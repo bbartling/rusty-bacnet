@@ -445,11 +445,14 @@ fn malformed_before_first_write_rejects_without_mutation() {
             priority: None,
         }],
     );
+    // A [1] where the [0] object identifier is due: the identifier is
+    // missing (#1446).
     request[0] = 0x1c;
 
     assert!(matches!(
         detailed(&mut db, &request),
-        WritePropertyMultipleOutcome::Reject { reason } if reason == RejectReason::INVALID_TAG
+        WritePropertyMultipleOutcome::Reject { reason }
+            if reason == RejectReason::MISSING_REQUIRED_PARAMETER
     ));
     assert_ne!(
         db.get(&oid)

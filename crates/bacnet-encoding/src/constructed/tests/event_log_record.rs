@@ -358,3 +358,18 @@ fn event_log_record_drops_a_message_text_it_cannot_read() {
         assert!(decode_event_log_record(&bytes, 0).is_err(), "{bytes:02X?}");
     }
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    for log_datum in [
+        EventLogDatum::LogStatus(LogStatus::LOG_DISABLED),
+        EventLogDatum::Notification(notification()),
+        EventLogDatum::TimeChange(0.0),
+    ] {
+        let octets = encoded(&record(log_datum));
+        let framed = assert_members_cut_short("BACnetEventLogRecord", &octets, |data| {
+            decode_event_log_record(data, 0)
+        });
+        assert!(framed > 0);
+    }
+}

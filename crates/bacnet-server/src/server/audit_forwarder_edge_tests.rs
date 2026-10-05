@@ -136,7 +136,7 @@ async fn audit_forwarding_denial_disabled_and_malformed_batches_are_silent() {
     malformed.pop();
     assert!(matches!(
         f.confirmed(2, &[3], malformed.clone().into()).await,
-        Some(Apdu::Error(_))
+        Some(Apdu::Reject(_))
     ));
     f.unconfirmed(malformed.into()).await;
     f.server

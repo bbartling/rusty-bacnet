@@ -349,3 +349,14 @@ fn color_command_keeps_any_value_that_fits() {
     );
     assert_eq!(encode(&decoded), data);
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let mut framed = 0;
+    for (_, wire) in golden_vectors() {
+        framed += super::assert_members_cut_short("BACnetColorCommand", &wire, |data| {
+            decode_color_command(data, 0)
+        });
+    }
+    assert!(framed > 0);
+}

@@ -35,4 +35,6 @@ pub mod write_property;
 #[cfg(test)]
 mod malformed_member_tests;
 #[cfg(test)]
+mod reject_reason_tests;
+#[cfg(test)]
 mod truncated_member_tests;

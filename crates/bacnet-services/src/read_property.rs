@@ -53,13 +53,14 @@ impl ReadPropertyRequest {
         let property_identifier = PropertyIdentifier::from_raw(prop_raw);
 
         // [2] propertyArrayIndex (optional), and nothing after it
-        let mut property_array_index = None;
-        if offset < data.len() {
-            let (index, end) =
-                decode_ctx_unsigned::<u32>(data, offset, 2, "ReadProperty request array-index")?;
-            expect_end(data, end, end, "ReadProperty request")?;
-            property_array_index = Some(index);
-        }
+        let (property_array_index, end) = decode_optional_ctx(
+            data,
+            offset,
+            2,
+            "ReadProperty request array-index",
+            decode_ctx_unsigned::<u32>,
+        )?;
+        expect_end(data, end, end, "ReadProperty request")?;
 
         Ok(Self {
             object_identifier,

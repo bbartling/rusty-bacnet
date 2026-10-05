@@ -452,15 +452,23 @@ async fn endpoint_device_write_rejects_scope_index_type_priority_and_malformed_b
             ErrorCode::PARAMETER_OUT_OF_RANGE,
         ));
     }
-    let mut malformed = request(&write());
-    malformed.service_request = Bytes::from_static(&[0x0c]);
-    cases.push((malformed, ErrorClass::SERVICES, ErrorCode::OTHER));
     for (request, class, code) in cases {
         assert_error(reply(&responder, received(request)).await.0, class, code);
         assert_eq!(
             description(&responder).await,
             PropertyValue::CharacterString(String::new())
         );
+    }
+    // A request cut short in its first tag is rejected before the policy
+    // looks at it (#1446).
+    let mut malformed = request(&write());
+    malformed.service_request = Bytes::from_static(&[0x0c]);
+    match reply(&responder, received(malformed)).await.0 {
+        Apdu::Reject(reject) => assert_eq!(
+            (reject.invoke_id, reject.reject_reason),
+            (71, RejectReason::MISSING_REQUIRED_PARAMETER)
+        ),
+        other => panic!("expected a Reject, got {other:?}"),
     }
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     ingress.stop().await.unwrap();

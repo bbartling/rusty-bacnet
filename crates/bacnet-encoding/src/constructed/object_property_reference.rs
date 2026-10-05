@@ -37,10 +37,13 @@ use bytes::BytesMut;
 use crate::primitives;
 use crate::tags;
 
-use super::decode_dopr_body;
-use super::tagged::{decode_ctx_constructed, expect_end};
+use super::tagged::{
+    decode_ctx_constructed, decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx,
+    expect_end, next_is_context,
+};
 
 const WHAT: &str = "BACnetObjectPropertyReference";
+const SETPOINT: &str = "BACnetSetpointReference";
 
 /// Encode the bare `BACnetObjectPropertyReference` member sequence:
 /// context-tagged \[0\]/\[1\] plus \[2\] when the reference is indexed.
@@ -61,52 +64,85 @@ pub fn encode_setpoint_reference(buf: &mut BytesMut, r: &BACnetObjectPropertyRef
     tags::encode_closing_tag(buf, 0);
 }
 
-/// Decode a whole property-value payload as the bare
-/// `BACnetObjectPropertyReference` member sequence.
+/// Decode the bare `BACnetObjectPropertyReference` members starting at
+/// `offset`, \[0\], \[1\] and the optional \[2\]; returns the reference
+/// and the offset just past its last member.
 ///
-/// Full consumption is required and the production is narrowed relative to
-/// the shared DOPR body codec: a device-qualifying member `[3]` is not part
-/// of `BACnetObjectPropertyReference` (the Loop/Pulse Converter references
-/// are local-device only), so it is rejected — as is any other content
-/// trailing the \[0\]/\[1\]/\[2\] members.
-pub fn decode_object_property_reference(
+/// The production is narrowed relative to the shared DOPR body codec: a
+/// device-qualifying \[3\] right after the members is not part of it (the
+/// Loop/Pulse Converter references are local-device only), so it is refused.
+/// Anything else that follows is the caller's to judge.
+pub fn decode_object_property_reference_at(
     data: &[u8],
-) -> Result<BACnetObjectPropertyReference, Error> {
-    let (dopr, end) = decode_dopr_body(data, 0, WHAT)?;
-    expect_end(data, end, end, WHAT)?;
-    if dopr.device_identifier.is_some() {
+    offset: usize,
+) -> Result<(BACnetObjectPropertyReference, usize), Error> {
+    let (object_identifier, offset) = decode_ctx_object_id(data, offset, 0, WHAT)?;
+    let (property_identifier, offset) = decode_ctx_unsigned::<u32>(data, offset, 1, WHAT)?;
+    let (property_array_index, offset) =
+        decode_optional_ctx(data, offset, 2, WHAT, decode_ctx_unsigned::<u32>)?;
+    if next_is_context(data, offset, 3)? {
         return Err(Error::decoding(
-            0,
+            offset,
             format!("{WHAT}: [3] device-identifier is not part of this production"),
         ));
     }
-    Ok(BACnetObjectPropertyReference {
-        object_identifier: dopr.object_identifier,
-        property_identifier: dopr.property_identifier,
-        property_array_index: dopr.property_array_index,
-    })
+    Ok((
+        BACnetObjectPropertyReference {
+            object_identifier,
+            property_identifier,
+            property_array_index,
+        },
+        offset,
+    ))
+}
+
+/// Decode a whole property-value payload as the bare
+/// `BACnetObjectPropertyReference` member sequence: the members, read by
+/// [`decode_object_property_reference_at`], must use all of `data`.
+pub fn decode_object_property_reference(
+    data: &[u8],
+) -> Result<BACnetObjectPropertyReference, Error> {
+    let (reference, end) = decode_object_property_reference_at(data, 0)?;
+    expect_end(data, end, end, WHAT)?;
+    Ok(reference)
+}
+
+/// Decode the `BACnetSetpointReference` frame at `offset` holding a
+/// reference: opening context tag 0, the bare members, which must fill the
+/// frame, and the closing tag. Returns the reference and the offset just
+/// past the closing tag; what follows is the caller's to judge.
+///
+/// A frame with nothing inside (`0x0E 0x0F`) is the member present but
+/// holding no object or property, which this refuses like any other
+/// incomplete reference. The value without a reference has no frame at all;
+/// see [`decode_setpoint_reference`].
+pub fn decode_setpoint_reference_at(
+    data: &[u8],
+    offset: usize,
+) -> Result<(BACnetObjectPropertyReference, usize), Error> {
+    let (inner, after) = decode_ctx_constructed(data, offset, 0, SETPOINT)?;
+    let (reference, end) = decode_object_property_reference_at(inner, 0)?;
+    expect_end(inner, end, offset, SETPOINT)?;
+    Ok((reference, after))
 }
 
 /// Decode a whole property-value payload as the `BACnetSetpointReference`
-/// form: an opening/closing context tag 0 frame whose content is the bare
-/// reference, decoded with [`decode_object_property_reference`]'s strictness.
+/// form, the frame read by [`decode_setpoint_reference_at`], which must use
+/// all of `data`.
 ///
 /// The production's one member is optional, and an absent member has no
 /// encoding (Clause 20.2.16), so an empty payload is the value without a
 /// reference and yields `None`: Clause 12.17.16 then takes the setpoint from
-/// the Loop's Setpoint property. A frame with nothing inside (`0x0E 0x0F`) is
-/// the member present but holding no object or property, which this refuses
-/// like any other incomplete reference.
+/// the Loop's Setpoint property.
 pub fn decode_setpoint_reference(
     data: &[u8],
 ) -> Result<Option<BACnetObjectPropertyReference>, Error> {
     if data.is_empty() {
         return Ok(None);
     }
-    let what = "BACnetSetpointReference";
-    let (inner, after) = decode_ctx_constructed(data, 0, 0, what)?;
-    expect_end(data, after, after, what)?;
-    decode_object_property_reference(inner).map(Some)
+    let (reference, after) = decode_setpoint_reference_at(data, 0)?;
+    expect_end(data, after, after, SETPOINT)?;
+    Ok(Some(reference))
 }
 
 #[cfg(test)]

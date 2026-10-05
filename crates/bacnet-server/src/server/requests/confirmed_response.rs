@@ -65,7 +65,7 @@ pub(super) async fn read_property_multiple_observed(
 ) -> Result<(), handlers::ReadFailure> {
     let db = db.read().await;
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest::decode(service_request)
-        .map_err(handlers::ReadFailure::Service)?;
+        .map_err(|error| handlers::ReadFailure::Service(error.into_request_reject()))?;
     let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
         .with_registered_port(registered_port);
     let plan = handlers::RpmPlan::new(&db, &request, budget.max_result_elements, Some(&view))?;
@@ -103,7 +103,9 @@ pub(super) async fn read_property_response_observed(
 ) -> Apdu {
     let mut service_ack = BytesMut::with_capacity(512);
     let db = db.read().await;
-    let result = match ReadPropertyRequest::decode(&request.service_request) {
+    let result = match ReadPropertyRequest::decode(&request.service_request)
+        .map_err(Error::into_request_reject)
+    {
         Ok(decoded) => {
             let lookup_oid =
                 handlers::resolve_read_target(&db, &decoded.object_identifier, registered_port);
@@ -163,6 +165,17 @@ pub(super) async fn read_property_response_observed(
     }
 }
 
+/// The reply to a confirmed request `error` refused.
+///
+/// An [`Error::Reject`] draws a Reject PDU with its reason, for every
+/// service, the formal-error ones included: a Reject has no
+/// service-specific body. Each handler turns the error from decoding the
+/// request into one with [`Error::into_request_reject`], so a syntax fault
+/// in the request draws the Reject naming it (Clauses 18.9 and 20.1.8,
+/// #1446). Any other refusal is an Error PDU, in the formal Clause 21
+/// production for the services that have one; that includes a decoding
+/// error met once the service is running, which is no syntax fault of the
+/// request.
 pub(super) fn error_apdu_from_error(
     invoke_id: u8,
     service_choice: ConfirmedServiceChoice,

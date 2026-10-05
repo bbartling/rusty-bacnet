@@ -194,3 +194,14 @@ fn landing_door_status_rejects_more_than_the_item_limit() {
     wire.push(0x0F);
     assert!(decode_landing_door_status(&wire, 0).is_err());
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let mut framed = 0;
+    for (_, wire) in golden_vectors() {
+        framed += super::assert_members_cut_short("BACnetLandingDoorStatus", &wire, |data| {
+            decode_landing_door_status(data, 0)
+        });
+    }
+    assert!(framed > 0);
+}

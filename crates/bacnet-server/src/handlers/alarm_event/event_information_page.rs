@@ -22,7 +22,8 @@ pub(crate) fn handle_get_event_information_configured(
     buf: &mut BytesMut,
     budget: GetEventInformationBudget,
 ) -> Result<(), EventInformationFailure> {
-    let request = GetEventInformationRequest::decode(service_data)?;
+    let request =
+        GetEventInformationRequest::decode(service_data).map_err(Error::into_request_reject)?;
     // Admission uses the same database view as the scan, before any callbacks.
     if db.len() > budget.max_objects {
         return Err(EventInformationFailure::Objects);

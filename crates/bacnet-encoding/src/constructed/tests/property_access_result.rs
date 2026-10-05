@@ -139,6 +139,17 @@ fn malformed_access_results_are_refused() {
 }
 
 #[test]
+fn members_cut_short_are_a_short_buffer() {
+    let mut framed = 0;
+    for (_, octets) in vectors() {
+        framed += super::assert_members_cut_short("BACnetPropertyAccessResult", &octets, |data| {
+            decode_property_access_result(data, 0)
+        });
+    }
+    assert!(framed > 0);
+}
+
+#[test]
 fn device_object_property_references_encode_bare() {
     for (reference, octets) in [(local(), LOCAL), (remote(), REMOTE)] {
         let mut encoded = BytesMut::new();

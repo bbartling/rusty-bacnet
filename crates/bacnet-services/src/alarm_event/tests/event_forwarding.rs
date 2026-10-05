@@ -2,7 +2,7 @@
 
 use super::*;
 use bacnet_encoding::constructed::decode_event_notification;
-use bacnet_types::enums::EventType;
+use bacnet_types::enums::{EventType, RejectReason};
 use bacnet_types::primitives::StatusFlags;
 
 fn alarm() -> EventNotificationRequest {
@@ -154,4 +154,46 @@ fn forwarded_notification_refuses_malformed_requests() {
     overflow.extend_from_slice(&[0x5A, 0x01, 0x00]);
     overflow.extend_from_slice(&wide[priority + 2..]);
     assert!(ForwardedEventNotification::decode(&overflow).is_err());
+}
+
+/// Where an alarm's fromState is due, a later member or the end of the data
+/// means it is missing, and an application tag is the wrong tag, as the
+/// client's own decoder answers.
+#[test]
+fn forwarded_from_state_faults_name_their_reasons() {
+    let mut request = alarm();
+    request.event_values = None;
+    let plain = encoded(&request);
+    let from_state = plain
+        .windows(2)
+        .rposition(|pair| pair == [0xA9, 0x00])
+        .expect("[10] fromState NORMAL");
+    let with = |member: &[u8], rest: bool| {
+        let mut body = BytesMut::from(&plain[..from_state]);
+        body.extend_from_slice(member);
+        if rest {
+            body.extend_from_slice(&plain[from_state + 2..]);
+        }
+        body
+    };
+    let reason = |body: &[u8]| {
+        ForwardedEventNotification::decode(body)
+            .unwrap_err()
+            .reject_reason()
+    };
+    // toState [11] where fromState is due.
+    assert_eq!(
+        reason(&with(&[], true)),
+        Some(RejectReason::MISSING_REQUIRED_PARAMETER)
+    );
+    // The data ends where fromState is due.
+    assert_eq!(
+        reason(&with(&[], false)),
+        Some(RejectReason::MISSING_REQUIRED_PARAMETER)
+    );
+    // fromState as an application ENUMERATED.
+    assert_eq!(
+        reason(&with(&[0x91, 0x00], true)),
+        Some(RejectReason::INVALID_TAG)
+    );
 }

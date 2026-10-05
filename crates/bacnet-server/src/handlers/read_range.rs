@@ -196,7 +196,7 @@ pub fn handle_read_range(
             unreachable!("a read with no limit ran past one")
         }
     };
-    let request = ReadRangeRequest::decode(service_data)?;
+    let request = ReadRangeRequest::decode(service_data).map_err(Error::into_request_reject)?;
     let plan = plan_read_range(db, None, &request).map_err(unlimited)?;
     let selected = prepare_read_range(db, None, request, plan.into_members()).map_err(unlimited)?;
     append_read_range_ack_with(
@@ -216,7 +216,8 @@ pub(crate) fn handle_read_range_budgeted(
     response: &mut BytesMut,
     budget: crate::server::ReadRangeBudget,
 ) -> Result<(), ReadRangeFailure> {
-    let request = ReadRangeRequest::decode(service_data).map_err(ReadRangeFailure::Service)?;
+    let request = ReadRangeRequest::decode(service_data)
+        .map_err(|error| ReadRangeFailure::Service(error.into_request_reject()))?;
     let plan = plan_read_range(db, None, &request)?;
     read_range_request_observed(db, None, request, plan, response, budget, |_, _, _, _| {})
 }

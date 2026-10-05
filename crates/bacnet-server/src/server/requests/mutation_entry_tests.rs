@@ -342,6 +342,8 @@ fn assert_not_policy_denied(bytes: Bytes, id: u8) {
                 "read-only service drew a policy denial"
             );
         }
+        // A request with a syntax fault is rejected before any policy.
+        Apdu::Reject(reject) => assert_eq!(reject.invoke_id, id),
         Apdu::ComplexAck(_) | Apdu::SimpleAck(_) => {}
         other => panic!("unexpected read-only response: {other:?}"),
     }

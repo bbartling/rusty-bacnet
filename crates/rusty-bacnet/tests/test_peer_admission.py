@@ -85,7 +85,11 @@ class PeerAdmissionRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     while True:
                         wire, _ = await loop.sock_recvfrom(sock, 65536)
                         if len(wire) >= 8 and wire[7] == 250:
-                            self.assertEqual(wire[6] >> 4, 5)  # handler Error, not overload Abort
+                            # The handler rejects the empty ReadProperty as
+                            # MISSING_REQUIRED_PARAMETER (5); an overload
+                            # would have drawn the admission layer's Abort.
+                            self.assertEqual(wire[6] >> 4, 6)
+                            self.assertEqual(wire[8], 5)
                             break
                 await quiescent()
         finally:

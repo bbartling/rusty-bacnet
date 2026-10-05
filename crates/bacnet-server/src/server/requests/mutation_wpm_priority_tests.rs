@@ -127,7 +127,13 @@ async fn wpm_priority_range_wire_error_is_semantic_before_and_after_prefix() {
 
 #[tokio::test]
 async fn wpm_priority_syntax_wire_result_retains_reject_and_prefix_invalid_tag() {
-    for malformed in [&[0x39][..], &[0x3a, 1], &[0x38]] {
+    // A priority cut short is missing octets (#1446); one of no octets is an
+    // invalid encoding.
+    for (malformed, reason) in [
+        (&[0x39][..], RejectReason::MISSING_REQUIRED_PARAMETER),
+        (&[0x3a, 1], RejectReason::MISSING_REQUIRED_PARAMETER),
+        (&[0x38], RejectReason::INVALID_DATA_ENCODING),
+    ] {
         for prefix in [false, true] {
             let (fixture, calls) = fixture().await;
             let response = fixture
@@ -145,7 +151,7 @@ async fn wpm_priority_syntax_wire_result_retains_reject_and_prefix_invalid_tag()
                     panic!("expected initial syntax Reject")
                 };
                 assert_eq!(reject.invoke_id, 71);
-                assert_eq!(reject.reject_reason, RejectReason::INVALID_DATA_ENCODING);
+                assert_eq!(reject.reject_reason, reason);
             }
             assert_state(&fixture, &calls, prefix).await;
         }

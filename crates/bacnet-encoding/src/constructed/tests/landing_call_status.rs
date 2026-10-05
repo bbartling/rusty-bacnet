@@ -249,3 +249,12 @@ fn landing_call_status_leaves_trailing_members_to_the_caller() {
         assert!(decode_landing_call_status_list(data).is_err());
     }
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    for (_, wire) in golden_vectors() {
+        super::assert_members_cut_short("BACnetLandingCallStatus", &wire, |data| {
+            decode_landing_call_status(data, 0)
+        });
+    }
+}

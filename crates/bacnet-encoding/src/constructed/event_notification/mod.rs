@@ -18,6 +18,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, StatusFlags, Time};
 use bytes::BytesMut;
 
+use super::tagged::{misplaced_tag, unclosed_kind};
 use super::{
     decode_bacnet_property_value_in_list, encode_bacnet_property_value, validate_tlv_sequence,
     MAX_FRAMED_ITEMS,
@@ -133,8 +134,9 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
     let priority_offset = offset;
     let (content, new_offset) = decode_context(data, offset, 5, "EventNotification priority")?;
     let priority = primitives::decode_unsigned(content)?;
-    let priority = u8::try_from(priority)
-        .map_err(|_| Error::decoding(priority_offset, "EventNotification priority exceeds u8"))?;
+    let priority = u8::try_from(priority).map_err(|_| {
+        Error::out_of_range(priority_offset, "EventNotification priority exceeds u8")
+    })?;
     offset = new_offset;
 
     // [6] eventType
@@ -192,13 +194,16 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
                 EventState::from_raw,
             )?;
         } else if notify_type != NotifyType::ACK_NOTIFICATION {
-            return Err(Error::decoding(
+            return Err(misplaced_tag(
+                data,
+                &peek,
+                Some(10),
                 offset,
                 "EventNotification expected fromState",
             ));
         }
     } else if notify_type != NotifyType::ACK_NOTIFICATION {
-        return Err(Error::decoding(
+        return Err(Error::missing(
             offset,
             "EventNotification missing fromState",
         ));
@@ -219,7 +224,10 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
     if offset < data.len() {
         let (opening, inner_start) = tags::decode_tag(data, offset)?;
         if !opening.is_opening_tag(12) {
-            return Err(Error::decoding(
+            return Err(misplaced_tag(
+                data,
+                &opening,
+                Some(12),
                 offset,
                 "EventNotification expected opening tag 12 for eventValues",
             ));
@@ -227,19 +235,28 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
         let closing_offset = data
             .len()
             .checked_sub(1)
-            .ok_or_else(|| Error::decoding(offset, "EventNotification missing closing tag 12"))?;
+            .ok_or_else(|| Error::missing(offset, "EventNotification missing closing tag 12"))?;
         if closing_offset < inner_start {
-            return Err(Error::decoding(
+            // The data ends right after the opening tag.
+            return Err(Error::missing(
                 inner_start,
-                "EventNotification empty eventValues",
+                "EventNotification eventValues are never closed",
             ));
         }
         let (closing, next) = tags::decode_tag(data, closing_offset)?;
         if !closing.is_closing_tag(12) || next != data.len() {
-            return Err(Error::decoding(
-                closing_offset,
-                "EventNotification expected closing tag 12 after eventValues",
-            ));
+            // Where the frame really ends: past the data (no closing tag) or
+            // before its end (octets after the request).
+            return Err(match tags::extract_context_value(data, inner_start, 12) {
+                Err(error) => error,
+                Ok((_, end)) if end < data.len() => {
+                    Error::trailing(end, "EventNotification has octets after eventValues")
+                }
+                Ok(_) => Error::invalid_tag(
+                    closing_offset,
+                    "EventNotification expected closing tag 12 after eventValues",
+                ),
+            });
         }
         event_values = Some(parameters_decode::decode_bounded(
             data,

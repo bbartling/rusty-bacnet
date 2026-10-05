@@ -10,16 +10,19 @@ use bytes::BytesMut;
 
 use bacnet_encoding::constructed::tagged::{
     decode_app_primitive, decode_app_unsigned, decode_ctx_object_id, decode_ctx_primitive,
-    decode_ctx_unsigned, next_is_context,
+    decode_ctx_unsigned, expect_end, misplaced_tag, next_is_context,
 };
 
 fn decode_count(data: &[u8], offset: usize, field: &str) -> Result<(i32, usize), Error> {
     let (content, end) = decode_app_primitive(data, offset, tags::app_tag::SIGNED, field)?;
     let value = primitives::decode_signed(content)?;
     let value = i16::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{field} exceeds INTEGER16")))?;
+        .map_err(|_| Error::out_of_range(offset, format!("{field} exceeds INTEGER16")))?;
     if value == 0 {
-        return Err(Error::decoding(offset, format!("{field} may not be zero")));
+        return Err(Error::out_of_range(
+            offset,
+            format!("{field} may not be zero"),
+        ));
     }
     Ok((i32::from(value), end))
 }
@@ -201,7 +204,7 @@ impl ReadRangeRequest {
             let (index, end) =
                 decode_ctx_unsigned::<u32>(data, offset, 2, "ReadRange request array-index")?;
             if index == 0 {
-                return Err(Error::decoding(
+                return Err(Error::out_of_range(
                     offset,
                     "ReadRange request array-index may not be zero",
                 ));
@@ -221,12 +224,7 @@ impl ReadRangeRequest {
                     decode_app_unsigned::<u64>(content, 0, "ReadRange byPosition reference-index")?;
                 let (count, inner_offset) =
                     decode_count(content, inner_offset, "ReadRange byPosition count")?;
-                if inner_offset != content.len() {
-                    return Err(Error::decoding(
-                        inner_offset,
-                        "ReadRange byPosition has trailing data",
-                    ));
-                }
+                expect_end(content, inner_offset, inner_offset, "ReadRange byPosition")?;
                 range = Some(RangeSpec::ByPosition {
                     reference_index,
                     count,
@@ -242,12 +240,12 @@ impl ReadRangeRequest {
                 )?;
                 let (count, inner_offset) =
                     decode_count(content, inner_offset, "ReadRange bySequenceNumber count")?;
-                if inner_offset != content.len() {
-                    return Err(Error::decoding(
-                        inner_offset,
-                        "ReadRange bySequenceNumber has trailing data",
-                    ));
-                }
+                expect_end(
+                    content,
+                    inner_offset,
+                    inner_offset,
+                    "ReadRange bySequenceNumber",
+                )?;
                 range = Some(RangeSpec::BySequenceNumber {
                     reference_seq,
                     count,
@@ -274,30 +272,23 @@ impl ReadRangeRequest {
                 }
                 let (count, inner_offset) =
                     decode_count(content, inner_offset, "ReadRange byTime count")?;
-                if inner_offset != content.len() {
-                    return Err(Error::decoding(
-                        inner_offset,
-                        "ReadRange byTime has trailing data",
-                    ));
-                }
+                expect_end(content, inner_offset, inner_offset, "ReadRange byTime")?;
                 range = Some(RangeSpec::ByTime {
                     reference_time: (date, time),
                     count,
                 });
                 offset = new_offset;
             } else {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &tag,
+                    None,
                     offset,
                     "ReadRange request has invalid range choice",
                 ));
             }
         }
-        if offset != data.len() {
-            return Err(Error::decoding(
-                offset,
-                "ReadRange request has trailing data",
-            ));
-        }
+        expect_end(data, offset, offset, "ReadRange request")?;
 
         Ok(Self {
             object_identifier,
@@ -409,7 +400,10 @@ impl ReadRangeAck {
         // [5] itemData
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if !tag.is_opening_tag(5) {
-            return Err(Error::decoding(
+            return Err(misplaced_tag(
+                data,
+                &tag,
+                Some(5),
                 offset,
                 "ReadRange ACK item-data expected opening tag 5",
             ));
@@ -429,7 +423,10 @@ impl ReadRangeAck {
         if offset < data.len() {
             let (tag, _) = tags::decode_tag(data, offset)?;
             if !tag.is_context(6) {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &tag,
+                    Some(6),
                     offset,
                     "ReadRange ACK expected context tag 6 for first-sequence-number",
                 ));
@@ -445,9 +442,7 @@ impl ReadRangeAck {
             first_sequence_number = Some(sequence_number);
             offset = end;
         }
-        if offset != data.len() {
-            return Err(Error::decoding(offset, "ReadRange ACK has trailing data"));
-        }
+        expect_end(data, offset, offset, "ReadRange ACK")?;
 
         Ok(Self {
             object_identifier,

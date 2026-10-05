@@ -44,7 +44,7 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditLogQueryAck, Error> {
     let mut record_offset = 0;
     while record_offset < records_body.len() {
         if records.len() >= MAX_DECODED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset + record_offset,
                 format!("AuditLogQuery-ACK record count exceeds {MAX_DECODED_ITEMS}"),
             ));

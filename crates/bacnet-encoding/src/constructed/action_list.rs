@@ -149,7 +149,7 @@ pub fn decode_action_list(data: &[u8], offset: usize) -> Result<(BACnetActionLis
     let mut offset = content;
     while offset < body.len() {
         if commands.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset,
                 "BACnetActionList: commands exceed item limit",
             ));

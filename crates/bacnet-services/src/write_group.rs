@@ -146,7 +146,7 @@ impl WriteGroupRequest {
             .ok()
             .and_then(NonZeroU32::new)
             .ok_or_else(|| {
-                Error::decoding(
+                Error::out_of_range(
                     0,
                     format!("WriteGroup group number {group_raw} out of range 1-4294967295"),
                 )
@@ -190,7 +190,7 @@ impl WriteGroupRequest {
             let (content, end) = decode_ctx_primitive(data, offset, 0, "WriteGroup channel")?;
             let channel_raw = primitives::decode_unsigned(content)?;
             let channel = u16::try_from(channel_raw).map_err(|_| {
-                Error::decoding(
+                Error::out_of_range(
                     offset,
                     format!("WriteGroup channel {channel_raw} exceeds 65535"),
                 )

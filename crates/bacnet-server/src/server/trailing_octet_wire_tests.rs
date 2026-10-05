@@ -1,20 +1,20 @@
 //! What a peer receives for a request with octets after its last member
 //! (#1411).
 //!
-//! The decoders refuse such a request as malformed, and the server answers
-//! it as it answers any request it can't decode: SERVICES / OTHER, with
-//! nothing read, written, deleted or changed. A GetAlarmSummary has no
-//! parameters at all, so any octet in it is trailing. A confirmed request
-//! is refused before its password or the server's policy is looked at. An
-//! unconfirmed request with trailing octets is dropped, since nothing can
-//! answer it: a Who-Is gets no I-Am, a Who-Has no I-Have, and an I-Am binds
-//! no device.
+//! The decoders refuse such a request, and the server rejects a confirmed
+//! one as TOO_MANY_ARGUMENTS (#1446), with nothing read, written, deleted or
+//! changed. A member under a tag the decoder can't take where a member is
+//! due is INVALID_TAG instead. A GetAlarmSummary has no parameters at all,
+//! so any octet in it is trailing. A confirmed request is refused before its
+//! password or the server's policy is looked at. An unconfirmed request
+//! with trailing octets is dropped, since nothing can answer it: a Who-Is
+//! gets no I-Am, a Who-Has no I-Have, and an I-Am binds no device.
 use super::*;
 use crate::server::cov_wire_test_support::{av1, Harness};
 use crate::server::mistagged_request_wire_tests::{
     contents, harness, request, FILE_1, FILE_2, READ, WRITE,
 };
-use crate::server::truncated_request_wire_tests::{answer_to, error_for};
+use crate::server::truncated_request_wire_tests::{answer_to, reject_case, reject_for};
 use bacnet_services::device_mgmt::{DeviceCommunicationControlRequest, ReinitializeDeviceRequest};
 use bacnet_types::enums::{EnableDisable, ReinitializedState};
 
@@ -25,10 +25,10 @@ const AV_1: [u8; 5] = [0xC4, 0x00, 0x80, 0x00, 0x01];
 const SECRET_APPLICATION: [u8; 9] = [0x75, 0x07, 0x00, b's', b'e', b'c', b'r', b'e', b't'];
 
 #[tokio::test(start_paused = true)]
-async fn file_requests_with_trailing_octets_draw_services_other() {
+async fn file_requests_with_trailing_octets_are_rejected() {
     let mut h = harness().await;
     // The well-formed requests these extend are served (see
-    // mistagged_file_requests_draw_services_other); the writes below carry
+    // mistagged_file_requests_are_rejected); the writes below carry
     // 0x42, which neither file holds, so any of them carried out would show.
     let before = contents(&h).await;
     let cases: [(ConfirmedServiceChoice, &str, Vec<u8>); 9] = [
@@ -96,23 +96,35 @@ async fn file_requests_with_trailing_octets_draw_services_other() {
         ),
     ];
     for (service, what, body) in &cases {
-        let error = error_for(&mut h, *service, body).await;
-        assert!(error.error_data.is_empty(), "{service:?} {what}");
+        reject_case(
+            &mut h,
+            *service,
+            what,
+            body,
+            RejectReason::TOO_MANY_ARGUMENTS,
+        )
+        .await;
     }
     assert_eq!(contents(&h).await, before);
     h.server.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn delete_object_with_trailing_octets_draws_services_other() {
+async fn delete_object_with_trailing_octets_is_rejected() {
     let mut h = Harness::start(ServerConfig::default()).await;
     let delete = ConfirmedServiceChoice::DELETE_OBJECT;
     for (what, tail) in [
         ("an octet", &[0x00][..]),
         ("a second identifier", &AV_1[..]),
     ] {
-        let error = error_for(&mut h, delete, &[&AV_1[..], tail].concat()).await;
-        assert!(error.error_data.is_empty(), "{what}");
+        reject_case(
+            &mut h,
+            delete,
+            what,
+            &[&AV_1[..], tail].concat(),
+            RejectReason::TOO_MANY_ARGUMENTS,
+        )
+        .await;
         assert!(
             h.server.database().read().await.get(&av1()).is_some(),
             "{what}"
@@ -147,7 +159,7 @@ async fn dcc_state(h: &Harness) -> (DccState, bool) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn dcc_with_trailing_octets_draws_services_other_and_changes_nothing() {
+async fn dcc_with_trailing_octets_is_rejected_and_changes_nothing() {
     let mut h = Harness::start(ServerConfig {
         dcc_policy: DccPolicy::RequirePassword,
         dcc_password: Some("secret".into()),
@@ -175,8 +187,14 @@ async fn dcc_with_trailing_octets_draws_services_other_and_changes_nothing() {
         ),
     ];
     for (what, body) in &cases {
-        let error = error_for(&mut h, service, body).await;
-        assert!(error.error_data.is_empty(), "{what}");
+        reject_case(
+            &mut h,
+            service,
+            what,
+            body,
+            RejectReason::TOO_MANY_ARGUMENTS,
+        )
+        .await;
         assert_eq!(dcc_state(&h).await, (enabled, false), "{what}");
     }
     let answer = answer_to(&mut h, service, &dcc(restrict, Some(5), &[])).await;
@@ -184,8 +202,13 @@ async fn dcc_with_trailing_octets_draws_services_other_and_changes_nothing() {
     assert_eq!(dcc_state(&h).await, (restricted, true));
     // An ENABLE with trailing octets leaves initiation restricted too.
     let enable = EnableDisable::ENABLE;
-    let error = error_for(&mut h, service, &dcc(enable, None, &[0x00])).await;
-    assert!(error.error_data.is_empty());
+    reject_for(
+        &mut h,
+        service,
+        &dcc(enable, None, &[0x00]),
+        RejectReason::TOO_MANY_ARGUMENTS,
+    )
+    .await;
     assert_eq!(dcc_state(&h).await, (restricted, true));
     let answer = answer_to(&mut h, service, &dcc(enable, None, &[])).await;
     assert!(matches!(answer, Apdu::SimpleAck(_)), "{answer:?}");
@@ -207,7 +230,7 @@ fn reinitialize(password: Option<&str>, tail: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn reinitialize_device_with_trailing_octets_draws_services_other() {
+async fn reinitialize_device_with_trailing_octets_is_rejected() {
     let mut h = Harness::start(ServerConfig {
         reinit_password: Some("secret".into()),
         ..Default::default()
@@ -241,22 +264,27 @@ async fn reinitialize_device_with_trailing_octets_draws_services_other() {
         ("a [2] after the state", reinitialize(None, &[0x29, 0x01])),
     ];
     for (what, body) in &cases {
-        let error = error_for(&mut h, service, body).await;
-        assert!(error.error_data.is_empty(), "{what}");
+        reject_case(
+            &mut h,
+            service,
+            what,
+            body,
+            RejectReason::TOO_MANY_ARGUMENTS,
+        )
+        .await;
         assert_eq!(dcc_state(&h).await, (DccState::Enable, false), "{what}");
     }
     h.server.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn get_alarm_summary_with_any_octet_draws_services_other() {
+async fn get_alarm_summary_with_any_octet_is_rejected() {
     let mut h = Harness::start(ServerConfig::default()).await;
     let service = ConfirmedServiceChoice::GET_ALARM_SUMMARY;
     let answer = answer_to(&mut h, service, &[]).await;
     assert!(matches!(answer, Apdu::ComplexAck(_)), "{answer:?}");
     for body in [&[0x00][..], &[0x09, 0x00]] {
-        let error = error_for(&mut h, service, body).await;
-        assert!(error.error_data.is_empty(), "{body:02X?}");
+        reject_for(&mut h, service, body, RejectReason::TOO_MANY_ARGUMENTS).await;
     }
     h.server.stop().await.unwrap();
 }
@@ -343,6 +371,29 @@ async fn who_is_and_who_has_with_trailing_octets_are_dropped() {
         (counters.who_is_received, counters.who_has_received),
         (1, 1)
     );
+    h.server.stop().await.unwrap();
+}
+
+/// A Who-Is carrying one limit without the other is malformed (#1447), so
+/// the server drops it rather than answering it as a Who-Is for every
+/// device.
+#[tokio::test(start_paused = true)]
+async fn a_who_is_with_one_limit_is_dropped() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    let who_is = UnconfirmedServiceChoice::WHO_IS;
+    // Low limit 0, then high limit 1000: either alone would take in the
+    // harness device (856) if read as unbounded.
+    for (what, body) in [
+        ("only the low limit", &[0x09, 0x00][..]),
+        ("only the high limit", &[0x1A, 0x03, 0xE8]),
+    ] {
+        assert_eq!(unconfirmed(&h, who_is, body).await, [], "{what}");
+    }
+    assert_eq!(
+        unconfirmed(&h, who_is, &[0x09, 0x00, 0x1A, 0x03, 0xE8]).await,
+        [UnconfirmedServiceChoice::I_AM]
+    );
+    assert_eq!(h.server.discovery_counters().who_is_received, 1);
     h.server.stop().await.unwrap();
 }
 

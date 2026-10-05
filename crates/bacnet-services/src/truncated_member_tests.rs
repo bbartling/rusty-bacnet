@@ -174,18 +174,26 @@ fn confirmed_cov_notification_rejects_keep_their_reasons() {
         let reason = error.reject_reason();
         (reason, error.into_error())
     };
-    // Contents cut short: a short buffer, rejected as an invalid encoding.
+    // Contents cut short: a short buffer, rejected as a missing parameter,
+    // as the server rejects any request cut short (#1446).
     let (cut, error) = reason(&PROCESS_CUT);
-    assert_eq!(cut, RejectReason::INVALID_DATA_ENCODING);
+    assert_eq!(cut, RejectReason::MISSING_REQUIRED_PARAMETER);
     assert!(matches!(error, Error::BufferTooShort { .. }), "{error:?}");
-    // A wrong tag, or a tag header cut short, is an invalid tag.
-    for data in [&[0x19, 0x01][..], &[0x0D]] {
-        let (wrong, error) = reason(data);
-        assert_eq!(wrong, RejectReason::INVALID_TAG, "{data:02X?}");
+    // Nothing at all, a tag header cut short, or a later member where the
+    // [0] process identifier is due: a missing parameter.
+    for data in [&[][..], &[0x0D], &[0x19, 0x01]] {
+        let (missing, error) = reason(data);
+        assert_eq!(
+            missing,
+            RejectReason::MISSING_REQUIRED_PARAMETER,
+            "{data:02X?}"
+        );
         assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
     }
-    // Nothing at all is a missing parameter.
-    assert_eq!(reason(&[]).0, RejectReason::MISSING_REQUIRED_PARAMETER);
+    // An application tag there is an invalid tag.
+    let (wrong, error) = reason(&[0x21, 0x01]);
+    assert_eq!(wrong, RejectReason::INVALID_TAG);
+    assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
     // A process identifier padded with a leading zero is an invalid
     // encoding, and one past u32 is out of range.
     let padded = [0x0A, 0x00, 0x01];

@@ -231,10 +231,12 @@ pub fn decode_event_parameter(
     // can reject ASHRAE-reserved tag number 255 everywhere else.
     if data.get(offset..offset.saturating_add(2)) == Some(&[0xFE, 0xFF]) {
         let body_start = offset + 2;
-        let body_end = data.len().checked_sub(2).ok_or_else(|| {
-            Error::decoding(offset, "BACnetEventParameter: truncated legacy wrapper")
-        })?;
-        if body_end < body_start || data.get(body_end..) != Some(&[0xFF, 0xFF]) {
+        // The wrapper needs its closing pair after the opening one.
+        if data.len() < body_start + 2 {
+            return Err(Error::buffer_too_short(body_start + 2, data.len()));
+        }
+        let body_end = data.len() - 2;
+        if data.get(body_end..) != Some(&[0xFF, 0xFF]) {
             return Err(Error::decoding(
                 offset,
                 "BACnetEventParameter: missing legacy closing tag",
@@ -319,7 +321,7 @@ pub fn decode_event_parameter(
             let mut list_of_values = Vec::new();
             while !next_is_closing(data, pos, 2)? {
                 if list_of_values.len() >= MAX_FRAMED_ITEMS {
-                    return Err(Error::decoding(
+                    return Err(Error::overflow(
                         pos,
                         "change-of-bitstring: list-of-bitstring-values exceeds limit",
                     ));
@@ -346,7 +348,7 @@ pub fn decode_event_parameter(
             let mut list_of_values = Vec::new();
             while !next_is_closing(data, pos, 1)? {
                 if list_of_values.len() >= MAX_FRAMED_ITEMS {
-                    return Err(Error::decoding(
+                    return Err(Error::overflow(
                         pos,
                         "change-of-state: list-of-values exceeds limit",
                     ));

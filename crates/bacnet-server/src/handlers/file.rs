@@ -159,7 +159,8 @@ fn read_file(
     budget: Option<crate::server::AtomicReadFileBudget>,
     completed: impl FnOnce(ObjectIdentifier, &Result<(), Error>),
 ) -> Result<(), AtomicReadFileFailure> {
-    let request = bacnet_services::file::AtomicReadFileRequest::decode(service_data)?;
+    let request = bacnet_services::file::AtomicReadFileRequest::decode(service_data)
+        .map_err(Error::into_request_reject)?;
     let target = request.file_identifier;
     let result = match execute_read_file(db, request, buf, budget) {
         Ok(()) => Ok(()),
@@ -351,7 +352,8 @@ fn write_file(
 ) -> Result<(), AtomicWriteFileFailure> {
     use bacnet_services::file::{AtomicWriteFileRequest, FileWriteAccessMethod};
 
-    let request = AtomicWriteFileRequest::decode(service_data)?;
+    let request =
+        AtomicWriteFileRequest::decode(service_data).map_err(Error::into_request_reject)?;
 
     // Wire decoding enforces record cardinality. Keep this cross-check so a
     // future typed or internal request path cannot bypass the same pre-mutation

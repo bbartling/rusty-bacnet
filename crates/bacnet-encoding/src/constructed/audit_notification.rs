@@ -237,7 +237,7 @@ pub fn decode_audit_notification_at(
         decode_ctx_canonical_unsigned::<u8>,
     )?;
     if let Some(priority) = target_priority.filter(|priority| !(1..=16).contains(priority)) {
-        return Err(Error::decoding(
+        return Err(Error::out_of_range(
             priority_offset,
             format!("AuditNotification target-priority {priority} is outside 1..=16"),
         ));

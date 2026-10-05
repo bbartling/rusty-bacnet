@@ -37,7 +37,8 @@ pub fn handle_acknowledge_alarm(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<AcceptedAcknowledgeAlarm, Error> {
-    let request = AcknowledgeAlarmRequest::decode(service_data)?;
+    let request =
+        AcknowledgeAlarmRequest::decode(service_data).map_err(Error::into_request_reject)?;
 
     let object = db
         .get_mut(&request.event_object_identifier)

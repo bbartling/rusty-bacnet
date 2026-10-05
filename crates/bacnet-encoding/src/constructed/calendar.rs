@@ -113,7 +113,7 @@ pub fn decode_calendar_entry_list(data: &[u8]) -> Result<Vec<BACnetCalendarEntry
     let mut offset = 0;
     while offset < data.len() {
         if entries.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset,
                 "calendar entry list exceeds item limit",
             ));

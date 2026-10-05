@@ -409,3 +409,31 @@ fn fault_truncated_and_unbalanced_rejected() {
     // Application-tagged value where the CHOICE tag belongs.
     assert!(decode_fault_parameters(&[0x21, 0x00], 0).is_err());
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    for value in [
+        FaultParameters::FaultOutOfRange {
+            min_normal: 10.0,
+            max_normal: 20.0,
+        },
+        FaultParameters::FaultState {
+            fault_values: vec![
+                BACnetPropertyStates::BooleanValue(false),
+                BACnetPropertyStates::UnsignedValue(3),
+            ],
+        },
+        FaultParameters::FaultExtended {
+            vendor_id: 42,
+            extended_fault_type: 7,
+            parameters: vec![0x61, 0x2F],
+        },
+    ] {
+        let mut octets = BytesMut::new();
+        encode_fault_parameters(&mut octets, &value).unwrap();
+        let framed = assert_members_cut_short("BACnetFaultParameter", &octets, |data| {
+            decode_fault_parameters(data, 0)
+        });
+        assert!(framed > 0, "{value:?}");
+    }
+}

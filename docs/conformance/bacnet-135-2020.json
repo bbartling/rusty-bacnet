@@ -5517,7 +5517,7 @@
    ],
    "negative_tests": [
         "crates/bacnet-server/src/server/cov_identity_completion_tests/completion_order.rs::cov_order_newer_failure_or_cancellation_does_not_block_older_success",
-        "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{subscribe_cov_property_cut_short_draws_services_other,subscribe_cov_property_multiple_cut_short_draws_the_general_error}",
+        "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{subscribe_cov_property_cut_short_is_rejected,subscribe_cov_property_multiple_cut_short_is_rejected}",
         "crates/bacnet-server/src/cov/observation_order/tests.rs::cov_order_counter_checked_exhaustion_covers_both_modes",
         "crates/bacnet-server/src/cov/confirmed/tests.rs::a_replaced_subscription_starts_unmarked",
         "crates/bacnet-server/src/cov/confirmed/tests.rs::a_route_change_fences_the_report_and_revisits_its_references",
@@ -6242,7 +6242,7 @@
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_staged_batch_whose_commit_fails_leaves_the_log_as_it_was",
     "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_whose_commit_fails_is_refused_and_stores_nothing",
     "crates/bacnet-encoding/src/constructed/tests/audit_notification.rs::{an_object_identifier_of_the_wrong_length_is_malformed_even_when_cut_short,an_object_identifier_cut_short_is_a_short_buffer}",
-    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_draws_services_other",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_or_misshapen_is_rejected",
     "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit",
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_log_dropped_with_a_staged_change_whose_commit_failed_leaves_storage_alone",
     "crates/bacnet-server/src/server/audit_local_source_tests.rs::a_direct_write_named_by_two_bindings_stays_ambiguous"
@@ -6988,6 +6988,7 @@
     "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::unknown_object_is_semantic_result_with_actual_reference_before_any_commit",
     "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::semantic_index_value_name_and_write_arm_failures_keep_exact_reference",
     "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::malformed_before_first_write_rejects_without_mutation",
+    "crates/bacnet-services/src/wpm/priority_tests.rs::whole_request_decode_keeps_the_cursor_reason",
     "crates/bacnet-services/src/wpm/priority_tests.rs::wpm_priority_range_failure_keeps_kind_stage_offset_and_indexed_reference",
     "crates/bacnet-services/src/wpm/priority_tests.rs::wpm_priority_malformed_unsigned_is_syntax_not_numeric_range",
     "crates/bacnet-server/src/server/requests/mutation_wpm_priority_tests.rs::wpm_priority_range_wire_error_is_semantic_before_and_after_prefix",
@@ -6999,7 +7000,7 @@
    "notes": [
     "Refs #741: syntactically valid Unsigned priorities outside 1..16 retain a typed PriorityOutOfRange cursor failure and return formal SERVICES / PARAMETER_OUT_OF_RANGE both before writes and after a committed prefix.",
     "Commandable AnalogOutput wire tests cover 0, 17 and 257, exact failed coordinates, untouched suffixes and policy reachability; malformed priority encodings retain initial Reject and post-prefix INVALID_TAG.",
-    "The public cursor error kind replaces its former reject-only field; whole-request decode still returns Error::Decoding. Bounded service-procedure correction (Refs #242), not full BACnet, object, PICS, or BIBB conformance.",
+    "The public cursor error kind replaces its former reject-only field; whole-request decode returns Error::Decoding whose kind draws the cursor's reason. Bounded service-procedure correction (Refs #242), not full BACnet or BIBB conformance.",
     "The post-success undecodable-coordinate policy uses DEVICE instance 4194303, PropertyIdentifier ALL, and no array index; only the instance is normative. Inbound empty requests and empty property lists retain the existing SimpleACK/no-op behavior; outbound typed requests reject them before encoding (#793).",
     "Existing ErrorPdu, TsmResponse, client, and Python shapes are unchanged: low-level ErrorPdu.error_data retains the complete formal body while high-level clients continue exposing class/code. Legacy generic WPM Error PDUs remain decodable.",
     "The unused public object write rollback API was removed before 1.0 (Refs #743). Observable File, NetworkPort, multistate and AccessDoor tests prove committed prefix state survives a later failure, including command priority and fallback ownership.",
@@ -7031,19 +7032,24 @@
     "crates/bacnet-types/src/primitives.rs::object_identifier_checked_instance_boundaries",
     "crates/rusty-bacnet/tests/test_object_identifier_invariant.py",
     "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{contents_past_the_end_are_a_short_buffer,fixed_size_primitives_refuse_any_other_length,application_enumerated_items_narrow_and_canonical_ones_refuse_padding}",
-    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::read_property_multiple_cut_short_draws_services_other",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::read_property_multiple_cut_short_is_rejected",
     "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{application_primitives_read_any_type_and_name_the_expected_one,application_unsigned_values_narrow_to_their_width,an_application_boolean_has_no_contents_to_read,fixed_size_contents_check_their_length_first}",
     "crates/bacnet-services/src/truncated_member_tests.rs::{members_cut_short_are_a_short_buffer,fixed_size_members_of_the_wrong_length_stay_malformed_when_cut_short,confirmed_cov_notification_rejects_keep_their_reasons,reals_and_times_check_their_length_before_their_contents}",
-    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{service_parameters_cut_short_draw_services_other,subscribe_cov_property_multiple_process_cut_short_draws_the_general_error,malformed_and_cut_short_requests_draw_the_same_reply}",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{service_parameters_cut_short_are_rejected,request_syntax_faults_draw_the_reject_naming_them_for_every_service}",
     "crates/bacnet-services/src/malformed_member_tests/object.rs::{read_property_request,read_property_ack,write_property_request,read_property_multiple_ack,create_object_request,delete_object_request,list_element_request}",
     "crates/bacnet-services/src/malformed_member_tests/discovery.rs::{who_is_request,i_am_request,who_has_request,i_have_request,you_are_request}",
     "crates/bacnet-services/src/malformed_member_tests/device.rs::{device_communication_control_request,reinitialize_device_request,time_synchronization_request,private_transfer_request_and_ack,text_message_request}",
     "crates/bacnet-services/src/malformed_member_tests/summary.rs::{get_alarm_summary_ack,get_enrollment_summary_request,get_enrollment_summary_ack,vt_data_ack}",
     "crates/bacnet-services/src/malformed_member_tests/file.rs::atomic_write_file_ack",
     "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{fixed_size_application_items_check_their_length_first,an_optional_primitive_yields_its_contents_or_nothing,an_application_peek_matches_only_its_own_type}",
-    "crates/bacnet-server/src/server/mistagged_request_wire_tests.rs::mistagged_delete_object_draws_services_other",
-    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{inline_members_cut_short_draw_services_other,create_object_and_list_requests_cut_short_draw_their_formal_errors}",
-    "crates/bacnet-server/src/server/trailing_octet_wire_tests.rs::{delete_object_with_trailing_octets_draws_services_other,dcc_with_trailing_octets_draws_services_other_and_changes_nothing,reinitialize_device_with_trailing_octets_draws_services_other,get_alarm_summary_with_any_octet_draws_services_other,confirmed_private_transfer_stays_unrecognized,who_is_and_who_has_with_trailing_octets_are_dropped,an_i_am_with_trailing_octets_binds_nothing}"
+    "crates/bacnet-server/src/server/mistagged_request_wire_tests.rs::mistagged_delete_object_is_rejected",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{inline_members_cut_short_are_rejected,create_object_and_list_requests_cut_short_are_rejected,members_cut_short_inside_a_frame_are_rejected}",
+    "crates/bacnet-encoding/src/primitives/length_first_tests.rs::{fixed_size_application_values_check_their_length_first,timestamp_members_check_their_length_then_their_contents}",
+    "crates/bacnet-services/src/reject_reason_tests.rs::{read_property_faults_name_their_reasons,frames_and_choices_name_their_reasons,atomic_write_file_record_counts_name_their_reasons,ranges_lists_and_character_sets_name_their_reasons}",
+    "crates/bacnet-types/src/error.rs::tests::syntax_faults_name_their_reject_reasons",
+    "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::formal_members_cut_short_inside_their_frames_are_a_short_buffer",
+    "crates/bacnet-encoding/src/constructed/tests/event_notification/cut_short.rs::members_cut_short_are_a_short_buffer",
+    "crates/bacnet-server/src/server/trailing_octet_wire_tests.rs::{delete_object_with_trailing_octets_is_rejected,dcc_with_trailing_octets_is_rejected_and_changes_nothing,reinitialize_device_with_trailing_octets_is_rejected,get_alarm_summary_with_any_octet_is_rejected,confirmed_private_transfer_stays_unrecognized,who_is_and_who_has_with_trailing_octets_are_dropped,a_who_is_with_one_limit_is_dropped,an_i_am_with_trailing_octets_binds_nothing}"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -7057,15 +7063,15 @@
     "Primitive, application/context and reference codec boundary vectors plus Python rejection/valid controls provide narrow evidence. Generic ObjectType remains unrestricted; no serde API or producer behavior is added. Broader encoding status is unchanged: still needs a complete malformed fixture catalog and byte-equivalence guard for optimizations.",
     "In the shared tagged-field helpers and the codecs and formal Error bodies read with them, contents that run past the end of the data are Error::BufferTooShort; a cut-short or malformed tag header is Error::Decoding.",
     "A fixed-size context member (object identifier, REAL, BOOLEAN, a lighting-command level) has its length checked before its contents, so a wrong length is Error::Decoding even when the data also stops early.",
-    "A member cut short inside a constructed frame is caught when the frame is extracted (tags::extract_context_value), which reports Error::Decoding.",
-    "The server answers a ReadPropertyMultiple, SubscribeCOVProperty or ConfirmedAuditNotification cut short with SERVICES / OTHER, and a SubscribeCOVPropertyMultiple with its general error, whichever kind the decoder reports.",
+    "A member cut short inside a constructed frame is caught when the frame is extracted (tags::extract_context_value), which reports Error::BufferTooShort too.",
+    "The server rejects a ReadPropertyMultiple, SubscribeCOVProperty, SubscribeCOVPropertyMultiple or ConfirmedAuditNotification cut short as MISSING_REQUIRED_PARAMETER: its octets ran out before a member was complete.",
     "bacnet-services reads its service parameter members with the same public helpers (constructed::tagged), so one cut short outside a constructed frame is Error::BufferTooShort; AtomicReadFile-ACK's application BOOLEAN has no contents to cut.",
-    "A ReadProperty, WriteProperty, ReadRange, SubscribeCOV, SubscribeCOVProperty, AcknowledgeAlarm, GetEventInformation, LifeSafetyOperation or AuditLogQuery cut short draws SERVICES / OTHER from the server.",
-    "DeleteObject and I-Have requests refuse an object identifier or object name under any tag but its application tag; the server answers such a DeleteObject with SERVICES / OTHER and deletes nothing.",
-    "A fixed-size application-tagged service member (an object identifier, Date or Time) has its length checked before its contents, as the context ones do; decode_application_value still reads contents first.",
-    "A DeviceCommunicationControl, ReinitializeDevice, ConfirmedTextMessage, GetEnrollmentSummary, DeleteObject, AtomicReadFile, AtomicWriteFile, CreateObject or list-service request cut short draws SERVICES / OTHER, or its formal error, from the server.",
-    "Service request decoders refuse octets after the last member as Error::Decoding. The server answers such a confirmed request with SERVICES / OTHER, or its formal error, as it answers any malformed one, and drops an unconfirmed one.",
-    "A GetAlarmSummary carrying any service-request octet draws SERVICES / OTHER. A Who-Is with only one limit reads as unbounded; one with octets its limits leave unread, a limit under another tag included, is dropped."
+    "A ReadProperty, WriteProperty, ReadRange, SubscribeCOV, SubscribeCOVProperty, AcknowledgeAlarm, GetEventInformation, LifeSafetyOperation or AuditLogQuery cut short is rejected as MISSING_REQUIRED_PARAMETER.",
+    "DeleteObject and I-Have requests refuse an object identifier or object name under any tag but its application tag; the server rejects such a DeleteObject as INVALID_TAG and deletes nothing.",
+    "A fixed-size application-tagged member (an object identifier, REAL, Double, Date or Time) has its length checked before its contents, as the context ones do, in the service readers and in decode_application_value alike.",
+    "A DeviceCommunicationControl, ReinitializeDevice, ConfirmedTextMessage, GetEnrollmentSummary, DeleteObject, AtomicReadFile, AtomicWriteFile, CreateObject or list-service request cut short is rejected the same way.",
+    "Refused confirmed requests draw the Reject Error::reject_reason names (TOO_MANY_ARGUMENTS, INVALID_TAG, MISSING_REQUIRED_PARAMETER, INVALID_DATA_ENCODING, PARAMETER_OUT_OF_RANGE, BUFFER_OVERFLOW, OTHER); unconfirmed ones are dropped.",
+    "A GetAlarmSummary carrying any service-request octet is rejected as TOO_MANY_ARGUMENTS. A Who-Is with only one limit, or with octets its limits leave unread, a limit under another tag included, is dropped."
    ]
   },
   {
@@ -9313,8 +9319,8 @@
      "crates/bacnet-services/src/file_width_tests.rs::atomic_write_record_short_list_is_missing_required_parameter",
     "crates/bacnet-services/src/file_width_tests.rs::atomic_write_record_extra_element_is_too_many_arguments",
     "crates/bacnet-services/src/malformed_member_tests/file.rs::{atomic_read_file_request,atomic_write_file_request}",
-    "crates/bacnet-server/src/server/mistagged_request_wire_tests.rs::{mistagged_file_requests_draw_services_other,record_counts_still_draw_their_rejects}",
-    "crates/bacnet-server/src/server/trailing_octet_wire_tests.rs::file_requests_with_trailing_octets_draw_services_other"
+    "crates/bacnet-server/src/server/mistagged_request_wire_tests.rs::{mistagged_file_requests_are_rejected,record_counts_still_draw_their_rejects}",
+    "crates/bacnet-server/src/server/trailing_octet_wire_tests.rs::file_requests_with_trailing_octets_are_rejected"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -9330,8 +9336,8 @@
        "This draft PICS evidence does not change File storage or resize behavior. Clause 19.1.3.3 explains the File_Size=0 restore use case, but restore orchestration is not implemented here. Other deferrals are custom FileStorage/custom-backend property resize, host filesystem storage, locking beyond the object-database guard, Python/CLI exposure, ReadRange, and unbounded allocation.",
        "The read handler clamps a record window to MAX_DECODED_ITEMS so one ACK never exceeds what the workspace decoder accepts, including files preloaded past the record cap. This is a recorded departure from the Clause 14.1 Service Procedure, which short-reads only when fewer records remain; the clamp adds a second local reason.",
        "Clause 14.1.3.1 makes End Of File data-independent, so a client that continues from start + Returned Record Count still reads the whole file. FileObject::set_data and set_records update File_Size and Record_Count only for the selected channel (any raw value other than RECORD_ACCESS is the stream channel for those local setters), while network property resize requires an exact named access method and set_file_access_method recomputes both on a switch; Record_Count remains present only under RECORD_ACCESS (Table 12-16 footnote 2).",
-       "The AtomicReadFile and AtomicWriteFile request decoders refuse a file identifier, start position or record, count, file data or record under any tag but its application tag; the server answers SERVICES / OTHER and reads or writes nothing.",
-       "The AtomicReadFile and AtomicWriteFile request decoders refuse octets after an access frame's members or after the frame (SERVICES / OTHER, nothing read or written); extra records in a record write draw the count's TOO_MANY_ARGUMENTS."
+       "The AtomicReadFile and AtomicWriteFile request decoders refuse a file identifier, start position or record, count, file data or record under any tag but its application tag; the server rejects it as INVALID_TAG.",
+       "The AtomicReadFile and AtomicWriteFile request decoders refuse octets after an access frame's members or after the frame, and extra records in a record write: TOO_MANY_ARGUMENTS, nothing read or written."
       ]
   },
   {

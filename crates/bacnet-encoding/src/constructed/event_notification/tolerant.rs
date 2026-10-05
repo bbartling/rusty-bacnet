@@ -62,8 +62,10 @@ fn unreadable_message_text(data: &[u8]) -> Option<Range<usize>> {
     let end = content.checked_add(tag.length as usize)?;
     let text = data.get(content..end)?;
     // The notify type must follow, so dropping this field can't promote a
-    // second text field into the optional slot.
-    if !tags::decode_tag(data, end).ok()?.0.is_context(8) {
+    // second text field into the optional slot. Data that ends with the text
+    // is read without it too, so the request reports its missing notify type
+    // rather than the text, as any request cut short does.
+    if end < data.len() && !tags::decode_tag(data, end).ok()?.0.is_context(8) {
         return None;
     }
     primitives::decode_character_string(text)

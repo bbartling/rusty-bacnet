@@ -446,3 +446,23 @@ fn recipient_mac_bound_holds_in_both_directions() {
         assert_eq!(&buf[..], &[0xAA], "{len}-octet MAC left output behind");
     }
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let address = BACnetDestination {
+        recipient: BACnetRecipient::Address(BACnetAddress {
+            network_number: 0x1234,
+            mac_address: vec![0xAA, 0xBB].into(),
+        }),
+        ..device_destination()
+    };
+    let mut framed = 0;
+    for destination in [device_destination(), address] {
+        let mut wire = BytesMut::new();
+        encode_destination(&mut wire, &destination).unwrap();
+        framed += super::assert_members_cut_short("BACnetDestination", &wire, |data| {
+            decode_destination(data, 0)
+        });
+    }
+    assert!(framed > 0);
+}

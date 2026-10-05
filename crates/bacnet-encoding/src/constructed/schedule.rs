@@ -113,7 +113,7 @@ fn decode_time_values(
             return Ok((time_values, expect_closing(data, pos, tag, what)?));
         }
         if time_values.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 pos,
                 format!("{what}: time-values exceed item limit"),
             ));
@@ -259,7 +259,7 @@ pub fn decode_exception_schedule(data: &[u8]) -> Result<Vec<BACnetSpecialEvent>,
     let mut pos = 0;
     while pos < data.len() {
         if events.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 pos,
                 "exception schedule exceeds item limit",
             ));

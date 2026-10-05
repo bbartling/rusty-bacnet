@@ -662,6 +662,22 @@ fn error_pdu_truncated_error_code() {
 }
 
 #[test]
+fn error_pdu_class_or_code_cut_short_is_a_short_buffer() {
+    // An error class, then an error code, that says two octets and holds one.
+    for (wire, need) in [
+        (&[0x50, 0x01, 0x0C, 0x92, 0x00][..], 6),
+        (&[0x50, 0x01, 0x0C, 0x91, 0x02, 0x92, 0x00], 8),
+    ] {
+        match decode_apdu(Bytes::copy_from_slice(wire)) {
+            Err(Error::BufferTooShort { need: n, have }) => {
+                assert_eq!((n, have), (need, wire.len()), "{wire:02X?}");
+            }
+            other => panic!("expected a short buffer for {wire:02X?}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn unconfirmed_request_empty_service_data() {
     let pdu = UnconfirmedRequest {
         service_choice: UnconfirmedServiceChoice::WHO_IS,

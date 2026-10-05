@@ -78,13 +78,13 @@ pub fn decode_read_access_specification(
     let mut list_of_property_references = Vec::new();
     loop {
         if offset >= data.len() {
-            return Err(Error::decoding(
+            return Err(Error::missing(
                 offset,
                 format!("{WHAT} missing closing tag 1"),
             ));
         }
         if list_of_property_references.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset,
                 format!("{WHAT} property references exceed the item limit"),
             ));

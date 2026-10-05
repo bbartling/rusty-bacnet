@@ -265,9 +265,11 @@ fn dcc_configured_validation_retains_decode_password_unknown_mode_precedence() {
             handlers::device_mgmt::validate_dcc(data, &password, policy)
                 .expect_err("each request here is refused")
         };
-        // `[1]` announces one contents octet and holds none (#1374).
+        // `[1]` announces one contents octet and holds none (#1374): the
+        // request's Reject for a missing parameter (#1446).
         let failure = validate(&[0x19]);
-        assert!(matches!(failure.error, Error::BufferTooShort { .. }));
+        assert!(matches!(failure.error, Error::Reject { reason }
+            if reason == RejectReason::MISSING_REQUIRED_PARAMETER.to_raw()));
         assert!(matches!(failure.outcome, DccOutcome::Malformed));
         // The password is checked before the mode, so an unknown mode with
         // no password is a password failure.
