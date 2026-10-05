@@ -1,12 +1,13 @@
-//! `RecipientRoute::localize` case by case (#1299), and two outcomes it has on
-//! a running server: a confirmed notification sent to a node on this network
-//! is completed by that node's own SimpleACK, and a Device bound to the link
-//! broadcast MAC on this network is skipped as unroutable.
+//! `RecipientRoute::localize` case by case (#1299), `into_confirmed`'s group
+//! check (#1493), and two outcomes on a running server: a confirmed
+//! notification sent to a node on this network is completed by that node's
+//! own SimpleACK, and a Device bound to the link broadcast MAC on this network
+//! is skipped as unroutable.
 
 use super::*;
 use crate::server::device_bindings::BindingFreshness;
 use crate::server::event_delivery::EventDelivery;
-use crate::server::event_recipient_route::RecipientRoute;
+use crate::server::event_recipient_route::{ConfirmedRouteRefusal, RecipientRoute};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::BACnetObject;
@@ -14,6 +15,15 @@ use bacnet_types::enums::{EventState, EventType, NotifyType};
 
 fn is_link_broadcast(mac: &[u8]) -> bool {
     mac == LITERAL_BROADCAST_MAC
+}
+
+/// A multicast address: a group destination, not the link's broadcast.
+const MULTICAST: [u8; 6] = [224, 0, 0, 1, 0xBA, 0xC0];
+
+/// The link's group rule: its broadcast, and [`MULTICAST`]. Distinct from
+/// [`is_link_broadcast`], so a test tells which one each case consults.
+fn is_group(mac: &[u8]) -> bool {
+    is_link_broadcast(mac) || mac == MULTICAST
 }
 
 fn mac(octets: &[u8]) -> MacAddr {
@@ -45,11 +55,9 @@ fn localize_leaves_every_route_alone_while_the_number_is_unknown() {
         || remote_unicast(THIS_NETWORK, LITERAL_BROADCAST_MAC),
         || bound_routed(THIS_NETWORK, &PEER_C),
         || bound_routed(THIS_NETWORK, LITERAL_BROADCAST_MAC),
+        || bound_routed(THIS_NETWORK, &MULTICAST),
     ] {
-        assert_eq!(
-            route().localize(None, is_link_broadcast, is_link_broadcast),
-            route()
-        );
+        assert_eq!(route().localize(None, is_link_broadcast, is_group), route());
     }
 }
 
@@ -76,7 +84,7 @@ fn localize_takes_only_routes_naming_this_network_as_local() {
         || bound_routed(REMOTE_NETWORK, &PEER_C),
     ] {
         assert_eq!(
-            route().localize(local, is_link_broadcast, is_link_broadcast),
+            route().localize(local, is_link_broadcast, is_group),
             route()
         );
     }
@@ -101,16 +109,82 @@ fn localize_takes_only_routes_naming_this_network_as_local() {
                 freshness: BindingFreshness::Configured,
             },
         ),
-        // A Device bound to the broadcast MAC here names no single device.
+        // A Device bound to the broadcast MAC here names no single device,
+        // and neither does one bound to any other group address (#1493).
         (
             bound_routed(THIS_NETWORK, LITERAL_BROADCAST_MAC),
             RecipientRoute::InvalidDevice,
         ),
+        (
+            bound_routed(THIS_NETWORK, &MULTICAST),
+            RecipientRoute::InvalidDevice,
+        ),
+        // An address at a group address other than the link's broadcast is
+        // routed as a unicast to it: an unconfirmed notification may go
+        // there, and `into_confirmed` refuses a confirmed one.
+        (
+            remote_unicast(THIS_NETWORK, &MULTICAST),
+            RecipientRoute::LocalUnicast(mac(&MULTICAST)),
+        ),
     ] {
-        assert_eq!(
-            route.localize(local, is_link_broadcast, is_link_broadcast),
-            expected
-        );
+        assert_eq!(route.localize(local, is_link_broadcast, is_group), expected);
+    }
+}
+
+/// #1493: a confirmed request's route is refused when its local next hop is
+/// a group address, the recipient's own MAC or a binding's router. A remote
+/// recipient with no router named has no local next hop to check, since its
+/// DADR is on another network, and a broadcast names no device.
+#[test]
+fn into_confirmed_refuses_a_group_next_hop() {
+    let refusal = |route: RecipientRoute| route.into_confirmed(is_group).err();
+    let group = Some(ConfirmedRouteRefusal::GroupNextHop);
+    let bound_local = |octets: &[u8]| RecipientRoute::BoundLocalUnicast {
+        mac: mac(octets),
+        freshness: BindingFreshness::Configured,
+    };
+    let routed_via = |router: &[u8]| RecipientRoute::BoundRoutedUnicast {
+        network: REMOTE_NETWORK,
+        mac: mac(&PEER_C),
+        router: mac(router),
+        freshness: BindingFreshness::Configured,
+    };
+    for (case, route, expected) in [
+        (
+            "local station",
+            RecipientRoute::LocalUnicast(mac(&PEER_C)),
+            None,
+        ),
+        (
+            "local multicast",
+            RecipientRoute::LocalUnicast(mac(&MULTICAST)),
+            group,
+        ),
+        (
+            "local broadcast MAC",
+            RecipientRoute::LocalUnicast(mac(LITERAL_BROADCAST_MAC)),
+            group,
+        ),
+        ("bound local station", bound_local(&PEER_C), None),
+        ("bound local multicast", bound_local(&MULTICAST), group),
+        ("routed via a station", routed_via(&ROUTER), None),
+        (
+            "routed via a multicast router",
+            routed_via(&MULTICAST),
+            group,
+        ),
+        (
+            "remote with no router",
+            remote_unicast(REMOTE_NETWORK, &MULTICAST),
+            None,
+        ),
+        (
+            "local broadcast",
+            RecipientRoute::LocalBroadcast,
+            Some(ConfirmedRouteRefusal::NotOneDevice),
+        ),
+    ] {
+        assert_eq!(refusal(route), expected, "{case}");
     }
 }
 

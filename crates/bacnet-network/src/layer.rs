@@ -366,7 +366,10 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// 6.3). This layer doesn't ask the transport on every unicast, so that
     /// is the caller's to keep: `BACnetClient`, the endpoint's egress and its
     /// requester, which take caller-chosen MACs, refuse anything else to it
-    /// (#1479), and the server sends no confirmed request to one (#1493).
+    /// (#1479). The server refuses one for the confirmed requests it starts
+    /// itself, to event recipients, Channel and Command targets, audit
+    /// recipients and bound devices (#1493); its replies and COV
+    /// notifications go to the source a request came from.
     pub async fn send_apdu(
         &self,
         apdu: &[u8],

@@ -3,7 +3,8 @@
 //! (#1493). A confirmed notification goes to one device, so a confirmed
 //! recipient there gets nothing and counts with the confirmed broadcast
 //! recipients, while an unconfirmed one is still sent to that address. A
-//! Device binding to a group address names no device and is unroutable.
+//! Device binding to a group address names no device and is unroutable, one
+//! routed through this network's own number to a group final MAC included.
 
 use super::super::device_bindings::DeviceBindingTable;
 use super::*;
@@ -16,6 +17,11 @@ const THIS_NETWORK: u16 = 7;
 /// Configured Devices bound to a group address, locally and as a router.
 const GROUP_PEER: u32 = 60;
 const GROUP_ROUTER: u32 = 61;
+/// A Device bound through a station router on this network's own number, at
+/// a multicast final MAC: a local binding at that MAC once the number is
+/// known, so it names no device either.
+const GROUP_FINAL: u32 = 62;
+const ROUTER: [u8; 6] = [127, 0, 0, 3, 0xBA, 0xC0];
 
 /// [`routing_transport`] whose group rule also takes in [`GROUPS`].
 fn group_transport() -> (TestTransport, SendLog) {
@@ -35,13 +41,15 @@ fn device(instance: u32) -> BACnetRecipient {
 }
 
 /// Bindings to a group address, in a table built without the link's check,
-/// as no started server could hold them.
+/// as no started server could hold the first two. The third passes that
+/// check, its router being a station, and fails only once localized.
 fn group_bindings() -> Arc<RwLock<DeviceBindingTable>> {
     let id = |instance| ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
     let mut table = DeviceBindingTable::new();
     for binding in [
         DeviceBinding::local(id(GROUP_PEER), GROUPS[0]),
         DeviceBinding::routed(id(GROUP_ROUTER), 700, [0x33], GROUPS[1]),
+        DeviceBinding::routed(id(GROUP_FINAL), THIS_NETWORK, GROUPS[0], ROUTER),
     ] {
         table
             .insert_configured(binding.unwrap(), |_| false)
@@ -116,7 +124,7 @@ async fn a_device_bound_to_a_group_address_is_unroutable() {
         recipient_unroutable: 1,
         ..Default::default()
     };
-    for instance in [GROUP_PEER, GROUP_ROUTER] {
+    for instance in [GROUP_PEER, GROUP_ROUTER, GROUP_FINAL] {
         for confirmed in [false, true] {
             let (broadcasts, unicasts, counters) =
                 distribute_one(destination_for(device(instance), confirmed)).await;

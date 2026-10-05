@@ -462,8 +462,11 @@ pub trait TransportPort: Send + Sync {
     /// broadcast, an IPv6 multicast group or an Ethernet multicast MAC
     /// (#1493). Such a send is a local broadcast, which may carry only an
     /// Unconfirmed-Request (Clause 6.3), so a sender that takes a
-    /// caller-chosen MAC refuses anything else to it (#1479), and the server
-    /// sends no confirmed request to one and binds no device to one (#1493).
+    /// caller-chosen MAC refuses anything else to it (#1479). The server binds
+    /// no device to one, and the confirmed requests it starts itself, to
+    /// event recipients, Channel and Command targets, audit recipients and
+    /// bound devices, never go to one (#1493). Its replies and COV
+    /// notifications go to the source a request came from.
     ///
     /// [`Self::is_broadcast_mac`] keeps its narrower meaning, this link's own
     /// broadcast, which routing and recipient checks rely on. The default is

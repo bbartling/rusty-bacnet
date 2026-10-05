@@ -285,10 +285,16 @@ impl DeviceBindingTable {
         is_group: impl Fn(&[u8]) -> bool,
     ) -> Result<(), Error> {
         validate_device_identifier(binding.device)?;
+        if let Some((role, mac)) = group_hop(&binding.target, &is_group) {
+            return Err(binding_error(&format!(
+                "Device {} is bound at {} as {role}, a broadcast or group address of \
+                 this link; bind the device's unicast address",
+                binding.device.instance_number(),
+                colon_hex(mac)
+            )));
+        }
         if !target_is_usable(&binding.target, &is_group) {
-            return Err(binding_error(
-                "local peer or next-hop router is a broadcast or group address",
-            ));
+            return Err(binding_error("the binding names no reachable device"));
         }
         if self.entries.contains_key(&binding.device) {
             return Err(binding_error("duplicate configured Device identifier"));
@@ -456,6 +462,30 @@ impl DeviceBindingTable {
             },
         }
     }
+}
+
+/// The MAC of `target` that is a group address of the link, the device's own
+/// or its router's, with which of the two it is (#1493).
+fn group_hop(
+    target: &DeviceBindingTarget,
+    is_group: impl Fn(&[u8]) -> bool,
+) -> Option<(&'static str, &MacAddr)> {
+    match target {
+        DeviceBindingTarget::Local { peer_mac } => {
+            is_group(peer_mac).then_some(("its own MAC", peer_mac))
+        }
+        DeviceBindingTarget::Routed { router_mac, .. } => {
+            is_group(router_mac).then_some(("its router's MAC", router_mac))
+        }
+    }
+}
+
+/// `mac` as colon-separated hex octets, the form the address parsers take.
+fn colon_hex(mac: &[u8]) -> String {
+    mac.iter()
+        .map(|octet| format!("{octet:02x}"))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 /// Whether a binding names one device this link can reach. A binding never

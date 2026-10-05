@@ -2063,8 +2063,11 @@ finally:
   reachability or authentication. Duplicate Device identifiers raise `ValueError`,
   even for the same address, without changing the first binding. There is no update/removal,
   routed-binding or discovery API. The Rust builder's 4096-binding capacity check
-  runs at `start()` before registrations transfer (`ValueError`); concrete
-  transport broadcast checks remain in the subsequent Rust build step.
+  runs at `start()` before registrations transfer (`ValueError`). The Rust
+  build step then refuses a binding at a broadcast or other group address of
+  the link, such as a multicast address, 255.255.255.255 or the configured
+  broadcast IP at another port: `start()` raises `BacnetError` naming the
+  device and the address (#1493). Bind each device at its unicast address.
 - `configure_audit_log_parent(instance: int, *, parent_device_instance: int,
   parent_audit_log_instance: int) -> None` sets the registered local log's
   `Member_Of` reference. All identifiers must be integers in `0..=4194303`, not

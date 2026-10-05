@@ -180,6 +180,7 @@ async fn command_write_to_a_device_bound_at_a_group_address_is_never_sent() {
         assert_eq!(db_flags(&h, 1).await, [false, true]);
         assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
         assert_eq!(state(&mut h, 1).await, (false, false));
+        h.server.stop().await.unwrap();
     }
 }
 

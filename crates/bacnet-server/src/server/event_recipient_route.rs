@@ -161,10 +161,12 @@ impl RecipientRoute {
         }
     }
 
-    /// The route a confirmed request to this recipient takes: every server
-    /// path that sends one (event notifications, a Channel's or Command's
-    /// requests to another device, audit notifications and Audit Log
-    /// forwarding) gets its route here. A confirmed request goes to one
+    /// The route a confirmed request to this recipient takes: each confirmed
+    /// request the server starts toward a configured recipient or a bound
+    /// device (event notifications, a Channel's or Command's requests to
+    /// another device, audit notifications and Audit Log forwarding) gets its
+    /// route here. Replies and COV notifications go to the source a request
+    /// came from and don't come through here. A confirmed request goes to one
     /// device, so a route that names none is refused, and so is one whose
     /// local next hop, the destination's MAC or the binding's router, reaches
     /// a group of nodes (`is_group`, [`TransportPort::is_group_destination`]):

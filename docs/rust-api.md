@@ -1684,9 +1684,11 @@ multicast group, on Ethernet any MAC with the group bit set), is a local
 broadcast too, but the layer doesn't ask the transport on every unicast:
 `BACnetClient`'s confirmed requests, the endpoint's egress and its requester,
 which take caller-chosen MACs, refuse anything but an Unconfirmed-Request there
-themselves, and the server sends no confirmed request to one (#1493).
-`is_broadcast_mac` keeps its narrower meaning, this link's own broadcast,
-which routing relies on.
+themselves. The server refuses one for the confirmed requests it starts
+itself, to event recipients, Channel and Command targets, audit recipients and
+bound devices, and binds no device to one (#1493); its replies and COV
+notifications go to the source a request came from. `is_broadcast_mac` keeps
+its narrower meaning, this link's own broadcast, which routing relies on.
 
 ---
 
@@ -2863,8 +2865,8 @@ confirmed WriteProperty (#1180). The address comes from the server's device
 bindings: a `DeviceBinding` registered on the builder, or an I-Am the server
 heard in the last ten minutes. A binding never takes a group address of the
 link (`TransportPort::is_group_destination`), as the device's own MAC or as its
-router's: one registered so stops the server from starting, and an I-Am from
-one binds nothing (#1493). For a device with neither, the server first
+router's: one registered so stops the server from starting, with an error
+naming the device and the address, and an I-Am from one binds nothing (#1493). For a device with neither, the server first
 broadcasts one Who-Is whose low and high limits are both that device's
 instance (#1322). A device it has never heard from is asked on every network
 (a global broadcast, DNET 65535). One whose stale I-Am is still held is asked
@@ -5245,9 +5247,10 @@ MAC rather than through its router, and a confirmed notification then waits
 for the answer from that MAC directly. Such a binding whose final MAC is the
 link's broadcast MAC, or any other group address of the link, names no
 single device here, so it is skipped and counts in `recipient_unroutable`, as
-a local binding at such a MAC does, so no forwarded copy goes to it either. Clause 6.5.1 sends traffic for the local
-network without a DNET, and a non-routing node drops an NPDU whose DNET names
-a network (Clause 6.5.2.1), so the routed form might never arrive. The
+a local binding at such a MAC does, so no forwarded copy goes to it either.
+Clause 6.5.1 sends traffic for the local network without a DNET, and a
+non-routing node drops an NPDU whose DNET names a network (Clause 6.5.2.1),
+so the routed form might never arrive. The
 number is read once per notification from `NetworkLayer::local_network_number`,
 without the database lock, and a confirmed notification keeps the route it
 was first sent on for its retries. While the number is unknown, an address

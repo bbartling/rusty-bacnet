@@ -38,7 +38,12 @@ async fn a_configured_binding_at_a_group_address_stops_startup() {
         let Err(error) = started else {
             panic!("a server started with a binding at a group address");
         };
-        assert!(error.to_string().contains("group address"), "{error}");
+        let error = error.to_string();
+        assert!(
+            error.contains("Device 9 is bound at e0:00:00:01:ba:c0"),
+            "{error}"
+        );
+        assert!(error.contains("broadcast or group address"), "{error}");
     }
 
     let mut server = BACnetServer::generic_builder()
