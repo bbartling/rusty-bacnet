@@ -137,20 +137,25 @@ fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
         rows.extend([P::START_TIME, P::STOP_TIME].map(|p| (p, !trend, true)));
         rows.extend([P::ALIGN_INTERVALS, P::INTERVAL_OFFSET, P::TRIGGER].map(|p| (p, true, true)));
     }
-    // Every log's BUFFER_READY rows, optional (Table 12-29 and 12-35
-    // footnote 4, Table 12-31 footnote 3); the configuration ones writable
-    // (#1347).
+    // Every log's BUFFER_READY rows, the configuration ones writable (#1347).
+    // Tables 12-29 and 12-35 (footnote 4) and 12-31 (footnote 3) require
+    // them of a log that reports intrinsically, as these do, all but
+    // Event_Message_Texts, which they only permit (#1485).
     rows.extend([
-        (P::NOTIFICATION_THRESHOLD, true, true),
-        (P::RECORDS_SINCE_NOTIFICATION, true, false),
-        (P::LAST_NOTIFY_RECORD, true, false),
-        (P::NOTIFICATION_CLASS, true, true),
-        (P::EVENT_ENABLE, true, true),
-        (P::ACKED_TRANSITIONS, true, false),
-        (P::NOTIFY_TYPE, true, true),
-        (P::EVENT_TIME_STAMPS, true, false),
+        (P::NOTIFICATION_THRESHOLD, false, true),
+        (P::RECORDS_SINCE_NOTIFICATION, false, false),
+        (P::LAST_NOTIFY_RECORD, false, false),
+        (P::NOTIFICATION_CLASS, false, true),
+        (P::EVENT_ENABLE, false, true),
+        (P::ACKED_TRANSITIONS, false, false),
+        (P::NOTIFY_TYPE, false, true),
+        (P::EVENT_TIME_STAMPS, false, false),
         (P::EVENT_MESSAGE_TEXTS, true, false),
-        (P::EVENT_DETECTION_ENABLE, true, true),
+        // The message texts and the inhibit pair, only permitted (#1329).
+        (P::EVENT_MESSAGE_TEXTS_CONFIG, true, true),
+        (P::EVENT_DETECTION_ENABLE, false, true),
+        (P::EVENT_ALGORITHM_INHIBIT_REF, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT, true, true),
     ]);
     rows.push((P::PROPERTY_LIST, false, false));
     rows

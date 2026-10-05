@@ -21,6 +21,7 @@
 //! `impl_buffer_ready_reporting!` with the field and the log buffer.
 
 use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, EventType, NotifyType, PropertyIdentifier as P,
 };
@@ -29,6 +30,7 @@ use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
 use crate::common;
 use crate::event::history::{EventHistory, EventTransitionState};
+use crate::event::options::REPORTING_OPTION_METADATA as OPTIONS;
 use crate::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
     EventTransitionCommitError, TransitionOutcome,
@@ -36,7 +38,7 @@ use crate::event::{
 use crate::property_metadata::{
     PropertyConformance::Optional,
     PropertyMetadata,
-    PropertyPresenceCondition::IntrinsicReporting,
+    PropertyPresenceCondition::{IntrinsicReportingOptional, IntrinsicReportingRequired},
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
@@ -52,29 +54,42 @@ pub struct BufferReadyReport {
     pub current_notification: u32,
 }
 
-const fn row(
+/// A row footnote 3 of Table 12-31 (4 of Tables 12-29 and 12-35) requires
+/// of a log that reports intrinsically.
+const fn required(
     property: P,
     write: crate::property_metadata::PropertyWriteCapability,
 ) -> PropertyMetadata {
-    PropertyMetadata::new(property, Optional, Some(IntrinsicReporting), write)
+    PropertyMetadata::new(property, Optional, Some(IntrinsicReportingRequired), write)
+}
+
+/// A row footnote 5 of Table 12-31 (7 of 12-29, 6 of 12-35) only lets such
+/// a log have.
+const fn permitted(
+    property: P,
+    write: crate::property_metadata::PropertyWriteCapability,
+) -> PropertyMetadata {
+    PropertyMetadata::new(property, Optional, Some(IntrinsicReportingOptional), write)
 }
 
 /// The event rows a log that reports intrinsically adds, in the order the
-/// three log tables list them. Event_Message_Texts_Config and the
-/// Event_Algorithm_Inhibit pair are optional there and not served; the
-/// others are the ones footnote 3 of Table 12-31 (4 of Tables 12-29 and
-/// 12-35) asks of a log with intrinsic reporting, and Event_Message_Texts.
-pub(crate) const BUFFER_READY_METADATA: [PropertyMetadata; 10] = [
-    row(P::NOTIFICATION_THRESHOLD, Always),
-    row(P::RECORDS_SINCE_NOTIFICATION, ReadOnly),
-    row(P::LAST_NOTIFY_RECORD, ReadOnly),
-    row(P::NOTIFICATION_CLASS, Always),
-    row(P::EVENT_ENABLE, Always),
-    row(P::ACKED_TRANSITIONS, ReadOnly),
-    row(P::NOTIFY_TYPE, Always),
-    row(P::EVENT_TIME_STAMPS, ReadOnly),
-    row(P::EVENT_MESSAGE_TEXTS, ReadOnly),
-    row(P::EVENT_DETECTION_ENABLE, Always),
+/// three log tables list them: the ones the tables require of a log with
+/// intrinsic reporting, and Event_Message_Texts, Event_Message_Texts_Config
+/// and the Event_Algorithm_Inhibit pair, which they only permit (#1329).
+pub(crate) const BUFFER_READY_METADATA: [PropertyMetadata; 13] = [
+    required(P::NOTIFICATION_THRESHOLD, Always),
+    required(P::RECORDS_SINCE_NOTIFICATION, ReadOnly),
+    required(P::LAST_NOTIFY_RECORD, ReadOnly),
+    required(P::NOTIFICATION_CLASS, Always),
+    required(P::EVENT_ENABLE, Always),
+    required(P::ACKED_TRANSITIONS, ReadOnly),
+    required(P::NOTIFY_TYPE, Always),
+    required(P::EVENT_TIME_STAMPS, ReadOnly),
+    permitted(P::EVENT_MESSAGE_TEXTS, ReadOnly),
+    OPTIONS[0],
+    required(P::EVENT_DETECTION_ENABLE, Always),
+    OPTIONS[1],
+    OPTIONS[2],
 ];
 
 /// The records collected from Total_Record_Count `from` to `to`. The count
@@ -202,7 +217,9 @@ impl BufferReadyReporting {
     /// whose Total_Record_Count is `total`, or `None` for any other property.
     /// Acked_Transitions is refused with WRITE_ACCESS_DENIED, as on every
     /// intrinsic-reporting object; the other read-only rows are left to the
-    /// object's metadata.
+    /// object's metadata. Event_Message_Texts_Config and the
+    /// Event_Algorithm_Inhibit pair go to the history's
+    /// [`ReportingOptions`](crate::event::options::ReportingOptions).
     ///
     /// Event_Detection_Enable FALSE puts Event_State, Acked_Transitions,
     /// Event_Time_Stamps and Event_Message_Texts back to their starting
@@ -211,9 +228,16 @@ impl BufferReadyReporting {
     pub(crate) fn write(
         &mut self,
         property: P,
+        array_index: Option<u32>,
         value: &PropertyValue,
         total: u32,
     ) -> Option<Result<(), Error>> {
+        if let Some(result) =
+            self.history
+                .write(property, array_index, value, self.event_detection_enable)
+        {
+            return Some(result);
+        }
         let result = match property {
             P::EVENT_DETECTION_ENABLE => boolean(value).map(|enable| {
                 if !enable {
@@ -259,10 +283,14 @@ impl BufferReadyReporting {
     /// The algorithm (Clause 13.3.7) for a log whose Total_Record_Count is
     /// `total`: a NORMAL to NORMAL transition once Notification_Threshold or
     /// more records have been collected since Last_Notify_Record, counting
-    /// across the wrap. No threshold, or detection off, proposes nothing.
-    /// Proposing changes nothing; the commit does.
+    /// across the wrap. No threshold, detection off, or a TRUE
+    /// Event_Algorithm_Inhibit, which stops a NORMAL state's re-entry
+    /// (Clause 13.2.2.1), proposes nothing; the records keep counting, so a
+    /// report falls due once the inhibit clears. Proposing changes nothing;
+    /// the commit does.
     pub(crate) fn propose(&self, total: u32) -> Option<TransitionOutcome> {
         let due = self.event_detection_enable
+            && !self.history.options.inhibited()
             && self.notification_threshold > 0
             && records_between(self.last_notify_record, total) >= self.notification_threshold;
         due.then(|| TransitionOutcome {
@@ -325,6 +353,17 @@ impl BufferReadyReporting {
             event_state,
             timestamp,
         )
+    }
+
+    /// The property Event_Algorithm_Inhibit follows, if any.
+    pub(crate) fn inhibit_reference(&self) -> Option<BACnetObjectPropertyReference> {
+        self.history.options.inhibit_reference().cloned()
+    }
+
+    /// Take the referenced value as Event_Algorithm_Inhibit; returns whether
+    /// it changed.
+    pub(crate) fn follow_inhibit(&mut self, inhibit: bool) -> bool {
+        self.history.options.follow(inhibit)
     }
 
     /// What GetEnrollmentSummary reports for the log.
@@ -397,6 +436,16 @@ macro_rules! impl_buffer_ready_reporting {
 
         fn buffer_ready_report_internal(&self) -> Option<$crate::log_reporting::BufferReadyReport> {
             self.$reporting.report()
+        }
+
+        fn event_algorithm_inhibit_reference_internal(
+            &self,
+        ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
+            self.$reporting.inhibit_reference()
+        }
+
+        fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
+            self.$reporting.follow_inhibit(inhibit)
         }
     };
 }
