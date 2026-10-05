@@ -41,9 +41,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// The selected Device's `Device_Address_Binding` lists the server's device
     /// bindings at the time of the read (#1369): each configured
-    /// [`DeviceBinding`](crate::server::DeviceBinding) and each device whose
-    /// I-Am was heard in the last ten minutes, in Device instance order, as a
-    /// `PropertyValue::List` whose items are encoded BACnetAddressBindings
+    /// [`DeviceBinding`] and each device whose I-Am was heard in the last ten
+    /// minutes, in Device instance order, as a `PropertyValue::List` whose
+    /// items are encoded BACnetAddressBindings
     /// (`PropertyValue::ApplicationData`). A device on this network has
     /// network number 0. The bindings outlast `stop`, so they still read then.
     ///
