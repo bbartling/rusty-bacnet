@@ -3,7 +3,7 @@ use bacnet_types::constructed::BACnetDeviceObjectReference;
 use super::{AuditLogObject, AuditReporterStatus};
 
 /// Instance-owned, memory-only forwarding configuration and delivery health.
-/// This is not a pending-send ledger and does not change the durable snapshot.
+/// This is not a pending-send queue and does not change the durable snapshot.
 #[doc(hidden)]
 pub struct AuditLogForwarding {
     parent: BACnetDeviceObjectReference,

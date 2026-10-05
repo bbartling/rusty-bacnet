@@ -316,12 +316,11 @@ The [hosted guides](https://jscott3201.github.io/rusty-bacnet/) cover the
 ## Conformance
 
 Rusty BACnet is **not BTL certified** and does not claim full BACnet
-conformance. Support is tracked clause by clause, with the evidence and open
-gaps for each, in the
-[support summary](docs/conformance/support-summary.md),
-[Standard 135-2020 ledger](docs/conformance/standard-135-2020-ledger.md) and
-[draft PICS](docs/conformance/pics-draft.md). Check the specific service, object
-and transport you rely on there.
+conformance. The website's
+[What's supported](https://jscott3201.github.io/rusty-bacnet/project/support/#whats-supported)
+section lists the object types, services, transports and Python bindings the
+current source implements. A running server can also generate a PICS for its
+own objects and services with `bacnet_server::pics`.
 
 ## Contributing
 

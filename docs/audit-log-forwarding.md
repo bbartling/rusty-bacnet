@@ -39,7 +39,7 @@ replay, or catch-up when a parent recovers. Shutdown, cancellation, or restart
 can lose forwarding progress even when local receipt succeeded. Reapply the
 local parent configuration after reopening storage. Schema v2, v1 migration,
 the two-slot checksummed backend, and receipt recovery are unchanged.
-Schema v1 has **no receipt ledger**: after reopening it, a later exact historical
+Schema v1 stores **no receipts**: after reopening it, a later exact historical
 request is fresh for receipt purposes. It receives an ACK and a v2 receipt on
 successful commit. If its complete record already matches, it still does not
 forward; an exact retransmission of that newly receipted request is silent,
@@ -116,7 +116,7 @@ These tests harden the existing policy, not a new delivery or durability profile
 | `audit_forwarder_boundary_tests.rs::audit_forwarding_mixed_timestamp_variants_create_distinct_records_and_attempts` and `audit/notification_tests.rs::forwarding_mixed_timestamp_variants_never_complement_in_either_direction` | Every mixed Time/DateTime/SequenceNumber pair stays distinct in both directions. |
 | `audit_forwarder_boundary_tests.rs::audit_forwarding_zero_capacity_commits_receipt_without_forward` | Confirmed ACK and durable receipt with no retained record/forward; exact duplicate stays silent. |
 | `audit_forwarder_recovery_tests.rs::audit_forwarding_configuration_recovers_only_on_next_changed_batch` | Unresolved/observed-only configuration, no replay on route availability, next-attempt resolution and ACK-driven recovery. |
-| `audit_forwarder_recovery_tests.rs::audit_forwarding_file_v1_reopen_has_no_replay_or_historical_receipt` | Real file-backed v1 reopen, local Member_Of reapplication, no replay, fresh receipt-only acceptance, and v2 receipt recovery. The server fixture removes the empty v2 receipt ledger from an encoded file; `audit/persistence_receipt_tests.rs::forwarding_v1_reopen_reapplies_member_of_without_rewriting_snapshot` also exercises the existing v1 encoder seam directly. |
+| `audit_forwarder_recovery_tests.rs::audit_forwarding_file_v1_reopen_has_no_replay_or_historical_receipt` | Real file-backed v1 reopen, local Member_Of reapplication, no replay, fresh receipt-only acceptance, and v2 receipt recovery. The server fixture removes the empty v2 receipt list from an encoded file; `audit/persistence_receipt_tests.rs::forwarding_v1_reopen_reapplies_member_of_without_rewriting_snapshot` also exercises the existing v1 encoder seam directly. |
 | `audit_forwarder_recovery_tests.rs::audit_forwarding_old_instance_completion_and_cancellation_cannot_update_replacement` | Old-instance success, rejection, deadline and joined shutdown cannot update replacement health; no durable mutation or detached work. |
 
 Server test paths are under `crates/bacnet-server/src/server/`; object test paths

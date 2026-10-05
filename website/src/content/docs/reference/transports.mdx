@@ -38,9 +38,7 @@ The README does not claim Annex J NAT traversal or IPv4 BACnet/IP multicast. A B
 
 ## Understand the evidence labels
 
-The project's conformance ledger distinguishes implementation presence, missing tests or source review, specifically evidenced clause behavior, deferred decisions, and unsupported designs. Preserve those distinctions when describing a feature.
-
-A row with clause-specific evidence supports that row's stated scope. It does not upgrade the whole object, service family, transport, or product to full conformance. The generated draft PICS and ledger are not a BTL certification.
+Code that implements a feature, a test that exercises it, and conformance are separate claims. Keep them apart when describing a feature: a test of one behavior supports that behavior, not the whole object, service family, transport, or product. A generated PICS is not a BTL certification.
 
 ## Which guide next?
 
@@ -50,4 +48,4 @@ Start with [connection configuration](/rusty-bacnet/guides/configuration/) for B
 
 These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
 
-[Release scope](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.11.0) · [CLI features](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/Cargo.toml) · [Python transport features](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/rusty-bacnet/Cargo.toml) · [Conformance evidence](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/conformance/standard-135-2020-ledger.md).
+[Release scope](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.11.0) · [CLI features](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/Cargo.toml) · [Python transport features](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/rusty-bacnet/Cargo.toml).

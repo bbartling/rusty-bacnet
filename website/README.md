@@ -4,7 +4,7 @@ An Astro/Starlight task guide with two explicit paths: preserved **v0.11.0**
 release installation/lab/tutorials and **current development** source guides.
 The development section covers shared endpoints, Network Port/Number controls,
 transport evidence and current SC setup. [Engineering docs](../docs/README.md)
-and the canonical conformance ledger remain the contract authorities.
+remain the contract authority.
 
 This content refresh is local-only. A successful build or browser check does not
 publish it or establish that a hosted site contains these changes. Historical

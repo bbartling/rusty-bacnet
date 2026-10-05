@@ -58,7 +58,7 @@ This is a source-build workflow, not a claim that a matching development wheel i
 
 ## Use the reference for exact signatures
 
-The [engineering documentation map](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/README.md) links the canonical [Rust API](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/rust-api.md), [Python API](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/python-api.md), [CLI reference](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/CLI.md) and conformance evidence. These task guides summarize those contracts rather than duplicate every method.
+The [engineering documentation map](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/README.md) links the canonical [Rust API](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/rust-api.md), [Python API](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/python-api.md) and [CLI reference](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/CLI.md). These task guides summarize those contracts rather than duplicate every method.
 
 Before 1.0, APIs may be removed or changed directly. Keep the source revision, feature selection and installed native artifact together in your integration record. Review [upgrade guidance](/rusty-bacnet/project/upgrading/) when moving an existing application.
 

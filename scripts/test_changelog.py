@@ -118,8 +118,8 @@ class ParseFragmentTests(unittest.TestCase):
                 self.assert_rejected("7-x.md", fragment(section, *longer), rf"is {cap + 1} characters; keep it to {cap}")
 
     def test_link_targets_and_wrapping_do_not_count(self):
-        entry = "- See [the ledger](docs/conformance/" + "a" * 400 + ".md#anchor)\n  for detail (#7)."
-        self.assertEqual(cl.entry_length(entry), len("See the ledger for detail (#7)."))
+        entry = "- See [the guide](docs/" + "a" * 400 + ".md#anchor)\n  for detail (#7)."
+        self.assertEqual(cl.entry_length(entry), len("See the guide for detail (#7)."))
         self.parse("7-x.md", fragment("Fixed", *entry.split("\n")))
 
     def test_blank_line_after_front_matter_is_allowed(self):
