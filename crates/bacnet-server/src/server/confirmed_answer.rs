@@ -1,5 +1,7 @@
 //! The answer a device gives a confirmed request this server sent: a
-//! confirmed notification, or a WriteProperty a run makes in another device.
+//! confirmed notification, a WriteProperty a run makes in another device, or
+//! the ReadProperty a Channel sends there to learn a member's datatype
+//! (#1342).
 //!
 //! An answer that turns the request down keeps what it said (#1323): the
 //! Error PDU's class and code, or the Reject or Abort reason. Notification
@@ -9,12 +11,16 @@
 
 use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 use bacnet_types::error::Error;
+use bytes::Bytes;
 
 /// Result of a confirmed request from the receiving device's side.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CovAckResult {
     /// SimpleAck received: the device took the request.
     Ack,
+    /// An unsegmented ComplexAck received, with its service data: the device
+    /// answered a read.
+    Data(Bytes),
     /// Error, Reject or Abort received: the device turned the request down.
     Error(Refusal),
 }

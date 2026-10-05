@@ -292,6 +292,16 @@ impl BACnetObject for SourceReporter {
             .record_command_write_internal(generation, command, success)
     }
 
+    fn learn_member_datatype_internal(
+        &mut self,
+        slot: usize,
+        reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
+        datatype: bacnet_objects::channel::MemberDatatype,
+    ) {
+        self.wrapped
+            .learn_member_datatype_internal(slot, reference, datatype);
+    }
+
     fn complete_command_run_internal(
         &mut self,
         generation: u64,

@@ -17,16 +17,16 @@ use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::command::CommandRun;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::write_property::WritePropertyRequest;
-use bacnet_types::constructed::BACnetActionCommand;
+use bacnet_types::constructed::{BACnetActionCommand, BACnetDeviceObjectPropertyReference};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, RwLock};
 
 use super::{end_when_free, execute, RunHost, TakenRuns, Unfinished};
-use crate::server::RemoteWriteError;
+use crate::server::RemoteRequestError;
 
 /// Run `runs`, and any runs their writes start, to their ends.
 ///
@@ -127,8 +127,16 @@ impl RunHost for Unattached<'_> {
         &self,
         _device: ObjectIdentifier,
         _command: &BACnetActionCommand,
-    ) -> Result<(), RemoteWriteError> {
-        Err(RemoteWriteError::NoNetwork)
+    ) -> Result<(), RemoteRequestError> {
+        Err(RemoteRequestError::NoNetwork)
+    }
+
+    async fn read_remote(
+        &self,
+        _device: ObjectIdentifier,
+        _reference: &BACnetDeviceObjectPropertyReference,
+    ) -> Result<PropertyValue, RemoteRequestError> {
+        Err(RemoteRequestError::NoNetwork)
     }
 
     async fn committed(&self, _db: &ObjectDatabase, _source: ObjectIdentifier) {}

@@ -2,6 +2,7 @@ use super::*;
 use bacnet_objects::traits::BACnetObject;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Barrier, Semaphore};
+use tokio::time::Duration;
 
 struct CountDrop(Arc<AtomicUsize>);
 impl Drop for CountDrop {

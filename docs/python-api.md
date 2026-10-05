@@ -2485,8 +2485,9 @@ peer writes the list. A member in another device keeps its Device and is
 written there with a confirmed WriteProperty when the server has a binding for
 it, from `add_device_binding` or an I-Am heard in the last ten minutes, or
 finds one with a Who-Is first, as for a Command's remote action (see
-[Building Control](#building-control)); the value goes as
-written, without the datatype conversion local members get (see the Channel
+[Building Control](#building-control)). The server reads that member's
+property there first to learn its datatype and converts the value to it as for
+a local member; a read that fails leaves the value as written (see the Channel
 paragraphs under [Lighting & Color](rust-api.md#lighting--color-5)).
 `execution_delay` holds one delay in milliseconds per member (zeros when
 omitted), `control_groups` the groups whose WriteGroup the Channel takes, and
@@ -2495,10 +2496,11 @@ them. Peers can write all of these, and Channel_Number, over the network.
 
 Once the server runs, a value written to the Channel's Present_Value, over the
 network or with `write_property_local`, goes on to each member at the write's
-priority once that member's delay has passed, converted to a local member
-property's datatype, as the Rust server does. Write_Status reads IN_PROGRESS
+priority once that member's own delay has passed, converted to the member
+property's datatype, as the Rust server does; a member in another device that
+waits for its answer holds back no other member. Write_Status reads IN_PROGRESS
 until every member is done and then SUCCESSFUL or FAILED, and Reliability
-reports what kind of failure the first failed member had; another
+reports what kind of failure the first member to fail had; another
 Present_Value write meanwhile is refused with BUSY. A
 [WriteGroup](#write-group) naming one of the Channel's groups and its number
 writes the value the same way.

@@ -100,7 +100,8 @@ pub enum LeaseOwner {
     /// A local client-side confirmed request.
     Requester,
     /// A confirmed request the local server role initiates: a notification,
-    /// or a write a Command object makes in another device. The recipient
+    /// a write a Command or Channel object makes in another device, or the
+    /// read a Channel makes there to learn a member's datatype. The recipient
     /// answers it as that transaction's server.
     Notification,
 }
@@ -175,6 +176,19 @@ impl LeaseMetadata {
             peer,
             service_choice,
             terminal_policy: TerminalPolicy::SimpleAck,
+            segmented_request: false,
+        }
+    }
+
+    /// Metadata for a read the server role initiates, whose successful
+    /// terminal is an unsegmented ComplexACK. The server role reassembles
+    /// nothing: it asks for an unsegmented answer and admits no segment.
+    pub fn server_read(peer: CanonicalPeer, service_choice: ConfirmedServiceChoice) -> Self {
+        Self {
+            owner: LeaseOwner::Notification,
+            peer,
+            service_choice,
+            terminal_policy: TerminalPolicy::ComplexAck,
             segmented_request: false,
         }
     }
@@ -577,7 +591,10 @@ fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind,
             if !pdu.segmented {
                 validate_service(metadata, pdu.service_choice)?;
             }
-            if metadata.owner != LeaseOwner::Requester {
+            // A server-role lease takes a ComplexACK only when it asked for
+            // one ([`LeaseMetadata::server_read`]), and never a segment.
+            let server_read = !pdu.segmented && metadata.terminal_policy.accepts_complex_ack();
+            if metadata.owner != LeaseOwner::Requester && !server_read {
                 return Err(AdmissionOutcome::OwnerMismatch);
             }
             if !metadata.terminal_policy.accepts_complex_ack() {

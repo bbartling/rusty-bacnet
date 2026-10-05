@@ -328,6 +328,17 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("record_command_write_internal", |o| {
         o.record_command_write_internal(11, 2, false).to_string()
     }),
+    ("learn_member_datatype_internal", |o| {
+        let reference = bacnet_types::constructed::BACnetDeviceObjectPropertyReference::new_local(
+            oid(ObjectType::BINARY_OUTPUT, 4),
+            P::PRESENT_VALUE.to_raw(),
+        );
+        let datatype = bacnet_objects::channel::MemberDatatype::Enumerated;
+        format!(
+            "{:?}",
+            o.learn_member_datatype_internal(3, &reference, datatype)
+        )
+    }),
     ("complete_command_run_internal", |o| {
         o.complete_command_run_internal(11, Err(WriteFailure::Communication))
             .to_string()

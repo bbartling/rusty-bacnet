@@ -1,6 +1,10 @@
 //! Writes this server makes in other devices on behalf of its own objects: a
 //! Command action naming another Device (Clause 12.10.8, #1180), or a Channel
-//! member in another device (Clause 12.53.11, #1264).
+//! member in another device (Clause 12.53.11, #1264). A Channel also reads
+//! such a member's property first, to learn the datatype it coerces its value
+//! to (#1342); that ReadProperty takes the same path, asks for an unsegmented
+//! answer and takes only that, and everything below about a write holds for
+//! it too.
 //!
 //! Each write goes out as one unsegmented confirmed WriteProperty. The address
 //! comes from the server's device bindings: a configured binding, or an I-Am
@@ -41,8 +45,11 @@
 use super::binding_probes::{ProbeStep, WhoIsScope};
 use super::device_bindings::{DeviceBindingTable, DeviceResolution};
 use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
-use super::notification_transactions::{run_attempts, Attempt, NotificationReserveError};
+use super::notification_transactions::{
+    run_attempts, Attempt, AttemptsEnd, NotificationReserveError,
+};
 use super::*;
+use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetActionCommand;
 use std::fmt;
@@ -52,10 +59,11 @@ use std::fmt;
 const CONFIRMED_HEADER_LEN: usize = 4;
 
 const WRITE_PROPERTY: ConfirmedServiceChoice = ConfirmedServiceChoice::WRITE_PROPERTY;
+const READ_PROPERTY: ConfirmedServiceChoice = ConfirmedServiceChoice::READ_PROPERTY;
 
-/// Why a write in another device was not made.
+/// Why a write, or a read, in another device got no answer it could use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RemoteWriteError {
+pub(crate) enum RemoteRequestError {
     /// DeviceCommunicationControl restricts initiation: nothing was sent, or
     /// the write ended at the first retry after it took effect.
     Disabled,
@@ -81,9 +89,12 @@ pub(crate) enum RemoteWriteError {
     Unanswered,
     /// The runner has no network to send on: a run made without a server.
     NoNetwork,
+    /// A read's answer doesn't decode, or names another property than the
+    /// one asked for.
+    Malformed,
 }
 
-impl fmt::Display for RemoteWriteError {
+impl fmt::Display for RemoteRequestError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let reason = match self {
             Self::Disabled => "initiation is restricted by DeviceCommunicationControl",
@@ -95,10 +106,11 @@ impl fmt::Display for RemoteWriteError {
             Self::Stopping => "the server is stopping",
             Self::Refused(refusal) => {
                 let answer = Error::from(*refusal);
-                return write!(formatter, "the device refused the write: {answer}");
+                return write!(formatter, "the device refused the request: {answer}");
             }
             Self::Unanswered => "the device didn't answer",
-            Self::NoNetwork => "no network to send the write on",
+            Self::NoNetwork => "no network to send the request on",
+            Self::Malformed => "the device's answer doesn't fit the read",
         };
         formatter.write_str(reason)
     }
@@ -118,10 +130,10 @@ impl RemoteWrite {
     pub(crate) fn for_command(
         device: ObjectIdentifier,
         command: &BACnetActionCommand,
-    ) -> Result<Self, RemoteWriteError> {
+    ) -> Result<Self, RemoteRequestError> {
         let mut value = BytesMut::new();
         encode_property_value(&mut value, &command.property_value)
-            .map_err(|_| RemoteWriteError::Unencodable)?;
+            .map_err(|_| RemoteRequestError::Unencodable)?;
         Ok(Self {
             device,
             request: WritePropertyRequest {
@@ -151,28 +163,75 @@ pub(super) struct RemoteWriter<'a, T: TransportPort + 'static> {
 
 impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
     /// Send `write` and wait for the device's answer.
-    pub(super) async fn write(&self, write: &RemoteWrite) -> Result<(), RemoteWriteError> {
-        if self.initiation_restricted() {
-            return Err(RemoteWriteError::Disabled);
-        }
-        let route = self.route(write.device).await?;
+    pub(super) async fn write(&self, write: &RemoteWrite) -> Result<(), RemoteRequestError> {
         let mut service = BytesMut::new();
         write
             .request
             .encode(&mut service)
-            .map_err(|_| RemoteWriteError::Unencodable)?;
+            .map_err(|_| RemoteRequestError::Unencodable)?;
+        // A write's lease admits no ComplexAck, so any answer taken is a
+        // SimpleAck.
+        self.request(write.device, WRITE_PROPERTY, service)
+            .await
+            .map(drop)
+    }
+
+    /// Read `request`'s property in `device` and return the value the device
+    /// answers with, decoded. An answer naming another property, or one that
+    /// doesn't decode, is [`RemoteRequestError::Malformed`].
+    pub(super) async fn read(
+        &self,
+        device: ObjectIdentifier,
+        request: &ReadPropertyRequest,
+    ) -> Result<PropertyValue, RemoteRequestError> {
+        let mut service = BytesMut::new();
+        request.encode(&mut service);
+        let Some(data) = self.request(device, READ_PROPERTY, service).await? else {
+            return Err(RemoteRequestError::Malformed);
+        };
+        let ack = ReadPropertyACK::decode(&data).map_err(|_| RemoteRequestError::Malformed)?;
+        if (
+            ack.object_identifier,
+            ack.property_identifier,
+            ack.property_array_index,
+        ) != (
+            request.object_identifier,
+            request.property_identifier,
+            request.property_array_index,
+        ) {
+            return Err(RemoteRequestError::Malformed);
+        }
+        decode_value(&ack.property_value).ok_or(RemoteRequestError::Malformed)
+    }
+
+    /// Send one confirmed request for `service`, whose encoded parameters are
+    /// `parameters`, to `device`, and wait for its answer: `None` for a
+    /// SimpleAck, the service data of a ComplexAck to a ReadProperty.
+    async fn request(
+        &self,
+        device: ObjectIdentifier,
+        service_choice: ConfirmedServiceChoice,
+        parameters: BytesMut,
+    ) -> Result<Option<Bytes>, RemoteRequestError> {
+        if self.initiation_restricted() {
+            return Err(RemoteRequestError::Disabled);
+        }
+        let route = self.route(device).await?;
         // Checked before an invoke ID is leased.
         let capacity = usize::try_from(self.max_apdu).unwrap_or(usize::MAX);
-        if CONFIRMED_HEADER_LEN + service.len() > capacity {
-            return Err(RemoteWriteError::TooLong);
+        if CONFIRMED_HEADER_LEN + parameters.len() > capacity {
+            return Err(RemoteRequestError::TooLong);
         }
-        let (operation, answer) = match self
-            .transactions
-            .reserve(route.canonical_peer.clone(), WRITE_PROPERTY)
-        {
+        let peer = route.canonical_peer.clone();
+        let reserved = if service_choice == READ_PROPERTY {
+            self.transactions.reserve_read(peer, service_choice)
+        } else {
+            self.transactions.reserve(peer, service_choice)
+        };
+        let (operation, answer) = match reserved {
             Ok(reservation) => reservation,
-            Err(NotificationReserveError::Closed) => return Err(RemoteWriteError::Stopping),
-            Err(_) => return Err(RemoteWriteError::NoInvokeId),
+            Err(NotificationReserveError::Closed) => return Err(RemoteRequestError::Stopping),
+            Err(_) => return Err(RemoteRequestError::NoInvokeId),
         };
         let invoke_id = operation.invoke_id();
         let mut apdu = BytesMut::new();
@@ -188,8 +247,8 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
                 invoke_id,
                 sequence_number: None,
                 proposed_window_size: None,
-                service_choice: WRITE_PROPERTY,
-                service_request: service.freeze(),
+                service_choice,
+                service_request: parameters.freeze(),
             }),
         )
         .expect("valid APDU encoding");
@@ -198,12 +257,12 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
             // A retry is a send too: DCC and the binding's lifetime are
             // checked again before each one, and either ends the write.
             let withdrawn = if self.initiation_restricted() {
-                Some(RemoteWriteError::Disabled)
+                Some(RemoteRequestError::Disabled)
             } else if route
                 .freshness
                 .is_some_and(|freshness| !freshness.permits_attempt_at(tokio::time::Instant::now()))
             {
-                Some(RemoteWriteError::Unbound)
+                Some(RemoteRequestError::Unbound)
             } else {
                 None
             };
@@ -219,10 +278,13 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         })
         .await?;
         match outcome {
-            NotificationWorkerResult::Ack => Ok(()),
-            NotificationWorkerResult::Error(refusal) => Err(RemoteWriteError::Refused(refusal)),
-            NotificationWorkerResult::Exhausted => Err(RemoteWriteError::Unanswered),
-            NotificationWorkerResult::Closed => Err(RemoteWriteError::Stopping),
+            AttemptsEnd::Answered(CovAckResult::Ack) => Ok(None),
+            AttemptsEnd::Answered(CovAckResult::Data(data)) => Ok(Some(data)),
+            AttemptsEnd::Answered(CovAckResult::Error(refusal)) => {
+                Err(RemoteRequestError::Refused(refusal))
+            }
+            AttemptsEnd::Exhausted => Err(RemoteRequestError::Unanswered),
+            AttemptsEnd::Closed => Err(RemoteRequestError::Stopping),
         }
     }
 
@@ -231,20 +293,20 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
     async fn route(
         &self,
         device: ObjectIdentifier,
-    ) -> Result<ConfirmedRecipientRoute, RemoteWriteError> {
+    ) -> Result<ConfirmedRecipientRoute, RemoteRequestError> {
         let resolution = self.resolve(&*self.bindings.read().await, device);
         if !can_look_for(device, &resolution) {
-            return self.confirmed(resolution, RemoteWriteError::Unbound);
+            return self.confirmed(resolution, RemoteRequestError::Unbound);
         }
         let (step, scope) = {
             let mut table = self.bindings.write().await;
             // An I-Am may have come in since the read guard went.
             let resolution = self.resolve(&table, device);
             if !can_look_for(device, &resolution) {
-                return self.confirmed(resolution, RemoteWriteError::Unbound);
+                return self.confirmed(resolution, RemoteRequestError::Unbound);
             }
             if self.initiation_restricted() {
-                return Err(RemoteWriteError::Disabled);
+                return Err(RemoteRequestError::Disabled);
             }
             let now = tokio::time::Instant::now();
             let step = table.probes.begin(device, now, self.timeout);
@@ -258,18 +320,18 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
             ProbeStep::Join(wait) => wait,
             ProbeStep::HeldOff | ProbeStep::Full => {
                 debug!(%device, ?step, "No Who-Is sent for an unbound device");
-                return Err(RemoteWriteError::Unbound);
+                return Err(RemoteRequestError::Unbound);
             }
         };
         // Woken by the I-Am or the deadline, the write looks again either way.
         wait.answered().await;
         let resolution = self.resolve(&*self.bindings.read().await, device);
-        if let Ok(route) = self.confirmed(resolution, RemoteWriteError::Undiscovered) {
+        if let Ok(route) = self.confirmed(resolution, RemoteRequestError::Undiscovered) {
             return Ok(route);
         }
         // A probe withdrawn before its Who-Is went out ends here too.
         if self.initiation_restricted() {
-            return Err(RemoteWriteError::Disabled);
+            return Err(RemoteRequestError::Disabled);
         }
         // Nothing answered where the device was last seen, so its next
         // Who-Is asks every network instead.
@@ -277,7 +339,7 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
             .write()
             .await
             .forget_stale(&device, Instant::now());
-        Err(RemoteWriteError::Undiscovered)
+        Err(RemoteRequestError::Undiscovered)
     }
 
     fn resolve(&self, table: &DeviceBindingTable, device: ObjectIdentifier) -> DeviceResolution {
@@ -294,8 +356,8 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
     fn confirmed(
         &self,
         resolution: DeviceResolution,
-        missing: RemoteWriteError,
-    ) -> Result<ConfirmedRecipientRoute, RemoteWriteError> {
+        missing: RemoteRequestError,
+    ) -> Result<ConfirmedRecipientRoute, RemoteRequestError> {
         RecipientRoute::from_device_resolution(resolution)
             .localize(self.network.local_network_number().get(), |mac| {
                 self.network.transport().is_broadcast_mac(mac)
@@ -314,7 +376,7 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         device: ObjectIdentifier,
         scope: WhoIsScope,
         probe: u64,
-    ) -> Result<(), RemoteWriteError> {
+    ) -> Result<(), RemoteRequestError> {
         let instance = device.instance_number();
         let mut service = BytesMut::new();
         WhoIsRequest {
@@ -335,7 +397,7 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         let priority = NetworkPriority::NORMAL;
         if self.initiation_restricted() {
             self.bindings.write().await.probes.withdraw(&device, probe);
-            return Err(RemoteWriteError::Disabled);
+            return Err(RemoteRequestError::Disabled);
         }
         let sent = match scope {
             WhoIsScope::Local => self.network.broadcast_apdu(&apdu, false, priority).await,
@@ -401,11 +463,20 @@ async fn send<T: TransportPort + 'static>(
         _ => return Err(()),
     };
     match &sent {
-        Ok(()) => debug!(invoke_id, attempt, "WriteProperty to another device sent"),
+        Ok(()) => debug!(invoke_id, attempt, "Request to another device sent"),
         Err(error) => warn!(
             %error,
-            invoke_id, attempt, "WriteProperty to another device not sent"
+            invoke_id, attempt, "Request to another device not sent"
         ),
     }
     sent.map_err(|_| ())
+}
+
+/// A ReadProperty-ACK's value: one application-tagged primitive, or `None`
+/// for anything else, which carries no datatype a Channel can coerce to.
+fn decode_value(encoded: &[u8]) -> Option<PropertyValue> {
+    match bacnet_encoding::primitives::decode_application_value(encoded, 0) {
+        Ok((value, end)) if end == encoded.len() => Some(value),
+        _ => None,
+    }
 }

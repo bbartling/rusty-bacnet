@@ -19,6 +19,8 @@ use super::command_remote_write_tests::{ack, deliver, device, remote_write, star
 use super::command_run_stop_tests::db_flags;
 use super::cov_wire_test_support::*;
 use super::*;
+use bacnet_objects::channel::MemberDatatype;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::WriteStatus;
 use bacnet_types::network_number::NetworkNumber;
@@ -68,7 +70,11 @@ async fn start(writer: Writer) -> Harness {
                     device_identifier: Some(device(9)),
                     ..member(ao(1), PropertyIdentifier::PRESENT_VALUE)
                 };
-                db.add(Box::new(channel(5, 21, vec![(remote, 0)]))).unwrap();
+                let mut channel = channel(5, 21, vec![(remote.clone(), 0)]);
+                // As an earlier distribution's read would have, so the write
+                // is the only request sent (#1342).
+                channel.learn_member_datatype_internal(0, &remote, MemberDatatype::Real);
+                db.add(Box::new(channel)).unwrap();
             })
             .await
         }

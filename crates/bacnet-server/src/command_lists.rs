@@ -28,12 +28,14 @@
 //! in list order, each through the owner's write path (a command naming
 //! another device through [`RunHost::write_remote`]), each outcome recorded
 //! under a generation check, the post delay after each attempt, a stop at a
-//! failure that quits, then the end of the run. A Channel's members go in
-//! delay order through the same write paths, a member in another device
-//! through [`RunHost::write_remote`] too. A failed write is sorted into a
-//! [`WriteFailure`] (`target`), and the run ends with its first one, which a
-//! Channel reports in Reliability. A run a write starts is admitted through
-//! `chain`, which stops runs that feed back into themselves.
+//! failure that quits, then the end of the run. A Channel's members each go
+//! once their own delay is up, through the same write paths, a member in
+//! another device through [`RunHost::write_remote`] too, after a
+//! [`RunHost::read_remote`] that learns its datatype (`channel`). A failed
+//! write is sorted into a [`WriteFailure`] (`target`), and the run ends with
+//! its first one, which a Channel reports in Reliability. A run a write starts
+//! is admitted through `chain`, which stops runs that feed back into
+//! themselves.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -42,13 +44,13 @@ use std::time::Duration;
 use bacnet_objects::command::{CommandRun, RunPlan, WriteFailure};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::constructed::BACnetActionCommand;
+use bacnet_types::constructed::{BACnetActionCommand, BACnetDeviceObjectPropertyReference};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
-use crate::server::RemoteWriteError;
+use crate::server::RemoteRequestError;
 
 mod chain;
 mod channel;
@@ -82,7 +84,16 @@ pub(crate) trait RunHost: Sync {
         &self,
         device: ObjectIdentifier,
         command: &BACnetActionCommand,
-    ) -> impl Future<Output = Result<(), RemoteWriteError>> + Send;
+    ) -> impl Future<Output = Result<(), RemoteRequestError>> + Send;
+
+    /// Read `reference`'s property in `device`, another device, as a confirmed
+    /// ReadProperty, and return the value it holds. No database guard is held
+    /// while it is outstanding.
+    fn read_remote(
+        &self,
+        device: ObjectIdentifier,
+        reference: &BACnetDeviceObjectPropertyReference,
+    ) -> impl Future<Output = Result<PropertyValue, RemoteRequestError>> + Send;
 
     /// The object's run state changed under `db`, the guard that changed it.
     fn committed(
@@ -104,7 +115,9 @@ pub(crate) trait RunHost: Sync {
 pub(crate) struct Unfinished {
     source: ObjectIdentifier,
     generation: u64,
-    /// The first command, or member, not yet written.
+    /// How many writes have been made: a Command's first `next` commands, in
+    /// list order, or that many of a Channel's members, in the order they
+    /// finished.
     next: usize,
     len: usize,
     /// `Ok` while every write made so far succeeded, otherwise the first

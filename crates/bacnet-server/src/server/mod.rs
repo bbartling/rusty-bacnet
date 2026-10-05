@@ -603,7 +603,7 @@ mod network_port;
 mod network_port_tests;
 pub use confirmed_answer::{CovAckResult, Refusal};
 mod remote_writes;
-pub(crate) use remote_writes::RemoteWriteError;
+pub(crate) use remote_writes::RemoteRequestError;
 mod notification_transactions;
 #[doc(hidden)]
 pub use notification_transactions::{
@@ -682,7 +682,11 @@ mod averaging_sample_tests;
 #[cfg(test)]
 mod binary_lighting_task_tests;
 #[cfg(test)]
+mod channel_member_concurrency_tests;
+#[cfg(test)]
 mod channel_reliability_tests;
+#[cfg(test)]
+mod channel_remote_datatype_tests;
 #[cfg(test)]
 mod channel_remote_write_tests;
 #[cfg(test)]

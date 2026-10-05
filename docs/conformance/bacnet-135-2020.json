@@ -4438,8 +4438,13 @@
     "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_that_refuses_is_a_process_error_until_a_good_run_clears_it,channel_reliability_takes_a_client_value_only_out_of_service,channel_reliability_names_the_first_failure_in_write_order}",
     "crates/bacnet-objects/src/channel/reliability_tests.rs::{channel_reliability_names_the_failure_and_clears_on_the_next_success,channel_write_with_nothing_to_distribute_clears_reliability,channel_reliability_is_simulated_out_of_service_and_restored_in_service,channel_takes_members_in_other_devices}",
     "crates/bacnet-server/src/command_lists/target.rs::tests::{failures_sort_into_configuration_process_and_communication,only_an_invalid_datatype_error_or_reject_refuses_the_datatype,only_silence_to_the_write_or_its_who_is_marks_the_device_silent}",
-    "crates/bacnet-integration-tests/tests/server/channel_remote.rs::channel_writes_members_in_another_device_over_bip",
-    "crates/bacnet-server/src/server/local_network_outbound_tests.rs::channel_member_bound_through_this_network_is_written_without_a_dnet"
+    "crates/bacnet-integration-tests/tests/server/channel_remote.rs::{channel_writes_members_in_another_device_over_bip,channel_coerces_its_value_for_a_member_in_another_device_over_bip}",
+    "crates/bacnet-server/src/server/local_network_outbound_tests.rs::channel_member_bound_through_this_network_is_written_without_a_dnet",
+    "crates/bacnet-server/src/server/channel_remote_datatype_tests.rs::{channel_coerces_a_value_to_the_datatype_a_member_in_another_device_reads_as,channel_sends_its_value_as_written_when_the_member_read_tells_no_datatype}",
+    "crates/bacnet-objects/src/channel/learned_tests.rs::a_learned_datatype_stays_until_its_member_is_replaced",
+    "crates/bacnet-server/src/server/channel_member_concurrency_tests.rs::{a_silent_member_in_another_device_holds_back_no_member_here,reliability_takes_the_first_failure_to_finish_not_the_first_member,a_distribution_keeps_at_most_sixteen_requests_outstanding_in_other_devices}",
+    "crates/bacnet-server/src/server/notification_transactions_tests.rs::only_a_read_lease_takes_a_complex_ack_and_its_data",
+    "crates/bacnet-endpoint-core/src/coordinator_tests.rs::server_read_accepts_only_an_unsegmented_complex_ack_for_its_service"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/channel_wire_tests.rs::{channel_value_no_member_can_take_fails_without_writing,channel_writing_its_own_present_value_is_refused_busy}",
@@ -4477,19 +4482,19 @@
     "CHANGELOG.md Unreleased Fixed entry for #1324 (a dropped write_local ends its runs), from changelog.d/1324-dropped-write-local-runs.md",
     "CHANGELOG.md Unreleased Added entry for #1322 (targeted Who-Is for unbound remote targets), from changelog.d/1322-targeted-who-is.md",
     "docs/rust-api.md#lighting--color-5 Channel object",
-    "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md"
+    "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md",
+    "CHANGELOG.md Unreleased Changed entry for #1342 (a remote member's datatype is read and coerced to), from changelog.d/1342-channel-remote-member-datatype.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1343 (member delays run side by side while a remote write waits), from changelog.d/1343-channel-member-delays-side-by-side.md"
    ],
    "notes": [
-    "A local member's datatype is that of its property's value; NULL, constructed values and remote members count as unknown and pass unchanged, `Lighting_Command` as a BACnetLightingCommand. Rule 3 bounds Unsigned and ENUMERATED at 2147483647.",
-    "Remote members are written one at a time (no DNET if bound via this network's number), after a Who-Is if unbound; a silent device fails its later members unsent (one Who-Is, one write's retries each). This Device's identifier is dropped.",
+    "A member's datatype is its property value's, read here or, once per remote member until it is rewritten, by ReadProperty. NULL, constructed values and failed reads pass unchanged. Rule 3 bounds Unsigned and ENUMERATED at 2147483647.",
+    "Each member goes when its delay is up: local ones in delay then list order, remote ones side by side (16 requests at most), after a Who-Is if unbound. A device found silent fails its later members unsent. This Device's identifier drops.",
     "A whole `Execution_Delay` write takes exactly one delay per member (VALUE_OUT_OF_RANGE otherwise); index-0 and whole member-list writes resize both arrays. Caps are 1024 members and 64 control groups.",
     "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers and `stop()` end it FAILED.",
-    "Reliability names the first failed member: CONFIGURATION_ERROR for a value the Channel can't coerce (type or rule range) or an unknown-target or datatype refusal, COMMUNICATION_FAILURE for no binding, DCC or silence, else PROCESS_ERROR."
+    "Reliability names the first failure to finish: CONFIGURATION_ERROR for a value the Channel can't coerce (type or rule range) or an unknown-target or datatype refusal, COMMUNICATION_FAILURE for no binding, DCC or silence, else PROCESS_ERROR."
    ],
    "gaps": [
-    "Intrinsic reporting and Reliability_Evaluation_Inhibit aren't served (no issue)",
-    "#1342: a remote member's datatype isn't read first, so its value goes uncoerced",
-    "#1343: members are written one at a time, so an outstanding remote write delays members due after it"
+    "Intrinsic reporting and Reliability_Evaluation_Inhibit aren't served (no issue)"
    ]
   },
   {

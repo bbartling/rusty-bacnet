@@ -38,7 +38,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use tracing::debug;
 
 use super::RunHost;
-use crate::server::RemoteWriteError;
+use crate::server::RemoteRequestError;
 
 /// A write that failed.
 #[derive(Debug)]
@@ -78,7 +78,7 @@ pub(super) async fn write<H: RunHost>(
             };
             log_failure(run, Some(device), command, &error);
             match error {
-                RemoteWriteError::Refused(refusal) => {
+                RemoteRequestError::Refused(refusal) => {
                     let answer = Error::from(refusal);
                     Failed {
                         failure: refused(&answer),
@@ -168,27 +168,29 @@ fn refused(error: &Error) -> WriteFailure {
 /// Whether a write in another device that ended with `error` found the
 /// device silent: no answer to any attempt, or no I-Am to the Who-Is sent
 /// to find it.
-fn silent(error: RemoteWriteError) -> bool {
+fn silent(error: RemoteRequestError) -> bool {
     matches!(
         error,
-        RemoteWriteError::Unanswered | RemoteWriteError::Undiscovered
+        RemoteRequestError::Unanswered | RemoteRequestError::Undiscovered
     )
 }
 
 /// How a write in another device that got no answer, or was never sent,
 /// failed.
-fn unmade(error: RemoteWriteError) -> WriteFailure {
+fn unmade(error: RemoteRequestError) -> WriteFailure {
     match error {
-        RemoteWriteError::Disabled
-        | RemoteWriteError::Unbound
-        | RemoteWriteError::Undiscovered
-        | RemoteWriteError::Unanswered => WriteFailure::Communication,
-        RemoteWriteError::Refused(refusal) => refused(&Error::from(refusal)),
-        RemoteWriteError::Unencodable
-        | RemoteWriteError::TooLong
-        | RemoteWriteError::NoInvokeId
-        | RemoteWriteError::Stopping
-        | RemoteWriteError::NoNetwork => WriteFailure::Process,
+        RemoteRequestError::Disabled
+        | RemoteRequestError::Unbound
+        | RemoteRequestError::Undiscovered
+        | RemoteRequestError::Unanswered => WriteFailure::Communication,
+        RemoteRequestError::Refused(refusal) => refused(&Error::from(refusal)),
+        RemoteRequestError::Unencodable
+        | RemoteRequestError::TooLong
+        | RemoteRequestError::NoInvokeId
+        | RemoteRequestError::Stopping
+        | RemoteRequestError::NoNetwork
+        // Only a read's answer is ever malformed.
+        | RemoteRequestError::Malformed => WriteFailure::Process,
     }
 }
 
@@ -234,19 +236,19 @@ mod tests {
         }
 
         for silence in [
-            RemoteWriteError::Disabled,
-            RemoteWriteError::Unbound,
-            RemoteWriteError::Undiscovered,
-            RemoteWriteError::Unanswered,
+            RemoteRequestError::Disabled,
+            RemoteRequestError::Unbound,
+            RemoteRequestError::Undiscovered,
+            RemoteRequestError::Unanswered,
         ] {
             assert_eq!(unmade(silence), WriteFailure::Communication);
         }
         for local in [
-            RemoteWriteError::Unencodable,
-            RemoteWriteError::TooLong,
-            RemoteWriteError::NoInvokeId,
-            RemoteWriteError::Stopping,
-            RemoteWriteError::NoNetwork,
+            RemoteRequestError::Unencodable,
+            RemoteRequestError::TooLong,
+            RemoteRequestError::NoInvokeId,
+            RemoteRequestError::Stopping,
+            RemoteRequestError::NoNetwork,
         ] {
             assert_eq!(unmade(local), WriteFailure::Process);
         }
@@ -254,14 +256,14 @@ mod tests {
 
     #[test]
     fn only_silence_to_the_write_or_its_who_is_marks_the_device_silent() {
-        assert!(silent(RemoteWriteError::Unanswered));
-        assert!(silent(RemoteWriteError::Undiscovered));
+        assert!(silent(RemoteRequestError::Unanswered));
+        assert!(silent(RemoteRequestError::Undiscovered));
         // Nothing was asked of the device for these.
         for unasked in [
-            RemoteWriteError::Disabled,
-            RemoteWriteError::Unbound,
-            RemoteWriteError::NoInvokeId,
-            RemoteWriteError::Stopping,
+            RemoteRequestError::Disabled,
+            RemoteRequestError::Unbound,
+            RemoteRequestError::NoInvokeId,
+            RemoteRequestError::Stopping,
         ] {
             assert!(!silent(unasked), "{unasked:?}");
         }
@@ -269,7 +271,7 @@ mod tests {
             class: ErrorClass::OBJECT,
             code: ErrorCode::BUSY,
         };
-        assert!(!silent(RemoteWriteError::Refused(busy)));
+        assert!(!silent(RemoteRequestError::Refused(busy)));
     }
 
     #[test]

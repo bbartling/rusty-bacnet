@@ -115,12 +115,17 @@ fn unsigned_element(value: PropertyValue) -> Result<u32, Error> {
 }
 
 impl ChannelObject {
-    /// Make both parallel arrays `size` long.
+    /// Make both parallel arrays, and the datatypes learned for the members,
+    /// `size` long. The members a resize keeps keep what was learned for
+    /// them.
     fn resize_members(&mut self, size: usize) {
         self.members.resize_with(size, empty_reference);
+        self.learned.resize(size, None);
         self.execution_delay.resize(size, 0);
     }
 
+    /// Write List_Of_Object_Property_References. A member replaced, by an
+    /// element write or a whole one, loses the datatype learned for it.
     pub(super) fn write_members(
         &mut self,
         array_index: Option<u32>,
@@ -131,6 +136,7 @@ impl ChannelObject {
                 let members = decode_members(&value)?;
                 let size = members.len();
                 self.members = members;
+                self.learned.clear();
                 self.resize_members(size);
             }
             Some(0) => {
@@ -143,6 +149,7 @@ impl ChannelObject {
                     device_reference::decode_reference(&value)?;
                 device_reference::check_device_member(member.device_identifier)?;
                 self.members[at] = member;
+                self.learned[at] = None;
             }
         }
         Ok(())

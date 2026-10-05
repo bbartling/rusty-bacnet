@@ -3157,25 +3157,32 @@ Command), each attempt waiting `cov_retry_timeout_ms`, up to three
 retries for silence, nothing sent while DeviceCommunicationControl restricts
 initiation. A binding routed through the local network's own number is
 written as a local device, with no DNET (#1358), as a Command's is.
-The server can't read that property's datatype first, so the value goes as
-written (a lighting command only to `Lighting_Command`) and the device refuses
-a datatype it doesn't take (#1342). Members are written one at a time: while a
-remote write waits for its answer, Write_Status stays IN_PROGRESS (a
-Present_Value write, WriteGroup's included, is refused BUSY), and a member
-whose delay comes due meanwhile is written as soon as that write ends (#1343).
-A device that answers none of a write's attempts, or none of the Who-Is sent
-to find it, counts as offline for the rest of that distribution: its later
-members fail at once with nothing sent, while members in other devices and
-local ones are still written. A distribution therefore waits at most one
-Who-Is and one write's attempts (five times `cov_retry_timeout_ms`, 15
-seconds by default) per silent device. A run that
-`stop()` cuts short during a remote write ends FAILED and frees its invoke ID.
-Without a server, `tick_schedules` has no network, so a remote member fails
-there.
+Before the first write the server learns the property's datatype with a
+ReadProperty there, sent as the distribution starts so it overlaps the
+member's delay, and converts the value to it as for a local member (#1342):
+a REAL 1.0 reaches a remote Binary Output as ACTIVE. A primitive datatype is
+kept on the Channel until that member, or the whole member list, is written
+again, so later distributions send no read. No read is sent for a NULL, a
+lighting command or a `Lighting_Command` member. A read that is refused, gets
+no answer after its retries, or returns NULL or a constructed value keeps
+nothing, and the value goes as written; the device then refuses a datatype it
+doesn't take. Each member is written when its own delay is up (#1343): a
+remote write that waits for its answer holds back no other member, though
+Write_Status stays IN_PROGRESS (a Present_Value write, WriteGroup's included,
+is refused BUSY) until every member has finished. Members in this device go
+in delay order, list order among equal delays; one distribution keeps at most
+16 requests outstanding in other devices, and a member due while all 16 are
+out waits for one to end. A device that answers none of a write's attempts,
+or none of the Who-Is sent to find it, counts as offline for the rest of that
+distribution: its members due after that fail at once with nothing sent,
+while members in other devices and local ones are still written. A run that
+`stop()` cuts short during a remote request ends FAILED and frees its invoke
+ID. Without a server, `tick_schedules` has no network, so a remote member
+fails there.
 
 Reliability reports how the last distribution ended (Clause 12.53.9):
 NO_FAULT_DETECTED after a SUCCESSFUL one, otherwise the kind of the first
-member that failed, in the order the members were written.
+member failure to finish.
 CONFIGURATION_ERROR means the value couldn't be converted to the member's
 datatype, by datatype or by a coercion rule's range, or the member answered
 UNKNOWN_OBJECT, UNKNOWN_PROPERTY, INVALID_ARRAY_INDEX,

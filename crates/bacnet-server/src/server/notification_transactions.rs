@@ -16,10 +16,16 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 use tokio::sync::oneshot;
 use tokio::task::{JoinError, JoinSet};
-use tokio::time::Duration;
 
 use super::event_recipient_route::ConfirmedRecipientRoute;
 use super::{CommState, CovAckResult, Refusal};
+
+#[path = "notification_attempts.rs"]
+mod attempts;
+pub use attempts::run_notification_worker;
+pub(super) use attempts::{
+    run_attempts, run_notification_under_dcc, Attempt, AttemptsEnd, InitiationRestricted,
+};
 
 #[cfg(test)]
 #[path = "notification_worker_owner_tests.rs"]
@@ -334,7 +340,20 @@ impl NotificationTransactions {
         service_choice: ConfirmedServiceChoice,
     ) -> Result<(NotificationOperation, oneshot::Receiver<CovAckResult>), NotificationReserveError>
     {
-        self.core.reserve(peer, service_choice)
+        self.core
+            .reserve(LeaseMetadata::notification(peer, service_choice))
+    }
+
+    /// Lease an invoke ID for a read this server sends, answered by an
+    /// unsegmented ComplexAck whose service data reaches the receiver
+    /// ([`LeaseMetadata::server_read`]).
+    pub(super) fn reserve_read(
+        &self,
+        peer: CanonicalPeer,
+        service_choice: ConfirmedServiceChoice,
+    ) -> Result<NotificationReservation, NotificationReserveError> {
+        self.core
+            .reserve(LeaseMetadata::server_read(peer, service_choice))
     }
 
     /// Admit and complete one terminal answer to a notification lease.
@@ -422,13 +441,11 @@ impl NotificationTransactions {
 impl NotificationCore {
     pub(super) fn reserve(
         self: &Arc<Self>,
-        peer: CanonicalPeer,
-        service_choice: ConfirmedServiceChoice,
-    ) -> Result<(NotificationOperation, oneshot::Receiver<CovAckResult>), NotificationReserveError>
-    {
+        metadata: LeaseMetadata,
+    ) -> Result<NotificationReservation, NotificationReserveError> {
         let token = self
             .coordinator
-            .reserve(LeaseMetadata::notification(peer, service_choice))
+            .reserve(metadata)
             .map_err(NotificationReserveError::Coordinator)?;
         let (sender, receiver) = oneshot::channel();
 
@@ -495,6 +512,14 @@ impl NotificationCore {
                     && pdu.service_choice == admission.metadata().service_choice() =>
             {
                 CovAckResult::Ack
+            }
+            // Only a read lease admits one, unsegmented (#1342).
+            Apdu::ComplexAck(pdu)
+                if !pdu.segmented
+                    && pdu.invoke_id == token.invoke_id()
+                    && pdu.service_choice == admission.metadata().service_choice() =>
+            {
+                CovAckResult::Data(pdu.service_ack.clone())
             }
             // What the refusal said goes to the waiting worker (#1323).
             Apdu::Error(pdu) if pdu.invoke_id == token.invoke_id() => {
@@ -645,161 +670,6 @@ enum Rearm {
     Claimed,
     /// The adapter closed.
     Closed,
-}
-
-/// What one attempt at a confirmed request did.
-pub(super) enum Attempt<W> {
-    /// The request went out.
-    Sent,
-    /// The send failed. The attempt still waits for an answer, so it ends as
-    /// silence would.
-    NotSent,
-    /// Nothing may be sent any more: the transaction ends at once, its invoke
-    /// ID freed, with this reason. An answer that has already taken the lease
-    /// is the exception: it is on its way, and it ends the transaction instead.
-    Withdrawn(W),
-}
-
-/// The shared retry loop for a notification none of whose attempts is
-/// withdrawn: a send that fails waits out its timeout as silence would.
-#[doc(hidden)]
-pub async fn run_notification_worker<F, Fut, E>(
-    operation: NotificationOperation,
-    receiver: oneshot::Receiver<CovAckResult>,
-    timeout: Duration,
-    max_retries: u8,
-    mut send: F,
-) -> NotificationWorkerResult
-where
-    F: FnMut(u8) -> Fut,
-    Fut: Future<Output = Result<(), E>>,
-{
-    let attempts = run_attempts(operation, receiver, timeout, max_retries, |attempt| {
-        let sent = send(attempt);
-        async move {
-            match sent.await {
-                Ok(()) => Attempt::<std::convert::Infallible>::Sent,
-                Err(_) => Attempt::NotSent,
-            }
-        }
-    });
-    match attempts.await {
-        Ok(result) => result,
-        Err(never) => match never {},
-    }
-}
-
-/// DeviceCommunicationControl restricted initiation when a confirmed COV or
-/// event notification was due for an attempt: it ended there, its invoke ID
-/// freed, with nothing more sent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct InitiationRestricted;
-
-/// [`run_notification_worker`] for a confirmed COV or event notification,
-/// which DeviceCommunicationControl stops (Clause 16.1). `comm_state` is read
-/// before every attempt, the first and each retry: once DCC restricts
-/// initiation the attempt is withdrawn instead of sent, so a notification
-/// outstanding when it takes effect ends at its next retry.
-pub(super) async fn run_notification_under_dcc<F, Fut, E>(
-    operation: NotificationOperation,
-    receiver: oneshot::Receiver<CovAckResult>,
-    timeout: Duration,
-    max_retries: u8,
-    comm_state: &CommState,
-    mut send: F,
-) -> Result<NotificationWorkerResult, InitiationRestricted>
-where
-    F: FnMut(u8) -> Fut,
-    Fut: Future<Output = Result<(), E>>,
-{
-    run_attempts(operation, receiver, timeout, max_retries, |attempt| {
-        let sent = (!comm_state.initiation_restricted()).then(|| send(attempt));
-        async move {
-            let Some(sent) = sent else {
-                return Attempt::Withdrawn(InitiationRestricted);
-            };
-            match sent.await {
-                Ok(()) => Attempt::Sent,
-                Err(_) => Attempt::NotSent,
-            }
-        }
-    })
-    .await
-}
-
-/// Make the first attempt and up to `max_retries` more, each waiting
-/// `timeout` for the answer. Only silence earns another attempt; an attempt
-/// that is withdrawn ends the transaction at once, unless an answer has
-/// already taken the lease, which then ends it as usual.
-pub(super) async fn run_attempts<F, Fut, W>(
-    mut operation: NotificationOperation,
-    mut receiver: oneshot::Receiver<CovAckResult>,
-    timeout: Duration,
-    max_retries: u8,
-    mut attempt_with: F,
-) -> Result<NotificationWorkerResult, W>
-where
-    F: FnMut(u8) -> Fut,
-    Fut: Future<Output = Attempt<W>>,
-{
-    let mut attempt = 0;
-    let answer = loop {
-        let send_failed = match attempt_with(attempt).await {
-            Attempt::Sent => false,
-            Attempt::NotSent => true,
-            Attempt::Withdrawn(reason) => {
-                // The receiver was armed before this attempt was asked for,
-                // so an answer that has taken the lease since, on another
-                // thread, is on its way to it and still counts.
-                if !operation.withdraw() {
-                    break receiver.await;
-                }
-                operation.cancel();
-                return Err(reason);
-            }
-        };
-        // Borrowed, so an answer that claims the lease as the timer fires
-        // still reaches this receiver.
-        if let Ok(answer) = tokio::time::timeout(timeout, &mut receiver).await {
-            break answer;
-        }
-        if attempt < max_retries {
-            match operation.rearm() {
-                Ok(next) => receiver = next,
-                Err(Rearm::Claimed) => break receiver.await,
-                Err(Rearm::Closed) => {
-                    operation.cancel();
-                    return Ok(NotificationWorkerResult::Closed);
-                }
-            }
-            attempt += 1;
-            continue;
-        }
-        if !operation.withdraw() {
-            break receiver.await;
-        }
-        if send_failed {
-            operation.cancel();
-        } else {
-            operation.release();
-        }
-        return Ok(NotificationWorkerResult::Exhausted);
-    };
-    Ok(match answer {
-        Ok(CovAckResult::Ack) => {
-            operation.terminal_completed();
-            NotificationWorkerResult::Ack
-        }
-        Ok(CovAckResult::Error(refusal)) => {
-            operation.terminal_completed();
-            NotificationWorkerResult::Error(refusal)
-        }
-        // The sender went with the adapter's close.
-        Err(_) => {
-            operation.cancel();
-            NotificationWorkerResult::Closed
-        }
-    })
 }
 
 #[doc(hidden)]

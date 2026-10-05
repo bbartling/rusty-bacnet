@@ -1,6 +1,6 @@
 //! Which answers end a remote write, and how (#1180): the write is made
 //! through the server's run host directly, so each test sees the
-//! [`RemoteWriteError`] it ends with.
+//! [`RemoteRequestError`] it ends with.
 //!
 //! Device 9 is bound to the harness peer, and the write sets AO-1 there to
 //! 80.0 at priority 8. The clock is paused, and the server's APDU timeout is
@@ -20,7 +20,7 @@ use tokio::task::JoinHandle;
 const STRANGER: [u8; 6] = [10, 0, 0, 6, 0xBA, 0xC0];
 
 /// Start the write and wait for its request: the task and its invoke ID.
-async fn start_write(h: &Harness) -> (JoinHandle<Result<(), RemoteWriteError>>, u8) {
+async fn start_write(h: &Harness) -> (JoinHandle<Result<(), RemoteRequestError>>, u8) {
     let runner = CommandRunner::for_server(&h.server);
     let command = BACnetActionCommand {
         device_identifier: Some(device(9)),
@@ -106,7 +106,10 @@ async fn remote_write_error_reject_or_abort_ends_it_at_once_saying_why() {
         let sent = tokio::time::Instant::now();
         deliver(&h, &answer(invoke_id), &PEER, None).await;
         // The run host gets what the device said (#1323).
-        assert_eq!(task.await.unwrap(), Err(RemoteWriteError::Refused(refusal)));
+        assert_eq!(
+            task.await.unwrap(),
+            Err(RemoteRequestError::Refused(refusal))
+        );
         assert!(sent.elapsed() < Duration::from_millis(100));
         assert_eq!(h.server.notification_transactions.active_count(), 0);
         tokio::time::sleep(Duration::from_secs(15)).await;
@@ -120,7 +123,7 @@ async fn remote_write_blocked_by_dcc_at_a_retry_ends_there_as_disabled() {
     let (task, _) = start_write(&h).await;
     let sent = tokio::time::Instant::now();
     disable_initiation(&h);
-    assert_eq!(task.await.unwrap(), Err(RemoteWriteError::Disabled));
+    assert_eq!(task.await.unwrap(), Err(RemoteRequestError::Disabled));
     let ended = sent.elapsed();
     assert!(
         (Duration::from_millis(2_900)..Duration::from_millis(3_050)).contains(&ended),
