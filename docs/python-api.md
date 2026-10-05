@@ -205,6 +205,12 @@ PropertyValue.bit_string(0, b"\xff")  # unused_bits, data
 PropertyValue.list([PropertyValue.unsigned(1), PropertyValue.unsigned(2)])
 ```
 
+Lists nest at most 32 deep, the decoder's nesting limit: a deeper
+`PropertyValue.list`, by hand or from a pickle, raises `ValueError` (#1506).
+Two values are equal when they have the same tag and value, numbers compared
+as numbers (`PropertyValue.real(0.0) == PropertyValue.real(-0.0)`, and a NaN
+equals nothing), and equal values hash alike.
+
 ### Accessors
 
 ```python
