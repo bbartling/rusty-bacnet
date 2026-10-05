@@ -136,7 +136,7 @@ impl TrendLogMultipleObject {
                     return Err(references::no_space_error());
                 }
                 for reference in &written {
-                    references::check_written(reference, true)?;
+                    references::check_written(reference)?;
                 }
                 candidate = written;
             }
@@ -156,7 +156,7 @@ impl TrendLogMultipleObject {
                     .and_then(|slot| candidate.get_mut(slot))
                     .ok_or_else(common::invalid_array_index_error)?;
                 let reference = device_reference::decode_reference(&value)?;
-                references::check_written(&reference, true)?;
+                references::check_written(&reference)?;
                 *slot = reference;
             }
         }

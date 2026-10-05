@@ -30,9 +30,9 @@
 //! `device_reference.rs` (#1313).
 
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::PropertyValue;
 
 use super::ChannelObject;
 use crate::{common, device_reference};
@@ -45,26 +45,17 @@ pub const MAX_CHANNEL_MEMBERS: usize = 1024;
 /// joins at once (Clause 12.53.15 leaves it to the implementation).
 pub const MAX_CONTROL_GROUPS: usize = 64;
 
-/// The member a resize adds: object instance 4194303, which marks the
-/// reference empty (Clause 12.53.11.1).
+/// The member a resize adds: the shared unset reference, object instance
+/// 4194303, which marks the reference empty (Clause 12.53.11.1).
 pub(super) fn empty_reference() -> BACnetDeviceObjectPropertyReference {
-    BACnetDeviceObjectPropertyReference::new_local(
-        ObjectIdentifier::new(
-            ObjectType::ANALOG_INPUT,
-            ObjectIdentifier::WILDCARD_INSTANCE,
-        )
-        .expect("the wildcard instance is a valid identifier"),
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )
+    device_reference::unset_reference(ObjectType::ANALOG_INPUT)
 }
 
 /// Whether `member` is an empty reference, one the Channel skips: its object
-/// or Device instance is 4194303 (Clause 12.53.11.1).
+/// or Device instance is 4194303 (Clause 12.53.11.1), the shared
+/// [`BACnetDeviceObjectPropertyReference::is_unset`] rule.
 pub(super) fn is_empty(member: &BACnetDeviceObjectPropertyReference) -> bool {
-    member.object_identifier.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE
-        || member
-            .device_identifier
-            .is_some_and(|device| device.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE)
+    member.is_unset()
 }
 
 fn no_space_error() -> Error {

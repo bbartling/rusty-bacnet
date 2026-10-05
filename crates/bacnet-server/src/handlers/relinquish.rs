@@ -23,8 +23,10 @@
 //! - no member of its datatype is an application NULL ([`null_in_datatype`]).
 //!
 //! A property the object takes a NULL for never reaches this rule: a
-//! commandable Present_Value relinquishing, a Schedule_Default storing NULL,
-//! a reference this stack clears with NULL.
+//! commandable Present_Value relinquishing, a Schedule_Default storing NULL.
+//! A reference property is no exception: an unset one reads, and is cleared
+//! by writing, a reference to the reserved instance 4194303 (#1417), so a
+//! NULL there comes here like on any other property.
 //!
 //! The value counts as a NULL when its whole encoding is one application
 //! NULL. That covers a raw-octet property such as Recipient_List or an

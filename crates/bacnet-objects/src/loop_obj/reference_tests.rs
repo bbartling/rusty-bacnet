@@ -16,6 +16,12 @@ const AI_7_PV: [u8; 7] = [0x0C, 0x00, 0x00, 0x00, 0x07, 0x19, 0x55];
 const AO_3_PV_4: [u8; 9] = [0x0C, 0x00, 0x40, 0x00, 0x03, 0x19, 0x55, 0x29, 0x04];
 /// Opening tag 0, `[0]` analog-value 10, `[1]` present-value, closing tag 0.
 const AV_10_PV_FRAMED: [u8; 9] = [0x0E, 0x0C, 0x00, 0x80, 0x00, 0x0A, 0x19, 0x55, 0x0F];
+/// The unset Controlled_Variable_Reference (#1417): `[0]` analog-input
+/// 4194303, `[1]` present-value.
+const UNSET_CVR: [u8; 7] = [0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55];
+/// The unset Manipulated_Variable_Reference: `[0]` analog-output 4194303,
+/// `[1]` present-value.
+const UNSET_MVR: [u8; 7] = [0x0C, 0x00, 0x7F, 0xFF, 0xFF, 0x19, 0x55];
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -74,10 +80,10 @@ fn configured_loop() -> LoopObject {
 }
 
 #[test]
-fn loop_unset_references_read_null_or_the_empty_setpoint_reference() {
+fn loop_unset_references_read_the_reserved_instance_or_the_empty_setpoint_reference() {
     let lo = LoopObject::new(1, "LOOP-1", 62).unwrap();
-    assert_eq!(read(&lo, CVR), PropertyValue::Null);
-    assert_eq!(read(&lo, MVR), PropertyValue::Null);
+    assert_eq!(read(&lo, CVR), data(&UNSET_CVR));
+    assert_eq!(read(&lo, MVR), data(&UNSET_MVR));
     // A BACnetSetpointReference without its optional member encodes as
     // nothing at all.
     assert_eq!(read(&lo, SR), data(&[]));
@@ -120,14 +126,48 @@ fn loop_reference_writes_take_the_encodings_they_read_as() {
 }
 
 #[test]
-fn loop_reference_writes_clear_with_null_or_the_empty_setpoint_reference() {
+fn loop_reference_writes_clear_with_the_unset_values_they_read_as() {
     let mut lo = configured_loop();
-    write(&mut lo, CVR, PropertyValue::Null);
-    write(&mut lo, MVR, PropertyValue::Null);
+    write(&mut lo, CVR, data(&UNSET_CVR));
+    write(&mut lo, MVR, data(&UNSET_MVR));
     write(&mut lo, SR, data(&[]));
-    assert_eq!(read(&lo, CVR), PropertyValue::Null);
-    assert_eq!(read(&lo, MVR), PropertyValue::Null);
+    assert_eq!(read(&lo, CVR), data(&UNSET_CVR));
+    assert_eq!(read(&lo, MVR), data(&UNSET_MVR));
     assert_eq!(read(&lo, SR), data(&[]));
+    // Any reference to the reserved instance clears one, whatever else it
+    // names (here analog-value 4194303's priority-array); the read gives the
+    // property's own unset form back (#1417).
+    let unset = LoopObject::new(2, "LOOP-2", 62).unwrap();
+    for property in [CVR, MVR] {
+        let mut lo = configured_loop();
+        write(
+            &mut lo,
+            property,
+            data(&[0x0C, 0x00, 0xBF, 0xFF, 0xFF, 0x19, 0x57]),
+        );
+        assert_eq!(read(&lo, property), read(&unset, property), "{property:?}");
+    }
+    // A setter given the unset form clears the reference too.
+    let mut lo = configured_loop();
+    lo.set_controlled_variable_reference(crate::reference::unset_reference(
+        ObjectType::ANALOG_VALUE,
+    ));
+    assert_eq!(read(&lo, CVR), data(&UNSET_CVR));
+}
+
+#[test]
+fn loop_null_reference_writes_are_refused_as_another_datatype() {
+    // A NULL is no BACnetObjectPropertyReference or BACnetSetpointReference:
+    // INVALID_DATA_TYPE, which the server answers as the Clause 15.9.2 no-op.
+    let mut lo = configured_loop();
+    for property in [CVR, MVR, SR] {
+        assert_refused(
+            &mut lo,
+            property,
+            PropertyValue::Null,
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+    }
 }
 
 #[test]

@@ -1798,6 +1798,14 @@ by COV yet (#1480), so a Trend Log refuses a COV Logging_Type, and a polled
 log's Log_Interval written from nonzero to zero (the older way to ask for
 COV), with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 
+A Trend Log's Log_DeviceObjectProperty reads as `application_data` holding the
+context-tagged BACnetDeviceObjectPropertyReference. Without a reference it
+reads as Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`), the
+empty element a Trend Log Multiple grows by, and the log polls nothing.
+Writing a reference whose object or Device is at instance 4194303 removes the
+reference, and a null succeeds and changes nothing (#1417); before, it read
+null while unset and a null write removed it.
+
 Once the server runs with a valid Device clock, every event notification it
 generates (an intrinsic or Event Enrollment transition, or an acknowledgment)
 is recorded in each Event Log, stamped with that clock, even when no recipient
@@ -2321,22 +2329,64 @@ the Loop's Action (DIRECT until written).
 
 The Loop's Controlled_Variable_Reference and Manipulated_Variable_Reference,
 and a Pulse Converter's Input_Reference, read as `application_data` holding
-the context-tagged BACnetObjectPropertyReference, or null while unset. The
-Loop's Setpoint_Reference reads as the BACnetSetpointReference, the same
-octets inside opening and closing tag 0, or an empty `list` while unset (#1312).
+the context-tagged BACnetObjectPropertyReference. The Loop's
+Setpoint_Reference reads as the BACnetSetpointReference, the same octets
+inside opening and closing tag 0, or an empty `list` while unset (#1312).
 Peers and `write_property_local` write them in those encodings, so a value
-read writes back unchanged. Null clears the first three and the empty value
-clears Setpoint_Reference. The flat list of object identifier and enumerated
+read writes back unchanged. The flat list of object identifier and enumerated
 property these used to read as is refused with INVALID_DATA_TYPE, and
-malformed octets with INVALID_DATA_ENCODING. Null on Setpoint_Reference, whose
-datatype has no NULL, succeeds and leaves it as it is (#1396).
+malformed octets with INVALID_DATA_ENCODING.
+
+An unset reference reads as one to the reserved instance 4194303 (#1417):
+the Present_Value of Analog Input 4194303 for Controlled_Variable_Reference,
+of Analog Output 4194303 for Manipulated_Variable_Reference and of
+Accumulator 4194303 for Input_Reference, so `application_data` holding
+`0c 00 3f ff ff 19 55`, `0c 00 7f ff ff 19 55` and `0c 05 ff ff ff 19 55`.
+Writing any reference to that instance clears the property, and the empty
+value clears Setpoint_Reference. None of the four datatypes has a NULL, so a
+null written to any of them, by a peer or with `write_property_local`,
+succeeds and leaves it as it is (#1396).
+
+**Migration (#1417):** these properties used to read null while unset and a
+null write cleared them. Treat a reference whose object instance is 4194303
+as unset, and write the unset form (for example the octets a fresh object
+reads) to clear one.
+
+An Event Enrollment's Object_Property_Reference, which peers can only read,
+reads as Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`) while
+the enrollment has no reference, instead of null (#1417). Its
+Fault_Parameters reads as the context-tagged `none` choice (`08`) while no
+fault algorithm is set, and writing that clears it; a null written to it,
+which used to clear it, now succeeds and changes nothing.
+
+An Accumulator serves Prescale only once one is configured; until then a
+read is UNKNOWN_PROPERTY and Property_List leaves it out, instead of a null
+read.
+
+A Pulse Converter checks what its Input_Reference names (#1341). Reliability
+reads CONFIGURATION_ERROR (10), and Status_Flags FAULT, while the reference
+names a missing object or a property that isn't an Unsigned or INTEGER, and
+NO_FAULT_DETECTED once it names one that is, or is unset; an array index of
+0 (the size) is a fault too. The server checks it when a peer or
+`write_property_local` writes the reference, when the object it names is
+created or deleted, and on each counting pass, and reports the Status_Flags
+change to COV subscribers. While the converter is out of service, peers and
+`write_property_local` can write Reliability to simulate a fault, and the
+return to service puts back the checked value. At least once a second the
+running server reads the named property and adds each increase over the
+previous reading to Count. When the reference names an Accumulator's
+Present_Value, a lower reading is counted as its wrap past Max_Pres_Value;
+from any other property, or after the reference changes, a reading only
+sets the baseline.
 
 A running server samples an Averaging object's Object_Property_Reference
 itself, every Window_Interval / Window_Samples seconds but never more often
 than every 100 ms, starting one spacing after `start()` and over again after
 each write that empties the window. A missing object or property, a failed
 read, or a value it can't average counts as a missed attempt. An object
-without a reference is the application's to feed: about that often it passes
+without a reference, which reads as Analog Input 4194303's Present_Value
+(`0c 00 3f ff ff 19 55`, #1417), is the application's to feed: about that
+often it passes
 each result with `await server.add_averaging_sample_local(averaging_id,
 PropertyValue.real(21.5))`, or `None` when its reading failed. On an object
 the server samples, such a call is one more attempt and doesn't move the
@@ -2356,7 +2406,9 @@ Object_Property_Reference written with the server's own Device in it is kept
 as the local reference it names, and one naming another device is refused with
 OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (#1153). Peers read and write it as the
 context-tagged BACnetDeviceObjectPropertyReference; the flat application-tagged
-form is refused with INVALID_DATA_TYPE (#1182). The
+form is refused with INVALID_DATA_TYPE (#1182). Writing a reference whose
+object or Device is at instance 4194303 removes the reference, and a null
+succeeds and changes nothing (#1417); it used to remove it. The
 statistics and counts change together and go through the server's COV path.
 SubscribeCOV on an Averaging object is refused, since Table 13-1 has no row for
 it, but a property subscription (SubscribeCOVProperty or

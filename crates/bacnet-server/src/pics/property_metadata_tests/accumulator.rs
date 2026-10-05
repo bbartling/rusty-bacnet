@@ -14,7 +14,7 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::PRESENT_VALUE, false, false),
             (P::MAX_PRES_VALUE, false, true),
             (P::SCALE, false, false),
-            (P::PRESCALE, true, false),
+            // Prescale only once one is set, which a fresh object hasn't.
             (P::PULSE_RATE, true, true),
             (P::UNITS, false, false),
             (P::LIMIT_MONITORING_INTERVAL, true, true),
@@ -45,7 +45,8 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::STATUS_FLAGS, false, false),
             (P::EVENT_STATE, false, false),
             (P::OUT_OF_SERVICE, false, true),
-            (P::RELIABILITY, true, false),
+            // Writable out of service (Clause 12.23.10, #1341).
+            (P::RELIABILITY, true, true),
             (P::PROPERTY_LIST, false, false),
         ],
     }

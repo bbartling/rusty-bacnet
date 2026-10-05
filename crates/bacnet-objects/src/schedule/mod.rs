@@ -546,6 +546,10 @@ impl BACnetObject for ScheduleObject {
         self.complete_write(write, outcomes)
     }
 
+    fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
+        self.retry_refused_naming(target)
+    }
+
     fn tick_schedule(
         &mut self,
         today: SpecificDate,

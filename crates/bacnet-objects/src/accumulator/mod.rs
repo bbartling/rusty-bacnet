@@ -14,6 +14,8 @@ use crate::traits::BACnetObject;
 mod metadata;
 mod pulse_converter;
 
+#[doc(hidden)]
+pub use pulse_converter::InputReading;
 pub use pulse_converter::PulseConverterObject;
 
 // ---------------------------------------------------------------------------
@@ -79,9 +81,17 @@ impl AccumulatorObject {
         self.scale = scale;
     }
 
-    /// Set the prescale.
+    /// Set the prescale. Prescale is optional (Table 12-79), and the object
+    /// serves it only once this has set one: until then it is absent from
+    /// Property_List and a read is UNKNOWN_PROPERTY, since BACnetPrescale
+    /// has no value standing for none.
     pub fn set_prescale(&mut self, prescale: BACnetPrescale) {
         self.prescale = Some(prescale);
+    }
+
+    /// Whether Prescale is present, for the metadata.
+    fn has_prescale(&self) -> bool {
+        self.prescale.is_some()
     }
 }
 
@@ -125,7 +135,7 @@ impl BACnetObject for AccumulatorObject {
                     PropertyValue::Unsigned(ps.multiplier as u64),
                     PropertyValue::Unsigned(ps.modulo_divide as u64),
                 ])),
-                None => Ok(PropertyValue::Null),
+                None => Err(common::unknown_property_error()),
             },
             p if p == PropertyIdentifier::PULSE_RATE => Ok(PropertyValue::Real(self.pulse_rate)),
             p if p == PropertyIdentifier::UNITS => Ok(PropertyValue::Enumerated(self.units)),
@@ -274,12 +284,19 @@ mod tests {
     }
 
     #[test]
-    fn accumulator_read_prescale_none() {
+    fn accumulator_without_prescale_does_not_serve_it() {
+        // Optional, and BACnetPrescale has no NULL: absent until set.
         let acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
-        let val = acc
+        let err = acc
             .read_property(PropertyIdentifier::PRESCALE, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::Null);
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::Protocol { class, code }
+                if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                    && code == bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32),
+            "{err:?}"
+        );
+        assert!(!acc.property_list().contains(&PropertyIdentifier::PRESCALE));
     }
 
     #[test]
@@ -315,7 +332,11 @@ mod tests {
 
     #[test]
     fn accumulator_property_list() {
-        let acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let mut acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        acc.set_prescale(BACnetPrescale {
+            multiplier: 1,
+            modulo_divide: 1,
+        });
         let list = acc.property_list();
         assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
         assert!(list.contains(&PropertyIdentifier::SCALE));

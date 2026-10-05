@@ -790,6 +790,17 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         false
     }
 
+    /// The [`retry`](ScheduleWrite::retry) of the current value to the
+    /// references whose last write was refused and that name `target`, an
+    /// object just added to the database (#1440), so the refusal can clear
+    /// without waiting for the next pass. `None` when no such refusal
+    /// stands, or when the pass itself would retry nothing: out of service,
+    /// outside Effective_Period, or with a NULL Present_Value. Only
+    /// meaningful for Schedule objects; default returns `None`.
+    fn retry_refusals_naming(&self, _target: ObjectIdentifier) -> Option<ScheduleWrite> {
+        None
+    }
+
     /// Whether this Calendar's Date_List matches `day`: its Present_Value on
     /// that day. `None` for an object that does not evaluate a date list; the
     /// schedule tick then reads its Present_Value instead.
@@ -1145,6 +1156,44 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         _now: Duration,
     ) -> Option<BACnetObjectPropertyReference> {
         None
+    }
+
+    /// The local property a Pulse Converter counts its input from, its
+    /// Input_Reference (Clause 12.23.6): `Some(None)` while it holds none,
+    /// and `None` for an object that counts no referenced input, which the
+    /// default is.
+    ///
+    /// The database judges the reference against its own objects
+    /// (`ObjectDatabase::check_input_reference`) and reports the verdict
+    /// through [`set_input_usable_internal`](Self::set_input_usable_internal).
+    #[doc(hidden)]
+    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
+        None
+    }
+
+    /// Take the database's verdict on the reference
+    /// [`input_reference_internal`](Self::input_reference_internal) returned:
+    /// `false` when it names a property the object can't count from, which
+    /// Clause 12.23.9 reports as a CONFIGURATION_ERROR Reliability. Returns
+    /// whether a readable property changed, so a caller owes COV. The
+    /// default has no input to judge.
+    #[doc(hidden)]
+    fn set_input_usable_internal(&mut self, _usable: bool) -> bool {
+        false
+    }
+
+    /// Take a reading of the property
+    /// [`input_reference_internal`](Self::input_reference_internal) names,
+    /// or `None` when there is nothing to read. A Pulse Converter counts each
+    /// increase over the last reading into Count (Clause 12.23.14), across a
+    /// wrap when the reading carries its bound. Returns whether a readable
+    /// property changed, so a caller owes COV. The default counts nothing.
+    #[doc(hidden)]
+    fn take_input_reading_internal(
+        &mut self,
+        _reading: Option<crate::accumulator::InputReading>,
+    ) -> bool {
+        false
     }
 
     /// Borrow this object's Audit Log query storage, if it has any.

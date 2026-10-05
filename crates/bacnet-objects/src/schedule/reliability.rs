@@ -46,7 +46,11 @@
 //! which a configuration was built doesn't decide the fault. A NULL
 //! Present_Value isn't retried, since a NULL never counts here, and nothing is
 //! retried out of service or outside Effective_Period, where the calculation
-//! sends nothing. Datatype refusals are retried as well as reference refusals:
+//! sends nothing. The server doesn't wait for a pass when the object a
+//! refused member names is added to the database (#1440): it offers the
+//! value to the members naming that object at once
+//! ([`retry_refusals_naming`](crate::traits::BACnetObject::retry_refusals_naming)).
+//! An array grown to take the index still waits for the pass. Datatype refusals are retried as well as reference refusals:
 //! both answer the one question of 12.24.13, and a datatype refusal can pass
 //! without the Schedule changing too, when the application puts an object that
 //! takes the datatype under the target's identifier. A member that still
@@ -67,7 +71,7 @@
 use std::mem::discriminant;
 
 use bacnet_types::enums::Reliability;
-use bacnet_types::primitives::PropertyValue;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::{ScheduleObject, ScheduleTargetOutcome, ScheduleWrite};
 use crate::traits::ReliabilityEvaluation;
@@ -154,6 +158,28 @@ impl ScheduleObject {
             references: self.refusing_references.clone(),
             retry: true,
         })
+    }
+
+    /// [`retry_refused`](Self::retry_refused) limited to the references
+    /// naming `target`, for an object just created under that identifier
+    /// (#1440). Only while the calculation would send a retry itself: in
+    /// service and in Effective_Period as the last pass found it.
+    pub(super) fn retry_refused_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
+        if self.out_of_service || !self.in_effective_period {
+            return None;
+        }
+        if !self
+            .refusing_references
+            .iter()
+            .any(|reference| reference.object_identifier == target)
+        {
+            return None;
+        }
+        let mut write = self.retry_refused()?;
+        write
+            .references
+            .retain(|reference| reference.object_identifier == target);
+        Some(write)
     }
 
     /// Re-run the consistency check after the contents or the references

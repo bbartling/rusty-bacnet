@@ -4,9 +4,8 @@
 //! Clause 21 encoding and take network writes through the checks here.
 
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::common;
 use crate::device_reference::{check_device_member, check_local_member};
@@ -23,17 +22,12 @@ pub(super) fn no_space_error() -> Error {
 }
 
 /// The element a write of index 0 appends when it lengthens a Trend Log
-/// Multiple's array: Analog Input 4194303's Present_Value, an empty element
-/// under Clause 12.30.11, so the poller logs NO_PROPERTY_SPECIFIED for it.
+/// Multiple's array: the shared unset form, Analog Input 4194303's
+/// Present_Value, an empty element under Clause 12.30.11, so the poller logs
+/// NO_PROPERTY_SPECIFIED for it. A Trend Log without a reference reads as the
+/// same reference (#1417).
 pub(super) fn empty_element() -> BACnetDeviceObjectPropertyReference {
-    BACnetDeviceObjectPropertyReference::new_local(
-        ObjectIdentifier::new(
-            ObjectType::ANALOG_INPUT,
-            ObjectIdentifier::WILDCARD_INSTANCE,
-        )
-        .expect("the wildcard instance is a valid identifier"),
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )
+    crate::device_reference::unset_reference(ObjectType::ANALOG_INPUT)
 }
 
 /// Check a reference a client writes with the shared
@@ -42,20 +36,12 @@ pub(super) fn empty_element() -> BACnetDeviceObjectPropertyReference {
 /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, since the poller reads only its own
 /// database, which both clauses let a writable reference be held to. The
 /// bundled server has already put one naming its own Device in local form.
-/// With `empty_elements` (a Trend Log Multiple element), an object or Device
-/// instance of 4194303 marks the element empty (Clause 12.30.11), so a Device
-/// member there is kept as written.
-pub(super) fn check_written(
-    reference: &BACnetDeviceObjectPropertyReference,
-    empty_elements: bool,
-) -> Result<(), Error> {
+/// An unset reference, its object or Device instance 4194303, names nothing
+/// (Clause 12.30.11 for a Trend Log Multiple element), so a Device member
+/// there is kept as written.
+pub(super) fn check_written(reference: &BACnetDeviceObjectPropertyReference) -> Result<(), Error> {
     check_device_member(reference.device_identifier)?;
-    let wildcard =
-        |oid: ObjectIdentifier| oid.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE;
-    let empty = reference
-        .device_identifier
-        .is_some_and(|device| wildcard(reference.object_identifier) || wildcard(device));
-    if empty_elements && empty {
+    if reference.is_unset() {
         return Ok(());
     }
     check_local_member(reference.device_identifier)

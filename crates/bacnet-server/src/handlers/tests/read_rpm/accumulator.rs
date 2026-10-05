@@ -155,24 +155,22 @@ fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
                     None,
                 )
                 .unwrap();
-            object.set_prescale(bacnet_types::constructed::BACnetPrescale {
-                multiplier: 5,
-                modulo_divide: 100,
-            });
         }
+        // Prescale is served only once set (an unset one is UNKNOWN_PROPERTY,
+        // pinned in `pulse_converter_input_reference`), so set it for both.
+        object.set_prescale(bacnet_types::constructed::BACnetPrescale {
+            multiplier: 5,
+            modulo_divide: 100,
+        });
         write_common(&mut object, configured);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
         // Independent application-value bytes pin the existing projection.
-        // Scale is a BACnetLIST-style List production and Prescale is absent
-        // (Null) until set, so an index is PROPERTY_IS_NOT_AN_ARRAY on both.
+        // Scale is a BACnetLIST-style List production and Prescale a pair of
+        // Unsigneds, so an index is PROPERTY_IS_NOT_AN_ARRAY on both.
         // 2.5f32 encodes as 0x40200000; 1.0f32 as 0x3F800000.
-        let prescale: &[u8] = if configured {
-            &[0x21, 5, 0x21, 100]
-        } else {
-            &[0x00]
-        };
+        let prescale: ExpectedRead = Ok(&[0x21, 5, 0x21, 100]);
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (P::OBJECT_TYPE, None, Ok(&[0x91, 23])),
             (
@@ -206,7 +204,7 @@ fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
             ),
             (P::SCALE, None, Ok(&[0x44, 0x3F, 0x80, 0x00, 0x00])),
             (P::SCALE, Some(1), Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
-            (P::PRESCALE, None, Ok(prescale)),
+            (P::PRESCALE, None, prescale),
             (
                 P::PRESCALE,
                 Some(0),
@@ -379,7 +377,8 @@ fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
         let input_reference: &[u8] = if configured {
             &[0x0C, 0x05, 0xC0, 0x00, 0x01, 0x19, 0x55]
         } else {
-            &[0x00]
+            // Unset: Accumulator 4194303's present-value (#1417).
+            &[0x0C, 0x05, 0xFF, 0xFF, 0xFF, 0x19, 0x55]
         };
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (P::OBJECT_TYPE, None, Ok(&[0x91, 24])),

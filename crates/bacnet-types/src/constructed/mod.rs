@@ -236,6 +236,14 @@ impl BACnetObjectPropertyReference {
             property_array_index: Some(array_index),
         }
     }
+
+    /// Whether the reference names nothing: its object is at the reserved
+    /// instance 4194303, which Clause 12.1 lets an identifier hold to mean
+    /// uninitialized or unused. A property of this type has no empty
+    /// encoding, so the stack serves an unset one in this form (#1417).
+    pub fn is_unset(&self) -> bool {
+        self.object_identifier.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +302,17 @@ impl BACnetDeviceObjectPropertyReference {
     /// applies to that type's device member.
     pub fn device_identifier_is_device(&self) -> bool {
         device_identifier_is_device(self.device_identifier)
+    }
+
+    /// Whether the reference names nothing: its object, or its Device when
+    /// it has one, is at the reserved instance 4194303 (Clause 12.1), the
+    /// rule Clause 12.30.11 gives an empty Trend Log Multiple element. A
+    /// property of this type has no empty encoding, so the stack serves an
+    /// unset one in this form (#1417).
+    pub fn is_unset(&self) -> bool {
+        let reserved =
+            |oid: ObjectIdentifier| oid.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE;
+        reserved(self.object_identifier) || self.device_identifier.is_some_and(reserved)
     }
 }
 

@@ -176,7 +176,11 @@ async fn advance(seconds: u64) {
 #[tokio::test(start_paused = true)]
 async fn write_property_takes_a_reference_naming_this_device_as_a_local_reference() {
     let mut h = start().await;
-    assert_eq!(read(&h, REFERENCE).await, PropertyValue::Null);
+    // Unset: analog-input 4194303's present-value (#1417).
+    assert_eq!(
+        read(&h, REFERENCE).await,
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55])
+    );
     fill_window(&h, 2).await;
 
     write_property(&mut h, present_value(local()))

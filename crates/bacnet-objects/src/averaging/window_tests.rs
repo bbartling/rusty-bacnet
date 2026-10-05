@@ -129,7 +129,11 @@ fn averaging_each_reset_route_discards_the_samples() {
     for (property, value) in [
         (P::ATTEMPTED_SAMPLES, PropertyValue::Unsigned(0)),
         (P::OBJECT_PROPERTY_REFERENCE, reference),
-        (P::OBJECT_PROPERTY_REFERENCE, PropertyValue::Null),
+        // The unset form (#1417): analog-input 4194303's present-value.
+        (
+            P::OBJECT_PROPERTY_REFERENCE,
+            PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55]),
+        ),
         (P::WINDOW_INTERVAL, PropertyValue::Unsigned(900)),
         (P::WINDOW_INTERVAL, PropertyValue::Unsigned(60)),
         (P::WINDOW_SAMPLES, PropertyValue::Unsigned(15)),

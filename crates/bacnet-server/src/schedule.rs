@@ -20,9 +20,13 @@
 //! a pass with nothing else to send for that Schedule offers its value again
 //! to the refused references alone (#1436): the 60-second tick, or the pass a
 //! committed write to the Schedule runs, of any property. So the fault clears
-//! within one tick of its cause going away: the object created, say, or the
-//! array grown. A retry still refused logs at debug, since it repeats every
-//! pass; one that fails otherwise ends the refusal and warns once.
+//! within one tick of its cause going away: the array grown, say. A missing
+//! object doesn't wait for the tick: once it is created, by CreateObject or
+//! the application's own `ObjectDatabase::add`, the server retries the
+//! references naming it at once (`retry_for_created`, #1440) and fans COV
+//! out for what that writes. A retry still refused logs at debug, since it
+//! repeats every pass; one that fails otherwise ends the refusal and warns
+//! once.
 //!
 //! A NULL relinquishes the Schedule's slot in a commandable target. On a
 //! target property that isn't commandable and has no NULL in its datatype,
@@ -116,6 +120,36 @@ pub(crate) async fn reevaluate_written(
     }
     let commit = evaluate(db_w, schedules);
     commit.finish(db, db_w, cov_table).await
+}
+
+/// Retry, under `db_w`, the refused references that name objects just added
+/// to the database (#1440): each `(schedule, object)` pair is a Schedule
+/// that held a refusal naming the object when it was added
+/// (`ObjectDatabase::take_membership_work_internal`). The write each
+/// Schedule builds now ([`BACnetObject::retry_refusals_naming`]) goes to
+/// those references only, as a pass's retry would, and `commit` collects the
+/// objects it changed for COV.
+///
+/// [`BACnetObject::retry_refusals_naming`]: bacnet_objects::traits::BACnetObject::retry_refusals_naming
+pub(crate) fn retry_for_created(
+    db_w: &mut ObjectDatabase,
+    commit: &mut BackgroundCommit,
+    retries: &[(ObjectIdentifier, ObjectIdentifier)],
+) {
+    for &(schedule, created) in retries {
+        let Some(write) = db_w
+            .get(&schedule)
+            .and_then(|object| object.retry_refusals_naming(created))
+        else {
+            continue;
+        };
+        debug!(
+            schedule = %schedule,
+            created = %created,
+            "Schedule retrying the references a created object makes writable"
+        );
+        deliver(db_w, commit, schedule, &write);
+    }
 }
 
 /// Whether each Calendar is TRUE on `today`, resolved once per pass so every

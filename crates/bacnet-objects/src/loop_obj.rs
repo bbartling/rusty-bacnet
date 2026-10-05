@@ -124,15 +124,17 @@ impl LoopObject {
     }
 
     /// Set the controlled variable reference (the object whose present value is
-    /// being controlled by this loop).
+    /// being controlled by this loop). A reference to the reserved instance
+    /// 4194303 clears it, as a client's write of the unset form does (#1417).
     pub fn set_controlled_variable_reference(&mut self, r: BACnetObjectPropertyReference) {
-        self.controlled_variable_reference = Some(r);
+        self.controlled_variable_reference = reference::set_or_unset(r);
     }
 
     /// Set the manipulated variable reference (the object that the loop output
-    /// drives to achieve the setpoint).
+    /// drives to achieve the setpoint). A reference to the reserved instance
+    /// 4194303 clears it (#1417).
     pub fn set_manipulated_variable_reference(&mut self, r: BACnetObjectPropertyReference) {
-        self.manipulated_variable_reference = Some(r);
+        self.manipulated_variable_reference = reference::set_or_unset(r);
     }
 
     /// Set the setpoint reference (an alternative way to supply the setpoint
@@ -300,15 +302,18 @@ impl BACnetObject for LoopObject {
                 Ok(PropertyValue::Boolean(self.out_of_service))
             }
             // Each reference reads as its Clause 21 encoding (#1312); see
-            // reference.rs for the unset forms.
+            // reference.rs for the unset forms (#1417): the measured input,
+            // or the commanded output, at the reserved instance.
             p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => {
                 Ok(reference::object_property_reference_value(
                     self.controlled_variable_reference.as_ref(),
+                    ObjectType::ANALOG_INPUT,
                 ))
             }
             p if p == PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE => {
                 Ok(reference::object_property_reference_value(
                     self.manipulated_variable_reference.as_ref(),
+                    ObjectType::ANALOG_OUTPUT,
                 ))
             }
             p if p == PropertyIdentifier::SETPOINT_REFERENCE => Ok(
@@ -425,7 +430,8 @@ impl BACnetObject for LoopObject {
             }
             // Table 12-20 types the two variable references
             // BACnetObjectPropertyReference: a write takes the reference's
-            // context-tagged members, or Null to clear it (reference.rs).
+            // context-tagged members, the unset form clearing it, and Null
+            // is a value of another datatype (reference.rs).
             p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => {
                 self.controlled_variable_reference =
                     reference::decode_reference_write(&value, ReferenceFrame::Bare)?;

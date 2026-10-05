@@ -257,7 +257,9 @@
     "crates/bacnet-server/src/local_references.rs::tests::only_members_naming_the_local_device_lose_their_device",
     "crates/bacnet-server/src/server/local_encoded_writes_tests.rs::a_local_read_writes_back_through_the_network_decoding",
     "crates/rusty-bacnet/tests/test_local_round_trips.py::LocalRoundTripTests::test_a_local_read_writes_back_locally_and_over_the_network",
-    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others_as_they_are"
+    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others_as_they_are",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_writes_clear_with_the_unset_values_they_read_as",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_reference_reads_and_writes_in_the_clause_21_form"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/schedule/write_tests.rs::weekly_schedule_refused_writes_leave_it_unchanged",
@@ -392,6 +394,8 @@
    "code_anchors": [
     "crates/bacnet-objects/src/schedule/reliability.rs",
     "crates/bacnet-objects/src/schedule/mod.rs::ScheduleObject",
+    "crates/bacnet-objects/src/database/membership.rs",
+    "crates/bacnet-server/src/membership.rs",
     "crates/bacnet-server/src/fault_detection.rs",
     "crates/bacnet-objects/src/schedule/evaluation.rs::ScheduleTargetOutcome",
     "crates/bacnet-objects/src/traits.rs",
@@ -411,7 +415,10 @@
     "crates/bacnet-server/src/schedule_reference_reliability_tests.rs::{a_reference_its_target_can_never_write_faults_the_schedule,the_fault_clears_once_the_reference_is_fixed,a_missing_object_created_later_takes_the_value_at_the_next_pass}",
     "crates/bacnet-objects/src/schedule/retry_tests.rs::{a_pass_with_nothing_else_to_send_retries_only_the_refused_reference,a_datatype_refusal_is_retried_too,a_retry_that_fails_otherwise_ends_the_refusal,a_retry_leaves_the_held_slots_alone,a_new_value_goes_to_the_whole_list_not_as_a_retry}",
     "crates/bacnet-server/src/schedule_reference_retry_tests.rs::{a_state_text_index_that_becomes_valid_clears_the_fault,a_retry_runs_no_command_or_channel_member_again,a_retry_that_fails_otherwise_ends_the_fault_and_warns_once}",
-    "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_target_created_later_takes_the_value_within_one_tick"
+    "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_target_created_later_takes_the_value_as_it_is_created",
+    "crates/bacnet-objects/src/schedule/retry_tests.rs::{a_created_object_gets_a_retry_of_the_references_naming_it_alone,a_created_object_gets_no_retry_where_a_pass_would_send_none}",
+    "crates/bacnet-objects/src/database/membership_tests.rs::adding_a_refused_object_queues_its_retry_and_wakes_the_server",
+    "crates/bacnet-server/src/server/schedule_create_retry_tests.rs::{the_retry_writes_the_created_object_and_owes_cov_for_it,create_object_retries_the_refusal_before_its_answer,an_applications_own_add_is_retried_by_the_server_task}"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/schedule/retry_tests.rs::nothing_is_retried_without_a_value_the_schedule_sends",
@@ -436,6 +443,7 @@
     "The cost is that the fault shows at the first write rather than at configuration time; 12.24.13 already lets a remote member's fault wait for a write. Local choices: only a refusal of a value whose datatype the schedule itself holds counts, so a NULL, or an out-of-service value of another datatype, raises nothing; any other failure leaves a member's standing as it was; the flag combines with the contents check under the one ownership rule, so a Reliability set by the application or a client simulation is never cleared by it.",
     "A reference the target can't write whatever the value (a missing object or property, or an array index the property can't take) faults the Schedule as a datatype refusal does, and clears the same way. A denied write doesn't: it can be the target's state.",
     "While a refusal of either kind stands, each pass with nothing else to send offers Present_Value again to the refused members only, so the fault clears within a tick of its cause going away. NULL isn't retried; refusals log at debug.",
+    "When the object a refused member names is created, by CreateObject or ObjectDatabase::add, the server offers the value to the members naming it at once and fans COV out for what that writes; the database finds those Schedules by asking each whether it holds such a refusal. An array that grows still waits for the pass.",
     "A retry that fails otherwise (out of range, denied) ends that member's refusal and warns once, as the same failure on a first write raises nothing. After a write that isn't a retry, the next retry settles the member."
    ]
   },
@@ -3618,7 +3626,7 @@
   },
   {
    "id": "BACNET-12-REQUIRED-ROWS-UNITS-PULSE-LIGHTING",
-   "standard_anchor": "Clauses 12.39, 12.43 and 12.44 with Tables 12-46, 12-50 and 12-51 (Units); Clause 12.23 and Table 12-27, including 12.23.5 Present_Value, 12.23.13 Adjust_Value and 12.23.14-12.23.17; Clause 13.1 and Table 13-1 (Pulse Converter row, COV_Period); Clauses 12.54 and 12.55 with Tables 12-64 and 12-69, including 12.54.17, 12.54.18, 12.54.39 and 12.55.32; Clause 21 BACnetEngineeringUnits, BACnetDateTime and BACnetOptionalUnsigned; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "standard_anchor": "Clauses 12.39, 12.43 and 12.44 with Tables 12-46, 12-50 and 12-51 (Units); Clause 12.23 and Table 12-27, including 12.23.5 Present_Value, 12.23.9 Reliability, 12.23.10 Out_Of_Service, 12.23.13 Adjust_Value and 12.23.14-12.23.17; Clause 13.1 and Table 13-1 (Pulse Converter row, COV_Period); Clauses 12.54 and 12.55 with Tables 12-64 and 12-69, including 12.54.17, 12.54.18, 12.54.39 and 12.55.32; Clause 21 BACnetEngineeringUnits, BACnetDateTime and BACnetOptionalUnsigned; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
    "priority": "P1",
    "requirement_summary": "Integer Value, Positive Integer Value and Large Analog Value serve the required Units (BACnetEngineeringUnits, NO_UNITS until the application sets it, read-only over the network). The Pulse Converter serves the required Count and Count_Before_Change (Unsigned), Update_Time and Count_Change_Time (BACnetDateTime), all read-only, and COV_Period (Unsigned 0, read-only), which its COV support makes required. In service its Present_Value is Count times Scale_Factor; a write of Adjust_Value stores the value, keeps the old Count in Count_Before_Change, takes the truncated quotient of the value over Scale_Factor off Count and stamps Count_Change_Time, or fails with PROPERTY / VALUE_OUT_OF_RANGE and changes nothing when Count would leave its range. Its SubscribeCOV notifications carry Update_Time after Present_Value and Status_Flags. Lighting Output serves Default_Ramp_Rate and Default_Step_Increment (REAL, writable within 0.1 to 100.0, VALUE_OUT_OF_RANGE outside it), and both lighting objects serve Current_Command_Priority: the Priority_Array slot Present_Value comes from, or NULL on Relinquish_Default, read-only. Each row is in Property_List, the property metadata, RPM ALL and REQUIRED (COV_Period in OPTIONAL) and the PICS.",
    "status": "supported-with-clause-evidence",
@@ -3627,6 +3635,9 @@
     "crates/bacnet-objects/src/value_types/metadata.rs",
     "crates/bacnet-objects/src/accumulator/pulse_converter.rs",
     "crates/bacnet-objects/src/accumulator/pulse_converter/metadata.rs",
+    "crates/bacnet-objects/src/database/input_references.rs",
+    "crates/bacnet-objects/src/database/membership.rs",
+    "crates/bacnet-server/src/membership.rs",
     "crates/bacnet-objects/src/clock.rs",
     "crates/bacnet-objects/src/traits/defaults.rs",
     "crates/bacnet-objects/src/lighting/mod.rs",
@@ -3663,10 +3674,31 @@
     "crates/bacnet-server/src/handlers/tests/read_rpm/lighting.rs::rpm_lighting_output_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/read_rpm/lighting.rs::rpm_binary_lighting_output_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/property_metadata/lighting.rs::rpm_lighting_metadata_selectors_preserve_bytes_and_budgets",
-    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact"
+    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::a_missing_object_faults_the_converter_until_it_is_added",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::only_unsigned_and_integer_properties_are_inputs",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::an_unset_reference_is_no_fault_and_clears_one",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::the_verdict_waits_out_of_service_and_applies_on_the_return",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::each_increase_of_an_accumulator_is_counted_across_its_wrap",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::a_decrease_of_any_other_source_only_sets_the_baseline_again",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::a_priority_array_slot_is_judged_by_the_commanded_datatype",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::the_counting_pass_judges_a_reference_changed_past_the_server",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::reliability_takes_a_clients_value_out_of_service_until_the_return",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/metadata_tests.rs::property_metadata_pulse_converter_reliability_oos_gate_pins",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_input_reference.rs::reliability_takes_a_simulated_value_only_out_of_service",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_input_reference.rs::an_accumulator_serves_prescale_only_once_set",
+    "crates/bacnet-objects/src/accumulator/mod.rs::accumulator_without_prescale_does_not_serve_it",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_input_reference.rs::a_written_reference_is_judged_as_the_write_commits",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_input_reference.rs::deleting_and_recreating_the_named_object_moves_the_fault",
+    "crates/bacnet-server/src/server/pulse_converter_reference_tests.rs::an_applications_add_and_remove_report_the_fault_without_a_write",
+    "crates/bacnet-server/src/server/pulse_converter_reference_tests.rs::create_object_and_delete_object_report_the_fault_they_move",
+    "crates/bacnet-server/src/server/pulse_converter_reference_tests.rs::a_local_write_of_input_reference_is_judged_at_once",
+    "crates/bacnet-server/src/server/pulse_converter_reference_tests.rs::a_running_server_counts_the_input_into_count_and_reports_it",
+    "crates/rusty-bacnet/tests/test_loop_references.py::PulseConverterInputTests::test_reliability_follows_what_input_reference_names"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/value_types/tests/units.rs::non_numeric_value_types_have_no_units",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_input_reference.rs::a_null_leaves_the_reference_and_its_verdict_as_they_are",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_adjust_value_out_of_range_changes_nothing",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_refuses_a_count_or_scale_past_the_largest_real",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_count_rows_are_read_only_over_the_network",
@@ -3690,7 +3722,11 @@
     "Timestamps come from the database's Device clock through `clock::stamp_datetime`, shared with the File object's Modification_Date, and are all-unspecified with no clock or before the first change. COV_Period is required by footnote 2 since the object supports COV; it is a constant 0, which Clause 13.1 defines as no periodic notifications, because the server sends none.",
     "Table 13-1 reports Update_Time with the Pulse Converter's Present_Value and Status_Flags, so `cov_reported_properties_default` now lists it (reported, not a trigger). Lighting: Default_Ramp_Rate starts at 100.0 and Default_Step_Increment at 1.0, both inside the 0.1 to 100.0 range Clauses 12.54.17 and 12.54.18 set; they are writable, with matching setters.",
     "Current_Command_Priority reuses `common::current_command_priority`, which the analog, binary and multi-state outputs and values already share; on Binary Lighting Output it stays at the commanding slot through a WARN_RELINQUISH egress, since the slot holds until the egress ends.",
-    "Not covered: Lighting Output's Default_Fade_Time still reads a constant 0, below the 100 ms floor of Clause 12.54.16; Current_Command_Priority and COV_Increment on the commandable value types; periodic COV notifications; feeding Count from Input_Reference.",
+    "Not covered: Lighting Output's Default_Fade_Time still reads a constant 0, below the 100 ms floor of Clause 12.54.16; Current_Command_Priority and COV_Increment on the commandable value types; periodic COV notifications.",
+    "Pulse Converter Input_Reference: the database judges it as a write of it commits and as the object it names is added, replaced or removed. A missing object, a property that doesn't read as Unsigned or INTEGER, an index on a non-array or the converter's own property is CONFIGURATION_ERROR; an unset reference is not. Out of service the judged value waits for the return.",
+    "A running server reads the property Input_Reference names at least once a second, judging the reference again, and adds each increase to Count; a drop of an Accumulator's Present_Value counts its wrap at Max_Pres_Value, while the first reading, one after a change of reference and a drop of any other source only set the baseline. Clause 12.23.14 leaves the means local.",
+    "Pulse Converter Reliability takes a client's value while Out_Of_Service is TRUE, since it can now leave NO_FAULT_DETECTED (12.23.10); the return to service restores the judged value. Index 0 is a fault; a Priority_Array slot is judged by the Relinquish_Default datatype.",
+    "The Accumulator's optional Prescale is served only once the application sets one: BACnetPrescale has no NULL, so without one the row is absent from Property_List, the metadata and the PICS, and a read is UNKNOWN_PROPERTY.",
     "Lighting Output Default_Fade_Time, Current_Command_Priority on the commandable value types and COV_Increment on the numeric value types are covered by BACNET-12-REQUIRED-ROWS-VALUE-PRIORITY-COV-FADE.",
     "Analog Input and Output take Units from a CreateObject initial value, with the same 65535 bound; WriteProperty still refuses it. Analog Value isn't createable."
    ]
@@ -5006,7 +5042,7 @@
   },
   {
    "id": "BACNET-12-REFERENCE-PROPERTY-WRITABILITY",
-   "standard_anchor": "Clauses 12.5.13, 12.17.12, 12.17.13, 12.17.16, 12.23.6, 20.2.16; Table 12-5, 12-20, 12-27; Clause 21",
+   "standard_anchor": "Clauses 12.1, 12.5.13, 12.17.12, 12.17.13, 12.17.16, 12.23.6, 15.9.2, 20.2.16; Table 12-5, 12-20, 12-27; Clause 21",
    "priority": "P1",
    "requirement_summary": "The Loop Controlled_Variable_Reference and Manipulated_Variable_Reference and the Pulse Converter Input_Reference are typed BACnetObjectPropertyReference - a SEQUENCE of primitive context-tagged members [0]/[1] plus an optional property-array-index [2] - and the Loop Setpoint_Reference is BACnetSetpointReference, that reference as an optional member inside context tag [0]. Each reads as PropertyValue::ApplicationData holding that encoding, built by the shared codecs in bacnet-encoding/src/constructed/object_property_reference.rs, and takes writes in it over WriteProperty, WritePropertyMultiple and write_local; the server hands the written octets to the object whole. The codec requires full consumption and rejects a device-qualifying member [3], since unlike BACnetDeviceObjectPropertyReference these references are local-device only. The Averaging arm (Table 12-5, BACnetDeviceObjectPropertyReference) shares the write decode: a Device member there is PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and the server localizes one naming its own Device first (BACNET-12-AVERAGING-LOCAL-REFERENCE).",
    "status": "supported-with-clause-evidence",
@@ -5024,16 +5060,16 @@
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_golden_vector",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_golden_vector_indexed",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_empty_value_is_the_absent_alternative",
-    "crates/bacnet-objects/src/reference/tests.rs::object_property_reference_reads_as_its_members_or_null",
+    "crates/bacnet-objects/src/reference/tests.rs::object_property_reference_reads_as_its_members_or_the_unset_form",
     "crates/bacnet-objects/src/reference/tests.rs::setpoint_reference_reads_framed_or_empty",
     "crates/bacnet-objects/src/reference/tests.rs::read_values_write_back_unchanged",
-    "crates/bacnet-objects/src/reference/tests.rs::null_clears_except_on_setpoint_reference",
+    "crates/bacnet-objects/src/reference/tests.rs::a_bare_reference_to_the_reserved_instance_clears",
     "crates/bacnet-objects/src/reference/tests.rs::empty_value_clears_only_setpoint_reference",
     "crates/bacnet-objects/src/reference/tests.rs::framed_form_decodes_from_one_or_split_application_data",
-    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_unset_references_read_null_or_the_empty_setpoint_reference",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_unset_references_read_the_reserved_instance_or_the_empty_setpoint_reference",
     "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_set_references_read_as_their_clause_21_encodings",
     "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_reference_writes_take_the_encodings_they_read_as",
-    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_reference_writes_clear_with_null_or_the_empty_setpoint_reference",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_reference_writes_clear_with_the_unset_values_they_read_as",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_write_framed_indexed_input_reference_lands",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_accepts_the_framed_local_form",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::loop_references_read_and_write_in_their_clause_21_encodings",
@@ -5044,7 +5080,10 @@
     "crates/bacnet-server/src/handlers/tests/loop_reference_follow.rs::loop_follows_the_references_a_client_writes",
     "crates/bacnet-server/src/pics/truth_source_tests.rs::is_writable_property_matches_write_property_on_pulse_converter_and_averaging",
     "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_references_read_and_write_in_their_encodings",
-    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_null_or_the_empty_setpoint_reference_clears"
+    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_unset_references_read_the_reserved_instance_or_the_empty_setpoint",
+    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_the_unset_forms_clear_and_null_changes_nothing",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::event_enrollment_fault_parameters_take_the_context_tagged_none_and_ignore_a_null",
+    "crates/bacnet-types/src/constructed/tests.rs::a_reference_to_the_reserved_instance_is_unset"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::bare_decode_rejects_device_qualified_reference",
@@ -5068,7 +5107,11 @@
     "crates/bacnet-server/src/server/reference_write_wire_tests.rs::single_references_answer_the_same_octets_the_same_way",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_refuses_the_flat_list_forms",
-    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_flat_list_is_refused_and_changes_nothing"
+    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_flat_list_is_refused_and_changes_nothing",
+    "crates/bacnet-objects/src/reference/tests.rs::null_is_another_datatype_on_every_reference",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_null_reference_writes_are_refused_as_another_datatype",
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_null_reference_write_is_another_datatype",
+    "crates/bacnet-objects/src/event_enrollment/tests/fault_parameters.rs::fault_parameters_application_null_is_another_datatype"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -5077,7 +5120,8 @@
    ],
    "notes": [
     "The Loop, Pulse Converter and Averaging arms share one write decode (common::decode_single_element): another datatype, the flat list included, is PROPERTY / INVALID_DATA_TYPE; octets that open right but don't fully decode, PROPERTY / INVALID_DATA_ENCODING.",
-    "An unset BACnetObjectPropertyReference reads Null and a Null write clears it. An unset Setpoint_Reference reads as the empty value, which clears it when written; a Null there succeeds and changes nothing.",
+    "An unset BACnetObjectPropertyReference reads as a reference to the reserved instance 4194303 that Clause 12.1 allows for an unused identifier: Present_Value of an Analog Input (Controlled_Variable_Reference), an Analog Output (Manipulated_Variable_Reference) or an Accumulator (Input_Reference). Writing any reference to that instance, or giving one to the setters, clears it. An unset Setpoint_Reference reads as the empty value, which clears it when written. A NULL is no value of any of the four datatypes, so the object refuses it as INVALID_DATA_TYPE and the server answers the write as the Clause 15.9.2 no-op; the object stores no reference internally while unset.",
+    "Event Enrollment Fault_Parameters reads as the context-tagged none choice while it has no fault algorithm, and writing that clears it; an application NULL is no member of the CHOICE, so it is the same no-op.",
     "A Setpoint_Reference frame with nothing inside (0E 0F) is INVALID_DATA_ENCODING: a reference that is absent has no octets at all (Clause 20.2.16).",
     "Averaging Object_Property_Reference reads as the context-tagged BACnetDeviceObjectPropertyReference with no Device member; under that frame the flat list is INVALID_DATA_TYPE and a Device member naming no Device VALUE_OUT_OF_RANGE.",
     "The stack doesn't follow these references; an application decodes the value it reads with the shared codecs and follows that.",
@@ -5086,7 +5130,7 @@
   },
   {
    "id": "BACNET-12-DEVICE-REFERENCE-PROPERTIES",
-   "standard_anchor": "Clauses 12.5.13, 12.12.8, 12.15.29, 12.16.26, 12.16.27, 12.25.8 and 12.30.11; Clause 21",
+   "standard_anchor": "Clauses 12.1, 12.5.13, 12.12.8, 12.15.29, 12.16.26, 12.16.27, 12.25.8, 12.30.11, 15.9.2; Clause 21",
    "priority": "P1",
    "summary": "Every device reference property reads, and takes writes where writable, in its context-tagged Clause 21 encoding through one shared module, with one set of write errors.",
    "status": "supported-with-clause-evidence",
@@ -5107,6 +5151,10 @@
     "crates/bacnet-objects/src/device_reference_tests.rs::decode_accepts_raw_bytes_and_the_read_shape",
     "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::read_object_property_reference_serves_every_member",
     "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_write_purges_on_change_and_needs_a_clock_to",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_unset_forms_clear_and_null_is_another_datatype",
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_write_of_the_unset_form_clears_reference",
+    "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::read_object_property_reference_none",
+    "crates/bacnet-server/src/event_enrollment/tests/integration.rs::malformed_reference_shapes_do_not_become_local",
     "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_multiple_serves_one_encoding_per_element",
     "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_multiple_indexed_write_checks_only_the_element_written",
     "crates/bacnet-objects/src/life_safety/membership_tests.rs::point_member_of_keeps_a_remote_zone_and_lists_each_zone_once",
@@ -5138,7 +5186,7 @@
     "docs/rust-api.md#schedule--notification-6 Event Enrollment Object_Property_Reference"
    ],
    "notes": [
-    "An unset Averaging, Event Enrollment or Trend Log reference reads Null, since the production has no empty form.",
+    "Unset, a reference reads as Analog Input 4194303's Present_Value (Clause 12.1). One whose object or Device is at that instance unsets it when written or set; a NULL is the Clause 15.9.2 no-op. Evaluation and pollers take the form as none.",
     "Writable references reach the object as the written octets: another datatype, or a list element that can't open a reference, is INVALID_DATA_TYPE; a malformed reference, or anything after a single one, INVALID_DATA_ENCODING.",
     "Averaging and both trend objects keep their references inside this device: the server drops a Device member naming its own Device, and any other is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.",
     "A Trend Log Multiple holds at most 64 references; an index 0 write resizes it, padding with empty elements, ones naming instance 4194303. A client's change to either trend reference purges the log.",
@@ -9640,7 +9688,9 @@
     "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_commandable_present_value_still_relinquishes",
     "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_null_is_stored_where_the_datatype_has_one",
     "crates/bacnet-server/src/handlers/tests/create_object_initial_values.rs::{a_null_initial_value_leaves_a_noncommandable_property_as_it_is,a_null_initial_value_still_relinquishes_a_commandable_present_value}",
-    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others_as_they_are"
+    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others_as_they_are",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_writes_clear_with_the_unset_values_they_read_as",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_reference_reads_and_writes_in_the_clause_21_form"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/property_metadata_audit/unknown_writes.rs::unknown_writes_optional_staging_names_use_current_presence",

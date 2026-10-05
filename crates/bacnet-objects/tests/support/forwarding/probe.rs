@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::fixtures::{address, day, noon, oid, property_error, schedule_write};
+use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogObject, AuditLogPersistence,
@@ -459,6 +460,10 @@ impl BACnetObject for Probe {
         self.called("complete_schedule_write", (write, outcomes));
         true
     }
+    fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
+        self.called("retry_refusals_naming", (target,));
+        Some(schedule_write(7))
+    }
     fn calendar_state_internal(&self, date: SpecificDate) -> Option<bool> {
         self.called("calendar_state_internal", (date,));
         Some(date == day())
@@ -587,6 +592,18 @@ impl BACnetObject for Probe {
             property_identifier: P::PRESENT_VALUE.to_raw(),
             property_array_index: Some(2),
         })
+    }
+    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
+        self.called("input_reference_internal", ());
+        Some(None)
+    }
+    fn set_input_usable_internal(&mut self, usable: bool) -> bool {
+        self.called("set_input_usable_internal", (usable,));
+        true
+    }
+    fn take_input_reading_internal(&mut self, reading: Option<InputReading>) -> bool {
+        self.called("take_input_reading_internal", (reading,));
+        true
     }
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
         self.called("audit_log_storage_internal", ());

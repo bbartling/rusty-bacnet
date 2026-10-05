@@ -206,3 +206,72 @@ fn nothing_is_retried_without_a_value_the_schedule_sends() {
     assert_eq!(tick(&mut sched, at(9, 1)), None);
     assert!(faulted(&sched));
 }
+
+#[test]
+fn a_created_object_gets_a_retry_of_the_references_naming_it_alone() {
+    // AV-9 and AO-4 both refused; creating AV-9 asks for AV-9's retry only,
+    // with no pass run (#1440).
+    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(10.0)).unwrap();
+    sched.set_priority_for_writing(9).unwrap();
+    sched
+        .set_object_property_references(vec![av2(), av9(), ao4()])
+        .unwrap();
+    let write = tick(&mut sched, at(9, 0)).expect("the first pass in the period writes");
+    sched.complete_schedule_write(&write, &[Accepted, ReferenceRefused, DatatypeRefused]);
+    let av9_id = av9().object_identifier;
+    assert_eq!(sched.retry_refusals_naming(av9_id), Some(retry_to_av9()));
+    let retry = ScheduleWrite {
+        references: vec![ao4()],
+        ..retry_to_av9()
+    };
+    assert_eq!(
+        sched.retry_refusals_naming(ao4().object_identifier),
+        Some(retry)
+    );
+    // AV-2 took the value, and an object no reference names has no refusal.
+    assert_eq!(sched.retry_refusals_naming(av2().object_identifier), None);
+    let elsewhere = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 10).unwrap();
+    assert_eq!(sched.retry_refusals_naming(elsewhere), None);
+    // Once AV-9 takes it, nothing is owed for AV-9.
+    sched.complete_schedule_write(&retry_to_av9(), &[Accepted]);
+    assert_eq!(sched.retry_refusals_naming(av9_id), None);
+}
+
+#[test]
+fn a_created_object_gets_no_retry_where_a_pass_would_send_none() {
+    let av9_id = av9().object_identifier;
+    // Out of service.
+    let mut sched = refused_by_av9(ReferenceRefused);
+    sched
+        .write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        )
+        .unwrap();
+    assert_eq!(sched.retry_refusals_naming(av9_id), None);
+    // Outside Effective_Period, as the last pass found it.
+    let mut sched = refused_by_av9(ReferenceRefused);
+    sched
+        .set_effective_period(BACnetDateRange {
+            start_date: SpecificDate::new(2026, 10, 1).unwrap().to_date(),
+            end_date: unspecified_date(),
+        })
+        .unwrap();
+    assert_eq!(tick(&mut sched, at(9, 1)), None);
+    assert_eq!(sched.retry_refusals_naming(av9_id), None);
+    // A NULL Present_Value can't clear a refusal.
+    let mut sched = refused_by_av9(ReferenceRefused);
+    sched
+        .write_property(
+            PropertyIdentifier::SCHEDULE_DEFAULT,
+            None,
+            PropertyValue::Null,
+            None,
+        )
+        .unwrap();
+    let relinquish = tick(&mut sched, at(9, 1)).expect("the change to NULL writes");
+    sched.complete_schedule_write(&relinquish, &[Accepted, ReferenceRefused, Accepted]);
+    assert_eq!(sched.retry_refusals_naming(av9_id), None);
+}

@@ -107,7 +107,7 @@ fn encoded(
             device_identifier: device,
             object_identifier: object,
         }),
-        Production::Bare => object_property_reference_value(Some(&local)),
+        Production::Bare => object_property_reference_value(Some(&local), ObjectType::ACCUMULATOR),
         Production::Setpoint => setpoint_reference_value(Some(&local)),
     };
     assert!(device.is_none() || production.has_device_member());

@@ -454,6 +454,41 @@ fn device_object_property_reference_device_identifier_must_be_a_device() {
 }
 
 #[test]
+fn a_reference_to_the_reserved_instance_is_unset() {
+    let oid = |object_type, instance| ObjectIdentifier::new(object_type, instance).unwrap();
+    let reserved = ObjectIdentifier::WILDCARD_INSTANCE;
+    let unset = BACnetObjectPropertyReference::new(oid(ObjectType::ACCUMULATOR, reserved), 85);
+    assert!(unset.is_unset());
+    assert!(BACnetObjectPropertyReference::new_indexed(unset.object_identifier, 87, 3).is_unset());
+    assert!(
+        !BACnetObjectPropertyReference::new(oid(ObjectType::ACCUMULATOR, reserved - 1), 85)
+            .is_unset()
+    );
+
+    // Device-qualified: the object or the Device at the reserved instance.
+    let object = oid(ObjectType::ANALOG_INPUT, 7);
+    let local = BACnetDeviceObjectPropertyReference::new_local(object, 85);
+    assert!(!local.is_unset());
+    assert!(!BACnetDeviceObjectPropertyReference::new_remote(
+        object,
+        85,
+        oid(ObjectType::DEVICE, 9)
+    )
+    .is_unset());
+    assert!(BACnetDeviceObjectPropertyReference::new_remote(
+        object,
+        85,
+        oid(ObjectType::DEVICE, reserved)
+    )
+    .is_unset());
+    assert!(BACnetDeviceObjectPropertyReference::new_local(
+        oid(ObjectType::ANALOG_INPUT, reserved),
+        85
+    )
+    .is_unset());
+}
+
+#[test]
 fn value_source_address_variant() {
     let addr = BACnetAddress::from_ip([192, 168, 1, 10, 0xBA, 0xC0]);
     let vs = BACnetValueSource::Address(addr.clone());

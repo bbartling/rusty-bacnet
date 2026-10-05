@@ -171,6 +171,7 @@ mod multi_element_writes;
 mod noncommandable_null_writes;
 mod passwords;
 mod property_metadata;
+mod pulse_converter_input_reference;
 mod pulse_converter_writes;
 mod read_event_arrays;
 mod read_range;

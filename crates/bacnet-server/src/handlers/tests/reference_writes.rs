@@ -26,6 +26,11 @@ const AI_7_PV: [u8; 7] = [0x0C, 0x00, 0x00, 0x00, 0x07, 0x19, 0x55];
 /// The flat application-tagged list the Loop and Pulse Converter used to
 /// serve for the same reference: object identifier, then Enumerated.
 const AI_7_PV_FLAT: [u8; 7] = [0xC4, 0x00, 0x00, 0x00, 0x07, 0x91, 0x55];
+/// The unset forms (#1417): `[0]` analog-input, analog-output or accumulator
+/// 4194303, `[1]` present-value.
+const UNSET_AI: [u8; 7] = [0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55];
+const UNSET_AO: [u8; 7] = [0x0C, 0x00, 0x7F, 0xFF, 0xFF, 0x19, 0x55];
+const UNSET_ACCUMULATOR: [u8; 7] = [0x0C, 0x05, 0xFF, 0xFF, 0xFF, 0x19, 0x55];
 
 fn encode_value(value: PropertyValue) -> Vec<u8> {
     let mut buf = BytesMut::new();
@@ -150,10 +155,11 @@ fn loop_references_read_and_write_in_their_clause_21_encodings() {
     let mut db = ObjectDatabase::new();
     let oid = add_loop(&mut db, 1);
 
-    // Unset: Null for the two plain references, and for Setpoint_Reference
-    // the sequence without its optional member, which has no octets.
-    assert_eq!(read_raw(&db, oid, CVR), [0x00]);
-    assert_eq!(read_raw(&db, oid, MVR), [0x00]);
+    // Unset: the reserved instance for the two plain references (#1417),
+    // and for Setpoint_Reference the sequence without its optional member,
+    // which has no octets.
+    assert_eq!(read_raw(&db, oid, CVR), UNSET_AI);
+    assert_eq!(read_raw(&db, oid, MVR), UNSET_AO);
     assert_eq!(read_raw(&db, oid, SR), [0u8; 0]);
 
     let cases: [(PropertyIdentifier, &[u8]); 3] = [
@@ -175,7 +181,7 @@ fn loop_references_read_and_write_in_their_clause_21_encodings() {
 fn pulse_converter_input_reference_reads_and_writes_in_its_clause_21_encoding() {
     let mut db = ObjectDatabase::new();
     let oid = add_pulse_converter(&mut db, 1);
-    assert_eq!(read_raw(&db, oid, INPUT), [0x00]);
+    assert_eq!(read_raw(&db, oid, INPUT), UNSET_ACCUMULATOR);
 
     // [0] accumulator 1, [1] present-value, [2] index 4.
     let bytes = [0x0C, 0x05, 0xC0, 0x00, 0x01, 0x19, 0x55, 0x29, 0x04];
@@ -190,13 +196,22 @@ fn reference_writes_clear_with_the_unset_values_they_read_as() {
     let pc = add_pulse_converter(&mut db, 1);
     let framed_setpoint = [&[0x0E][..], &AI_7_PV, &[0x0F]].concat();
     for (oid, property, set, clear) in [
-        (lo, CVR, AI_7_PV.to_vec(), vec![0x00]),
-        (lo, MVR, AI_7_PV.to_vec(), vec![0x00]),
+        (lo, CVR, AI_7_PV.to_vec(), UNSET_AI.to_vec()),
+        (lo, MVR, AI_7_PV.to_vec(), UNSET_AO.to_vec()),
         (lo, SR, framed_setpoint, Vec::new()),
-        (pc, INPUT, AI_7_PV.to_vec(), vec![0x00]),
+        (pc, INPUT, AI_7_PV.to_vec(), UNSET_ACCUMULATOR.to_vec()),
     ] {
         write_raw(&mut db, oid, property, set.clone()).unwrap();
         assert_eq!(read_raw(&db, oid, property), set);
+        // A NULL is no reference and none of these is commandable, so it
+        // succeeds and changes nothing (Clause 15.9.2, #1417).
+        write_raw(&mut db, oid, property, vec![0x00])
+            .unwrap_or_else(|e| panic!("{property:?}: NULL refused: {e:?}"));
+        assert_eq!(
+            read_raw(&db, oid, property),
+            set,
+            "{property:?}: NULL changed it"
+        );
         write_raw(&mut db, oid, property, clear.clone())
             .unwrap_or_else(|e| panic!("{property:?}: clearing refused: {e:?}"));
         assert_eq!(read_raw(&db, oid, property), clear, "{property:?}");
@@ -430,6 +445,53 @@ fn averaging_object_property_reference_over_the_wire() {
         ErrorCode::INVALID_DATA_TYPE,
         "4-member flat reference",
     );
+
+    // A NULL is no reference and the property isn't commandable: it
+    // succeeds and changes nothing (Clause 15.9.2, #1417).
+    write_raw(&mut db, oid, opr, vec![0x00]).unwrap();
+    assert_eq!(read_raw(&db, oid, opr), AI_7_PV);
+    // The unset form clears it, and is what the property then serves; so
+    // does a reference naming Device 4194303, which names no device.
+    write_raw(&mut db, oid, opr, UNSET_AI.to_vec()).unwrap();
+    assert_eq!(read_raw(&db, oid, opr), UNSET_AI);
+    write_raw(&mut db, oid, opr, AI_7_PV.to_vec()).unwrap();
+    write_raw(
+        &mut db,
+        oid,
+        opr,
+        [&AI_7_PV[..], &[0x3C, 0x02, 0x3F, 0xFF, 0xFF]].concat(),
+    )
+    .unwrap();
+    assert_eq!(read_raw(&db, oid, opr), UNSET_AI);
+}
+
+#[test]
+fn event_enrollment_fault_parameters_take_the_context_tagged_none_and_ignore_a_null() {
+    use bacnet_objects::event_enrollment::EventEnrollmentObject;
+    use bacnet_types::enums::EventType;
+
+    const FP: PropertyIdentifier = PropertyIdentifier::FAULT_PARAMETERS;
+    let mut db = ObjectDatabase::new();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
+    let oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+    // Unset: the context-tagged `none` choice, [0] with no octets (#1417).
+    assert_eq!(read_raw(&db, oid, FP), [0x08]);
+    // fault-out-of-range [6]: min-normal [0] { Double 1.0 }, max-normal [1]
+    // { Double 2.0 }.
+    let out_of_range = [
+        0x6E, 0x0E, 0x55, 0x08, 0x3F, 0xF0, 0, 0, 0, 0, 0, 0, 0x0F, 0x1E, 0x55, 0x08, 0x40, 0, 0,
+        0, 0, 0, 0, 0, 0x1F, 0x6F,
+    ];
+    write_raw(&mut db, oid, FP, out_of_range.to_vec()).unwrap();
+    assert_eq!(read_raw(&db, oid, FP), out_of_range);
+    // The CHOICE's `none` is context-tagged, so an application NULL is no
+    // member of it: the write succeeds and changes nothing (Clause 15.9.2).
+    write_raw(&mut db, oid, FP, vec![0x00]).unwrap();
+    assert_eq!(read_raw(&db, oid, FP), out_of_range);
+    // The context-tagged `none` clears it.
+    write_raw(&mut db, oid, FP, vec![0x08]).unwrap();
+    assert_eq!(read_raw(&db, oid, FP), [0x08]);
 }
 
 #[test]
@@ -536,5 +598,5 @@ fn wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure() {
                 && code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32),
         "{err:?}"
     );
-    assert_eq!(read_raw(&db, oid, MVR), [0x00]);
+    assert_eq!(read_raw(&db, oid, MVR), UNSET_AO);
 }
