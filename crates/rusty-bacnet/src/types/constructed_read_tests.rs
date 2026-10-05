@@ -21,10 +21,11 @@ use bytes::BytesMut;
 use pyo3::types::{PyDict, PyList};
 use std::ffi::CStr;
 
+use crate::types::destination::destination as destination_from_py;
 use crate::types::read_value::decode_read_value;
 use crate::types::{
-    action_lists_from_py, destination_from_py, py_to_rpm_specs, rpm_ack_to_py, PyObjectIdentifier,
-    PyPropertyIdentifier, PyReadAccessSpec,
+    action_lists_from_py, py_to_rpm_specs, rpm_ack_to_py, PyObjectIdentifier, PyPropertyIdentifier,
+    PyReadAccessSpec,
 };
 
 const NF: ObjectType = ObjectType::NOTIFICATION_FORWARDER;

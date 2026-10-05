@@ -1,6 +1,6 @@
 //! Python mapping boundary for Recipient_List destinations
-//! (`BACnetDestination`, Clause 21), as `add_notification_forwarder` seeds
-//! them.
+//! (`BACnetDestination`, Clause 21), as `add_notification_forwarder` and
+//! `add_notification_class` seed them (#1260, #1364).
 //!
 //! Each destination is a `Destination` mapping. Its recipient uses the
 //! recipient mapping the Audit services take, and its time window uses the
@@ -27,6 +27,19 @@ const OPTIONAL: &[&str] = &[
     "issue_confirmed_notifications",
     "transitions",
 ];
+
+/// Read the `recipients=` seed of a Recipient_List, in order: nothing, or a
+/// list of `Destination` mappings.
+pub(crate) fn destinations(
+    recipients: Option<Vec<Bound<'_, PyAny>>>,
+) -> PyResult<Vec<BACnetDestination>> {
+    recipients
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(index, value)| destination(value, &format!("recipients[{index}]")))
+        .collect()
+}
 
 /// Read one `Destination` mapping. A key left out gives a destination that
 /// is active every day, all day, for every transition, with unconfirmed

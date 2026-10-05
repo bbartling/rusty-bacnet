@@ -1657,6 +1657,13 @@ server.add_notification_class(
     name="Critical Alarms",
     notification_class=1,
     storage_path="/application/state/class-1",  # optional
+    recipients=[  # keyword-only; seeds Recipient_List in order
+        {
+            "recipient": {"kind": "device",
+                          "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 99)},
+            "process_identifier": 1,
+        },
+    ],
 )
 server.add_notification_forwarder(
     instance=1,
@@ -1709,7 +1716,10 @@ OPERATIONAL_PROBLEM, and the class keeps its old list. `storage_path` takes a
 class its own file: the file records which class it belongs to, so two
 classes sharing a path fail to register after a restart, and a file this
 backend did not write, or a corrupt one, makes `add_notification_class` raise
-`BacnetError`.
+`BacnetError`. `recipients` seeds the class's Recipient_List with
+`Destination` mappings, with the forwarder's checks, errors and precedence
+(see below): a written, saved list wins over the seed, which until then
+applies at every start and is not saved (#1364).
 
 The Notification Forwarder sends each event notification the server
 receives, and each one its own objects address to its Device, on to the

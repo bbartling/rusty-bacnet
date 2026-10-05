@@ -322,14 +322,29 @@ impl BACnetServer {
     /// old list stays. Without it the list lives in memory only. Give each
     /// class its own file: one that holds another object's list, or that
     /// this backend did not write, raises BacnetError here.
-    #[pyo3(signature = (instance, name, notification_class=0, storage_path=None))]
+    ///
+    /// `recipients` seeds Recipient_List with `Destination` mappings, as
+    /// `add_notification_forwarder` does (#1364): more than 32, or an
+    /// address MAC past 18 octets, raises BacnetProtocolError and nothing is
+    /// registered. With `storage_path`, a saved, written list wins, and
+    /// until a write sets the list the seed applies at every start.
+    #[pyo3(signature = (
+        instance,
+        name,
+        notification_class=0,
+        storage_path=None,
+        *,
+        recipients=None
+    ))]
     fn add_notification_class(
         &self,
         instance: u32,
         name: &str,
         notification_class: u32,
         storage_path: Option<&str>,
+        recipients: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<()> {
+        let recipients = crate::types::destinations(recipients)?;
         let mut nc = match storage_path {
             Some(path) => {
                 let storage =
@@ -339,6 +354,9 @@ impl BACnetServer {
             None => NotificationClass::new(instance, name).map_err(to_py_err)?,
         };
         nc.notification_class = notification_class;
+        for destination in recipients {
+            nc.add_destination(destination).map_err(to_py_err)?;
+        }
         self.push_pending(Box::new(nc))
     }
 

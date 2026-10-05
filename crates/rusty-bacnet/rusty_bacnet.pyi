@@ -2770,6 +2770,8 @@ class BACnetServer:
         name: str,
         notification_class: int = 0,
         storage_path: Optional[str] = None,
+        *,
+        recipients: Optional[list[Destination]] = None,
     ) -> None:
         """Add a Notification Class (Clause 12.21). With ``storage_path``, a
         Recipient_List a client writes is kept in that file across restarts; a
@@ -2782,7 +2784,15 @@ class BACnetServer:
         the file names the class it belongs to, so one that holds another
         object's list, or anything this backend did not write, makes this call
         raise BacnetError (BacnetProtocolError for a saved list a client's write
-        would be refused)."""
+        would be refused).
+
+        ``recipients`` seeds Recipient_List with ``Destination`` mappings, in
+        order, with the checks and errors ``add_notification_forwarder``'s
+        ``recipients`` has: more than 32, or an address MAC past 18 octets,
+        raises BacnetProtocolError, and nothing is registered. With
+        ``storage_path``, a Recipient_List a client wrote, once saved, wins:
+        until a write sets the list, the seed applies at every start and is
+        not saved."""
     def add_notification_forwarder(
         self,
         instance: int,
