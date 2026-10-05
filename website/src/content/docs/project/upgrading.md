@@ -43,6 +43,7 @@ The packaging changed too:
 - A custom `TransportPort` must provide `local_receive_apdu_capacity()`, `max_apdu_length()` is now `egress_apdu_limit()` with no alias, and `ReceivedNpdu` gains `provenance` and `direct_response` (#693).
 - `PropertyPresenceCondition::IntrinsicReporting` splits into `IntrinsicReportingRequired` and `IntrinsicReportingOptional`; give a custom object's rows the one its table names (#1485).
 - The PICS generator's `CharacterSet` renames or drops four variants to match the six standard character sets (#913).
+- Local writes (`write_local`, `write_local_encoded` and the `*_local` setters) must be awaited inside a Tokio runtime; outside one they return `Error::Encoding` and write nothing. Once a write commits, its COV, event, Schedule and Staging work finishes even if the caller is dropped (#1367).
 
 ## Python API
 
@@ -103,6 +104,7 @@ The packaging changed too:
 - The server refuses DeviceCommunicationControl, even with the right password, until you pick a `DccPolicy` (`dcc_policy` in Python). `comm_state()` returns a `DccState` instead of a `u8`, and `handlers::handle_device_communication_control` is gone (#522, #1399, #1430).
 - `CovAckResult::Error` carries the refusing answer as a `Refusal`, a `Data` variant is added, and the type is no longer `Copy` (#1323, #1342).
 - Local writes take a `LocalCommandSource`. Writing a Command's Present_Value runs its Action list, and a Channel writes members in other devices (#824, #1150, #1264).
+- The Device's Device_Address_Binding lists the server's own configured bindings and recent I-Am observations, replacing any value the application stored there. An event notification to a Device recipient with no fresh binding sends a targeted Who-Is and waits up to a minute for the answer (#1368, #1369).
 - A Notification Class Recipient_List holds at most 32 destinations, `add_destination` returns `Result`, and the flat list form from before #152 is gone (#1098, #1124, #1125).
 - Log_Buffer reads only through ReadRange, and the pollers log any datatype. Trend Logs refuse COV logging for now (#1480), so stop a polled log by clearing Enable (#1092, #1233, #1236, #1354).
 - Calendar follows the local date, and a Schedule evaluates in the standard order. A target that refuses its write sets the Schedule's Reliability to CONFIGURATION_ERROR (#1028, #1029, #1086, #1433).
