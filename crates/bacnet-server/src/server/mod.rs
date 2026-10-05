@@ -590,6 +590,8 @@ mod event_recipient_route;
 mod event_send;
 mod event_suppression;
 pub use event_suppression::EventNotificationCounters;
+mod received_event_log;
+pub use received_event_log::{RECEIVED_EVENT_LOG_RATE, RECEIVED_EVENT_LOG_SOURCES};
 mod confirmed_answer;
 pub(crate) mod event_timestamp;
 mod handles;

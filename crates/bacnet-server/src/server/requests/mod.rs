@@ -1,6 +1,8 @@
 use super::cov_notify_context::CovNotifyContext;
 use super::event_forwarding::{ForwardOrigin, Reception};
+use super::received_event_log::log_received_event_notification;
 use super::*;
+use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_services::alarm_event::ForwardedEventNotification;
 
 #[cfg(test)]
@@ -94,8 +96,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             comm_state,
             dcc_timer: _,
             dcc_outcomes: _,
-            event_suppressions: _,
+            event_suppressions,
             confirmed_event_repeats,
+            received_event_log,
             mutation_decisions,
             config,
         } = services;
@@ -710,6 +713,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
         }
         if let Some(notification) = received_event {
+            // Logged at its first receipt only, with no lock held (#1346).
+            let source =
+                CanonicalPeer::from_source(source_mac, source_network.as_ref(), local_network);
+            let (log, suppressions) = (received_event_log, event_suppressions);
+            log_received_event_notification(db, log, suppressions, source, &req.service_request)
+                .await;
             // The dispatch loop drops a confirmed request that arrives by
             // broadcast (Clause 5.4.5.1), so this one was addressed to this
             // device alone.

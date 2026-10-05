@@ -141,6 +141,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 dcc_outcomes: Arc::clone(&dcc_outcomes),
                 event_suppressions: Arc::clone(&event_suppressions),
                 confirmed_event_repeats: Arc::default(),
+                received_event_log: Arc::default(),
                 mutation_decisions: Arc::clone(&mutation_decisions),
                 config: Arc::clone(&config_dispatch),
             },

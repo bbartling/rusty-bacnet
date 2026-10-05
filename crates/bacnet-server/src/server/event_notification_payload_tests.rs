@@ -132,6 +132,7 @@ fn normal_payload(object: &BuiltInProjectionObject) -> NotificationParameters {
             to,
         },
         event_type,
+        None,
     )
     .unwrap()
     .0
@@ -301,6 +302,7 @@ fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
                 to: EventState::FAULT,
             },
             EventType::CHANGE_OF_RELIABILITY,
+            None,
         )
         .unwrap()
         .0;
@@ -369,9 +371,10 @@ fn fault_recovery_requires_effective_reliability_type_and_none_is_not_projected(
         to: EventState::NORMAL,
     };
     assert!(
-        project_intrinsic_payload(&source, &recovery, EventType::CHANGE_OF_RELIABILITY).is_some()
+        project_intrinsic_payload(&source, &recovery, EventType::CHANGE_OF_RELIABILITY, None)
+            .is_some()
     );
-    assert!(project_intrinsic_payload(&source, &recovery, EventType::OUT_OF_RANGE).is_none());
+    assert!(project_intrinsic_payload(&source, &recovery, EventType::OUT_OF_RANGE, None).is_none());
     assert!(project_intrinsic_payload(
         &source,
         &EventStateChange {
@@ -379,6 +382,7 @@ fn fault_recovery_requires_effective_reliability_type_and_none_is_not_projected(
             to: EventState::HIGH_LIMIT,
         },
         EventType::NONE,
+        None,
     )
     .is_none());
 }
@@ -395,6 +399,7 @@ fn malformed_required_builtin_data_fails_closed() {
             to: EventState::HIGH_LIMIT,
         },
         EventType::OUT_OF_RANGE,
+        None,
     )
     .is_none());
 }

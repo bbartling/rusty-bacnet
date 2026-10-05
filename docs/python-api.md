@@ -1732,6 +1732,8 @@ server.add_trend_log_multiple(
     align_intervals=True,       # on each minute
 )
 server.add_event_log(instance=1, name="Event Log", buffer_size=500)
+# Also records the event notifications the server receives.
+server.add_event_log(2, "Received", 500, log_received_notifications=True)
 server.add_audit_log(
     instance=1,
     name="Audit Trail",
@@ -1808,10 +1810,26 @@ Once the server runs with a valid Device clock, every event notification it
 generates (an intrinsic or Event Enrollment transition, or an acknowledgment)
 is recorded in each Event Log, stamped with that clock, even when no recipient
 takes it. A client reads the records with `read_range` on `LOG_BUFFER`. Not
-logged: notifications the server receives, notifications about an Event Log
-(from the log or from an Event Enrollment watching one), and transitions whose
-Notification Class is missing or unreadable. The Rust API's Logging & Trending
-notes give the details.
+logged: an Event Log's BUFFER_READY reports, reports from an Event Enrollment
+watching an Event Log, and transitions whose Notification Class is missing or
+unreadable. The Rust API's Logging & Trending notes give the details.
+
+An Event Log added with `log_received_notifications=True` also records the
+Confirmed and UnconfirmedEventNotifications the server receives, unicast or
+broadcast, each as it decoded, Process Identifier included (#1346). The option
+is off by default. Each source, by network address, gets 5 records a second
+across the collecting logs; past that a notification isn't logged and counts
+in `event_notification_counters()["received_not_logged"]`. At most 33
+sources' worth, 165 records a second, get in however many send, and up to
+twice that within a second that straddles two windows. A received
+BUFFER_READY report on an Event Log's buffer, and one claiming this device as
+its source, are not logged.
+
+Event Logs, Trend Logs and Trend Log Multiples report BUFFER_READY (#1347):
+write Notification_Threshold (and Notification_Class) with
+`write_property_local` or from a peer, and the log's Notification Class
+recipients hear each time that many more records have been collected. Zero,
+the default, reports nothing.
 
 An Audit Log's `storage_path` is application-owned and produces two sibling
 snapshot files with `.slot0` and `.slot1` suffixes. Reuse the same path when
@@ -3181,6 +3199,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `apdu_too_large` | Notifications not sent to one destination because they exceed the local APDU size (notifications are never segmented); usually a forwarded copy of one that arrived segmented |
 | `received_not_forwarded` | Received event notifications that decoded but that no Notification Forwarder took; a confirmed one is still acknowledged |
 | `forwarding_cap_dropped` | Destinations a notification was not forwarded to because 64 copies were already on their way across the Notification Forwarders, one per destination dropped; destinations the loop rules refuse take no room |
+| `received_not_logged` | Received event notifications an Event Log collecting them would have taken, but their source had used its 5 records for that second; one per notification |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the

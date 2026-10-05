@@ -23,6 +23,7 @@ fn every_event_notification_counter_reaches_python_under_its_rust_name() {
         apdu_too_large: 12,
         received_not_forwarded: 13,
         forwarding_cap_dropped: 14,
+        received_not_logged: 15,
     };
     assert_eq!(
         event_notification_counter_entries(counters),
@@ -41,6 +42,7 @@ fn every_event_notification_counter_reaches_python_under_its_rust_name() {
             ("apdu_too_large", 12),
             ("received_not_forwarded", 13),
             ("forwarding_cap_dropped", 14),
+            ("received_not_logged", 15),
         ])
     );
 }
