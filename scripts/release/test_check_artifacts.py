@@ -166,8 +166,10 @@ def lazy(symbol, dylib="flat-namespace"):
     return f"__DATA   __la_symbol_ptr    0x01334000 {dylib:<16} {symbol}\n"
 
 
-BIND = (BIND_HEAD + got("_PyExc_BaseException") + got("__Py_NoneStruct") + got("_kCFBooleanTrue")
-        + got("_free", "libSystem") + LAZY_HEAD + lazy("_IOServiceMatching") + lazy("_malloc", "libSystem"))
+# As Apple's linker leaves them in an extension module: Python's C API to a
+# flat lookup, the framework and libSystem symbols bound to their library.
+BIND = (BIND_HEAD + got("_PyExc_BaseException") + got("__Py_NoneStruct") + got("_kCFBooleanTrue", "CoreFoundation")
+        + got("_free", "libSystem") + LAZY_HEAD + lazy("_IOServiceMatching", "IOKit") + lazy("_malloc", "libSystem"))
 CLI_BIND = BIND_HEAD + got("_free", "libSystem") + LAZY_HEAD + lazy("_malloc", "libSystem")
 
 
@@ -185,13 +187,7 @@ class MachoTests(unittest.TestCase):
         self.assertEqual((info["cpu"], info["platform"], info["minos"]), ("X86_64", "macos", "10.12"))
 
     def test_flat_lookups(self):
-        self.assertEqual(checks.flat_lookups(BIND),
-                         ["_IOServiceMatching", "_PyExc_BaseException", "__Py_NoneStruct", "_kCFBooleanTrue"])
-
-    def test_symbol_lists(self):
-        self.assertEqual((len(checks.IOKIT_SYMBOLS), len(checks.COREFOUNDATION_SYMBOLS)), (10, 72))
-        self.assertTrue(all(s.startswith(("_IO", "_kIO")) for s in checks.IOKIT_SYMBOLS))
-        self.assertTrue(all(s.startswith(("_CF", "_kCF")) for s in checks.COREFOUNDATION_SYMBOLS))
+        self.assertEqual(checks.flat_lookups(BIND), ["_PyExc_BaseException", "__Py_NoneStruct"])
 
     def check(self, headers, bind, arch="aarch64", minos=(11, 0), extension=True):
         outputs = {"--private-headers": headers, "--bind": bind}
@@ -200,8 +196,9 @@ class MachoTests(unittest.TestCase):
             return checks.check_macho(Path("x.so"), "x.so", arch, minos, extension)
 
     def test_extension_passes(self):
-        headers = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS)
-        self.assertEqual(self.check(headers, BIND), [])
+        self.assertEqual(self.check(macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS), BIND), [])
+        # The frameworks are allowed, not required.
+        self.assertEqual(self.check(macho_text(), BIND_HEAD + got("_PyType_Ready") + got("_free", "libSystem")), [])
 
     def test_cli_passes(self):
         self.assertEqual(self.check(macho_text(), CLI_BIND, extension=False), [])
@@ -214,6 +211,12 @@ class MachoTests(unittest.TestCase):
         self.assertTrue(any("needs macOS 11.0, its platform tag says 10.12" in e for e in errors))
         self.assertTrue(any("libz.1.dylib" in e for e in errors))
 
+    def test_libcharset_is_no_longer_expected(self):
+        # It came from cargo-zigbuild's libiconv stub; Apple's linker doesn't add it.
+        headers = macho_text(dylibs=checks.MACOS_SYSTEM | {"/usr/lib/libcharset.1.dylib"})
+        self.assertEqual(self.check(headers, CLI_BIND, extension=False),
+                         ["x.so loads /usr/lib/libcharset.1.dylib, which the release doesn't expect"])
+
     def test_arm64_needs_a_code_signature(self):
         unsigned = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS, extra="")
         self.assertEqual(self.check(unsigned, BIND),
@@ -223,30 +226,21 @@ class MachoTests(unittest.TestCase):
         x86 = macho_text("X86_64", dylibs=checks.MACOS_SYSTEM | FRAMEWORKS, extra="")
         self.assertEqual(self.check(x86, BIND, arch="x86_64"), [])
 
-    def test_extension_needs_the_frameworks_it_looks_up(self):
-        errors = self.check(macho_text(), BIND)
-        self.assertEqual(errors, [
-            f"x.so leaves _IOServiceMatching to a flat lookup but doesn't load {checks.IOKIT}",
-            f"x.so leaves _kCFBooleanTrue to a flat lookup but doesn't load {checks.COREFOUNDATION}"])
-        only_cf = BIND_HEAD + got("_PyType_Ready") + got("_CFRelease") + got("_free", "libSystem")
-        self.assertEqual(self.check(macho_text(dylibs=checks.MACOS_SYSTEM | {checks.COREFOUNDATION}), only_cf), [])
-
     def test_cli_loads_no_framework_and_leaves_no_flat_lookup(self):
         headers = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS)
         errors = self.check(headers, BIND, extension=False)
         self.assertEqual(len(errors), 3, errors)
-        self.assertTrue(any("leaves 4 symbols to a flat lookup" in e for e in errors))
+        self.assertTrue(any(f"loads {checks.IOKIT}" in e for e in errors))
+        self.assertTrue(any("leaves 2 symbols to a flat lookup" in e for e in errors))
 
-    def test_only_the_listed_framework_symbols(self):
+    def test_extension_leaves_only_python_to_a_flat_lookup(self):
+        # The cross-linked 0.12.0 development builds left their framework
+        # symbols to a flat lookup; a native link binds them to the framework.
         headers = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS)
-        for symbol in ("_SSLRead", "_CFNetworkCopySystemProxySettings", "_IOSurfaceCreate", "_kCFNull", "_Pz"):
+        for symbol in ("_IOServiceMatching", "_kCFBooleanTrue", "_SSLRead", "_Pz"):
             with self.subTest(symbol=symbol):
                 self.assertEqual(self.check(headers, BIND + lazy(symbol)), [
-                    "x.so leaves symbols to a flat lookup that neither Python nor the listed framework"
-                    f" symbols cover (1): {symbol}"])
-        every = BIND_HEAD + got("_Py_IsInitialized") + got("_free", "libSystem") + "".join(
-            got(s) for s in sorted(checks.IOKIT_SYMBOLS | checks.COREFOUNDATION_SYMBOLS))
-        self.assertEqual(self.check(headers, every), [])
+                    f"x.so leaves symbols other than Python's to a flat lookup (1): {symbol}"])
 
     def test_chained_fixups(self):
         chained = macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS) + (
@@ -263,7 +257,7 @@ class MachoTests(unittest.TestCase):
         self.assertIn("no bind table", self.check(macho_text(), "", extension=False)[0])
 
     def test_extension_without_python_lookups_fails(self):
-        no_python = BIND_HEAD + got("_CFRelease") + got("_free", "libSystem")
+        no_python = BIND_HEAD + got("_CFRelease", "CoreFoundation") + got("_free", "libSystem")
         self.assertEqual(self.check(macho_text(dylibs=checks.MACOS_SYSTEM | FRAMEWORKS), no_python),
                          ["x.so leaves no Python symbol to a flat lookup; the bind output didn't parse"])
 

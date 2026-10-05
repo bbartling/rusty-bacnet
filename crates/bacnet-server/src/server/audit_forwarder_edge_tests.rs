@@ -46,6 +46,7 @@ async fn audit_forwarding_routed_ack_uses_final_peer_not_router() {
             network: 200,
             mac_address: MacAddr::from_slice(&[9])
         }),
+        None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id: req.invoke_id,
             service_choice: req.service_choice
@@ -286,7 +287,7 @@ async fn audit_forwarding_terminal_failures_and_late_success_cannot_hide_new_fai
     assert!(f
         .server
         .notification_transactions
-        .admit_terminal(&[2], None, &failure));
+        .admit_terminal(&[2], None, None, &failure));
     settle().await;
     assert!(f.ack(requests[0].invoke_id, &[2], requests[0].service_choice));
     settle().await;
@@ -317,7 +318,7 @@ async fn audit_forwarding_terminal_failures_and_late_success_cannot_hide_new_fai
         assert!(f
             .server
             .notification_transactions
-            .admit_terminal(&[2], None, &terminal));
+            .admit_terminal(&[2], None, None, &terminal));
         settle().await;
         assert_eq!(f.server.notification_transactions.active_count(), 0);
     }

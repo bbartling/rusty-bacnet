@@ -172,6 +172,7 @@ async fn cov_multiple_route_admitted_confirmed_worker_may_finish_on_old_route() 
     assert!(fixture.transactions.admit_terminal(
         &old.subscriber_mac,
         old.subscriber_network.as_ref(),
+        None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id: request.invoke_id,
             service_choice: request.service_choice

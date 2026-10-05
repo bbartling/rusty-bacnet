@@ -35,9 +35,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             is_group,
             reply_tx,
         } = inbound;
-        let transaction_peer = response_transaction_peer(source_mac, source_network);
-        let tsm_mac = transaction_peer.tsm_mac;
-        let canonical_peer = transaction_peer.canonical;
+        let TransactionPeer {
+            tsm_mac,
+            canonical: canonical_peer,
+        } = TransactionPeer::of_answer_in(
+            tsm,
+            source_mac,
+            source_network.as_ref(),
+            network.local_network_number().get(),
+            &apdu,
+        )
+        .await;
         match apdu {
             Apdu::SimpleAck(ack) => {
                 // Mid-reassembly, a SimpleACK is in Clause 5.4.4.4

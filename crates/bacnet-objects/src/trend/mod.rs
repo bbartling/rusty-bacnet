@@ -9,7 +9,7 @@ use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LoggingType, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 
 use crate::clock::ClockReader;
 use crate::common::{self, read_property_list_property};
@@ -17,7 +17,9 @@ use crate::log_buffer::{
     log_buffer_read_denied, LogBufferRecords, LogRecordBuffer, LogRecordIdentity,
 };
 use crate::log_lifecycle::LogLifecycle;
+use crate::log_window::LogWindow;
 use crate::traits::BACnetObject;
+use acquisition::{Acquisition, Rules};
 
 mod acquisition;
 mod metadata;
@@ -29,22 +31,27 @@ pub use acquisition::DEFAULT_LOG_INTERVAL;
 pub use multiple::TrendLogMultipleObject;
 pub use references::MAX_LOG_DEVICE_OBJECT_PROPERTIES;
 
-/// BACnet TrendLog object.
+/// BACnet TrendLog object (type 20, Clause 12.25).
 ///
-/// Ring buffer of timestamped property values. The application calls
-/// `add_record()` to log values at `log_interval` intervals.
+/// Ring buffer of timestamped values of the one property
+/// Log_DeviceObjectProperty names. The database's trend poller samples it
+/// every Log_Interval while Logging_Type is POLLED, at clock-aligned times
+/// when Align_Intervals asks for them, and once for each Trigger while it is
+/// TRIGGERED; the application may also call `add_record()`. Records are kept
+/// only while Enable is TRUE and the local time lies between Start_Time and
+/// Stop_Time. COV logging isn't carried out, so Logging_Type refuses it.
 pub struct TrendLogObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
     log_enable: bool,
-    log_interval: u32,
     stop_when_full: bool,
     buffer_size: u32,
     log_buffer: LogRecordBuffer,
     reliability: Reliability,
     log_device_object_property: Option<BACnetDeviceObjectPropertyReference>,
-    logging_type: LoggingType,
+    acquisition: Acquisition,
+    window: LogWindow,
     clock: Option<Arc<dyn ClockReader>>,
 }
 
@@ -57,13 +64,13 @@ impl TrendLogObject {
             name: name.into(),
             description: String::new(),
             log_enable: true,
-            log_interval: 0,
             stop_when_full: false,
             buffer_size,
             log_buffer: LogRecordBuffer::new(buffer_size),
             reliability: Reliability::NO_FAULT_DETECTED,
             log_device_object_property: None,
-            logging_type: LoggingType::POLLED,
+            acquisition: Acquisition::new(Rules::TrendLog),
+            window: LogWindow::default(),
             clock: None,
         })
     }
@@ -71,11 +78,17 @@ impl TrendLogObject {
     /// Add a BACnetLogRecord to the trend log buffer.
     ///
     /// Success does not guarantee a resident ordinary record: disabled logging
-    /// is ignored, zero-capacity logging may only count, and a stop-before-full
+    /// and a record outside the Start_Time / Stop_Time window are ignored,
+    /// zero-capacity logging may only count, and a stop-before-full
     /// transition records status instead. Missing/invalid status clocks fail
-    /// atomically with DEVICE / OPERATIONAL_PROBLEM.
+    /// atomically with DEVICE / OPERATIONAL_PROBLEM. A successful call serves
+    /// a pending Trigger, which reads FALSE again, even when the record is
+    /// ignored (Enable FALSE, or outside the window): the acquisition was
+    /// made.
     pub fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        self.lifecycle().try_add_ordinary(record).map(|_| ())
+        self.lifecycle().try_add_ordinary(record)?;
+        self.acquisition.acquired();
+        Ok(())
     }
 
     /// Get the current buffer contents.
@@ -133,10 +146,62 @@ impl TrendLogObject {
         Ok(())
     }
 
-    /// Set Logging_Type. Only POLLED logs are polled; a Trend Log serves COV
-    /// and TRIGGERED but acquires nothing itself in either.
-    pub fn set_logging_type(&mut self, logging_type: LoggingType) {
-        self.logging_type = logging_type;
+    /// Set Logging_Type, as a client's write does: POLLED or TRIGGERED. This
+    /// device has no COV acquisition yet (#1480), so COV, like any other
+    /// value, is PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (Clause
+    /// 12.25.26) and changes nothing. POLLED with a zero Log_Interval sets
+    /// [`DEFAULT_LOG_INTERVAL`]; TRIGGERED sets Log_Interval to zero.
+    pub fn set_logging_type(&mut self, logging_type: LoggingType) -> Result<(), Error> {
+        self.acquisition.set_logging_type(logging_type)
+    }
+
+    /// Set Log_Interval in hundredths of a second, as a client's write does.
+    /// While Logging_Type is TRIGGERED it is read-only and this is PROPERTY /
+    /// WRITE_ACCESS_DENIED. A POLLED log's nonzero interval set to zero would
+    /// switch it to COV logging (Clause 12.25.9), which is refused with
+    /// PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, as COV itself is.
+    pub fn set_log_interval(&mut self, hundredths: u32) -> Result<(), Error> {
+        self.acquisition.set_log_interval(hundredths)
+    }
+
+    /// Set Start_Time, the local date and time from which records are kept,
+    /// as local configuration: nothing is recorded for the change itself,
+    /// but the log notes at once where the window stands, so a client's
+    /// write that then opens or shuts it is recorded. Every field
+    /// unspecified leaves the start open. Any other value has to name an
+    /// actual date and time, or it is PROPERTY / VALUE_OUT_OF_RANGE: the
+    /// weekday may stay unspecified, and unspecified seconds or hundredths
+    /// count as zero.
+    pub fn set_start_time(&mut self, date: Date, time: Time) -> Result<(), Error> {
+        self.lifecycle()
+            .configure_window(PropertyIdentifier::START_TIME, (date, time))
+    }
+
+    /// Set Stop_Time, the local date and time from which records are no
+    /// longer kept, under the same rules as
+    /// [`set_start_time`](Self::set_start_time).
+    pub fn set_stop_time(&mut self, date: Date, time: Time) -> Result<(), Error> {
+        self.lifecycle()
+            .configure_window(PropertyIdentifier::STOP_TIME, (date, time))
+    }
+
+    /// Set Align_Intervals: whether a POLLED log acquires at clock-aligned
+    /// times.
+    pub fn set_align_intervals(&mut self, align: bool) {
+        self.acquisition.set_align_intervals(align);
+    }
+
+    /// Set Interval_Offset, the delay after each aligned boundary, in
+    /// hundredths; it applies modulo Log_Interval.
+    pub fn set_interval_offset(&mut self, hundredths: u32) {
+        self.acquisition.set_interval_offset(hundredths);
+    }
+
+    /// Ask for one acquisition, as a local process writing Trigger TRUE does.
+    /// Only a TRIGGERED log takes it; any other is PROPERTY /
+    /// NOT_CONFIGURED_FOR_TRIGGERED_LOGGING.
+    pub fn trigger(&mut self) -> Result<(), Error> {
+        self.acquisition.trigger()
     }
 
     fn lifecycle(&mut self) -> LogLifecycle<'_, BACnetLogRecord> {
@@ -145,6 +210,7 @@ impl TrendLogObject {
             &mut self.log_enable,
             &mut self.stop_when_full,
             self.clock.as_ref(),
+            &mut self.window,
         )
     }
 }
@@ -163,6 +229,15 @@ impl BACnetObject for TrendLogObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        // Logging_Type, Log_Interval, Align_Intervals, Interval_Offset and
+        // Trigger, then Start_Time and Stop_Time.
+        if let Some(value) = self
+            .acquisition
+            .read(property)
+            .or_else(|| self.window.read(property))
+        {
+            return Ok(value);
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_IDENTIFIER => {
                 Ok(PropertyValue::ObjectIdentifier(self.oid))
@@ -177,9 +252,6 @@ impl BACnetObject for TrendLogObject {
                 Ok(PropertyValue::Enumerated(ObjectType::TREND_LOG.to_raw()))
             }
             p if p == PropertyIdentifier::LOG_ENABLE => Ok(PropertyValue::Boolean(self.log_enable)),
-            p if p == PropertyIdentifier::LOG_INTERVAL => {
-                Ok(PropertyValue::Unsigned(self.log_interval as u64))
-            }
             p if p == PropertyIdentifier::STOP_WHEN_FULL => {
                 Ok(PropertyValue::Boolean(self.stop_when_full))
             }
@@ -210,9 +282,6 @@ impl BACnetObject for TrendLogObject {
             }
             // ReadRange pages it through `log_buffer_internal`.
             p if p == PropertyIdentifier::LOG_BUFFER => Err(log_buffer_read_denied()),
-            p if p == PropertyIdentifier::LOGGING_TYPE => {
-                Ok(PropertyValue::Enumerated(self.logging_type.to_raw()))
-            }
             // The Clause 21 encoding; Null while no reference is set.
             p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => {
                 Ok(self.log_device_object_property.as_ref().map_or(
@@ -246,15 +315,14 @@ impl BACnetObject for TrendLogObject {
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
             });
         }
-        if property == PropertyIdentifier::LOG_INTERVAL {
-            if let PropertyValue::Unsigned(v) = value {
-                self.log_interval = common::u64_to_u32(v)?;
-                return Ok(());
-            }
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-            });
+        if let Some(result) = self.acquisition.write(property, &value) {
+            return result;
+        }
+        if let Some(result) = self.window.write(property, &value) {
+            // A change that opens or closes the window is recorded at once.
+            result?;
+            self.lifecycle().refresh_window();
+            return Ok(());
         }
         if property == PropertyIdentifier::STOP_WHEN_FULL {
             if let PropertyValue::Boolean(v) = value {
@@ -324,6 +392,10 @@ impl BACnetObject for TrendLogObject {
     fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         self.add_record(record)
     }
+
+    fn refresh_log_window_internal(&mut self) -> bool {
+        self.lifecycle().refresh_window()
+    }
 }
 
 #[cfg(test)]
@@ -331,6 +403,9 @@ mod log_record_tests;
 
 #[cfg(test)]
 mod multiple_options_tests;
+
+#[cfg(test)]
+mod options_tests;
 
 #[cfg(test)]
 mod reference_tests;

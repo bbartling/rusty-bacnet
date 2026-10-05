@@ -337,15 +337,22 @@ impl NotificationTransactions {
         self.core.reserve(peer, service_choice)
     }
 
+    /// Admit and complete one terminal answer to a notification lease.
+    /// `local_network` is this device's known network number, if any: an
+    /// answer relayed with it as SNET matches like one sent straight from
+    /// its SADR, or a lease reserved for the routed form while the number
+    /// was unknown
+    /// ([`OutboundTransactionCoordinator::admit_from_source`], #1465).
     #[doc(hidden)]
     pub fn admit_terminal(
         &self,
         immediate_source: &[u8],
         routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
         apdu: &Apdu,
     ) -> bool {
         self.core
-            .admit_terminal(immediate_source, routed_source, apdu)
+            .admit_terminal(immediate_source, routed_source, local_network, apdu)
     }
 
     /// Completes one already-admitted terminal (session dispatch only).
@@ -454,10 +461,16 @@ impl NotificationCore {
         &self,
         immediate_source: &[u8],
         routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
         apdu: &Apdu,
     ) -> bool {
-        let peer = canonical_inbound_peer(immediate_source, routed_source);
-        let admission = match self.coordinator.admit(&peer, apdu) {
+        let admitted = self.coordinator.admit_from_source(
+            immediate_source,
+            routed_source,
+            local_network,
+            apdu,
+        );
+        let admission = match admitted {
             Ok(AdmissionOutcome::Admitted(admission))
                 if admission.kind() == AdmissionKind::Terminal =>
             {
@@ -797,16 +810,4 @@ pub fn canonical_direct_peer(mac: &[u8]) -> CanonicalPeer {
 #[doc(hidden)]
 pub fn canonical_routed_peer(network: u16, address: &[u8]) -> CanonicalPeer {
     CanonicalPeer::routed(network, address)
-}
-
-fn canonical_inbound_peer(
-    immediate_source: &[u8],
-    routed_source: Option<&NpduAddress>,
-) -> CanonicalPeer {
-    match routed_source {
-        Some(source) if !source.mac_address.is_empty() => {
-            canonical_routed_peer(source.network, &source.mac_address)
-        }
-        _ => canonical_direct_peer(immediate_source),
-    }
 }

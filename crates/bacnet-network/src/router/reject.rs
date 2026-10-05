@@ -22,7 +22,7 @@ use tracing::{debug, warn};
 use super::forwarding::forward_unicast;
 use super::local_control::{LocalControl, OwnAddresses};
 use super::{IngressContext, SendRequest};
-use crate::layer::count_address_length_drop;
+use crate::layer::count_drop;
 use crate::router_table::{ReachabilityStatus, RouterTable};
 
 /// What a reject needs to know about the NPDU it refuses.
@@ -193,7 +193,7 @@ pub(super) fn refuse_address_too_long(
     drops: &AtomicU64,
 ) {
     warn!(error = %refused, port = port_idx, "Router refused an NPDU");
-    count_address_length_drop(drops);
+    count_drop(drops);
     let NpduDecodeError::AddressTooLong { dnet, source, .. } = refused else {
         return;
     };

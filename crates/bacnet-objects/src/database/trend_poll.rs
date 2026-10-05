@@ -45,11 +45,13 @@ struct Configuration {
 enum Mode {
     /// POLLED: every `interval` hundredths, counted from each acquisition.
     Polled { interval: u32 },
-    /// POLLED with Align_Intervals (Clause 12.30.14): at each local time of
-    /// day `offset` hundredths past a multiple of `interval`, which divides a
-    /// day. `offset` is Interval_Offset modulo the interval (12.30.15).
+    /// POLLED with Align_Intervals (Clauses 12.25.27 and 12.30.14): at each
+    /// local time of day `offset` hundredths past a multiple of `interval`,
+    /// which divides a day. `offset` is Interval_Offset modulo the interval
+    /// (12.25.28 and 12.30.15).
     Aligned { interval: u32, offset: u32 },
-    /// TRIGGERED with Trigger TRUE: one acquisition now (Clause 12.30.16).
+    /// TRIGGERED with Trigger TRUE: one acquisition now (Clauses 12.25.29
+    /// and 12.30.16).
     Triggered,
 }
 
@@ -57,7 +59,8 @@ enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Member {
     /// A Trend Log Multiple element naming object or device instance 4194303,
-    /// which Clause 12.30.11 treats as empty.
+    /// which Clause 12.30.11 treats as empty, or the missing reference of a
+    /// triggered Trend Log.
     Unspecified,
     /// A property to read, at one element when `index` is present.
     Reference {
@@ -139,17 +142,24 @@ impl ObjectDatabase {
     /// for an index past the end (#1183).
     ///
     /// Only POLLED logs with a nonzero Log_Interval and at least one reference
-    /// are polled. A TRIGGERED Trend Log Multiple whose Trigger reads TRUE
-    /// makes one acquisition, holding no values if it has no members, and the
-    /// object clears Trigger once it accepts the record (Clause 12.30.16). With
+    /// are polled. A TRIGGERED log whose Trigger reads TRUE makes one
+    /// acquisition, and the object clears Trigger once it accepts the record
+    /// (Clauses 12.25.29 and 12.30.16). A Trend Log Multiple without members
+    /// records no values for it, and a Trend Log without a reference records
+    /// PROPERTY / NO_PROPERTY_SPECIFIED, so Trigger never stays TRUE. With
     /// Align_Intervals TRUE and a Log_Interval that divides a day, a POLLED
-    /// Trend Log Multiple acquires when the Device clock's time of day is
-    /// Interval_Offset (modulo the interval) past a multiple of the interval
-    /// (Clauses 12.30.14 and 12.30.15); the first acquisition waits for such a
+    /// log acquires when the Device clock's time of day is Interval_Offset
+    /// (modulo the interval) past a multiple of the interval (Clauses
+    /// 12.25.27-28 and 12.30.14-15); the first acquisition waits for such a
     /// boundary. Such a log is judged against the Device clock on every pass,
     /// so a clock change moves its plan with it (see the `alignment` module).
-    /// Every pass also lets each log look at its Start_Time /
-    /// Stop_Time window, so one that opens or closes is recorded within a pass.
+    ///
+    /// Every pass also lets each Trend Log, Trend Log Multiple and Event Log
+    /// look at its Start_Time / Stop_Time window, with or without a
+    /// monotonic clock, so one that opens or closes is recorded within a pass
+    /// even when no record arrives. An Event Log takes its records from the
+    /// application and the device's notifications, never from this poller,
+    /// but this pass is the one regular visit every log gets.
     ///
     /// The caller must hold exclusive database access for this whole call. The
     /// bound monotonic clock drives scheduling; the shared Device clock
@@ -166,16 +176,25 @@ impl ObjectDatabase {
     /// avoids a zero-delay loop. These bounds are local policy, not real-time
     /// guarantees. Clock, object reads and insertion hooks must remain bounded.
     pub fn poll_trend_logs(&mut self) -> Duration {
+        let mut logs = self.find_by_type(ObjectType::TREND_LOG);
+        logs.extend(self.find_by_type(ObjectType::TREND_LOG_MULTIPLE));
+        let trend_logs = logs.len();
+        logs.extend(self.find_by_type(ObjectType::EVENT_LOG));
+        // Every log looks at its window, Event Logs included, whether or not
+        // a monotonic clock drives acquisition.
+        for oid in &logs {
+            if let Some(log) = self.get_mut(oid) {
+                log.refresh_log_window_internal();
+            }
+        }
+        logs.truncate(trend_logs);
         let Some(monotonic) = self.monotonic_clock.clone() else {
             return RECONCILE;
         };
         let mut eligible = HashSet::new();
         let local = self.local_device();
-        let mut logs = self.find_by_type(ObjectType::TREND_LOG);
-        logs.extend(self.find_by_type(ObjectType::TREND_LOG_MULTIPLE));
         for oid in logs {
             // Exclusive access prevents structural change after selection.
-            self.get_mut(&oid).unwrap().refresh_log_window_internal();
             let Some(configuration) = self.get(&oid).and_then(configuration) else {
                 continue;
             };
@@ -384,7 +403,15 @@ fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
             .map(|element| member(element, true))
             .collect::<Option<Vec<_>>>()?
     } else {
-        vec![member(&reference, false)?]
+        match member(&reference, false) {
+            Some(member) => vec![member],
+            // A Trigger on a log with no reference is still served, with a
+            // failure, so it doesn't stay TRUE.
+            None if mode == Mode::Triggered && reference == PropertyValue::Null => {
+                vec![Member::Unspecified]
+            }
+            None => return None,
+        }
     };
     // A Trigger is served even with no members, so it never stays TRUE.
     if members.is_empty() && mode != Mode::Triggered {

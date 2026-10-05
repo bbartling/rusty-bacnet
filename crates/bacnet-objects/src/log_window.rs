@@ -1,5 +1,5 @@
 //! Start_Time and Stop_Time of a log object: the span of local date and time
-//! inside which it logs (Clauses 12.25.6-7 and 12.30.9-10).
+//! inside which it logs (Clauses 12.25.6-7, 12.27.9-10 and 12.30.9-10).
 //!
 //! Each end is a BACnetDateTime. One with every field unspecified leaves
 //! that side of the span open. Any other value has to name an actual moment:
@@ -132,10 +132,14 @@ impl LogWindow {
         Ok(())
     }
 
-    /// Forget the state of the last look, so the next one only notes where
-    /// the span stands: a local change is configuration, not a transition.
-    pub(crate) fn forget(&mut self) {
+    /// Set Start_Time or Stop_Time as local configuration, checked as
+    /// [`set`](Self::set) checks it. The state of the last look is
+    /// forgotten, so the next look only notes where the span stands: a local
+    /// change is configuration, not a transition to record.
+    pub(crate) fn configure(&mut self, property: P, value: (Date, Time)) -> Result<(), Error> {
+        self.set(property, value)?;
         self.open = None;
+        Ok(())
     }
 
     /// Whether both ends are open, so the span admits every moment and a look

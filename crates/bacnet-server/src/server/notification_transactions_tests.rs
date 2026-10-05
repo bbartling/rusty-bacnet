@@ -172,16 +172,21 @@ async fn notification_terminals_complete_exactly_once() {
             _ => unreachable!(),
         };
 
-        assert!(!transactions.admit_terminal(&direct_mac, None, &error(invoke_id, EVENT_SERVICE)));
+        assert!(!transactions.admit_terminal(
+            &direct_mac,
+            None,
+            None,
+            &error(invoke_id, EVENT_SERVICE)
+        ));
         assert_eq!(
             transactions.active_count(),
             1,
             "wrong-service Error must retain notification ownership"
         );
-        assert!(transactions.admit_terminal(&direct_mac, None, &pdu));
+        assert!(transactions.admit_terminal(&direct_mac, None, None, &pdu));
         assert_eq!(receiver.await.unwrap(), expected);
         assert_eq!(transactions.active_count(), 0);
-        assert!(!transactions.admit_terminal(&direct_mac, None, &pdu));
+        assert!(!transactions.admit_terminal(&direct_mac, None, None, &pdu));
         drop(operation);
     }
 }
@@ -220,17 +225,28 @@ async fn mismatches_and_nonterminals_leave_notification_pending() {
         segment_ack(invoke_id, false),
         segment_ack(invoke_id, true),
     ] {
-        assert!(!transactions.admit_terminal(&[1, 0x55], None, &pdu));
+        assert!(!transactions.admit_terminal(&[1, 0x55], None, None, &pdu));
         assert_eq!(transactions.active_count(), 1);
     }
-    assert!(!transactions.admit_terminal(&[2, 0x55], None, &simple_ack(invoke_id, COV_SERVICE)));
+    assert!(!transactions.admit_terminal(
+        &[2, 0x55],
+        None,
+        None,
+        &simple_ack(invoke_id, COV_SERVICE)
+    ));
     assert!(!transactions.admit_terminal(
         &[1, 0x55],
+        None,
         None,
         &simple_ack(invoke_id.wrapping_add(1), COV_SERVICE)
     ));
 
-    assert!(transactions.admit_terminal(&[1, 0x55], None, &simple_ack(invoke_id, COV_SERVICE)));
+    assert!(transactions.admit_terminal(
+        &[1, 0x55],
+        None,
+        None,
+        &simple_ack(invoke_id, COV_SERVICE)
+    ));
     assert_eq!(receiver.await.unwrap(), CovAckResult::Ack);
     assert_eq!(transactions.active_count(), 0);
     drop(operation);
@@ -251,16 +267,17 @@ async fn routed_identity_ignores_the_immediate_router() {
         .unwrap();
     let ack = simple_ack(operation.invoke_id(), EVENT_SERVICE);
 
-    assert!(!transactions.admit_terminal(&[9], None, &ack));
+    assert!(!transactions.admit_terminal(&[9], None, None, &ack));
     assert!(!transactions.admit_terminal(
         &[9],
         Some(&NpduAddress {
             network: routed_source.network,
             mac_address: MacAddr::new(),
         }),
+        None,
         &ack,
     ));
-    assert!(transactions.admit_terminal(&[0x44], Some(&routed_source), &ack));
+    assert!(transactions.admit_terminal(&[0x44], Some(&routed_source), None, &ack));
     assert_eq!(receiver.await.unwrap(), CovAckResult::Ack);
     drop(operation);
 }
@@ -397,6 +414,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
     assert!(transactions.admit_terminal(
         source_mac.as_slice(),
         None,
+        None,
         &simple_ack(invoke_id, COV_SERVICE)
     ));
     assert_eq!(receiver.await.unwrap(), CovAckResult::Ack);
@@ -448,6 +466,7 @@ async fn an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction() {
         } else {
             assert!(answering.admit_terminal(
                 &[10, 0x55],
+                None,
                 None,
                 &simple_ack(invoke_id, COV_SERVICE)
             ));

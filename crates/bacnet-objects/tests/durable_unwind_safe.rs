@@ -2,10 +2,12 @@
 //! and `RefUnwindSafe` (#1428).
 //!
 //! The check happens at compile time: a field that takes either trait away
-//! from one of these types stops this test from building. The Notification
-//! Forwarder and the Audit Log save through the same writer, but each holds
-//! a clock the application binds, and the log keeps settled errors, so
-//! neither has the traits and neither is listed here.
+//! from one of these types stops this test from building.
+//!
+//! Left out on purpose (#1452): the Notification Forwarder and the Audit Log
+//! save through the same writer, but each holds a clock the application
+//! supplies, and the log also keeps settled results whose error can wrap an
+//! `std::io::Error`. Neither type has the traits; their docs say why.
 
 use std::panic::{RefUnwindSafe, UnwindSafe};
 

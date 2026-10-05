@@ -1564,6 +1564,15 @@ a router learns no route from it. No built-in transport reports a MAC that long
 custom `TransportPort` can, and every address the stack learns off the network
 fits a `BACnetAddress`.
 
+Both also drop an NPDU whose DNET is 0xFFFF and that carries a DADR (#1379).
+DNET 0xFFFF already names every device on every network (Clauses 6.2.2 and
+6.3.2), so a DADR beside it contradicts it. `NetworkLayer` hands such an NPDU
+to neither receiver. `BACnetRouter` neither forwards nor delivers it, acts on
+no network message in it and sends no reject, since a global broadcast never
+draws one. Each counts it in `global_broadcast_dadr_drops()`, apart from
+`address_length_drops()`: the lengths are fine, and the count points at the
+peer that sent it. A global broadcast with DLEN 0 is unaffected.
+
 `BACnetRouter` sends each Reject-Message-To-Network it originates to whoever
 first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
@@ -1616,6 +1625,14 @@ answer goes back by the route its request arrived on. The full server and the
 standalone client make that choice on every path they start, and send a
 destination naming their own network's number as local traffic (#1358).
 `BACnetRouter` keeps its own per-port networks and is not affected.
+
+The routed sends (`send_apdu_routed`, `send_apdu_routed_via_local_broadcast`
+and their `_with_data_attributes` forms), `send_apdu_on_issuance` and
+`broadcast_to_network` refuse DNET 0 and DNET 0xFFFF with `Error::Encoding`
+before anything is sent (#1314, #1340, #1380). A global broadcast goes out only
+through `broadcast_global_apdu`, with DLEN 0 and the broadcast MAC, so that
+every router on the network can pass it on (Clause 6.3.2); a unicast would
+reach a single router.
 
 ---
 
@@ -2442,20 +2459,30 @@ the buffer alone and may name another device (the poller logs a failure for
 it), but refuse a Device member that isn't a Device identifier, and
 `add_property_reference` a 65th reference.
 
-A Trend Log Multiple also serves Start_Time, Stop_Time, Align_Intervals,
-Interval_Offset and Trigger, and its Logging_Type is writable (#1235); each
-has a local setter returning `Result` where a write can be refused:
+Trend Log and Trend Log Multiple both serve Start_Time, Stop_Time,
+Align_Intervals, Interval_Offset and Trigger, and their Logging_Type is
+writable (#1235, #1353, #1354); Event Log serves Start_Time and Stop_Time
+(#1353). Each row has a local setter on the object, returning `Result` where
+a write can be refused:
 
-- **Logging_Type** is POLLED or TRIGGERED. COV, which this object type never
-  uses (Clause 12.30.12), and any other value are PROPERTY /
-  VALUE_OUT_OF_RANGE, through `set_logging_type(LoggingType)` as over the
-  wire. POLLED with a zero Log_Interval sets
+- **Logging_Type** is POLLED or TRIGGERED, through
+  `set_logging_type(LoggingType)` as over the wire. A Trend Log Multiple
+  never logs by COV, so COV and any other value are PROPERTY /
+  VALUE_OUT_OF_RANGE (Clause 12.30.12). A Trend Log could, but this stack has
+  no COV acquisition yet (#1480), so it refuses COV rather than serve a mode
+  it doesn't carry out: COV and any other value are PROPERTY /
+  OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the answer Clause 12.25.26 gives for a
+  value the object doesn't support. POLLED with a zero Log_Interval sets
   `trend::DEFAULT_LOG_INTERVAL` (6000 hundredths, one minute); TRIGGERED sets
   Log_Interval to 0 and makes it read-only, so a write or
-  `set_log_interval` then is WRITE_ACCESS_DENIED.
+  `set_log_interval` then is WRITE_ACCESS_DENIED. On a POLLED Trend Log, a
+  nonzero Log_Interval written to 0 is the older way to ask for COV logging
+  (Clause 12.25.9) and gets the same OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED; a
+  Trend Log Multiple just stops polling at 0.
 - **Trigger** written TRUE (or `trigger()`) asks a TRIGGERED log for one
-  acquisition; it reads TRUE until the poller's record is accepted, and
-  `add_record` clears it. TRUE on a POLLED log is PROPERTY /
+  acquisition; it reads TRUE until the poller's record is accepted, and a
+  successful `add_record` clears it, even when the log ignores the record
+  (Enable FALSE, or outside the window). TRUE on a POLLED log is PROPERTY /
   NOT_CONFIGURED_FOR_TRIGGERED_LOGGING; FALSE is accepted and changes nothing.
 - **Start_Time / Stop_Time** (`set_start_time`, `set_stop_time`) are
   BACnetDateTime values, served as an application Date then Time. Every field
@@ -2468,9 +2495,11 @@ has a local setter returning `Result` where a write can be refused:
   records it, LOG_DISABLED on closing and a clear status on opening; a write
   records it at once, and the poller's next pass records a change that time
   brings. Enable changes while the window is shut leave logging off, so they
-  add no record. The local setters are configuration: the first
-  look afterwards notes the window without a record. The window logic lives
-  in the shared log lifecycle, so the other log objects can take it up.
+  add no record. The local setters are configuration: the log notes where
+  the window stands without a record, so a client's write that then opens or
+  shuts it is recorded. The poller looks at
+  every log's window on each pass, an Event Log's included, so an opening or
+  closing is recorded even when no record arrives.
 - **Align_Intervals / Interval_Offset** (`set_align_intervals`,
   `set_interval_offset`) make a POLLED log acquire when the Device clock's
   time of day is Interval_Offset (modulo Log_Interval) past a multiple of
@@ -2525,8 +2554,8 @@ with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`). The rules:
   property of an Event Log. Logging such a report anywhere would add a record
   that changes what it watches, so reports could prompt each other without end,
   directly or crosswise between two logs.
-- Each log applies its own Enable, Buffer_Size and Stop_When_Full handling.
-  Event Log has no Start_Time or Stop_Time, so Enable alone switches logging.
+- Each log applies its own Enable, Start_Time / Stop_Time window,
+  Buffer_Size and Stop_When_Full handling.
 - Without a valid Device clock nothing is logged, since a record needs a
   timestamp.
 
@@ -2582,17 +2611,17 @@ Trend Log Multiple records. The void hook and `try_add_trend_record_internal`
 adapter have been replaced. Custom implementations return their insertion result
 directly; the default returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
 The server poller (`ObjectDatabase::poll_trend_logs`) samples both object types
-and retries failed insertions without advancing its last-log time. For a Trend
-Log Multiple it also makes one acquisition for each Trigger of a TRIGGERED log
-(a log with no members records an empty set of values, so Trigger never stays
-TRUE), waits for each clock-aligned boundary of an aligned POLLED log, and on
-every pass calls the hidden `refresh_log_window_internal` hook so each log
-records its window opening or closing. Wrappers forward that hook, as
-`SourceReporter` does. `TrendLogObject::set_logging_type` takes a
-`LoggingType` too; a Trend Log keeps its read-only Logging_Type and has no
-window, alignment or Trigger yet (#1353, #1354). Only POLLED and TRIGGERED
-logs are polled: a Trend Log set to a proprietary Logging_Type, which used to
-be polled as POLLED, no longer is. Bounded evidence is recorded in
+and retries failed insertions without advancing its last-log time. It also
+makes one acquisition for each Trigger of a TRIGGERED log (a Trend Log
+Multiple with no members records an empty set of values, and a Trend Log
+with no reference a PROPERTY / NO_PROPERTY_SPECIFIED failure, so Trigger
+never stays TRUE), waits for each clock-aligned boundary of an aligned POLLED
+log, and on every pass calls the hidden `refresh_log_window_internal` hook on
+each Trend Log, Trend Log Multiple and Event Log, so each records its window
+opening or closing. Wrappers forward that hook, as `SourceReporter` does.
+`TrendLogObject::set_logging_type` returns `Result`, as Trend Log
+Multiple's does. Only POLLED and TRIGGERED logs are polled. Bounded evidence
+is recorded in
 `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance is not
 claimed.
 
@@ -3553,9 +3582,18 @@ client's own network (#1358). A routed confirmed request to it, from any of
 the methods above or for a device added with `add_routed_device`, passes the
 checks above and then goes as a local request: a unicast to the DADR with no
 DNET, not through the router, so a non-routing peer there takes it. It holds
-no routed-path state, and `router_mac` is not used. Only an answer from the
-DADR, with no SNET, completes it: an answer relayed back by a router with that
-number as its SNET matches nothing, and the request is retried. The peer's
+no routed-path state, and `router_mac` is not used. An answer from the DADR
+with no SNET completes it, and so does one a router relays back with that
+number as its SNET and the DADR as its SADR (#1465): network numbers are
+unique, so both name the same station. That holds for any request to a station
+on this network. A relayed answer still has to carry the request's invoke ID,
+one naming another network or another station completes nothing, and while
+the number is unknown only the direct answer counts. The link source of a
+relayed answer is not checked, so any node on this link could complete the
+request by claiming that SNET and SADR with the right invoke ID; a routed
+request already trusts a claimed SNET/SADR the same way. A request routed to
+this network before the number was learned keeps its routed key, and its
+relayed answer still completes it. The peer's
 limits still come from its routed device-table row, so a request past them is
 refused or segmented as for the routed peer.
 `broadcast_network_unconfirmed`, and `who_is_network` and a `write_group` to
@@ -3566,8 +3604,11 @@ arrived by.
 
 The shared endpoint's requester does the same once its session knows the
 number (#1403). A `Routed` or `RoutedViaLocalBroadcast` destination naming it
-passes the same checks, then goes to the DADR with no DNET; only the DADR's own
-answer, with no SNET, completes the read.
+passes the same checks, then goes to the DADR with no DNET. The DADR's own
+answer completes the read, and so does one relayed back with that number as
+its SNET and the DADR as its SADR (#1465). The client, the endpoint and the
+server's own confirmed requests match answers through one rule,
+`CanonicalPeer::from_source`.
 
 State is keyed by the immediate router MAC together with DNET. One confirmed
 request at a time owns that path; requests through a different router or to a

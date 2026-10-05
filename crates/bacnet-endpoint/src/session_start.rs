@@ -129,6 +129,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             notifications: notifications.clone(),
             coordinator: Arc::clone(&self.coordinator),
             shared: Arc::clone(&self.shared),
+            local_network: egress.local_network_number().clone(),
         };
         let audit_lease = source_recipient
             .as_ref()

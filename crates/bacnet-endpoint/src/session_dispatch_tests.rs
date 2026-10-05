@@ -61,6 +61,7 @@ fn fixture() -> (
             notifications: Some(notifications),
             coordinator,
             shared,
+            local_network: LocalNetworkNumber::default(),
         },
         inbound_tx,
         terminal_tx,

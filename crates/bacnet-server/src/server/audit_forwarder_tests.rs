@@ -259,6 +259,7 @@ impl Fixture {
         self.server.notification_transactions.admit_terminal(
             peer,
             None,
+            None,
             &Apdu::SimpleAck(SimpleAck {
                 invoke_id: invoke,
                 service_choice: service,

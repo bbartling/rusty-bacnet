@@ -5,9 +5,8 @@
 //! drops and counts an NPDU whose DLEN or SLEN is past
 //! [`NpduAddress::MAX_MAC_LEN`]; the router also refuses to forward or deliver
 //! it, and rejects it with reason 6 when it names a specific DNET. Every case
-//! runs once per address field, and a boundary-length NPDU sent right after
-//! the refused one is the first thing to come out, which shows the refused one
-//! went nowhere.
+//! runs once per address field, and an NPDU sent right after the refused one
+//! is the first thing to come out, which shows the refused one went nowhere.
 
 use bacnet_encoding::npdu::{Npdu, NpduAddress, NpduAddressField, RejectMessageToNetwork};
 use bacnet_transport::loopback::LoopbackTransport;
@@ -62,20 +61,38 @@ async fn non_router_drops_and_counts_an_over_long_address_in_either_field() {
             .await
             .unwrap();
 
+        // An 18-octet address fits. As a SADR it comes out first. As a DADR
+        // it sits beside DNET 0xFFFF, the only DNET a non-router takes, and
+        // any DADR there is dropped for that, apart from its length (#1379):
+        // the plain local NPDUs sent after it come out first.
+        if field == NpduAddressField::Destination {
+            peer.send_unicast(&wire(None, None, None), &[0x01])
+                .await
+                .unwrap();
+            peer.send_unicast(&wire(None, None, control), &[0x01])
+                .await
+                .unwrap();
+        }
         let apdu = recv(&mut apdus).await;
         assert_eq!(apdu.apdu, APDU[..], "{field}");
-        if field == NpduAddressField::Source {
-            let source = apdu.source_network.expect("routed source survives");
-            assert_eq!(source.mac_address.len(), NpduAddress::MAX_MAC_LEN);
-        }
         let received = recv(&mut controls).await;
-        assert_eq!(
-            address_of(&received.npdu, field).mac_address.len(),
-            NpduAddress::MAX_MAC_LEN,
-            "{field}"
-        );
+        match field {
+            NpduAddressField::Destination => {
+                assert!(apdu.source_network.is_none() && !apdu.global_broadcast);
+                assert_eq!(received.npdu.destination, None);
+            }
+            NpduAddressField::Source => {
+                let source = apdu.source_network.expect("routed source survives");
+                assert_eq!(source.mac_address.len(), NpduAddress::MAX_MAC_LEN);
+                assert_eq!(
+                    address_of(&received.npdu, field).mac_address.len(),
+                    NpduAddress::MAX_MAC_LEN
+                );
+            }
+        }
     }
     assert_eq!(network.address_length_drops(), 8);
+    assert_eq!(network.global_broadcast_dadr_drops(), 2);
 
     network.stop().await.unwrap();
     peer.stop().await.unwrap();

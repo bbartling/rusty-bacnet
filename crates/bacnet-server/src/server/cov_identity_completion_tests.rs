@@ -194,6 +194,7 @@ impl Fixture {
             assert!(self.transactions.admit_terminal(
                 &[127, 0, 0, 1, 0xba, 0xd0],
                 None,
+                None,
                 &Apdu::SimpleAck(SimpleAck {
                     invoke_id: request.invoke_id,
                     service_choice: request.service_choice

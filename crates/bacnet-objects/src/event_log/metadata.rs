@@ -5,14 +5,17 @@ use bacnet_types::enums::PropertyIdentifier as P;
 
 use crate::log_buffer::{BUFFER_SIZE_METADATA, LOG_BUFFER_METADATA, TOTAL_RECORD_COUNT_METADATA};
 use crate::log_lifecycle::{LOG_ENABLE_METADATA, RECORD_COUNT_METADATA, STOP_WHEN_FULL_METADATA};
+use crate::log_window::{START_TIME_METADATA, STOP_TIME_METADATA};
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
-// Preserve legacy order. Table 12-31 defines neither Log_Interval nor
-// Out_Of_Service, so there are no such rows (#1064).
+// The legacy rows keep their order, then the window follows. Table 12-31
+// defines neither Log_Interval nor Out_Of_Service, so there are no such rows
+// (#1064). Start_Time and Stop_Time come together and are writable
+// (footnotes 1 and 2).
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -27,6 +30,8 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
+    START_TIME_METADATA,
+    STOP_TIME_METADATA,
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 

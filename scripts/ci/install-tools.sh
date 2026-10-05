@@ -43,7 +43,7 @@ for tool in "$@"; do
       fetch "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$version/cargo-nextest-$version-x86_64-unknown-linux-gnu.tar.gz" \
         "$(pin NEXTEST_SHA256)"
       tar xzf "$tmp/archive" -C "$bin" cargo-nextest
-      cargo nextest --version | head -1 ;;
+      cargo nextest --version | sed -n 1p ;;
     cargo-deny)
       version=$(pin CARGO_DENY_VERSION)
       dir=cargo-deny-$version-x86_64-unknown-linux-musl

@@ -7,7 +7,7 @@ Use local Codebase Memory as the first structural code-intelligence layer. The c
 ## Repository hosting
 
 - `origin` is [GitHub](https://github.com/jscott3201/rusty-bacnet), the project's host for branches, issues, pull requests, CI and development tracking. Push branches to `origin` and open PRs there, targeting `dev` (or `main` for releases). Keep public-facing links (README, docs, website) pointed at GitHub.
-- The self-hosted Forgejo that hosted the project before is retired and its repository archived; the `forgejo` remote is fetch-only. Only the release pipeline (`.forgejo/workflows/release.yml`) still refers to it, until the release moves to GitHub ([docs/ci.md](docs/ci.md#release)).
+- The self-hosted Forgejo that hosted the project before is retired and its repository archived; the `forgejo` remote is fetch-only.
 - CI runs on GitHub-hosted runners for every PR to `dev` or `main` and every push to them: Linux in `.github/workflows/ci.yml`, and the tests, clippy and rustdoc natively on macOS and Windows in `.github/workflows/native-tests.yml`. Before merge, follow [the merge-evidence policy](docs/ci.md): the required checks `CI OK` and `Native OK` green on the PR for the exact head SHA. `scripts/ci/local-macos.sh` is optional local verification before pushing, not merge evidence. Existing review and merge-authorization rules still apply.
 - Run tests with cargo-nextest 0.9.145 or later (`cargo nextest run`, configured in `.config/nextest.toml`) plus `cargo test --doc` for doctests, which nextest skips; see [docs/ci.md](docs/ci.md).
 - Historical `GitLab #NNN` references in docs and evidence refer to the retired GitLab tracker.

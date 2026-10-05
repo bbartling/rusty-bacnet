@@ -49,33 +49,24 @@ class Immutable(AssertionError):
 
 
 class FakeHost:
-    """Stands in for Forgejo or GitHub. Holds releases and tags in memory,
-    records every call, and, like GitHub, refuses any asset change once a
-    release is public. can_read_assets=False is Forgejo-like: no digests, no
-    downloads."""
+    """Stands in for GitHub: holds releases in memory, records every call and,
+    like GitHub, refuses any asset change once a release is public."""
 
     label = "Fake"
     published_hint = "Fake releases are immutable."
 
-    def __init__(self, can_read_assets=True, draft_creates_tag=False, hide_drafts=False, staged_only=False):
-        self.can_read_assets = can_read_assets
-        self.staged_only = staged_only
-        self.draft_creates_tag = draft_creates_tag
-        self.hide_drafts = hide_drafts
+    def __init__(self):
         self.releases = []
-        self.tags = set()
         self.calls = []
         # asset name -> how its next upload goes wrong:
         #   lost      stored, response lost
         #   refused   not stored, HTTP 502
-        #   forbidden not stored, HTTP 400 (a type the host doesn't allow)
         #   exists    stored, then HTTP 422 already_exists (as after a lost response)
         #   corrupt   other bytes stored, success
         #   dup       stored twice, success
         #   stray     stored, plus an incomplete upload of another file
         self.fail = {}
         self.create_lost = False
-        self.fail_delete_release = False
         self.ids = iter(range(100, 10_000))
 
     def add(self, tag, files, draft, commit=COMMIT):
@@ -87,10 +78,8 @@ class FakeHost:
         return release
 
     def _store(self, release, name, data, state="uploaded"):
-        item = {"id": next(self.ids), "name": name, "size": len(data), "state": state, "data": data}
-        if self.can_read_assets:
-            item["digest"] = "sha256:" + api.sha256_bytes(data)
-        release["assets"].append(item)
+        release["assets"].append({"id": next(self.ids), "name": name, "size": len(data), "state": state,
+                                  "data": data, "digest": "sha256:" + api.sha256_bytes(data)})
 
     def _live(self, release):
         return next(r for r in self.releases if r["id"] == release["id"])
@@ -102,7 +91,7 @@ class FakeHost:
         return live
 
     def list_releases(self):
-        return [copy.deepcopy(r) for r in self.releases if not (self.hide_drafts and r["draft"])]
+        return copy.deepcopy(self.releases)
 
     def find_release(self, tag):
         return api.pick_release(self.list_releases(), tag)
@@ -110,14 +99,9 @@ class FakeHost:
     def refresh(self, release):
         return copy.deepcopy(self._live(release))
 
-    def exists(self, release):
-        return any(r["id"] == release["id"] for r in self.releases)
-
     def create_draft(self, tag, name, notes, commit, prerelease):
         self.calls.append(("create", tag, name, commit, prerelease))
         release = self.add(tag, {}, draft=True, commit=commit)
-        if self.draft_creates_tag:
-            self.tags.add(tag)
         if self.create_lost:
             self.create_lost = False
             raise api.HttpFailure("POST /releases returned HTTP 502", 502)
@@ -143,8 +127,6 @@ class FakeHost:
         mode = self.fail.pop(path.name, None)
         if mode == "refused":
             raise api.HttpFailure("upload returned HTTP 502", 502)
-        if mode == "forbidden":
-            raise api.HttpFailure("upload returned HTTP 400: type not allowed", 400)
         data = path.read_bytes()
         self._store(live, path.name, data + b"!" if mode == "corrupt" else data)
         if mode == "dup":
@@ -162,31 +144,17 @@ class FakeHost:
         self.calls.append(("delete", item["name"]))
         live["assets"] = [a for a in live["assets"] if a["id"] != item["id"]]
 
-    def delete_release(self, release):
-        self.calls.append(("delete-release", release["tag_name"]))
-        if self.fail_delete_release:
-            raise api.HttpFailure("DELETE /releases returned HTTP 403: forbidden", 403)
-        self.releases = [r for r in self.releases if r["id"] != release["id"]]
-
-    def tag_exists(self, tag):
-        return tag in self.tags
-
     def download(self, release, item):
-        if not self.can_read_assets:
-            raise AssertionError("this host can't download")
         self.calls.append(("download", item["name"]))
         return item["data"]
 
     def asset_digest(self, release, item):
-        if not self.can_read_assets:
-            raise AssertionError("this host can't checksum")
         self.calls.append(("digest", item["name"]))
         return item["digest"].removeprefix("sha256:")
 
     def publish_release(self, release):
         self.calls.append(("publish",))
         self._live(release)["draft"] = False
-        self.tags.add(release["tag_name"])
         return copy.deepcopy(self._live(release))
 
     def files(self, tag="v1.0.0"):
@@ -194,7 +162,7 @@ class FakeHost:
         return {a["name"]: a["data"] for a in release["assets"]}
 
 
-WRITES = ("create", "upload", "delete", "delete-release", "publish")
+WRITES = ("create", "upload", "delete", "publish")
 
 
 def writes(host):
@@ -203,9 +171,11 @@ def writes(host):
 
 WHEEL, BINARY = b"wheel", b"binary"
 SUMS_OK = api.sums_text({"bacnet-linux-amd64": api.sha256_bytes(BINARY), "x.whl": api.sha256_bytes(WHEEL)}).encode()
+SUMS_SHA = api.sha256_bytes(SUMS_OK)
+COMPLETE = {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK}
 
 
-class PublishTests(unittest.TestCase):
+class AssetsTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
@@ -215,133 +185,111 @@ class PublishTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_publish(self, host, dry_run=False, tag="v1.0.0"):
+    def stage(self, host, tag="v1.0.0"):
         with contextlib.redirect_stdout(io.StringIO()) as out:
-            api.publish(host, tag, "notes", self.dir, COMMIT, dry_run)
-        return out.getvalue()
+            release, sums = api.stage(host, tag, "notes", self.dir, COMMIT)
+        return release, sums, out.getvalue()
 
-    def publish_fails(self, host, pattern):
+    def stage_fails(self, host, pattern):
         with self.assertRaisesRegex(api.ReleaseError, pattern) as caught, \
                 contextlib.redirect_stdout(io.StringIO()):
-            api.publish(host, "v1.0.0", "notes", self.dir, COMMIT, False)
+            api.stage(host, "v1.0.0", "notes", self.dir, COMMIT)
         self.assertNotIn(("publish",), host.calls)
         return str(caught.exception)
 
-    def test_new_release_stays_a_draft_until_everything_is_up(self):
+    def publish(self, host, staged):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            api.publish(host, "v1.0.0", self.dir, staged)
+        return out.getvalue()
+
+    def plan(self, host):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            api.plan(host, "v1.0.0", self.dir, COMMIT)
+        return out.getvalue()
+
+
+class StageTests(AssetsTestCase):
+    def test_new_draft_is_filled_checked_and_left_a_draft(self):
         host = FakeHost()
-        out = self.run_publish(host, tag="v1.0.0-rc.1")
+        release, sums, out = self.stage(host, tag="v1.0.0-rc.1")
         self.assertEqual(writes(host), [
             ("create", "v1.0.0-rc.1", "Rusty BACnet v1.0.0-rc.1", COMMIT, True),
-            ("upload", "bacnet-linux-amd64"), ("upload", "x.whl"), ("upload", "SHA256SUMS"), ("publish",)])
+            ("upload", "bacnet-linux-amd64"), ("upload", "x.whl"), ("upload", "SHA256SUMS")])
+        self.assertTrue(host.releases[0]["draft"])
         self.assertEqual(host.files("v1.0.0-rc.1")["SHA256SUMS"], SUMS_OK)
-        self.assertFalse(host.releases[0]["draft"])
+        self.assertEqual((release["id"], sums), (host.releases[0]["id"], SUMS_SHA))
         self.assertIn("final check: 3 assets as expected (reported sha256 digest)", out)
 
-    def test_dry_run_without_a_release_writes_nothing(self):
+    def test_a_release_is_not_a_prerelease(self):
         host = FakeHost()
-        out = self.run_publish(host, dry_run=True)
-        self.assertEqual(host.calls, [])
-        self.assertIn(f"would create draft release v1.0.0 at {COMMIT}", out)
-        self.assertIn("would upload x.whl", out)
-        self.assertIn("would upload SHA256SUMS for 2 assets, check them all, then publish the draft", out)
+        self.stage(host)
+        self.assertEqual(writes(host)[0], ("create", "v1.0.0", "Rusty BACnet v1.0.0", COMMIT, False))
 
-    def test_dry_run_on_a_draft_writes_nothing_and_checks_downloads(self):
+    def test_an_earlier_build_on_the_draft_is_replaced(self):
+        # The draft must end up with this run's files: the ones that were
+        # tested and that PyPI gets.
         host = FakeHost()
-        host.add("v1.0.0", {"x.whl": WHEEL, "big.tar.gz": b"x" * 100}, draft=True)
-        out = self.run_publish(host, dry_run=True)
-        self.assertEqual(writes(host), [])
-        self.assertIn("would resume draft release v1.0.0", out)
-        self.assertIn("skip x.whl: already on the draft", out)
-        self.assertIn("would upload bacnet-linux-amd64", out)
-        self.assertIn("would delete big.tar.gz: it isn't part of this release", out)
-        self.assertIn("would upload SHA256SUMS for 2 assets", out)
-        self.assertIn("download check: x.whl (5 bytes)", out)
+        host.add("v1.0.0", {"x.whl": b"older wheel", "bacnet-linux-amd64": BINARY}, draft=True)
+        _, sums, out = self.stage(host)
+        self.assertEqual(writes(host), [("delete", "x.whl"), ("upload", "x.whl"), ("upload", "SHA256SUMS")])
+        self.assertIn("delete x.whl: it differs from this run's file, which replaces it", out)
+        self.assertIn("resuming draft release v1.0.0", out)
+        self.assertEqual(host.files()["SHA256SUMS"], SUMS_OK)
+        self.assertEqual(sums, SUMS_SHA)
 
-    def test_dry_run_warns_about_a_draft_for_another_commit(self):
-        host = FakeHost()
-        host.add("v1.0.0", {"x.whl": WHEEL}, draft=True, commit="beef")
-        out = self.run_publish(host, dry_run=True)
-        self.assertEqual(writes(host), [])
-        self.assertIn("::warning::Fake has a draft release v1.0.0", out)
-        self.assertIn("A real run would stop here.", out)
-
-    def test_resumed_draft_keeps_an_earlier_build(self):
-        # A first run uploaded an x.whl that differs from this run's, then failed
-        # before SHA256SUMS: the draft keeps its copy, and SHA256SUMS lists it.
-        host = FakeHost()
-        host.add("v1.0.0", {"x.whl": b"older wheel"}, draft=True)
-        out = self.run_publish(host)
-        self.assertEqual(writes(host), [("upload", "bacnet-linux-amd64"), ("upload", "SHA256SUMS"), ("publish",)])
-        sums = api.parse_sums(host.files()["SHA256SUMS"].decode())
-        self.assertEqual(sums["x.whl"], api.sha256_bytes(b"older wheel"))
-        self.assertIn("x.whl is from an earlier build", out)
-        self.assertNotIn(("download", "x.whl"), host.calls)  # the reported digest is enough
-
-    def test_resumed_draft_replaces_a_stale_sums(self):
+    def test_a_stale_sums_is_replaced(self):
         host = FakeHost()
         host.add("v1.0.0", {"x.whl": WHEEL, "SHA256SUMS": b"00  x.whl\n"}, draft=True)
-        self.run_publish(host)
+        self.stage(host)
         self.assertEqual(writes(host), [
-            ("upload", "bacnet-linux-amd64"), ("delete", "SHA256SUMS"), ("upload", "SHA256SUMS"), ("publish",)])
+            ("upload", "bacnet-linux-amd64"), ("delete", "SHA256SUMS"), ("upload", "SHA256SUMS")])
         self.assertEqual(host.files()["SHA256SUMS"], SUMS_OK)
 
-    def test_complete_draft_is_only_published(self):
+    def test_a_complete_draft_is_left_alone(self):
         host = FakeHost()
-        host.add("v1.0.0", {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK}, draft=True)
-        out = self.run_publish(host)
-        self.assertEqual(writes(host), [("publish",)])
+        host.add("v1.0.0", COMPLETE, draft=True)
+        _, sums, out = self.stage(host)
+        self.assertEqual(writes(host), [])
+        self.assertEqual(sums, SUMS_SHA)
         self.assertIn("skip SHA256SUMS: up to date", out)
 
-    def test_draft_for_another_commit_is_refused(self):
+    def test_a_draft_for_another_commit_is_refused(self):
         host = FakeHost()
         host.add("v1.0.0", {"x.whl": WHEEL}, draft=True, commit="beef")
-        message = self.publish_fails(host, "made for beef, not c0ffee")
-        self.assertIn("Delete that draft", message)
+        self.assertIn("Delete that draft", self.stage_fails(host, "made for beef, not c0ffee"))
         self.assertEqual(writes(host), [])
 
-    def test_extra_assets_on_a_draft_are_deleted_and_not_published(self):
+    def test_extra_assets_are_deleted(self):
         host = FakeHost()
         host.add("v1.0.0", {"x.whl": WHEEL, "old-tool.exe": b"old", "SHA256SUMS": b"00  old-tool.exe\n"},
                  draft=True)
-        self.run_publish(host)
+        self.stage(host)
         self.assertEqual(writes(host), [
             ("delete", "old-tool.exe"), ("upload", "bacnet-linux-amd64"), ("delete", "SHA256SUMS"),
-            ("upload", "SHA256SUMS"), ("publish",)])
+            ("upload", "SHA256SUMS")])
         self.assertEqual(set(host.files()), {"x.whl", "bacnet-linux-amd64", "SHA256SUMS"})
-        self.assertEqual(host.files()["SHA256SUMS"], SUMS_OK)
 
-    def test_host_that_cant_read_assets_replaces_the_drafts_copies(self):
-        host = FakeHost(can_read_assets=False)
-        host.add("v1.0.0", {"x.whl": b"older wheel", "SHA256SUMS": b"00  x.whl\n"}, draft=True)
-        out = self.run_publish(host)
-        self.assertEqual(writes(host), [
-            ("delete", "SHA256SUMS"), ("delete", "x.whl"), ("upload", "bacnet-linux-amd64"),
-            ("upload", "x.whl"), ("upload", "SHA256SUMS"), ("publish",)])
-        self.assertEqual(host.files()["SHA256SUMS"], SUMS_OK)
-        self.assertIn("size only: the host reports no digest", out)
-
-    def test_duplicate_names_on_a_forgejo_draft_are_all_deleted(self):
-        host = FakeHost(can_read_assets=False)
+    def test_every_copy_of_a_duplicated_name_is_deleted(self):
+        host = FakeHost()
         release = host.add("v1.0.0", {"x.whl": WHEEL}, draft=True)
-        host._store(release, "x.whl", b"other wheel")
-        self.run_publish(host)
-        self.assertEqual(writes(host)[:2], [("delete", "x.whl"), ("delete", "x.whl")])
+        host._store(release, "x.whl", WHEEL)
+        self.stage(host)
+        self.assertEqual(writes(host)[:3], [("delete", "x.whl"), ("delete", "x.whl"), ("upload", "bacnet-linux-amd64")])
         self.assertEqual([a["name"] for a in host.releases[0]["assets"]].count("x.whl"), 1)
 
-    def test_duplicate_left_by_an_upload_stops_before_publishing(self):
-        host = FakeHost(can_read_assets=False)
+    def test_a_duplicate_left_by_an_upload_fails_the_final_check(self):
+        host = FakeHost()
         host.fail["x.whl"] = "dup"
-        self.assertIn("several assets are named x.whl", self.publish_fails(host, "failed the final check"))
+        self.assertIn("several assets are named x.whl", self.stage_fails(host, "failed the final check"))
         self.assertTrue(host.releases[0]["draft"])
 
-    def test_corrupted_upload_stops_before_publishing(self):
+    def test_a_corrupted_upload_fails_the_final_check(self):
         host = FakeHost()
         host.fail["x.whl"] = "corrupt"
-        message = self.publish_fails(host, "failed the final check, so it stays a draft")
+        message = self.stage_fails(host, "failed the final check, so it stays a draft")
         self.assertIn("x.whl is 6 bytes, expected 5", message)
-        self.assertTrue(host.releases[0]["draft"])
 
-    def test_digest_mismatch_of_the_same_size_stops_before_publishing(self):
+    def test_a_digest_mismatch_of_the_same_size_fails_the_final_check(self):
         host = FakeHost()
         release = host.add("v1.0.0", {}, draft=True)
         original = host.upload
@@ -349,73 +297,93 @@ class PublishTests(unittest.TestCase):
         def upload(rel, path):
             original(rel, path)
             if path.name == "x.whl":  # same size, other bytes
-                item = host._live(release)["assets"][-1]
-                item["digest"] = "sha256:" + api.sha256_bytes(b"WHEEL")
+                host._live(release)["assets"][-1]["digest"] = "sha256:" + api.sha256_bytes(b"WHEEL")
 
         host.upload = upload
-        message = self.publish_fails(host, "failed the final check")
+        message = self.stage_fails(host, "failed the final check")
         self.assertIn(f"x.whl has sha256 {api.sha256_bytes(b'WHEEL')}, expected {api.sha256_bytes(WHEEL)}",
                       message)
 
-    def test_sums_digest_is_checked_too(self):
+    def test_the_sums_digest_is_checked_too(self):
         host = FakeHost()
         host.fail["SHA256SUMS"] = "corrupt"
-        self.assertIn("SHA256SUMS is", self.publish_fails(host, "failed the final check"))
+        self.assertIn("SHA256SUMS is", self.stage_fails(host, "failed the final check"))
 
-    def test_incomplete_entry_stops_before_publishing(self):
+    def test_an_incomplete_entry_fails_the_final_check(self):
         host = FakeHost()
         host.fail["SHA256SUMS"] = "stray"
-        message = self.publish_fails(host, "failed the final check")
+        message = self.stage_fails(host, "failed the final check")
         self.assertIn("late.bin is not completely uploaded (state starter)", message)
         self.assertIn("late.bin isn't part of this release", message)
 
-    def test_missing_digest_falls_back_to_downloading(self):
+    def test_a_missing_digest_falls_back_to_downloading(self):
         host = FakeHost()
-        host.add("v1.0.0", {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK}, draft=True)
+        host.add("v1.0.0", COMPLETE, draft=True)
         for item in host.releases[0]["assets"]:
             del item["digest"]
         host.asset_digest = lambda release, item: api.sha256_bytes(host.download(release, item))
-        out = self.run_publish(host)
+        _, _, out = self.stage(host)
         self.assertIn("(downloaded sha256)", out)
-        self.assertEqual(writes(host), [("publish",)])
-
-    def test_complete_published_release_is_left_alone(self):
-        host = FakeHost()
-        host.add("v1.0.0", {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK}, draft=False)
-        out = self.run_publish(host)
         self.assertEqual(writes(host), [])
-        self.assertIn("is complete; nothing to do", out)
 
-    def test_incomplete_published_release_fails_without_writing(self):
+    def test_a_lost_upload_response_is_not_sent_again(self):
+        host = FakeHost()
+        host.fail["x.whl"] = "lost"
+        _, _, out = self.stage(host)
+        self.assertEqual([c for c in host.calls if c == ("upload", "x.whl")], [("upload", "x.whl")])
+        self.assertIn("x.whl arrived after all", out)
+        self.assertEqual(host.files()["SHA256SUMS"], SUMS_OK)
+
+    def test_already_exists_with_the_same_bytes_is_accepted(self):
+        host = FakeHost()
+        host.fail["x.whl"] = "exists"
+        _, _, out = self.stage(host)
+        self.assertEqual([c for c in host.calls if c == ("upload", "x.whl")], [("upload", "x.whl")])
+        self.assertIn("x.whl arrived after all", out)
+
+    def test_a_refused_upload_is_sent_again(self):
+        host = FakeHost()
+        host.fail["x.whl"] = "refused"
+        self.stage(host)
+        self.assertEqual([c for c in host.calls if c == ("upload", "x.whl")], [("upload", "x.whl")] * 2)
+        self.assertEqual(host.files()["SHA256SUMS"], SUMS_OK)
+
+    def test_a_lost_create_response_reuses_the_draft(self):
+        host = FakeHost()
+        host.create_lost = True
+        self.stage(host)
+        self.assertEqual(len(host.releases), 1)
+        self.assertEqual([c[0] for c in writes(host)].count("create"), 1)
+
+    def test_a_complete_published_release_is_only_checked(self):
+        host = FakeHost()
+        release = host.add("v1.0.0", COMPLETE, draft=False)
+        found, sums, out = self.stage(host)
+        self.assertEqual(writes(host), [])
+        self.assertEqual((found["id"], sums), (release["id"], SUMS_SHA))
+        self.assertIn("is complete; the publish job will only check it again", out)
+
+    def test_an_incomplete_published_release_fails_without_writing(self):
         host = FakeHost()
         host.add("v1.0.0", {"x.whl": WHEEL}, draft=False)
-        message = self.publish_fails(host, "published but incomplete")
+        message = self.stage_fails(host, "published but incomplete")
         self.assertEqual(writes(host), [])
         for want in ("bacnet-linux-amd64 is missing", "SHA256SUMS is missing", "immutable"):
             self.assertIn(want, message)
 
-    def test_incomplete_published_release_only_warns_on_a_dry_run(self):
-        host = FakeHost()
-        host.add("v1.0.0", {"x.whl": WHEEL}, draft=False)
-        out = self.run_publish(host, dry_run=True)
-        self.assertEqual(writes(host), [])
-        self.assertIn("::warning::Fake release v1.0.0 is published but incomplete", out)
-        self.assertIn("A real run would stop here.", out)
-
-    def test_published_asset_that_doesnt_match_sums_is_a_problem(self):
+    def test_a_published_asset_that_doesnt_match_sums_is_a_problem(self):
         host = FakeHost()
         sums = api.sums_text({"bacnet-linux-amd64": api.sha256_bytes(BINARY), "x.whl": "00"}).encode()
         host.add("v1.0.0", {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": sums}, draft=False)
-        self.publish_fails(host, "x.whl doesn't match its SHA256SUMS entry")
+        self.stage_fails(host, "x.whl doesn't match its SHA256SUMS entry")
 
-    def test_published_release_with_duplicate_names_is_a_problem(self):
-        host = FakeHost(can_read_assets=False)
-        release = host.add("v1.0.0", {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK},
-                           draft=False)
+    def test_a_published_release_with_duplicate_names_is_a_problem(self):
+        host = FakeHost()
+        release = host.add("v1.0.0", COMPLETE, draft=False)
         host._store(release, "x.whl", WHEEL)
-        self.publish_fails(host, "several assets are named x.whl")
+        self.stage_fails(host, "several assets are named x.whl")
 
-    def test_fake_host_refuses_uploads_after_publishing(self):
+    def test_the_fake_host_refuses_changes_after_publishing(self):
         # Publishing before the uploads would fail here, as it would on GitHub.
         host = FakeHost()
         release = host.add("v1.0.0", {}, draft=True)
@@ -425,364 +393,149 @@ class PublishTests(unittest.TestCase):
         with self.assertRaises(Immutable):
             host.delete_asset(release, {"id": 0, "name": "x.whl"})
 
-    def test_lost_upload_response_is_not_sent_again(self):
-        host = FakeHost()
-        host.fail["x.whl"] = "lost"
-        out = self.run_publish(host)
-        self.assertEqual([c for c in host.calls if c == ("upload", "x.whl")], [("upload", "x.whl")])
-        self.assertIn("x.whl arrived after all", out)
-        self.assertEqual(host.files()["SHA256SUMS"], SUMS_OK)
 
-    def test_already_exists_with_the_same_bytes_is_accepted(self):
-        host = FakeHost()
-        host.fail["x.whl"] = "exists"
-        out = self.run_publish(host)
-        self.assertEqual([c for c in host.calls if c == ("upload", "x.whl")], [("upload", "x.whl")])
-        self.assertIn("x.whl arrived after all", out)
-        self.assertFalse(host.releases[0]["draft"])
-
-    def test_refused_upload_is_sent_again(self):
-        host = FakeHost()
-        host.fail["x.whl"] = "refused"
-        self.run_publish(host)
-        self.assertEqual([c for c in host.calls if c == ("upload", "x.whl")], [("upload", "x.whl")] * 2)
-        self.assertEqual(host.files()["SHA256SUMS"], SUMS_OK)
-
-    def test_lost_create_response_reuses_the_draft(self):
-        host = FakeHost()
-        host.create_lost = True
-        self.run_publish(host)
-        self.assertEqual(len(host.releases), 1)
-        self.assertEqual([c[0] for c in writes(host)].count("create"), 1)
-        self.assertFalse(host.releases[0]["draft"])
-
-    def test_github_like_host_publishes_nothing_without_a_staged_draft(self):
-        # Fails closed (#951): no draft is made, filled or published, even
-        # when a complete draft is waiting.
-        for files in ({}, {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK}):
-            host = FakeHost(staged_only=True)
-            if files:
-                host.add("v1.0.0", files, draft=True)
-            with self.subTest(draft=bool(files)):
-                self.publish_fails(host, "publishes only the draft the smoke test ran against")
-                self.assertEqual(host.calls, [])
-        out = self.run_publish(FakeHost(staged_only=True), dry_run=True)
-        self.assertIn("would create draft release v1.0.0", out)
-
-
-SUMS_SHA = api.sha256_bytes(SUMS_OK)
-
-
-class StageTests(unittest.TestCase):
-    """stage() and publishing the staged draft (#951)."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.dir = Path(self.tmp.name)
-        (self.dir / "x.whl").write_bytes(WHEEL)
-        (self.dir / "bacnet-linux-amd64").write_bytes(BINARY)
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def stage(self, host, **kwargs):
-        with contextlib.redirect_stdout(io.StringIO()) as out:
-            release, sums = api.stage(host, "v1.0.0", "notes", self.dir, COMMIT, **kwargs)
-        return release, sums, out.getvalue()
-
-    def publish_staged(self, host, staged):
-        with contextlib.redirect_stdout(io.StringIO()) as out:
-            api.publish(host, "v1.0.0", "notes", self.dir, COMMIT, False, staged)
-        return out.getvalue()
-
-    def test_new_draft_is_staged_and_stays_a_draft(self):
-        host = FakeHost()
-        release, sums, out = self.stage(host)
-        self.assertEqual(writes(host), [
-            ("create", "v1.0.0", "Rusty BACnet v1.0.0", COMMIT, False),
-            ("upload", "bacnet-linux-amd64"), ("upload", "x.whl"), ("upload", "SHA256SUMS")])
-        self.assertTrue(host.releases[0]["draft"])
-        self.assertEqual((release["id"], sums), (host.releases[0]["id"], SUMS_SHA))
-        self.assertIn("final check: 3 assets as expected", out)
-
-    def test_staging_replaces_an_earlier_build_on_the_draft(self):
-        # Unlike a plain resume, the draft must end up with this run's files, so
-        # that the smoke test runs what PyPI gets.
-        host = FakeHost()
-        host.add("v1.0.0", {"x.whl": b"older wheel", "bacnet-linux-amd64": BINARY}, draft=True)
-        _, sums, out = self.stage(host)
-        self.assertEqual(writes(host), [("delete", "x.whl"), ("upload", "x.whl"), ("upload", "SHA256SUMS")])
-        self.assertIn("delete x.whl: it differs from this run's file, which replaces it", out)
-        self.assertEqual(host.files()["SHA256SUMS"], SUMS_OK)
-        self.assertEqual(sums, SUMS_SHA)
-
-    def test_complete_staged_draft_is_left_alone(self):
-        host = FakeHost()
-        host.add("v1.0.0", {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK}, draft=True)
-        _, sums, _ = self.stage(host)
-        self.assertEqual(writes(host), [])
-        self.assertEqual(sums, SUMS_SHA)
-
-    def test_draft_for_another_commit_stops_staging(self):
-        host = FakeHost()
-        host.add("v1.0.0", {}, draft=True, commit="beef")
-        with self.assertRaisesRegex(api.ReleaseError, "made for beef, not c0ffee"), \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.stage(host)
-        self.assertEqual(writes(host), [])
-
-    def test_published_release_is_only_checked(self):
-        host = FakeHost()
-        release = host.add("v1.0.0", {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK},
-                           draft=False)
-        found, sums, out = self.stage(host)
-        self.assertEqual(writes(host), [])
-        self.assertEqual((found["id"], sums), (release["id"], SUMS_SHA))
-        self.assertIn("already published; smoke-testing its files", out)
-        host.add("v2.0.0", {"x.whl": WHEEL}, draft=False)
-        with self.assertRaisesRegex(api.ReleaseError, "published but incomplete"), \
-                contextlib.redirect_stdout(io.StringIO()):
-            api.stage(host, "v2.0.0", "notes", self.dir, COMMIT)
-
-    def test_throwaway_draft_replaces_a_leftover_of_its_name(self):
-        host = FakeHost()
-        old = host.add("release-smoke-42", {"x.whl": WHEEL}, draft=True)
-        host.add("v1.0.0", {}, draft=True, commit="beef")  # the tag's draft is not touched
-        release, sums, out = self.stage(host, throwaway="release-smoke-42")
-        self.assertEqual(writes(host)[:2], [
-            ("delete-release", "release-smoke-42"),
-            ("create", "release-smoke-42", "Release smoke test release-smoke-42", COMMIT, True)])
-        self.assertNotEqual(release["id"], old["id"])
-        self.assertEqual(host.files("release-smoke-42")["SHA256SUMS"], SUMS_OK)
-        self.assertEqual(sums, SUMS_SHA)
-        self.assertIn("smoke test: no release or tag release-smoke-42 is left", out)
-        self.assertEqual(host.files("v1.0.0"), {})
-
-    def test_throwaway_name_must_be_a_smoke_name(self):
-        with self.assertRaisesRegex(api.ReleaseError, "must start with release-smoke-"):
-            self.stage(FakeHost(), throwaway="v1.0.0")
-
-    def test_staged_draft_is_published_without_any_other_write(self):
+class PublishTests(AssetsTestCase):
+    def test_the_staged_draft_is_published_without_any_other_write(self):
         host = FakeHost()
         release, sums, _ = self.stage(host)
         host.calls.clear()
-        out = self.publish_staged(host, (str(release["id"]), sums))
+        out = self.publish(host, (str(release["id"]), sums))
         self.assertEqual(writes(host), [("publish",)])
         self.assertFalse(host.releases[0]["draft"])
-        self.assertIn("the smoke-tested draft is public as v1.0.0", out)
+        self.assertIn("done: v1.0.0 is public", out)
 
     def test_another_release_for_the_tag_isnt_published(self):
         host = FakeHost()
         release, sums, _ = self.stage(host)
         host.calls.clear()
         for staged in ((str(release["id"] + 1), sums), ("7", sums)):
-            with self.assertRaisesRegex(api.ReleaseError, "isn't the draft the smoke test ran against"):
-                self.publish_staged(host, staged)
+            with self.assertRaisesRegex(api.ReleaseError, "isn't the draft this run staged"):
+                self.publish(host, staged)
         host.releases.clear()
         with self.assertRaisesRegex(api.ReleaseError, r"v1.0.0 \(none\) isn't the draft"):
-            self.publish_staged(host, (str(release["id"]), sums))
+            self.publish(host, (str(release["id"]), sums))
         self.assertEqual(writes(host), [])
 
-    def test_draft_changed_after_the_smoke_test_isnt_published(self):
+    def test_a_draft_changed_after_staging_isnt_published(self):
         host = FakeHost()
         release, sums, _ = self.stage(host)
         host.delete_asset(release, host.releases[0]["assets"][0])
         host._store(host.releases[0], "extra.bin", b"x")
         host.calls.clear()
-        with self.assertRaisesRegex(api.ReleaseError, "failed the final check") as caught, \
-                contextlib.redirect_stdout(io.StringIO()):
-            api.publish(host, "v1.0.0", "notes", self.dir, COMMIT, False, (release["id"], sums))
+        with self.assertRaisesRegex(api.ReleaseError, "failed the final check") as caught:
+            self.publish(host, (release["id"], sums))
         self.assertIn("bacnet-linux-amd64 is missing", str(caught.exception))
         self.assertIn("extra.bin isn't part of this release", str(caught.exception))
         self.assertEqual(writes(host), [])
 
-    def test_other_local_files_than_the_smoke_tested_ones_arent_published(self):
+    def test_other_local_files_than_the_staged_ones_arent_published(self):
         host = FakeHost()
         release, sums, _ = self.stage(host)
         (self.dir / "x.whl").write_bytes(b"rebuilt")
         host.calls.clear()
-        with self.assertRaisesRegex(api.ReleaseError, "aren't the ones the smoke test ran against"), \
-                contextlib.redirect_stdout(io.StringIO()):
-            api.publish(host, "v1.0.0", "notes", self.dir, COMMIT, False, (release["id"], sums))
+        with self.assertRaisesRegex(api.ReleaseError, "aren't the ones it staged"):
+            self.publish(host, (release["id"], sums))
         self.assertEqual(writes(host), [])
 
-    def test_staged_release_already_published_is_only_checked(self):
+    def test_an_already_published_release_is_only_checked(self):
         host = FakeHost()
         release, sums, _ = self.stage(host)
         host.publish_release(release)
         host.calls.clear()
-        out = self.publish_staged(host, (release["id"], sums))
+        out = self.publish(host, (release["id"], sums))
         self.assertEqual(writes(host), [])
         self.assertIn("is complete; nothing to do", out)
 
+    def test_an_incomplete_published_release_fails(self):
+        host = FakeHost()
+        release = host.add("v1.0.0", {"x.whl": WHEEL}, draft=False)
+        with self.assertRaisesRegex(api.ReleaseError, "published but incomplete"):
+            self.publish(host, (release["id"], SUMS_SHA))
+        self.assertEqual(writes(host), [])
 
-PROBE = "release-preflight-42-0a1b2c3d"
+
+class PlanTests(AssetsTestCase):
+    def test_no_release_writes_nothing(self):
+        host = FakeHost()
+        out = self.plan(host)
+        self.assertEqual(writes(host), [])
+        self.assertIn(f"would create draft release v1.0.0 at {COMMIT}", out)
+        self.assertIn("would upload x.whl", out)
+        self.assertIn("would upload SHA256SUMS for 2 assets", out)
+
+    def test_a_draft_is_planned_and_read(self):
+        host = FakeHost()
+        host.add("v1.0.0", {"x.whl": WHEEL, "big.tar.gz": b"x" * 100, "bacnet-linux-amd64": b"older"},
+                 draft=True)
+        out = self.plan(host)
+        self.assertEqual(writes(host), [])
+        self.assertIn("would resume draft release v1.0.0", out)
+        self.assertIn("skip x.whl: already on the draft", out)
+        self.assertIn("would delete big.tar.gz: it isn't part of this release", out)
+        self.assertIn("would delete bacnet-linux-amd64: it differs from this run's file", out)
+        self.assertIn("would upload bacnet-linux-amd64", out)
+        self.assertIn("download check: bacnet-linux-amd64 (5 bytes) read", out)
+
+    def test_a_draft_for_another_commit_only_warns(self):
+        host = FakeHost()
+        host.add("v1.0.0", {"x.whl": WHEEL}, draft=True, commit="beef")
+        out = self.plan(host)
+        self.assertEqual(writes(host), [])
+        self.assertIn("::warning::Fake has a draft release v1.0.0", out)
+        self.assertIn("A release would stop here.", out)
+
+    def test_a_published_release_is_checked_and_problems_only_warn(self):
+        host = FakeHost()
+        host.add("v1.0.0", {"x.whl": WHEEL}, draft=False)
+        out = self.plan(host)
+        self.assertEqual(writes(host), [])
+        self.assertIn("::warning::Fake release v1.0.0 is published but incomplete", out)
+        host = FakeHost()
+        host.add("v1.0.0", COMPLETE, draft=False)
+        self.assertIn("is complete; a release would only check it", self.plan(host))
 
 
 class FakeTags:
     def __init__(self, commit):
         self.commit = commit
-        self.calls = 0
+        self.label = "GitHub"
 
     def tag_commit(self, tag):
-        self.calls += 1
         return self.commit
 
 
-class PreflightTests(unittest.TestCase):
-    def run_preflight(self, host, read_only=False, tags=None, tag="v1.0.0"):
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            api.preflight(host, tag, COMMIT, PROBE, read_only, tags)
-        return out.getvalue() + err.getvalue()
+class CheckTagTests(unittest.TestCase):
+    def test_a_tag_elsewhere_fails_a_release_and_warns_a_dry_run(self):
+        with self.assertRaisesRegex(api.ReleaseError, "points at bbb, not aaa"):
+            api.check_tag(FakeTags("bbb"), "v1", "aaa")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            api.check_tag(FakeTags("bbb"), "v1", "aaa", dry_run=True)
+        self.assertIn("::warning::GitHub's v1 points at bbb", out.getvalue())
 
-    def preflight_fails(self, host, pattern, **kwargs):
-        err = io.StringIO()
-        with self.assertRaisesRegex(api.ReleaseError, pattern) as caught, \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-            api.preflight(host, "v1.0.0", COMMIT, PROBE, False, **kwargs)
-        return str(caught.exception), err.getvalue()
+    def test_a_missing_tag_fails_a_release_and_warns_a_dry_run(self):
+        with self.assertRaisesRegex(api.ReleaseError, "has no tag v1"):
+            api.check_tag(FakeTags(None), "v1", "aaa")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            api.check_tag(FakeTags(None), "v1", "aaa", dry_run=True)
+        self.assertIn("a release would stop here", out.getvalue())
 
-    def assert_cleaned_up(self, host):
-        self.assertEqual([r for r in host.releases if r["tag_name"] == PROBE], [])
-        self.assertNotIn(("publish",), host.calls)
-
-    def test_write_check_drafts_uploads_checks_and_deletes(self):
-        host = FakeHost()
-        out = self.run_preflight(host, tags=FakeTags(COMMIT))
-        uploads = [("upload", name) for name in sorted(api.PROBE_ASSETS)]
-        self.assertEqual(writes(host), [("create", PROBE, f"Release preflight {PROBE}", COMMIT, True), *uploads,
-                                        ("delete-release", PROBE)])
-        self.assert_cleaned_up(host)
-        self.assertEqual(host.tags, set())
-        self.assertIn("GitHub has v1.0.0 at c0ffee", out)
-        self.assertIn("Fake has no release v1.0.0 yet", out)
-        self.assertIn(f"final check: {len(api.PROBE_ASSETS)} assets as expected", out)
-        self.assertIn("download check: bacnet-linux-amd64 (1 bytes)", out)
-        self.assertIn(f"write check: no release or tag {PROBE} is left", out)
-        self.assertIn("Fake preflight passed", out)
-
-    def test_write_check_on_a_forgejo_like_host_checks_sizes(self):
-        host = FakeHost(can_read_assets=False)
-        out = self.run_preflight(host)
-        self.assert_cleaned_up(host)
-        self.assertIn("size only", out)
-        self.assertNotIn(("download", "bacnet-linux-amd64"), host.calls)
-
-    def test_probe_assets_are_named_like_the_release_assets(self):
-        names = sorted(api.PROBE_ASSETS)
-        self.assertEqual([n for n in names if "." not in n], ["bacnet-linux-amd64"])
-        self.assertTrue(any(n.endswith(".whl") for n in names))
-        self.assertTrue(any(n.endswith(".tar.gz") for n in names))
-        self.assertEqual(len(api.PROBE_ASSETS["bacnet-linux-amd64"]), 1)
-
-    def test_read_only_makes_no_write(self):
-        host = FakeHost()
-        host.add("v1.0.0", {}, draft=False)
-        out = self.run_preflight(host, read_only=True, tags=FakeTags(None))
-        self.assertEqual(writes(host), [])
-        self.assertIn("GitHub has no tag v1.0.0 yet", out)
-        self.assertIn("already published; the publish job will only check it", out)
-        self.assertIn("read only: the Fake write check runs only when publishing", out)
-
-    def test_tag_elsewhere_stops_before_any_host_call(self):
-        host = FakeHost()
-        self.preflight_fails(host, "points at beef, not c0ffee", tags=FakeTags("beef"))
-        self.assertEqual(host.calls, [])
-
-    def test_draft_for_another_commit_stops_before_the_write_check(self):
-        host = FakeHost()
-        host.add("v1.0.0", {}, draft=True, commit="beef")
-        self.preflight_fails(host, "made for beef, not c0ffee")
-        self.assertEqual(writes(host), [])
-        out = self.run_preflight(host, read_only=True)
-        self.assertIn("::warning::Fake has a draft release v1.0.0", out)
-
-    def test_resumable_draft_is_reported(self):
-        host = FakeHost()
-        host.add("v1.0.0", {}, draft=True)
-        self.assertIn("the publish job will resume it", self.run_preflight(host))
-
-    def test_stale_preflight_and_smoke_drafts_are_reported_not_deleted(self):
-        host = FakeHost()
-        host.add("release-preflight-7-ffffffff", {}, draft=True)
-        host.add("release-smoke-8", {}, draft=True)
-        out = self.run_preflight(host)
-        self.assertIn("has preflight or smoke test drafts of other runs: release-preflight-7-ffffffff,"
-                      " release-smoke-8.", out)
-        self.assertNotIn(("delete-release", "release-preflight-7-ffffffff"), host.calls)
-        self.assertNotIn(("delete-release", "release-smoke-8"), host.calls)
-
-    def test_refused_upload_still_deletes_the_draft(self):
-        host = FakeHost()
-        host.fail["bacnet-linux-amd64"] = "forbidden"
-        with self.assertRaisesRegex(api.HttpFailure, "type not allowed"), \
-                contextlib.redirect_stdout(io.StringIO()):
-            api.preflight(host, "v1.0.0", COMMIT, PROBE, False)
-        self.assertIn(("delete-release", PROBE), host.calls)
-        self.assert_cleaned_up(host)
-
-    def test_failed_final_check_still_deletes_the_draft(self):
-        host = FakeHost()
-        host.fail["rusty_bacnet-0.0.0.tar.gz"] = "corrupt"
-        self.preflight_fails(host, "failed the final check")
-        self.assert_cleaned_up(host)
-
-    def test_lost_create_response_is_found_and_deleted(self):
-        host = FakeHost()
-        host.create_lost = True
-        self.run_preflight(host)
-        self.assertEqual(len([c for c in host.calls if c[0] == "create"]), 1)
-        self.assert_cleaned_up(host)
-
-    def test_draft_that_created_a_tag_fails(self):
-        host = FakeHost(draft_creates_tag=True)
-        message, _ = self.preflight_fails(host, f"now has a tag {PROBE}")
-        self.assertIn("Delete it by hand", message)
-        self.assert_cleaned_up(host)
-
-    def test_drafts_missing_from_the_list_fail_and_are_deleted_by_id(self):
-        host = FakeHost(hide_drafts=True)
-        self.preflight_fails(host, "doesn't show the draft just created")
-        self.assertIn(("delete-release", PROBE), host.calls)
-        self.assert_cleaned_up(host)
-
-    def test_failed_delete_after_a_passing_check_fails(self):
-        host = FakeHost()
-        host.fail_delete_release = True
-        message, _ = self.preflight_fails(host, f"draft release {PROBE} may still be on Fake")
-        self.assertIn("Delete it by hand", message)
-
-    def test_failed_delete_after_a_failing_check_reports_both(self):
-        host = FakeHost()
-        host.fail_delete_release = True
-        host.fail["bacnet-linux-amd64"] = "forbidden"
-        with self.assertRaisesRegex(api.HttpFailure, "type not allowed"), \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
-            api.preflight(host, "v1.0.0", COMMIT, PROBE, False)
-        self.assertIn(f"::error::the preflight's draft release {PROBE} may still be on Fake", err.getvalue())
-
-    def test_write_check_refuses_a_v_name(self):
-        with self.assertRaisesRegex(api.ReleaseError, "must start with release-preflight-"):
-            api.write_check(FakeHost(), "v9.9.9", COMMIT)
-
-    def test_remove_draft_deletes_only_disposable_drafts(self):
-        host = FakeHost()
-        published = host.add("v1.0.0", {"x.whl": WHEEL}, draft=False)
-        draft = host.add("v1.0.0", {}, draft=True)
-        for name, made in (("v1.0.0", []), ("v1.0.0", [draft]), ("release-x", [])):
-            with self.subTest(name=name, made=bool(made)), \
-                    self.assertRaisesRegex(api.ReleaseError, f"refusing to delete release {name}: only"):
-                api.remove_draft(host, name, made, "smoke test")
-        smoke = host.add("release-smoke-9", {}, draft=False)  # a published release of a smoke name
-        with self.assertRaisesRegex(api.ReleaseError, "refusing to delete release release-smoke-9 .*isn't a draft"), \
-                contextlib.redirect_stdout(io.StringIO()):
-            api.remove_draft(host, "release-smoke-9", [], "smoke test")
-        self.assertEqual(writes(host), [])
-        self.assertEqual({r["id"] for r in host.releases}, {published["id"], draft["id"], smoke["id"]})
+    def test_the_right_tag_passes(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            api.check_tag(FakeTags("aaa"), "v1", "aaa")
+        self.assertIn("GitHub has v1 at aaa", out.getvalue())
 
 
 class MainTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        (self.dir / "notes.md").write_text("n")
+        (self.dir / "assets").mkdir()
+        (self.dir / "assets" / "x.whl").write_bytes(WHEEL)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
     def run_main(self, argv, env):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(out), \
@@ -790,73 +543,72 @@ class MainTests(unittest.TestCase):
             code = api.main(argv)
         return code, out.getvalue(), err.getvalue()
 
-    def test_missing_token_fails_clearly(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "notes.md").write_text("n")
-            code, _, err = self.run_main(["github", "--tag", "v1.0.0", "--notes", str(Path(tmp, "notes.md")),
-                                          "--assets", tmp, "--commit", "abc", "--staged-release", "7",
-                                          "--staged-sums", "ab"], {})
+    def base(self, command):
+        return [command, "--tag", "v1.0.0", "--commit", "abc", "--assets", str(self.dir / "assets")]
+
+    def test_a_missing_token_fails_clearly(self):
+        for argv in (self.base("stage") + ["--notes", str(self.dir / "notes.md")],
+                     self.base("publish") + ["--staged-release", "7", "--staged-sums", "ab"]):
+            with self.subTest(command=argv[0]):
+                code, _, err = self.run_main(argv, {})
+                self.assertEqual(code, 1)
+                self.assertIn("GITHUB_TOKEN is not set", err)
+
+    def test_publish_fails_closed_without_staged_values(self):
+        # Empty values (an unset job output) must not publish anything:
+        # argparse stops before any request.
+        for extra in ([], ["--staged-release", "", "--staged-sums", ""], ["--staged-release", "7"],
+                      ["--staged-sums", "ab"], ["--staged-release", "7", "--staged-sums", ""]):
+            with self.subTest(extra=extra), \
+                    mock.patch.object(api.GitHub, "find_release") as find, \
+                    mock.patch.object(api.GitHub, "publish_release") as publish, \
+                    mock.patch.object(api.GitHub, "tag_commit") as tag:
+                with self.assertRaises(SystemExit) as caught:
+                    self.run_main(self.base("publish") + extra, {"GITHUB_TOKEN": "t"})
+                self.assertNotEqual(caught.exception.code, 0)
+                find.assert_not_called()
+                publish.assert_not_called()
+                tag.assert_not_called()
+
+    def test_a_tag_elsewhere_stops_before_any_release_call(self):
+        with mock.patch.object(api.GitHub, "tag_commit", return_value="beef"), \
+                mock.patch.object(api.GitHub, "list_releases") as releases:
+            code, _, err = self.run_main(self.base("stage") + ["--notes", str(self.dir / "notes.md")],
+                                         {"GITHUB_TOKEN": "t"})
         self.assertEqual(code, 1)
-        self.assertIn("GH_RELEASE_TOKEN is not set", err)
-        self.assertIn("Contents read and write", err)
+        self.assertIn("points at beef, not abc", err)
+        releases.assert_not_called()
 
-    def test_github_publish_fails_closed_without_staged_values(self):
-        # Empty values (an unset job output) must not fall back to an
-        # unstaged publish (#951): argparse stops before any request.
-        with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "notes.md").write_text("n")
-            Path(tmp, "x.whl").write_bytes(WHEEL)
-            base = ["github", "--tag", "v1.0.0", "--notes", str(Path(tmp, "notes.md")), "--assets", tmp,
-                    "--commit", "abc"]
-            for extra in ([], ["--staged-release", "", "--staged-sums", ""], ["--staged-release", "7"],
-                          ["--staged-sums", "ab"], ["--staged-release", "7", "--staged-sums", ""]):
-                with self.subTest(extra=extra), \
-                        mock.patch.object(api.GitHub, "find_release") as find, \
-                        mock.patch.object(api.GitHub, "publish_release") as publish, \
-                        mock.patch.object(api.GitHub, "tag_commit") as tag:
-                    with self.assertRaises(SystemExit) as caught:
-                        self.run_main(base + extra, {"GH_RELEASE_TOKEN": "t"})
-                    self.assertNotEqual(caught.exception.code, 0)
-                    find.assert_not_called()
-                    publish.assert_not_called()
-                    tag.assert_not_called()
+    def test_stage_writes_its_outputs(self):
+        output = self.dir / "output"
+        with mock.patch.object(api.GitHub, "tag_commit", return_value="abc"), \
+                mock.patch.object(api, "stage", return_value=({"id": 42}, "f" * 64)) as stage:
+            code, _, _ = self.run_main(self.base("stage") + ["--notes", str(self.dir / "notes.md")],
+                                       {"GITHUB_TOKEN": "t", "GITHUB_OUTPUT": str(output),
+                                        "GITHUB_REPOSITORY": "o/r"})
+        self.assertEqual(code, 0)
+        self.assertEqual(output.read_text(), f"release_id=42\nsums_sha256={'f' * 64}\n")
+        self.assertEqual(stage.call_args.args[0].repo, "o/r")
+        self.assertEqual(stage.call_args.args[1:3], ("v1.0.0", "n"))
 
-    def test_staged_values_are_only_for_a_github_publish(self):
-        for argv in (["forgejo", "--tag", "v1.0.0", "--commit", "abc", "--preflight", "--staged-release", "7"],
-                     ["github", "--tag", "v1.0.0", "--commit", "abc", "--preflight", "--dry-run",
-                      "--staged-sums", "ab"]):
-            with self.subTest(argv=argv), self.assertRaises(SystemExit) as caught:
-                self.run_main(argv, {})
-            self.assertEqual(caught.exception.code, 2)
-
-    def test_preflight_needs_the_token_to_publish(self):
-        code, _, err = self.run_main(["github", "--preflight", "--tag", "v1.0.0", "--commit", "abc"], {})
-        self.assertEqual(code, 1)
-        self.assertIn("::error::preflight: GH_RELEASE_TOKEN is not set", err)
-        self.assertIn("Nothing has been built or published", err)
-
-    def test_preflight_dry_run_without_a_token_checks_only_the_tag(self):
+    def test_plan_runs_without_a_token(self):
         seen = []
 
-        def tag_commit(self, tag):
-            seen.append(self.http.auth)
+        def tag_commit(host, tag):
+            seen.append(host.http.auth)
             return "abc"
 
-        with mock.patch.object(api.GitHub, "tag_commit", tag_commit):
-            code, out, _ = self.run_main(
-                ["github", "--preflight", "--dry-run", "--tag", "v1.0.0", "--commit", "abc"], {})
+        with mock.patch.object(api.GitHub, "tag_commit", tag_commit), \
+                mock.patch.object(api.GitHub, "list_releases", return_value=[]):
+            code, out, _ = self.run_main(self.base("plan"), {})
         self.assertEqual(code, 0)
         self.assertEqual(seen, [None])  # anonymous
-        self.assertIn("GitHub has v1.0.0 at abc", out)
-        self.assertIn("::notice::GH_RELEASE_TOKEN isn't set", out)
-
-    def test_publish_needs_notes_and_assets(self):
-        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
-            api.main(["forgejo", "--tag", "v1.0.0", "--commit", "abc"])
+        self.assertIn("dry run: no writes", out)
+        self.assertIn("would create draft release v1.0.0 at abc", out)
 
 
 class HttpTests(unittest.TestCase):
-    def test_token_is_never_redirected(self):
+    def test_the_token_is_never_redirected(self):
         http = api.Http("Bearer secret-value", {"Accept": "application/json"})
         req = http.build("GET", "https://api.github.com/repos/o/r/releases/assets/1",
                          accept="application/octet-stream")
@@ -868,7 +620,7 @@ class HttpTests(unittest.TestCase):
         self.assertIsNone(moved.get_header("Authorization"))
         self.assertEqual(moved.get_header("Accept"), "application/octet-stream")
 
-    def test_anonymous_client_sends_no_authorization(self):
+    def test_an_anonymous_client_sends_no_authorization(self):
         req = api.Http(None).build("GET", "https://api.github.com/repos/o/r/git/ref/tags/v1")
         self.assertNotIn("Authorization", req.unredirected_hdrs)
         self.assertNotIn("Authorization", req.headers)
@@ -897,7 +649,7 @@ class HttpTests(unittest.TestCase):
                 http.call("GET", "https://h.invalid/x")
         self.assertEqual(calls, ["POST"] + ["GET"] * 4)
 
-    def test_truncated_response_is_an_uncertain_failure(self):
+    def test_a_truncated_response_is_an_uncertain_failure(self):
         http = api.Http("token t")
         urlopen, calls = self.fake_urlopen([IncompleteRead(b"x", 5) for _ in range(5)])
         with mock.patch.object(urllib.request, "urlopen", urlopen):
@@ -933,7 +685,7 @@ class HttpTests(unittest.TestCase):
 
         return seen, mock.patch.object(host.http, "call", call)
 
-    def test_github_downloads_draft_assets_through_the_api(self):
+    def test_draft_assets_are_downloaded_through_the_api(self):
         host = api.GitHub("o/r", "t")
         seen = []
 
@@ -949,13 +701,13 @@ class HttpTests(unittest.TestCase):
                 host.download({}, {**item, "size": 6})
         self.assertEqual(seen[0], ("GET", item["url"], {"accept": "application/octet-stream", "raw": True}))
 
-    def test_github_digest_comes_from_the_asset_when_reported(self):
+    def test_the_digest_comes_from_the_asset_when_reported(self):
         host = api.GitHub("o/r", "t")
         self.assertEqual(host.asset_digest({}, {"digest": "sha256:abc"}), "abc")
         self.assertIsNone(api.reported_digest({"digest": None}))
         self.assertIsNone(api.reported_digest({}))
 
-    def test_github_publish_keeps_latest_by_date_and_version(self):
+    def test_publishing_keeps_latest_by_date_and_version(self):
         host = api.GitHub("o/r", "t")
         seen, patch = self.recorded(host)
         with patch:
@@ -964,39 +716,20 @@ class HttpTests(unittest.TestCase):
                                  {"draft": False, "make_latest": "legacy"}, {})])
 
     def test_deletes_tolerate_404(self):
-        for host in (api.Forgejo("o/r", "https://f.invalid", "t"), api.GitHub("o/r", "t")):
-            seen, patch = self.recorded(host)
-            with patch:
-                host.delete_asset({"id": 7}, {"id": 8})
-                host.delete_release({"id": 7})
-            with self.subTest(host=host.label):
-                self.assertEqual([(m, kw) for m, _, _, kw in seen], [("DELETE", {"ok404": True})] * 2)
+        host = api.GitHub("o/r", "t")
+        seen, patch = self.recorded(host)
+        with patch:
+            host.delete_asset({"id": 7}, {"id": 8})
+            host.drop_incomplete({"assets": [{"id": 9, "name": "x", "state": "starter"}]})
+        self.assertEqual([(m, kw) for m, _, _, kw in seen], [("DELETE", {"ok404": True})] * 2)
 
-    def test_forgejo_tag_list_is_paged_to_the_end(self):
-        host = api.Forgejo("o/r", "https://f.invalid", "t")
-        pages = [[{"name": f"v{i}"} for i in range(50)], [{"name": "release-preflight-1-ab"}], []]
-        seen = []
-        with mock.patch.object(host.http, "call", lambda method, url, **kw: seen.append(url) or pages.pop(0)):
-            self.assertTrue(host.tag_exists("release-preflight-1-ab"))
-        self.assertIn("/repos/o/r/tags?page=2&limit=50", seen[1])
-        self.assertEqual(len(seen), 3)  # to the empty page
-
-
-class CheckTagTests(unittest.TestCase):
-    def test_tag_elsewhere_fails_a_real_run_and_warns_a_dry_run(self):
-        with self.assertRaisesRegex(api.ReleaseError, "points at bbb, not aaa"):
-            api.check_tag(FakeTags("bbb"), "v1", "aaa", 0, dry_run=False)
-        with contextlib.redirect_stdout(io.StringIO()) as out:
-            api.check_tag(FakeTags("bbb"), "v1", "aaa", 0, dry_run=True)
-        self.assertIn("::warning::GitHub's v1 points at bbb", out.getvalue())
-
-    def test_missing_tag_doesnt_wait_on_a_dry_run(self):
-        with contextlib.redirect_stdout(io.StringIO()) as out:
-            api.check_tag(FakeTags(None), "v1", "aaa", 900, dry_run=True)
-        self.assertIn("a real run would wait 900 s", out.getvalue())
-        with self.assertRaisesRegex(api.ReleaseError, "no tag v1 after 0 s"), \
-                contextlib.redirect_stdout(io.StringIO()):
-            api.check_tag(FakeTags(None), "v1", "aaa", 0, dry_run=False)
+    def test_an_annotated_tag_is_followed_to_its_commit(self):
+        host = api.GitHub("o/r", "t")
+        answers = [{"object": {"type": "tag", "sha": "t1"}}, {"object": {"type": "commit", "sha": "c1"}}]
+        with mock.patch.object(host.http, "call", lambda method, url, **kw: answers.pop(0)):
+            self.assertEqual(host.tag_commit("v1"), "c1")
+        with mock.patch.object(host.http, "call", lambda method, url, **kw: None):
+            self.assertIsNone(host.tag_commit("v1"))
 
 
 if __name__ == "__main__":

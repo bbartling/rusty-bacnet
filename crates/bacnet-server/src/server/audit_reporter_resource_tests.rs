@@ -90,6 +90,7 @@ fn ack(fixture: &Fixture, index: usize) {
     assert!(fixture.server.notification_transactions.admit_terminal(
         LOGGER,
         None,
+        None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id: request.invoke_id,
             service_choice: request.service_choice
@@ -296,6 +297,7 @@ async fn audit_reporter_auditing_failure_delivery_failures_never_recurse() {
             let request = confirmed_notification(&fixture.transport.sent, 0);
             assert!(fixture.server.notification_transactions.admit_terminal(
                 LOGGER,
+                None,
                 None,
                 &Apdu::Reject(RejectPdu {
                     invoke_id: request.invoke_id,

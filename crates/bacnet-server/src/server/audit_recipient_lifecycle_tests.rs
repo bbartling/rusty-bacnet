@@ -69,7 +69,7 @@ fn complete(fixture: &Fixture, index: usize, mac: &[u8], success: bool) {
     assert!(fixture
         .server
         .notification_transactions
-        .admit_terminal(mac, None, &response));
+        .admit_terminal(mac, None, None, &response));
 }
 
 #[tokio::test(start_paused = true)]

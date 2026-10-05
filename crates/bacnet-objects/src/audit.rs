@@ -99,6 +99,16 @@ pub trait AuditLogStorage: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// BACnet AuditLog object with explicit application-owned durable storage.
+///
+/// # Unwind safety
+///
+/// The log is neither `UnwindSafe` nor `RefUnwindSafe`, by decision (#1452).
+/// It holds the [`ClockReader`] the application supplies, which runs on the
+/// caller's thread with nothing to catch its panics, so asserting the traits
+/// for it would claim more than the type can promise. It also keeps the
+/// result of each staged batch that settled before its request collected it,
+/// and that result's [`Error`] can wrap a [`std::io::Error`], which has
+/// neither trait. Caller clocks get no unwind-safety bound.
 pub struct AuditLogObject {
     oid: ObjectIdentifier,
     name: String,

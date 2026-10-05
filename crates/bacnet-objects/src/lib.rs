@@ -50,6 +50,9 @@ pub mod value_types;
 mod log_status_tests;
 
 #[cfg(test)]
+mod log_window_tests;
+
+#[cfg(test)]
 mod property_metadata_audit;
 
 #[cfg(test)]
