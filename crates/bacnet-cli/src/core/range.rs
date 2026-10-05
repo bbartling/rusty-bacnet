@@ -1,40 +1,54 @@
 //! Device instance range parsing for Who-Is.
 
-/// Parse a discover range string like "1000-2000" into (low, high).
+use bacnet_services::who_is::DeviceInstanceRange;
+
+/// Parse a discover range string like "1000-2000"; no string asks every
+/// device. A Who-Is carries both limits or neither (Clause 16.10, #1483), so
+/// a range with one side missing, such as "1000-", is refused by name rather
+/// than sent as a request for every device, and so is a low limit above the
+/// high one.
 pub(crate) fn parse_discover_range(
     range: Option<&str>,
-) -> Result<(Option<u32>, Option<u32>), Box<dyn std::error::Error>> {
-    if let Some(r) = range {
-        if let Some((lo, hi)) = r.split_once('-') {
-            let low = lo
-                .parse::<u32>()
-                .map_err(|_| format!("invalid range low: '{lo}'"))?;
-            let high = hi
-                .parse::<u32>()
-                .map_err(|_| format!("invalid range high: '{hi}'"))?;
-            if low > high {
-                return Err(format!("invalid range: low ({low}) > high ({high})").into());
-            }
-            Ok((Some(low), Some(high)))
-        } else {
-            Err(format!("invalid range format: '{r}', expected 'low-high'").into())
-        }
-    } else {
-        Ok((None, None))
+) -> Result<Option<DeviceInstanceRange>, Box<dyn std::error::Error>> {
+    let Some(r) = range else {
+        return Ok(None);
+    };
+    let Some((lo, hi)) = r.split_once('-') else {
+        return Err(format!("invalid range format: '{r}', expected 'low-high'").into());
+    };
+    let missing = match (lo.is_empty(), hi.is_empty()) {
+        (false, true) => Some("a low limit but no high limit"),
+        (true, false) => Some("a high limit but no low limit"),
+        _ => None,
+    };
+    if let Some(missing) = missing {
+        return Err(format!(
+            "invalid range '{r}': it has {missing}; give both, as 'low-high', or none"
+        )
+        .into());
     }
+    let low = lo
+        .parse::<u32>()
+        .map_err(|_| format!("invalid range low: '{lo}'"))?;
+    let high = hi
+        .parse::<u32>()
+        .map_err(|_| format!("invalid range high: '{hi}'"))?;
+    let range = DeviceInstanceRange::new(low, high)
+        .map_err(|_| format!("invalid range: low ({low}) > high ({high})"))?;
+    Ok(Some(range))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_discover_range;
+    use super::*;
 
     #[test]
     fn parses_bounded_and_absent_ranges() {
         assert_eq!(
             parse_discover_range(Some("101-103")).unwrap(),
-            (Some(101), Some(103))
+            Some(DeviceInstanceRange::new(101, 103).unwrap())
         );
-        assert_eq!(parse_discover_range(None).unwrap(), (None, None));
+        assert_eq!(parse_discover_range(None).unwrap(), None);
     }
 
     #[test]
@@ -43,5 +57,21 @@ mod tests {
         assert!(inverted.contains("low (5) > high (1)"), "{inverted}");
         let malformed = parse_discover_range(Some("12")).unwrap_err().to_string();
         assert!(malformed.contains("expected 'low-high'"), "{malformed}");
+    }
+
+    /// One limit alone is refused by name, not sent as an unbounded Who-Is
+    /// (#1483).
+    #[test]
+    fn rejects_a_range_with_one_limit() {
+        for (text, named) in [
+            ("1000-", "a low limit but no high limit"),
+            ("-2000", "a high limit but no low limit"),
+        ] {
+            let error = parse_discover_range(Some(text)).unwrap_err().to_string();
+            assert!(
+                error.contains(named) && error.contains("give both"),
+                "{text}: {error}"
+            );
+        }
     }
 }

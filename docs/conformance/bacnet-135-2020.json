@@ -7069,7 +7069,10 @@
     "crates/bacnet-types/src/error.rs::tests::syntax_faults_name_their_reject_reasons",
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::formal_members_cut_short_inside_their_frames_are_a_short_buffer",
     "crates/bacnet-encoding/src/constructed/tests/event_notification/cut_short.rs::members_cut_short_are_a_short_buffer",
-    "crates/bacnet-server/src/server/trailing_octet_wire_tests.rs::{delete_object_with_trailing_octets_is_rejected,dcc_with_trailing_octets_is_rejected_and_changes_nothing,reinitialize_device_with_trailing_octets_is_rejected,get_alarm_summary_with_any_octet_is_rejected,confirmed_private_transfer_stays_unrecognized,who_is_and_who_has_with_trailing_octets_are_dropped,a_who_is_with_one_limit_is_dropped,an_i_am_with_trailing_octets_binds_nothing}"
+    "crates/bacnet-server/src/server/trailing_octet_wire_tests.rs::{delete_object_with_trailing_octets_is_rejected,dcc_with_trailing_octets_is_rejected_and_changes_nothing,reinitialize_device_with_trailing_octets_is_rejected,get_alarm_summary_with_any_octet_is_rejected,confirmed_private_transfer_stays_unrecognized,who_is_and_who_has_with_trailing_octets_are_dropped,a_who_is_with_one_limit_is_dropped,a_who_has_with_one_limit_is_dropped,an_i_am_with_trailing_octets_binds_nothing}",
+    "crates/bacnet-services/src/device_range_tests.rs::{a_low_limit_above_the_high_one_is_refused,separate_limits_make_a_range_only_in_pairs,a_who_has_with_one_limit_or_an_empty_range_is_refused}",
+    "crates/rusty-bacnet/tests/test_device_range.py",
+    "crates/bacnet-cli/src/core/range.rs::tests::rejects_a_range_with_one_limit"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -7091,7 +7094,8 @@
     "A fixed-size application-tagged member (an object identifier, REAL, Double, Date or Time) has its length checked before its contents, as the context ones do, in the service readers and in decode_application_value alike.",
     "A DeviceCommunicationControl, ReinitializeDevice, ConfirmedTextMessage, GetEnrollmentSummary, DeleteObject, AtomicReadFile, AtomicWriteFile, CreateObject or list-service request cut short is rejected the same way.",
     "Refused confirmed requests draw the Reject Error::reject_reason names (TOO_MANY_ARGUMENTS, INVALID_TAG, MISSING_REQUIRED_PARAMETER, INVALID_DATA_ENCODING, PARAMETER_OUT_OF_RANGE, BUFFER_OVERFLOW, OTHER); unconfirmed ones are dropped.",
-    "A GetAlarmSummary carrying any service-request octet is rejected as TOO_MANY_ARGUMENTS. A Who-Is with only one limit, or with octets its limits leave unread, a limit under another tag included, is dropped."
+    "A GetAlarmSummary carrying any service-request octet is rejected as TOO_MANY_ARGUMENTS. A Who-Is with only one limit, or with octets its limits leave unread, a limit under another tag included, is dropped.",
+    "#1483: WhoIsRequest and WhoHasRequest hold their limits as one Option<DeviceInstanceRange>, which holds both limits with the low one no greater than the high one (Clauses 16.9.1.1.1-2, 16.10.1.1.1-2), so neither request can be built with one limit, and the client, Python and CLI send no such request: Python and the CLI refuse one limit, or a low limit above the high one, by name. WhoHasRequest::decode refuses both forms as WhoIsRequest::decode does, and the server drops such a Who-Has without an I-Have."
    ]
   },
   {

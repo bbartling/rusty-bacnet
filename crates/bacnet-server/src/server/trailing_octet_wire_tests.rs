@@ -397,6 +397,32 @@ async fn a_who_is_with_one_limit_is_dropped() {
     h.server.stop().await.unwrap();
 }
 
+/// A Who-Has carrying one limit without the other is malformed too (#1483),
+/// and so is one whose low limit is above its high one, so the server drops
+/// each and sends no I-Have, where one limit used to read as no range.
+#[tokio::test(start_paused = true)]
+async fn a_who_has_with_one_limit_is_dropped() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    let who_has = UnconfirmedServiceChoice::WHO_HAS;
+    // AV-1 by name, behind limits 0 and 1000, which take in the harness
+    // device (856); either limit alone would too if read as unbounded.
+    let by_name = [0x3D, 0x05, 0x00, b'A', b'V', b'-', b'1'];
+    let with = |limits: &[u8]| [limits, &by_name[..]].concat();
+    for (what, limits) in [
+        ("only the low limit", &[0x09, 0x00][..]),
+        ("only the high limit", &[0x1A, 0x03, 0xE8]),
+        ("low limit above high", &[0x0A, 0x03, 0xE8, 0x19, 0x00]),
+    ] {
+        assert_eq!(unconfirmed(&h, who_has, &with(limits)).await, [], "{what}");
+    }
+    assert_eq!(
+        unconfirmed(&h, who_has, &with(&[0x09, 0x00, 0x1A, 0x03, 0xE8])).await,
+        [UnconfirmedServiceChoice::I_HAVE]
+    );
+    assert_eq!(h.server.discovery_counters().who_has_received, 1);
+    h.server.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn an_i_am_with_trailing_octets_binds_nothing() {
     let mut h = Harness::start(ServerConfig::default()).await;

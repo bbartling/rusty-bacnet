@@ -33,6 +33,7 @@ use bacnet_services::virtual_terminal::{
 };
 use bacnet_services::who_am_i::WhoAmIRequest;
 use bacnet_services::who_has::WhoHasObject;
+use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
@@ -54,6 +55,20 @@ use crate::types::{
 fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {
     bacnet_services::write_property::validate_priority(priority)
         .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// The Who-Is or Who-Has range the `low_limit` and `high_limit` keywords
+/// give: both or neither (Clauses 16.9 and 16.10). One alone, or a low limit
+/// above the high one, raises `ValueError` before anything is sent, where one
+/// limit used to go out as a request for every device (#1483).
+fn device_range(
+    low_limit: Option<u32>,
+    high_limit: Option<u32>,
+) -> PyResult<Option<DeviceInstanceRange>> {
+    DeviceInstanceRange::from_limits(low_limit, high_limit).map_err(|error| match error {
+        bacnet_types::error::Error::OutOfRange(message) => PyValueError::new_err(message),
+        other => PyValueError::new_err(other.to_string()),
+    })
 }
 
 /// Async BACnet client for reading/writing properties on remote devices.

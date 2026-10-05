@@ -219,7 +219,7 @@ async fn a_who_is_on_this_network_by_number_goes_as_a_local_broadcast() {
         (false, THIS_NETWORK, Some(THIS_NETWORK)),
     ] {
         let (mut client, _inbound, mut outbound) = client(learned).await;
-        client.who_is_network(network, None, None).await.unwrap();
+        client.who_is_network(network, None).await.unwrap();
         let sent = bounded(outbound.recv()).await.unwrap();
         assert!(sent.destination.is_empty(), "a broadcast");
         let destination = decode_npdu(sent.npdu).unwrap().destination;

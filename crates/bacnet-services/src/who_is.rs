@@ -11,82 +11,182 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 // ---------------------------------------------------------------------------
+// DeviceInstanceRange
+// ---------------------------------------------------------------------------
+
+/// The devices a Who-Is or Who-Has asks to answer: those whose Device object
+/// instance lies from [`low`](Self::low) to [`high`](Self::high), both
+/// included (Clauses 16.10.1.1.1-2 and 16.9.1.1.1-2).
+///
+/// The clauses send both limits or neither, and keep the low one at or below
+/// the high one. A request holds an `Option<DeviceInstanceRange>`, so it
+/// can't carry one limit alone, and [`Self::new`] refuses a low limit above
+/// the high one, a range no device lies in. The decoders refuse both forms
+/// on the wire as well (#1447, #1483).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeviceInstanceRange {
+    low: u32,
+    high: u32,
+}
+
+impl DeviceInstanceRange {
+    /// The instances from `low` to `high`, both included. Fails with
+    /// [`Error::OutOfRange`] when `low` is above `high`.
+    pub fn new(low: u32, high: u32) -> Result<Self, Error> {
+        if low > high {
+            return Err(Error::OutOfRange(format!(
+                "device instance range low limit {low} is above its high limit {high}, \
+                 so it would match no device"
+            )));
+        }
+        Ok(Self { low, high })
+    }
+
+    /// The one instance `instance`, as when a Who-Is looks for one device.
+    pub const fn single(instance: u32) -> Self {
+        Self {
+            low: instance,
+            high: instance,
+        }
+    }
+
+    /// The range two separately held limits give: none for neither, a range
+    /// for both, as the Python bindings take them. One limit alone fails with
+    /// [`Error::OutOfRange`] naming it, rather than becoming a request for
+    /// every device, and so does a low limit above the high one.
+    pub fn from_limits(low: Option<u32>, high: Option<u32>) -> Result<Option<Self>, Error> {
+        match (low, high) {
+            (None, None) => Ok(None),
+            (Some(low), Some(high)) => Self::new(low, high).map(Some),
+            (Some(low), None) => Err(Error::OutOfRange(format!(
+                "a device instance range needs both limits or neither: \
+                 low_limit {low} was given without high_limit"
+            ))),
+            (None, Some(high)) => Err(Error::OutOfRange(format!(
+                "a device instance range needs both limits or neither: \
+                 high_limit {high} was given without low_limit"
+            ))),
+        }
+    }
+
+    /// The lowest instance in the range.
+    pub const fn low(self) -> u32 {
+        self.low
+    }
+
+    /// The highest instance in the range.
+    pub const fn high(self) -> u32 {
+        self.high
+    }
+
+    /// Whether `instance` lies in the range.
+    pub const fn contains(self, instance: u32) -> bool {
+        self.low <= instance && instance <= self.high
+    }
+
+    /// Write the range as the `[0]` low and `[1]` high limits.
+    pub(crate) fn encode(self, buf: &mut BytesMut) {
+        primitives::encode_ctx_unsigned(buf, 0, self.low as u64);
+        primitives::encode_ctx_unsigned(buf, 1, self.high as u64);
+    }
+}
+
+/// A Who-Is or Who-Has request's optional `[0]` low and `[1]` high limits,
+/// as read from the start of its service-request octets. The decoders read
+/// the rest of the request before [`Self::range`] checks the pairing.
+pub(crate) struct WireLimits {
+    low: Option<u32>,
+    high: Option<u32>,
+    /// Where a `[1]` high limit after a lone low limit was due.
+    after_low: usize,
+    /// The offset after the limits.
+    pub(crate) end: usize,
+}
+
+impl WireLimits {
+    /// Read the limits; `service` (`WhoIs` or `WhoHas`) names them in errors.
+    pub(crate) fn decode(data: &[u8], service: &str) -> Result<Self, Error> {
+        let (low, after_low) = decode_optional_ctx(
+            data,
+            0,
+            0,
+            &format!("{service} low-limit"),
+            decode_ctx_unsigned::<u32>,
+        )?;
+        let (high, end) = decode_optional_ctx(
+            data,
+            after_low,
+            1,
+            &format!("{service} high-limit"),
+            decode_ctx_unsigned::<u32>,
+        )?;
+        Ok(Self {
+            low,
+            high,
+            after_low,
+            end,
+        })
+    }
+
+    /// The range the limits give. One limit without the other is malformed
+    /// (#1447, #1483): a receiver drops it rather than reading it as a
+    /// request for every device, which would make every device answer one
+    /// that probably meant a range. So is a low limit above the high one.
+    pub(crate) fn range(&self, service: &str) -> Result<Option<DeviceInstanceRange>, Error> {
+        match (self.low, self.high) {
+            (None, None) => Ok(None),
+            (Some(low), Some(high)) => {
+                DeviceInstanceRange::new(low, high).map(Some).map_err(|_| {
+                    Error::out_of_range(0, format!("{service} low-limit exceeds high-limit"))
+                })
+            }
+            (Some(_), None) => Err(Error::missing(
+                self.after_low,
+                format!("{service} low-limit needs the high-limit [1] with it"),
+            )),
+            (None, Some(_)) => Err(Error::missing(
+                0,
+                format!("{service} high-limit needs the low-limit [0] before it"),
+            )),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // WhoIsRequest
 // ---------------------------------------------------------------------------
 
 /// Who-Is-Request service parameters.
-///
-/// The two limits travel together (Clauses 16.10.1.1.1 and 16.10.1.1.2):
-/// [`WhoIsRequest::decode`] refuses a request carrying only one, and
-/// [`WhoIsRequest::encode`] writes them only when both are set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoIsRequest {
-    /// Lowest device instance number that should answer; `None` for an unbounded request.
-    pub low_limit: Option<u32>,
-    /// Highest device instance number that should answer; `None` for an unbounded request.
-    pub high_limit: Option<u32>,
+    /// The devices that should answer; `None` asks every device.
+    pub range: Option<DeviceInstanceRange>,
 }
 
 impl WhoIsRequest {
     /// Create an unbounded WhoIs (all devices).
     pub fn all() -> Self {
-        Self {
-            low_limit: None,
-            high_limit: None,
-        }
+        Self { range: None }
     }
 
-    /// Create a ranged WhoIs.
-    pub fn range(low: u32, high: u32) -> Self {
-        Self {
-            low_limit: Some(low),
-            high_limit: Some(high),
-        }
-    }
-
-    /// Encode the request into `buf`. The limits are written only when both are set; otherwise
-    /// nothing is written.
+    /// Encode the request into `buf`: both limits for a range, nothing for an
+    /// unbounded request.
     pub fn encode(&self, buf: &mut BytesMut) {
-        if let (Some(low), Some(high)) = (self.low_limit, self.high_limit) {
-            primitives::encode_ctx_unsigned(buf, 0, low as u64);
-            primitives::encode_ctx_unsigned(buf, 1, high as u64);
+        if let Some(range) = self.range {
+            range.encode(buf);
         }
     }
 
     /// Decode the request from service-request octets; fails on malformed or truncated input,
     /// on any octet that isn't a `[0]` or `[1]` limit in its place, so a limit under another
     /// tag or anything after the limits refuses the request rather than reading as no limits,
-    /// and on one limit without the other (#1447). A receiver drops such a request rather than
-    /// reading it as one for every device, which would make every device answer a request that
-    /// probably meant a range.
+    /// on one limit without the other (#1447), and on a low limit above the high one.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        // [0] low-limit and [1] high-limit
-        let (low_limit, offset) =
-            decode_optional_ctx(data, 0, 0, "WhoIs low-limit", decode_ctx_unsigned::<u32>)?;
-        let (high_limit, end) = decode_optional_ctx(
-            data,
-            offset,
-            1,
-            "WhoIs high-limit",
-            decode_ctx_unsigned::<u32>,
-        )?;
-        expect_end(data, end, end, "WhoIs")?;
-
-        match (low_limit, high_limit) {
-            (None, None) => Ok(Self::all()),
-            (Some(low), Some(high)) if low > high => {
-                Err(Error::out_of_range(0, "WhoIs low_limit exceeds high_limit"))
-            }
-            (Some(low), Some(high)) => Ok(Self::range(low, high)),
-            (Some(_), None) => Err(Error::missing(
-                end,
-                "WhoIs low-limit needs the high-limit [1] with it",
-            )),
-            (None, Some(_)) => Err(Error::missing(
-                0,
-                "WhoIs high-limit needs the low-limit [0] before it",
-            )),
-        }
+        let limits = WireLimits::decode(data, "WhoIs")?;
+        expect_end(data, limits.end, limits.end, "WhoIs")?;
+        Ok(Self {
+            range: limits.range("WhoIs")?,
+        })
     }
 }
 
@@ -156,7 +256,9 @@ mod tests {
 
     #[test]
     fn who_is_range_round_trip() {
-        let req = WhoIsRequest::range(1000, 2000);
+        let req = WhoIsRequest {
+            range: Some(DeviceInstanceRange::new(1000, 2000).unwrap()),
+        };
         let mut buf = BytesMut::new();
         req.encode(&mut buf);
         assert!(!buf.is_empty());
@@ -201,7 +303,9 @@ mod tests {
     fn test_decode_who_is_truncated() {
         // A range cut anywhere fails: inside the low limit, or after it,
         // which leaves one limit alone.
-        let req = WhoIsRequest::range(1000, 2000);
+        let req = WhoIsRequest {
+            range: Some(DeviceInstanceRange::new(1000, 2000).unwrap()),
+        };
         let mut buf = BytesMut::new();
         req.encode(&mut buf);
         for cut in 1..buf.len() {
@@ -227,24 +331,27 @@ mod tests {
 
     #[test]
     fn who_is_low_exceeds_high_is_error() {
-        let req = WhoIsRequest::range(2000, 1000);
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        let err = WhoIsRequest::decode(&buf).unwrap_err();
+        // Low limit 2000, high limit 1000: no range can be built this way,
+        // so the octets are written out.
+        let data = [0x0A, 0x07, 0xD0, 0x1A, 0x03, 0xE8];
+        let err = WhoIsRequest::decode(&data).unwrap_err();
         assert!(
-            format!("{err:?}").contains("low_limit exceeds high_limit"),
+            err.to_string()
+                .contains("WhoIs low-limit exceeds high-limit"),
             "expected low_limit > high_limit error, got: {err:?}"
         );
     }
 
     #[test]
     fn who_is_equal_limits_is_valid() {
-        let req = WhoIsRequest::range(1500, 1500);
+        let req = WhoIsRequest {
+            range: Some(DeviceInstanceRange::single(1500)),
+        };
         let mut buf = BytesMut::new();
         req.encode(&mut buf);
+        assert_eq!(buf[..], [0x0A, 0x05, 0xDC, 0x1A, 0x05, 0xDC]);
         let decoded = WhoIsRequest::decode(&buf).unwrap();
-        assert_eq!(decoded.low_limit, Some(1500));
-        assert_eq!(decoded.high_limit, Some(1500));
+        assert_eq!(decoded, req);
     }
 
     #[test]
@@ -282,8 +389,7 @@ mod tests {
             leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
         }
         let decoded = WhoIsRequest::decode(&leading_zero).unwrap();
-        assert_eq!(decoded.low_limit, Some(u32::MAX));
-        assert_eq!(decoded.high_limit, Some(u32::MAX));
+        assert_eq!(decoded.range, Some(DeviceInstanceRange::single(u32::MAX)));
     }
 
     #[test]
@@ -460,3 +566,7 @@ mod tests {
         assert!(IAmRequest::decode(&[0xFF, 0xFF, 0xFF]).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "device_range_tests.rs"]
+mod device_range_tests;

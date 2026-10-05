@@ -87,7 +87,9 @@ impl BACnetClient {
     // Discovery
     // -----------------------------------------------------------------------
 
-    /// Send a WhoHas broadcast to find an object by identifier.
+    /// Send a WhoHas broadcast to find an object by identifier. Give both
+    /// limits or neither; one alone, or `low_limit` above `high_limit`, raises
+    /// `ValueError` before anything is sent.
     #[pyo3(signature = (object_id, low_limit=None, high_limit=None))]
     fn who_has_by_id<'py>(
         &self,
@@ -96,6 +98,7 @@ impl BACnetClient {
         low_limit: Option<u32>,
         high_limit: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let range = device_range(low_limit, high_limit)?;
         let inner = self.inner.clone();
         let oid = object_id.to_rust();
 
@@ -106,7 +109,7 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            c.who_has(WhoHasObject::Identifier(oid), low_limit, high_limit)
+            c.who_has(WhoHasObject::Identifier(oid), range)
                 .await
                 .map_err(to_py_err)?;
             Ok(())
@@ -114,7 +117,8 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Send a WhoHas broadcast to find an object by name.
+    /// Send a WhoHas broadcast to find an object by name, with the same
+    /// limits rule as `who_has_by_id()`.
     #[pyo3(signature = (name, low_limit=None, high_limit=None))]
     fn who_has_by_name<'py>(
         &self,
@@ -123,6 +127,7 @@ impl BACnetClient {
         low_limit: Option<u32>,
         high_limit: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let range = device_range(low_limit, high_limit)?;
         let inner = self.inner.clone();
 
         let future = async move {
@@ -132,7 +137,7 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            c.who_has(WhoHasObject::Name(name), low_limit, high_limit)
+            c.who_has(WhoHasObject::Name(name), range)
                 .await
                 .map_err(to_py_err)?;
             Ok(())

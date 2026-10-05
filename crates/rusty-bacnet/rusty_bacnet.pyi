@@ -1867,7 +1867,12 @@ class BACnetClient:
         high_limit: Optional[int] = None,
     ) -> Awaitable[None]:
         """Broadcast a Who-Is request. Responses are collected asynchronously;
-        use ``discovered_devices()`` to retrieve them."""
+        use ``discovered_devices()`` to retrieve them.
+
+        Give ``low_limit`` and ``high_limit`` together or not at all: one alone,
+        or ``low_limit`` above ``high_limit``, raises ``ValueError`` before
+        anything is sent.
+        """
         ...
 
     def discover(
@@ -1876,7 +1881,12 @@ class BACnetClient:
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
     ) -> Awaitable[list[DiscoveredDevice]]:
-        """Convenience: send WhoIs, wait ``timeout_ms``, return discovered devices."""
+        """Convenience: send WhoIs, wait ``timeout_ms``, return discovered devices.
+
+        Give ``low_limit`` and ``high_limit`` together or not at all: one alone,
+        or ``low_limit`` above ``high_limit``, raises ``ValueError`` before
+        anything is sent.
+        """
         ...
 
     def who_has_by_id(
@@ -1885,7 +1895,12 @@ class BACnetClient:
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
     ) -> Awaitable[None]:
-        """Broadcast Who-Has by object identifier."""
+        """Broadcast Who-Has by object identifier.
+
+        Give ``low_limit`` and ``high_limit`` together or not at all: one alone,
+        or ``low_limit`` above ``high_limit``, raises ``ValueError`` before
+        anything is sent.
+        """
         ...
 
     def who_has_by_name(
@@ -1894,7 +1909,12 @@ class BACnetClient:
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
     ) -> Awaitable[None]:
-        """Broadcast Who-Has by object name."""
+        """Broadcast Who-Has by object name.
+
+        Give ``low_limit`` and ``high_limit`` together or not at all: one alone,
+        or ``low_limit`` above ``high_limit``, raises ``ValueError`` before
+        anything is sent.
+        """
         ...
 
     def discovered_devices(self) -> Awaitable[list[DiscoveredDevice]]:
@@ -1929,7 +1949,12 @@ class BACnetClient:
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
     ) -> Awaitable[None]:
-        """Send a Who-Is to a specific device address (unicast)."""
+        """Send a Who-Is to a specific device address (unicast).
+
+        Give ``low_limit`` and ``high_limit`` together or not at all: one alone,
+        or ``low_limit`` above ``high_limit``, raises ``ValueError`` before
+        anything is sent.
+        """
         ...
 
     # --- Time synchronization ---

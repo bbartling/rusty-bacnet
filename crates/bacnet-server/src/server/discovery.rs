@@ -15,7 +15,7 @@ use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
-use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
+use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ErrorClass, ErrorCode, NetworkPriority, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
@@ -459,12 +459,10 @@ impl DiscoveryLimiter {
             .map(|s| s.byte_tokens)
     }
 
-    fn check_instance_in_range(&self, low: Option<u32>, high: Option<u32>) -> bool {
-        match (self.device_instance.load(Ordering::Acquire), low, high) {
-            (Some(inst), Some(l), Some(h)) => inst >= l && inst <= h,
-            (Some(_), _, _) => true,
-            (None, _, _) => false,
-        }
+    fn check_instance_in_range(&self, range: Option<DeviceInstanceRange>) -> bool {
+        self.device_instance
+            .load(Ordering::Acquire)
+            .is_some_and(|instance| range.is_none_or(|range| range.contains(instance)))
     }
 
     pub(crate) fn pre_check_who_is(
@@ -482,7 +480,7 @@ impl DiscoveryLimiter {
 
         self.counters.inc(&self.counters.who_is_received);
 
-        if !self.check_instance_in_range(who_is.low_limit, who_is.high_limit) {
+        if !self.check_instance_in_range(who_is.range) {
             return PreCheckDecision::OutOfRange;
         }
 
@@ -577,7 +575,7 @@ impl DiscoveryLimiter {
 
         self.counters.inc(&self.counters.who_has_received);
 
-        if !self.check_instance_in_range(who_has.low_limit, who_has.high_limit) {
+        if !self.check_instance_in_range(who_has.range) {
             return PreCheckDecision::OutOfRange;
         }
 

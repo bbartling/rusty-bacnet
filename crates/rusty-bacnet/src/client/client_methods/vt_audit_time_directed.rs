@@ -392,7 +392,8 @@ impl BACnetClient {
     // Directed / Network WhoIs
     // -----------------------------------------------------------------------
 
-    /// Send a Who-Is to a specific device address (unicast).
+    /// Send a Who-Is to a specific device address (unicast), with the same
+    /// limits rule as `who_is()`.
     #[pyo3(signature = (address, low_limit=None, high_limit=None))]
     fn who_is_directed<'py>(
         &self,
@@ -401,6 +402,7 @@ impl BACnetClient {
         low_limit: Option<u32>,
         high_limit: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let range = device_range(low_limit, high_limit)?;
         let inner = self.inner.clone();
         let future = async move {
             let mac = parse_address(&address)?;
@@ -410,9 +412,7 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            c.who_is_directed(&mac, low_limit, high_limit)
-                .await
-                .map_err(to_py_err)?;
+            c.who_is_directed(&mac, range).await.map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))

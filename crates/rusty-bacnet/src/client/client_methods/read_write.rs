@@ -98,6 +98,9 @@ impl BACnetClient {
     }
 
     /// Send a WhoIs broadcast to discover devices.
+    ///
+    /// Give both limits or neither; one alone, or `low_limit` above
+    /// `high_limit`, raises `ValueError` before anything is sent.
     #[pyo3(signature = (low_limit=None, high_limit=None))]
     fn who_is<'py>(
         &self,
@@ -105,6 +108,7 @@ impl BACnetClient {
         low_limit: Option<u32>,
         high_limit: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let range = device_range(low_limit, high_limit)?;
         let inner = self.inner.clone();
         let future = async move {
             let c = {
@@ -114,7 +118,7 @@ impl BACnetClient {
                 })?)
             };
             // Mutex released here — concurrent calls can proceed
-            c.who_is(low_limit, high_limit).await.map_err(to_py_err)?;
+            c.who_is(range).await.map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
@@ -122,7 +126,8 @@ impl BACnetClient {
 
     /// Convenience: send WhoIs, wait for `timeout_ms` (default 3000), return discovered devices.
     ///
-    /// Combines `who_is()` + `asyncio.sleep()` + `discovered_devices()` in one call.
+    /// Combines `who_is()` + `asyncio.sleep()` + `discovered_devices()` in one call,
+    /// with the same limits rule as `who_is()`.
     #[pyo3(signature = (timeout_ms=3000, low_limit=None, high_limit=None))]
     fn discover<'py>(
         &self,
@@ -131,6 +136,7 @@ impl BACnetClient {
         low_limit: Option<u32>,
         high_limit: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let range = device_range(low_limit, high_limit)?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let c = {
@@ -139,7 +145,7 @@ impl BACnetClient {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            c.who_is(low_limit, high_limit).await.map_err(to_py_err)?;
+            c.who_is(range).await.map_err(to_py_err)?;
             tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
             let devices = c.discovered_devices().await;
             Ok(devices

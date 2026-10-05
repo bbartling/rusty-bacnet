@@ -7,6 +7,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
+use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_types::enums::Segmentation;
 
 /// Identifies one user-started operation, so late results can be dropped.
@@ -39,7 +40,7 @@ pub(crate) struct WhoIsSpec {
     /// Destination.
     pub(crate) scope: WhoIsScope,
     /// Inclusive instance range; `None` asks every device.
-    pub(crate) range: Option<(u32, u32)>,
+    pub(crate) range: Option<DeviceInstanceRange>,
     /// How long to show the request as running while replies arrive.
     pub(crate) listen: Duration,
 }
@@ -47,7 +48,8 @@ pub(crate) struct WhoIsSpec {
 impl WhoIsSpec {
     /// True when the request has no effective instance limit.
     pub(crate) fn is_full_range(&self) -> bool {
-        matches!(self.range, None | Some((0, MAX_INSTANCE)))
+        self.range
+            .is_none_or(|range| (range.low(), range.high()) == (0, MAX_INSTANCE))
     }
 
     /// True for a global broadcast.
@@ -57,8 +59,7 @@ impl WhoIsSpec {
 
     /// True when `instance` is one the request asks to answer.
     pub(crate) fn wants(&self, instance: u32) -> bool {
-        self.range
-            .is_none_or(|(low, high)| (low..=high).contains(&instance))
+        self.range.is_none_or(|range| range.contains(instance))
     }
 
     /// Short description, such as `local 101-103` or `network 5, all`.
@@ -70,8 +71,10 @@ impl WhoIsSpec {
             WhoIsScope::Network(dnet) => format!("network {dnet}"),
         };
         match self.range {
-            Some((low, high)) if low == high => format!("{scope} {low}"),
-            Some((low, high)) if !self.is_full_range() => format!("{scope} {low}-{high}"),
+            Some(range) if range.low() == range.high() => format!("{scope} {}", range.low()),
+            Some(range) if !self.is_full_range() => {
+                format!("{scope} {}-{}", range.low(), range.high())
+            }
             _ => format!("{scope}, all"),
         }
     }
@@ -220,7 +223,7 @@ mod tests {
     fn spec(scope: WhoIsScope, range: Option<(u32, u32)>) -> WhoIsSpec {
         WhoIsSpec {
             scope,
-            range,
+            range: range.map(|(low, high)| DeviceInstanceRange::new(low, high).unwrap()),
             listen: Duration::from_secs(3),
         }
     }

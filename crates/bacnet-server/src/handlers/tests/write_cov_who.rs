@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_services::who_is::DeviceInstanceRange;
 
 #[test]
 fn wpm_handler_success() {
@@ -453,8 +454,7 @@ fn who_has_by_id_found() {
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     let request = WhoHasRequest {
-        low_limit: None,
-        high_limit: None,
+        range: None,
         object: WhoHasObject::Identifier(ai_oid),
     };
     let mut buf = BytesMut::new();
@@ -473,8 +473,7 @@ fn who_has_by_name_found() {
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
 
     let request = WhoHasRequest {
-        low_limit: None,
-        high_limit: None,
+        range: None,
         object: WhoHasObject::Name("AI-1".into()),
     };
     let mut buf = BytesMut::new();
@@ -491,8 +490,7 @@ fn who_has_not_found() {
     let missing_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 99).unwrap();
 
     let request = WhoHasRequest {
-        low_limit: None,
-        high_limit: None,
+        range: None,
         object: WhoHasObject::Identifier(missing_oid),
     };
     let mut buf = BytesMut::new();
@@ -509,8 +507,7 @@ fn who_has_out_of_range() {
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     let request = WhoHasRequest {
-        low_limit: Some(100),
-        high_limit: Some(200),
+        range: Some(DeviceInstanceRange::new(100, 200).unwrap()),
         object: WhoHasObject::Identifier(ai_oid),
     };
     let mut buf = BytesMut::new();

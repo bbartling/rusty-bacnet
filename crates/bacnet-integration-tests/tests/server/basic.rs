@@ -177,7 +177,7 @@ async fn who_is_through_server() {
     let mut client = make_client().await;
 
     // Send WhoIs — the server should respond with IAm
-    client.who_is(None, None).await.unwrap();
+    client.who_is(None).await.unwrap();
 
     // Give the server time to process and respond
     tokio::time::sleep(Duration::from_millis(200)).await;

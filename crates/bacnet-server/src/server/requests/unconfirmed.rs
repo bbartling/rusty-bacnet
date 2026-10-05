@@ -99,10 +99,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             if let Some(device_oid) = device_oid {
                 let instance = device_oid.instance_number();
 
-                let in_range = match (who_is.low_limit, who_is.high_limit) {
-                    (Some(low), Some(high)) => instance >= low && instance <= high,
-                    _ => true,
-                };
+                let in_range = who_is.range.is_none_or(|range| range.contains(instance));
 
                 if in_range {
                     let i_am = IAmRequest {

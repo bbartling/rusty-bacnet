@@ -8,7 +8,7 @@ use std::process;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_services::who_is::WhoIsRequest;
+use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_types::enums::UnconfirmedServiceChoice;
 use bytes::BytesMut;
@@ -134,10 +134,14 @@ async fn main() {
         .broadcast
         .unwrap_or_else(|| default_broadcast(interface));
 
-    if args.low.is_some() ^ args.high.is_some() {
-        eprintln!("ERROR: --low and --high must be used together");
-        process::exit(1);
-    }
+    // A Who-Is carries both limits or neither, low no greater than high.
+    let range = match DeviceInstanceRange::from_limits(args.low, args.high) {
+        Ok(range) => range,
+        Err(e) => {
+            eprintln!("ERROR: --low and --high: {e}");
+            process::exit(1);
+        }
+    };
 
     let bind_port = if args.ephemeral {
         eprintln!("WARNING: --ephemeral skips UDP/47808; broadcast I-Am may not be received");
@@ -165,10 +169,7 @@ async fn main() {
         }
     };
 
-    let whois = WhoIsRequest {
-        low_limit: args.low,
-        high_limit: args.high,
-    };
+    let whois = WhoIsRequest { range };
     let mut whois_buf = BytesMut::new();
     whois.encode(&mut whois_buf);
 
@@ -182,7 +183,7 @@ async fn main() {
     }
 
     eprintln!("Sending global Who-Is (DNET=0xFFFF)...");
-    if let Err(e) = client.who_is(args.low, args.high).await {
+    if let Err(e) = client.who_is(range).await {
         eprintln!("ERROR: global Who-Is failed: {e}");
         process::exit(1);
     }

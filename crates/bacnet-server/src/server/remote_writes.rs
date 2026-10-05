@@ -318,8 +318,7 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         let instance = device.instance_number();
         let mut service = BytesMut::new();
         WhoIsRequest {
-            low_limit: Some(instance),
-            high_limit: Some(instance),
+            range: Some(DeviceInstanceRange::single(instance)),
         }
         .encode(&mut service);
         let mut apdu = BytesMut::new();

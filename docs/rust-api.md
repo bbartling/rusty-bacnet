@@ -396,9 +396,19 @@ use bacnet_services::cov_multiple::{
 ### Discovery
 
 ```rust
-use bacnet_services::who_is::{WhoIsRequest, IAmRequest};
+use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest, IAmRequest};
 use bacnet_services::who_has::{WhoHasRequest, WhoHasObject, IHaveRequest};
 ```
+
+`WhoIsRequest` and `WhoHasRequest` carry their device-instance limits as one
+`range: Option<DeviceInstanceRange>`, `None` asking every device (Clauses 16.9
+and 16.10, #1483). A range holds both limits, so a request with one alone can't
+be built, and `DeviceInstanceRange::new` refuses a low limit above the high one
+with `Error::OutOfRange`. `DeviceInstanceRange::single(n)` asks one device, and
+`DeviceInstanceRange::from_limits(low, high)` turns two optional limits into a
+range, refusing one without the other. Both decoders refuse a request with one
+limit, or with its low limit above its high one, and the server drops it
+unanswered.
 
 ### Device Management
 
@@ -4298,8 +4308,9 @@ the bundled server materializes an empty subscription context.
 ### Discovery
 
 ```rust
-client.who_is(None, None).await?;                       // broadcast
-client.who_has(WhoHasObject::Name("Zone Temp".into()), None, None).await?;
+client.who_is(None).await?;                             // every device, globally
+client.who_is(Some(DeviceInstanceRange::new(1000, 2000)?)).await?; // a range
+client.who_has(WhoHasObject::Name("Zone Temp".into()), None).await?;
 
 let devices = client.discovered_devices().await;         // Vec<DiscoveredDevice>
 let device = client.get_device(1234).await;              // Option<DiscoveredDevice>

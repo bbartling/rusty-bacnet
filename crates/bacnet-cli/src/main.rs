@@ -113,7 +113,7 @@ async fn execute_command<T: TransportPort + 'static>(
                     "--bbmd requires BACnet/IP transport (do not use --sc or --ipv6)".into(),
                 );
             }
-            let (low, high) = parse_discover_range(range.as_deref())?;
+            let range = parse_discover_range(range.as_deref())?;
             if let Some(target_str) = target {
                 let mac = resolve::parse_target(target_str)
                     .and_then(|t| match t {
@@ -121,13 +121,12 @@ async fn execute_command<T: TransportPort + 'static>(
                         _ => Err("--target requires an IP address, not a device instance or routed address".into()),
                     })
                     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-                commands::discover::discover_directed(client, &mac, low, high, *wait, format)
-                    .await?;
+                commands::discover::discover_directed(client, &mac, range, *wait, format).await?;
             } else if let Some(network) = dnet {
-                commands::discover::discover_network(client, *network, low, high, *wait, format)
+                commands::discover::discover_network(client, *network, range, *wait, format)
                     .await?;
             } else {
-                commands::discover::discover(client, low, high, *wait, format).await?;
+                commands::discover::discover(client, range, *wait, format).await?;
             }
         }
         Command::Find { name, wait } => match name {
@@ -374,7 +373,7 @@ async fn execute_bip_command(
             eprintln!("Registered as foreign device with BBMD: {result:?}");
             // Brief pause to allow registration to propagate.
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            let (low, high) = parse_discover_range(range.as_deref())?;
+            let range = parse_discover_range(range.as_deref())?;
             if let Some(target_str) = target {
                 let mac = resolve::parse_target(target_str)
                     .and_then(|t| match t {
@@ -382,13 +381,12 @@ async fn execute_bip_command(
                         _ => Err("--target requires an IP address, not a device instance or routed address".into()),
                     })
                     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-                commands::discover::discover_directed(client, &mac, low, high, *wait, format)
-                    .await?;
+                commands::discover::discover_directed(client, &mac, range, *wait, format).await?;
             } else if let Some(network) = dnet {
-                commands::discover::discover_network(client, *network, low, high, *wait, format)
+                commands::discover::discover_network(client, *network, range, *wait, format)
                     .await?;
             } else {
-                commands::discover::discover(client, low, high, *wait, format).await?;
+                commands::discover::discover(client, range, *wait, format).await?;
             }
         }
         Command::Bdt { target } => {

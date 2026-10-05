@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
-use bacnet_services::who_is::WhoIsRequest;
+use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bvll::encode_bip_mac;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, UnconfirmedServiceChoice};
@@ -292,8 +292,7 @@ async fn discover_device(
     }
 
     let whois = WhoIsRequest {
-        low_limit: Some(args.device),
-        high_limit: Some(args.device),
+        range: Some(DeviceInstanceRange::single(args.device)),
     };
     let mut whois_buf = BytesMut::new();
     whois.encode(&mut whois_buf);
@@ -306,7 +305,10 @@ async fn discover_device(
         eprintln!("ERROR: local Who-Is failed: {e}");
         process::exit(1);
     }
-    if let Err(e) = client.who_is(Some(args.device), Some(args.device)).await {
+    if let Err(e) = client
+        .who_is(Some(DeviceInstanceRange::single(args.device)))
+        .await
+    {
         eprintln!("ERROR: global Who-Is failed: {e}");
         process::exit(1);
     }

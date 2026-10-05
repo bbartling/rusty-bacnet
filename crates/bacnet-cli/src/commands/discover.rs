@@ -2,6 +2,7 @@
 
 use bacnet_client::client::BACnetClient;
 use bacnet_services::who_has::WhoHasObject;
+use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
 
 use crate::output::{self, device_info, DeviceInfo, OutputFormat};
@@ -10,18 +11,14 @@ use crate::output::{self, device_info, DeviceInfo, OutputFormat};
 /// optionally filtering by instance range.
 async fn collect_devices<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    low: Option<u32>,
-    high: Option<u32>,
+    range: Option<DeviceInstanceRange>,
 ) -> Vec<DeviceInfo> {
     let devices = client.discovered_devices().await;
     devices
         .iter()
         .filter(|d| {
             let inst = d.object_identifier.instance_number();
-            match (low, high) {
-                (Some(lo), Some(hi)) => inst >= lo && inst <= hi,
-                _ => true,
-            }
+            range.is_none_or(|range| range.contains(inst))
         })
         .map(device_info)
         .collect()
@@ -30,15 +27,14 @@ async fn collect_devices<T: TransportPort + 'static>(
 /// Send a WhoIs broadcast and display discovered devices after waiting.
 pub async fn discover<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    low: Option<u32>,
-    high: Option<u32>,
+    range: Option<DeviceInstanceRange>,
     wait_secs: u64,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    client.who_is(low, high).await?;
+    client.who_is(range).await?;
     output::print_waiting(wait_secs);
     tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-    output::print_devices(&collect_devices(client, low, high).await, format);
+    output::print_devices(&collect_devices(client, range).await, format);
     Ok(())
 }
 
@@ -46,15 +42,14 @@ pub async fn discover<T: TransportPort + 'static>(
 pub async fn discover_directed<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     target_mac: &[u8],
-    low: Option<u32>,
-    high: Option<u32>,
+    range: Option<DeviceInstanceRange>,
     wait_secs: u64,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    client.who_is_directed(target_mac, low, high).await?;
+    client.who_is_directed(target_mac, range).await?;
     output::print_waiting(wait_secs);
     tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-    output::print_devices(&collect_devices(client, low, high).await, format);
+    output::print_devices(&collect_devices(client, range).await, format);
     Ok(())
 }
 
@@ -62,15 +57,14 @@ pub async fn discover_directed<T: TransportPort + 'static>(
 pub async fn discover_network<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     dnet: u16,
-    low: Option<u32>,
-    high: Option<u32>,
+    range: Option<DeviceInstanceRange>,
     wait_secs: u64,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    client.who_is_network(dnet, low, high).await?;
+    client.who_is_network(dnet, range).await?;
     output::print_waiting(wait_secs);
     tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
-    output::print_devices(&collect_devices(client, low, high).await, format);
+    output::print_devices(&collect_devices(client, range).await, format);
     Ok(())
 }
 
@@ -82,7 +76,7 @@ pub async fn find_by_name<T: TransportPort + 'static>(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     client
-        .who_has(WhoHasObject::Name(name.to_string()), None, None)
+        .who_has(WhoHasObject::Name(name.to_string()), None)
         .await?;
     tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
 

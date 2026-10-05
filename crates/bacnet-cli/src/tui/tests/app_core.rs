@@ -402,7 +402,7 @@ fn describe_marks_remote_and_directed_scopes() {
             mac: vec![1, 2, 3, 4, 0xBA, 0xC0],
             label: "1.2.3.4".into(),
         },
-        range: Some((5, 5)),
+        range: Some(bacnet_services::who_is::DeviceInstanceRange::single(5)),
         listen: Duration::from_secs(1),
     };
     assert_eq!(spec.describe(), "to 1.2.3.4 5");

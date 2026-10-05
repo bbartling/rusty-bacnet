@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use crate::resolve::{parse_target, Target};
 use crate::tui::message::{AddressStyle, WhoIsScope, WhoIsSpec, MAX_INSTANCE};
+use bacnet_services::who_is::DeviceInstanceRange;
 
 /// Which scope the form's first field selects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,8 +137,8 @@ impl WhoIsForm {
         };
         let range = match spec.range {
             None => String::new(),
-            Some((low, high)) if low == high => low.to_string(),
-            Some((low, high)) => format!("{low}-{high}"),
+            Some(range) if range.low() == range.high() => range.low().to_string(),
+            Some(range) => format!("{}-{}", range.low(), range.high()),
         };
         Self {
             scope,
@@ -276,27 +277,24 @@ fn parse_network(target: &str) -> Result<u16, String> {
     }
 }
 
-/// Blank is unbounded; `N` is one instance; `LOW-HIGH` uses the shared parser.
-fn parse_range(text: &str) -> Result<Option<(u32, u32)>, String> {
+/// Blank is unbounded; `N` is one instance; `LOW-HIGH` uses the shared parser,
+/// which refuses one limit alone and a low limit above the high one (#1483).
+fn parse_range(text: &str) -> Result<Option<DeviceInstanceRange>, String> {
     if text.is_empty() {
         return Ok(None);
     }
-    let (low, high) = if text.contains('-') {
-        match crate::core::range::parse_discover_range(Some(text)) {
-            Ok((Some(low), Some(high))) => (low, high),
-            Ok(_) => return Ok(None),
-            Err(e) => return Err(e.to_string()),
-        }
+    let range = if text.contains('-') {
+        crate::core::range::parse_discover_range(Some(text)).map_err(|e| e.to_string())?
     } else {
         let n = text
             .parse::<u32>()
             .map_err(|_| format!("invalid instance range '{text}': use N or LOW-HIGH"))?;
-        (n, n)
+        Some(DeviceInstanceRange::single(n))
     };
-    if high > MAX_INSTANCE {
+    if range.is_some_and(|range| range.high() > MAX_INSTANCE) {
         return Err(format!("instances run from 0 to {MAX_INSTANCE}"));
     }
-    Ok(Some((low, high)))
+    Ok(range)
 }
 
 fn parse_listen(text: &str) -> Result<Duration, String> {
@@ -350,7 +348,10 @@ mod tests {
             panic!("expected Send");
         };
         assert_eq!(spec.scope, WhoIsScope::Local);
-        assert_eq!(spec.range, Some((101, 103)));
+        assert_eq!(
+            spec.range,
+            Some(DeviceInstanceRange::new(101, 103).unwrap())
+        );
         assert_eq!(spec.listen, Duration::from_secs(3));
     }
 
@@ -419,7 +420,7 @@ mod tests {
                 label: "10.0.0.7".into()
             }
         );
-        assert_eq!(spec.range, Some((42, 42)));
+        assert_eq!(spec.range, Some(DeviceInstanceRange::single(42)));
 
         form.target = "1234".into();
         form.key(FormKey::Submit, AddressStyle::Bip, 0);
@@ -448,11 +449,18 @@ mod tests {
 
     #[test]
     fn range_and_listen_limits() {
-        assert_eq!(parse_range("0-4194303"), Ok(Some((0, MAX_INSTANCE))));
+        assert_eq!(
+            parse_range("0-4194303"),
+            Ok(Some(DeviceInstanceRange::new(0, MAX_INSTANCE).unwrap()))
+        );
         assert!(parse_range("0-4194304").is_err());
         assert!(parse_range("9-1")
             .unwrap_err()
             .contains("low (9) > high (1)"));
+        // One limit alone is refused, not sent as an unbounded Who-Is (#1483).
+        assert!(parse_range("9-")
+            .unwrap_err()
+            .contains("a low limit but no high limit"));
         assert!(parse_listen("0").is_err() && parse_listen("61").is_err());
         let spec = WhoIsForm {
             range: "0-4194303".into(),
@@ -470,7 +478,7 @@ mod tests {
     fn from_spec_round_trips_the_last_request() {
         let spec = WhoIsSpec {
             scope: WhoIsScope::Network(7),
-            range: Some((10, 20)),
+            range: Some(DeviceInstanceRange::new(10, 20).unwrap()),
             listen: Duration::from_secs(5),
         };
         let form = WhoIsForm::from_spec(&spec);
