@@ -5,15 +5,22 @@
 
 A bulk move (#1145's split into fragments) leaves changelog.py without a
 commit to link. For each such fragment that names an issue, this finds the
-merge commits on HEAD's first-parent history whose subject names that issue
-and, when there is exactly one, adds `commit: <full sha>` to the fragment's
+merge commits on HEAD's first-parent history that name that issue and, when
+there is exactly one, adds `commit: <full sha>` to the fragment's
 front matter. Fragments with no such merge, or with several, stay unpinned
 and are counted at the end.
 
-Names in a merge subject are the issue numbers inside the quoted pull request
-title, like "(#1219, #1220)"; the pull request's own number after the title
-doesn't count. Run it on a branch cut from dev with full history. It is
-idempotent: fragments that already have a pin or a link are left alone.
+A merge names the issue numbers in its pull request's title, like
+"(#1219, #1220)", in either form of merge message:
+
+    Merge pull request '<title>' (#<pr>) from <branch> into <base>
+    Merge pull request #<pr> from <owner>/<branch>
+
+The first holds the title in its subject. The second, GitHub's default, holds
+it in the first line of the body. The pull request's own number doesn't count.
+Any other merge names the issues in its subject. Run it on a branch cut from
+dev with full history. It is idempotent: fragments that already have a pin or
+a link are left alone.
 """
 
 from __future__ import annotations
@@ -25,20 +32,32 @@ from pathlib import Path
 
 import changelog as cl
 
-# Forgejo's merge subject: Merge pull request '<title>' (#<pr>) from <branch> into <base>
-PR_SUBJECT = re.compile(r"^Merge pull request '(.*)' \(#\d+\) from \S+ into \S+$")
+# A pull request merge's subject, with the title quoted in it.
+TITLED_SUBJECT = re.compile(r"^Merge pull request '(.*)' \(#\d+\) from \S+ into \S+$")
+# GitHub's default subject, whose body starts with the title.
+GITHUB_SUBJECT = re.compile(r"^Merge pull request #\d+ from \S+$")
 ISSUE_REF = re.compile(r"#(\d+)")
+
+
+def merge_title(subject, body):
+    """The pull request title a merge message holds (see the module docstring), or its subject."""
+    m = TITLED_SUBJECT.match(subject)
+    if m:
+        return m.group(1)
+    if GITHUB_SUBJECT.match(subject):
+        return body.strip().split("\n", 1)[0]
+    return subject
 
 
 def merge_issues(root):
     """{issue number: [full SHA of each first-parent merge naming it]} on HEAD's history."""
-    log = cl.git_out(root, "log", "--first-parent", "--merges", "--format=%H%x00%s")
+    log = cl.git_out(root, "log", "--first-parent", "--merges", "--format=%H%x00%s%x00%b%x1e")
     merges = {}
-    for line in log.splitlines():
-        sha, _, subject = line.partition("\0")
-        m = PR_SUBJECT.match(subject)
-        title = m.group(1) if m else subject
-        for number in {int(n) for n in ISSUE_REF.findall(title)}:
+    for record in log.split("\x1e"):
+        if not record.strip():
+            continue
+        sha, subject, body = record.lstrip("\n").split("\0", 2)
+        for number in {int(n) for n in ISSUE_REF.findall(merge_title(subject, body))}:
             merges.setdefault(number, []).append(sha)
     return merges
 

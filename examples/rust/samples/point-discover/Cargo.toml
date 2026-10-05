@@ -3,6 +3,7 @@ name = "point-discover"
 version = "0.1.0"
 edition = "2021"
 description = "Discover a BACnet device by Who-Is, enumerate object-list points, exit"
+license.workspace = true
 publish = false
 
 [[bin]]
@@ -18,8 +19,3 @@ bacnet-types = { path = "../../../../crates/bacnet-types" }
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
-
-# A workspace of its own. The root Cargo.toml excludes this sample, but in a
-# checkout nested inside another one (a git worktree under the main checkout),
-# cargo would keep searching upward and find the outer checkout's workspace.
-[workspace]

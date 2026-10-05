@@ -3,6 +3,7 @@ name = "mini-device-revisited"
 version = "0.1.0"
 edition = "2021"
 description = "Rusty-BACnet port of BACpypes3 mini-device-revisited.py"
+license.workspace = true
 publish = false
 default-run = "mini-device-revisited"
 
@@ -20,8 +21,3 @@ socket2 = { version = "0.6", features = ["all"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# A workspace of its own. The root Cargo.toml excludes this sample, but in a
-# checkout nested inside another one (a git worktree under the main checkout),
-# cargo would keep searching upward and find the outer checkout's workspace.
-[workspace]
