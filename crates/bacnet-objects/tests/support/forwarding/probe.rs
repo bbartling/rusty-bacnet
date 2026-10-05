@@ -458,6 +458,10 @@ impl BACnetObject for Probe {
         self.called("complete_schedule_write", (write, outcomes));
         true
     }
+    fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
+        self.called("retry_refusals_naming", (target,));
+        Some(schedule_write(7))
+    }
     fn calendar_state_internal(&self, date: SpecificDate) -> Option<bool> {
         self.called("calendar_state_internal", (date,));
         Some(date == day())

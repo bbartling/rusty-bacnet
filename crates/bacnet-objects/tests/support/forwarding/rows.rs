@@ -191,6 +191,12 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("calendar_state_internal", |o| {
         format!("{:?}", o.calendar_state_internal(day()))
     }),
+    ("retry_refusals_naming", |o| {
+        format!(
+            "{:?}",
+            o.retry_refusals_naming(oid(ObjectType::ANALOG_VALUE, 9))
+        )
+    }),
     ("enrollment_eval_state_internal", |o| {
         format!("{:?}", o.enrollment_eval_state_internal())
     }),

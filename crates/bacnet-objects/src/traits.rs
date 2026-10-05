@@ -789,6 +789,17 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         false
     }
 
+    /// The [`retry`](ScheduleWrite::retry) of the current value to the
+    /// references whose last write was refused and that name `target`, an
+    /// object just added to the database (#1440), so the refusal can clear
+    /// without waiting for the next pass. `None` when no such refusal
+    /// stands, or when the pass itself would retry nothing: out of service,
+    /// outside Effective_Period, or with a NULL Present_Value. Only
+    /// meaningful for Schedule objects; default returns `None`.
+    fn retry_refusals_naming(&self, _target: ObjectIdentifier) -> Option<ScheduleWrite> {
+        None
+    }
+
     /// Whether this Calendar's Date_List matches `day`: its Present_Value on
     /// that day. `None` for an object that does not evaluate a date list; the
     /// schedule tick then reads its Present_Value instead.

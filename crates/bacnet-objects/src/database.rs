@@ -47,7 +47,7 @@ pub struct ObjectDatabase {
     /// Source ownership for custom Event Enrollment objects that implement
     /// evaluation state but not the optional object-owned source channel.
     enrollment_eval_sources: HashMap<ObjectIdentifier, EventEnrollmentMonitoredSource>,
-    /// What adding and removing objects left for the server (#1341).
+    /// What adding and removing objects left for the server (#1341, #1440).
     membership: membership::MembershipQueue,
 }
 
@@ -107,7 +107,9 @@ impl ObjectDatabase {
     /// Once the object is in, every Pulse Converter whose Input_Reference
     /// names it, or the object itself when it is one, has the reference
     /// judged again (`ObjectDatabase::check_input_reference`); one whose
-    /// Reliability changes is queued for the server's COV fanout.
+    /// Reliability changes is queued for the server's COV fanout. A Schedule
+    /// holding a refused reference to it is queued for the server to retry
+    /// that reference (#1440).
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
         self.check_network_port_membership(&object.object_identifier())?;
         self.check_audit_membership(&object.object_identifier(), true)?;
@@ -142,7 +144,7 @@ impl ObjectDatabase {
                 .or_default()
                 .push(oid);
         }
-        self.membership_changed(oid);
+        self.membership_changed(oid, true);
         Ok(())
     }
 
@@ -329,7 +331,7 @@ impl ObjectDatabase {
                 type_set.retain(|o| o != oid);
             }
             self.audit_membership_changed(*oid, false);
-            self.membership_changed(*oid);
+            self.membership_changed(*oid, false);
             Ok(Some(obj))
         } else {
             Ok(None)

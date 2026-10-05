@@ -10,6 +10,7 @@ use bacnet_objects::{
     file::{FileConfiguration, FileStorage},
     log_buffer::{LogBufferRecords, LogRecordIdentity},
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
+    schedule::ScheduleWrite,
     traits::{BACnetObject, CovReportedProperty},
 };
 use bacnet_types::{
@@ -379,6 +380,9 @@ impl BACnetObject for DeviceReadView<'_> {
     }
     fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
         self.object.calendar_state_internal(day)
+    }
+    fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
+        self.object.retry_refusals_naming(target)
     }
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
         self.object.enrollment_eval_state_internal()

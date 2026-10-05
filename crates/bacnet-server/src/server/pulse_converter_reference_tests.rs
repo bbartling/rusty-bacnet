@@ -162,8 +162,10 @@ async fn a_local_write_of_input_reference_is_judged_at_once() {
 async fn a_running_server_counts_the_input_into_count_and_reports_it() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         with_converter(db);
-        db.add(Box::new(MultiStateValueObject::new(5, "MSV-5", 10).unwrap()))
-            .unwrap();
+        db.add(Box::new(
+            MultiStateValueObject::new(5, "MSV-5", 10).unwrap(),
+        ))
+        .unwrap();
     })
     .await;
     subscribe(&mut h).await;

@@ -364,6 +364,10 @@ impl BACnetObject for SourceReporter {
         self.wrapped.complete_schedule_write(write, outcomes)
     }
 
+    fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
+        self.wrapped.retry_refusals_naming(target)
+    }
+
     fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
         self.wrapped.calendar_state_internal(day)
     }

@@ -2338,9 +2338,14 @@ that target later takes a value or leaves the list; a NULL, or an
 out-of-service value of another datatype, counts for nothing. While a refusal
 stands, each pass with nothing else to send offers the current value again to
 the refused references alone (#1436): the 60-second tick, or the pass any
-committed write to the Schedule runs. So a target object created later, or an
-array grown to take the index, gets the value and clears the fault within one
-tick. A retry that fails otherwise (an out-of-range value, a denied write) ends
+committed write to the Schedule runs. So an array grown to take the index gets
+the value and clears the fault within one tick. A target object created later
+doesn't wait (#1440): `ObjectDatabase::add` asks each Schedule through the
+public `BACnetObject::retry_refusals_naming(target)` hook whether it holds a
+refusal naming the new object, and queues those that do; the server then
+writes that retry to the references naming the object alone and fans COV out,
+under the CreateObject's own guard or, after the application's own `add`, from
+its Schedule task. A retry that fails otherwise (an out-of-range value, a denied write) ends
 the refusal as well, as that failure on a first write would never have raised
 it, and warns once; one still refused logs at debug. Retries skip a NULL value
 and a Schedule out of service or outside its period.

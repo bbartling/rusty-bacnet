@@ -1,10 +1,14 @@
-//! The work adding and removing objects leaves for the server (#1341).
+//! The work adding and removing objects leaves for the server (#1341,
+//! #1440).
 //!
 //! `ObjectDatabase::add` and `remove` judge again the Pulse Converters whose
 //! Input_Reference names the object, under the caller's guard, and queue
-//! those whose Reliability changed. COV for them is the server's: a
-//! CreateObject or DeleteObject takes the queue under its own guard and
-//! adds the fanout to the request's, and an application's own `add` or
+//! those whose Reliability changed; `add` also queues each Schedule holding
+//! a refused reference to the new object. The rest is the server's: the
+//! Schedule's retry to the new object ([`crate::schedule::retry_for_created`])
+//! and the COV for what changed. A CreateObject or DeleteObject takes the
+//! queue under its own guard and adds the fanout, and any Command run a
+//! retry starts, to the request's, and an application's own `add` or
 //! `remove` wakes the waker [`install_waker`] puts on the database, which
 //! the server's Schedule task waits on to take the queue under the next
 //! guard it gets ([`settle_committed`]). Lock order is the server's: the
@@ -33,6 +37,7 @@ pub(crate) async fn settle(
     for oid in work.changed {
         commit.changed(oid);
     }
+    crate::schedule::retry_for_created(db_w, &mut commit, &work.schedule_retries);
     commit.finish(db, db_w, cov_table).await
 }
 

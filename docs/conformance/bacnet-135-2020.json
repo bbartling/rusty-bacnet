@@ -394,6 +394,8 @@
    "code_anchors": [
     "crates/bacnet-objects/src/schedule/reliability.rs",
     "crates/bacnet-objects/src/schedule/mod.rs::ScheduleObject",
+    "crates/bacnet-objects/src/database/membership.rs",
+    "crates/bacnet-server/src/membership.rs",
     "crates/bacnet-server/src/fault_detection.rs",
     "crates/bacnet-objects/src/schedule/evaluation.rs::ScheduleTargetOutcome",
     "crates/bacnet-objects/src/traits.rs",
@@ -413,7 +415,10 @@
     "crates/bacnet-server/src/schedule_reference_reliability_tests.rs::{a_reference_its_target_can_never_write_faults_the_schedule,the_fault_clears_once_the_reference_is_fixed,a_missing_object_created_later_takes_the_value_at_the_next_pass}",
     "crates/bacnet-objects/src/schedule/retry_tests.rs::{a_pass_with_nothing_else_to_send_retries_only_the_refused_reference,a_datatype_refusal_is_retried_too,a_retry_that_fails_otherwise_ends_the_refusal,a_retry_leaves_the_held_slots_alone,a_new_value_goes_to_the_whole_list_not_as_a_retry}",
     "crates/bacnet-server/src/schedule_reference_retry_tests.rs::{a_state_text_index_that_becomes_valid_clears_the_fault,a_retry_runs_no_command_or_channel_member_again,a_retry_that_fails_otherwise_ends_the_fault_and_warns_once}",
-    "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_target_created_later_takes_the_value_within_one_tick"
+    "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_target_created_later_takes_the_value_as_it_is_created",
+    "crates/bacnet-objects/src/schedule/retry_tests.rs::{a_created_object_gets_a_retry_of_the_references_naming_it_alone,a_created_object_gets_no_retry_where_a_pass_would_send_none}",
+    "crates/bacnet-objects/src/database/membership_tests.rs::adding_a_refused_object_queues_its_retry_and_wakes_the_server",
+    "crates/bacnet-server/src/server/schedule_create_retry_tests.rs::{the_retry_writes_the_created_object_and_owes_cov_for_it,create_object_retries_the_refusal_before_its_answer,an_applications_own_add_is_retried_by_the_server_task}"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/schedule/retry_tests.rs::nothing_is_retried_without_a_value_the_schedule_sends",
@@ -438,6 +443,7 @@
     "The cost is that the fault shows at the first write rather than at configuration time; 12.24.13 already lets a remote member's fault wait for a write. Local choices: only a refusal of a value whose datatype the schedule itself holds counts, so a NULL, or an out-of-service value of another datatype, raises nothing; any other failure leaves a member's standing as it was; the flag combines with the contents check under the one ownership rule, so a Reliability set by the application or a client simulation is never cleared by it.",
     "A reference the target can't write whatever the value (a missing object or property, or an array index the property can't take) faults the Schedule as a datatype refusal does, and clears the same way. A denied write doesn't: it can be the target's state.",
     "While a refusal of either kind stands, each pass with nothing else to send offers Present_Value again to the refused members only, so the fault clears within a tick of its cause going away. NULL isn't retried; refusals log at debug.",
+    "When the object a refused member names is created, by CreateObject or ObjectDatabase::add, the server offers the value to the members naming it at once and fans COV out for what that writes; the database finds those Schedules by asking each whether it holds such a refusal. An array that grows still waits for the pass.",
     "A retry that fails otherwise (out of range, denied) ends that member's refusal and warns once, as the same failure on a first write raises nothing. After a write that isn't a retry, the next retry settles the member."
    ]
   },
