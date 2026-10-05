@@ -42,10 +42,10 @@ cargo run --release -- \
   --debug
 ```
 
-Release binary:
+Release binary, from the repository root (samples build into the workspace's `target/`):
 
 ```bash
-cargo build --release
+cargo build --release -p mini-device-revisited
 ./target/release/mini-device-revisited --address 192.168.204.55 --debug
 ```
 
@@ -83,4 +83,4 @@ One-shot unicast + Who-Is probe for sanity checks.
 
 ## Dependencies
 
-`bacnet-server`, `bacnet-objects`, `bacnet-client`, `bacnet-transport`, `bacnet-services`, `bacnet-types`, `bacnet-encoding` — all `0.9`.
+`bacnet-server`, `bacnet-objects`, `bacnet-client`, `bacnet-transport`, `bacnet-services`, `bacnet-types`, `bacnet-encoding`, from this repository by path.

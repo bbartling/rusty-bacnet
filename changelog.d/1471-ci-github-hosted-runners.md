@@ -1,7 +1,7 @@
 ---
 section: Changed
 ---
-- Linux CI moves from the self-hosted Forgejo runner to GitHub-hosted runners,
-  beside the native macOS and Windows jobs, and a PR merges when its `CI OK`
-  and `Native OK` checks pass; runs on dev prune superseded Actions caches
-  (#1471).
+- Issues, pull requests and CI moved from a private Forgejo to GitHub, keeping
+  every issue number (#1472). Linux CI runs on GitHub-hosted runners, a PR
+  merges only when its `CI OK` and `Native OK` checks pass, and runs on dev
+  prune superseded Actions caches (#1471).
