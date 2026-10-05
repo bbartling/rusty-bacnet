@@ -22,6 +22,7 @@ pub(super) struct RequestServices<T: TransportPort + 'static> {
     pub(super) dcc_outcomes: Arc<dcc_outcomes::DccOutcomes>,
     pub(super) event_suppressions: Arc<super::event_suppression::EventSuppressions>,
     pub(super) confirmed_event_repeats: Arc<super::event_forwarding_repeats::ConfirmedEventRepeats>,
+    pub(super) received_event_log: Arc<super::received_event_log::ReceivedEventLog>,
     pub(super) mutation_decisions: Arc<crate::mutation::MutationDecisions>,
     pub(super) config: Arc<ServerConfig>,
 }
@@ -43,6 +44,7 @@ impl<T: TransportPort + 'static> Clone for RequestServices<T> {
             dcc_outcomes: Arc::clone(&self.dcc_outcomes),
             event_suppressions: Arc::clone(&self.event_suppressions),
             confirmed_event_repeats: Arc::clone(&self.confirmed_event_repeats),
+            received_event_log: Arc::clone(&self.received_event_log),
             mutation_decisions: Arc::clone(&self.mutation_decisions),
             config: Arc::clone(&self.config),
         }
@@ -64,6 +66,7 @@ pub(super) struct UnconfirmedServices<T: TransportPort + 'static> {
     pub(super) notification_transactions: Arc<NotificationTransactions>,
     pub(super) learned_routers: Arc<Mutex<LearnedRouterCache>>,
     pub(super) event_suppressions: Arc<super::event_suppression::EventSuppressions>,
+    pub(super) received_event_log: Arc<super::received_event_log::ReceivedEventLog>,
     pub(super) cov_table: Arc<RwLock<CovSubscriptionTable>>,
     pub(super) cov_in_flight: Arc<Semaphore>,
     pub(super) tasks: request_tasks::RequestTaskSpawner,
@@ -96,6 +99,7 @@ impl<T: TransportPort + 'static> DispatchContext<T> {
             notification_transactions: Arc::clone(&self.services.notification_transactions),
             learned_routers: Arc::clone(&self.services.learned_routers),
             event_suppressions: Arc::clone(&self.services.event_suppressions),
+            received_event_log: Arc::clone(&self.services.received_event_log),
             cov_table: Arc::clone(&self.services.cov_table),
             cov_in_flight: Arc::clone(&self.services.cov_in_flight),
             tasks: self.request_tasks.spawner(),
@@ -167,6 +171,7 @@ impl<T: TransportPort + 'static> RequestServices<T> {
             dcc_outcomes: Arc::new(dcc_outcomes::DccOutcomes::default()),
             event_suppressions: Arc::default(),
             confirmed_event_repeats: Arc::default(),
+            received_event_log: Arc::default(),
             mutation_decisions: Arc::new(crate::mutation::MutationDecisions::default()),
             config: Arc::new(config),
         }
@@ -208,6 +213,7 @@ impl<T: TransportPort + 'static> UnconfirmedServices<T> {
             notification_transactions: NotificationTransactions::new(),
             learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
             event_suppressions: Arc::default(),
+            received_event_log: Arc::default(),
             cov_table: Arc::new(RwLock::new(CovSubscriptionTable::new())),
             cov_in_flight: Arc::new(Semaphore::new(1)),
             tasks: Arc::new(request_tasks::RequestTasks::default()).spawner(),
@@ -236,6 +242,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // The server keeps no handle on the dispatch loop's record, so
             // these handles start their own.
             confirmed_event_repeats: Arc::default(),
+            received_event_log: Arc::default(),
             mutation_decisions: Arc::clone(&self.mutation_decisions),
             config: Arc::new(self.config.clone()),
         }
@@ -255,6 +262,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             notification_transactions: Arc::clone(&self.notification_transactions),
             learned_routers: Arc::clone(&self.learned_routers),
             event_suppressions: Arc::clone(&self.event_suppressions),
+            received_event_log: Arc::default(),
             cov_table: Arc::clone(&self.cov_table),
             cov_in_flight: Arc::clone(&self.cov_in_flight),
             tasks: self.request_tasks.spawner(),

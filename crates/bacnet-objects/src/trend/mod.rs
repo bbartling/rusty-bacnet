@@ -4,9 +4,10 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetLogRecord};
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, LoggingType, ObjectType, PropertyIdentifier, Reliability,
+    ErrorClass, ErrorCode, LoggingType, NotifyType, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
@@ -17,6 +18,7 @@ use crate::log_buffer::{
     log_buffer_read_denied, LogBufferRecords, LogRecordBuffer, LogRecordIdentity,
 };
 use crate::log_lifecycle::LogLifecycle;
+use crate::log_reporting::{impl_buffer_ready_reporting, BufferReadyReporting};
 use crate::log_window::LogWindow;
 use crate::traits::BACnetObject;
 use acquisition::{Acquisition, Rules};
@@ -52,6 +54,7 @@ pub struct TrendLogObject {
     log_device_object_property: Option<BACnetDeviceObjectPropertyReference>,
     acquisition: Acquisition,
     window: LogWindow,
+    reporting: BufferReadyReporting,
     clock: Option<Arc<dyn ClockReader>>,
 }
 
@@ -71,6 +74,7 @@ impl TrendLogObject {
             log_device_object_property: None,
             acquisition: Acquisition::new(Rules::TrendLog),
             window: LogWindow::default(),
+            reporting: BufferReadyReporting::default(),
             clock: None,
         })
     }
@@ -204,6 +208,29 @@ impl TrendLogObject {
         self.acquisition.trigger()
     }
 
+    /// Set Notification_Threshold, the number of records that makes a
+    /// BUFFER_READY report; zero, the default, makes none.
+    pub fn set_notification_threshold(&mut self, threshold: u32) {
+        self.reporting.set_notification_threshold(threshold);
+    }
+
+    /// Set Notification_Class: the number of the Notification Class whose
+    /// recipients get the log's reports (0 by default).
+    pub fn set_notification_class(&mut self, class: u32) {
+        self.reporting.set_notification_class(class);
+    }
+
+    /// Set Event_Enable; a report goes out only while its TO_NORMAL flag is
+    /// set, as it is by default.
+    pub fn set_event_enable(&mut self, enable: EventTransitionBits) {
+        self.reporting.set_event_enable(enable);
+    }
+
+    /// Set Notify_Type, sent with each report (EVENT by default).
+    pub fn set_notify_type(&mut self, notify_type: NotifyType) {
+        self.reporting.set_notify_type(notify_type);
+    }
+
     fn lifecycle(&mut self) -> LogLifecycle<'_, BACnetLogRecord> {
         LogLifecycle::new(
             &mut self.log_buffer,
@@ -211,6 +238,7 @@ impl TrendLogObject {
             &mut self.stop_when_full,
             self.clock.as_ref(),
             &mut self.window,
+            &mut self.reporting,
         )
     }
 }
@@ -238,6 +266,10 @@ impl BACnetObject for TrendLogObject {
         {
             return Ok(value);
         }
+        let total = self.log_buffer.total_record_count();
+        if let Some(result) = self.reporting.read(property, array_index, total) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_IDENTIFIER => {
                 Ok(PropertyValue::ObjectIdentifier(self.oid))
@@ -261,9 +293,9 @@ impl BACnetObject for TrendLogObject {
             p if p == PropertyIdentifier::RECORD_COUNT => {
                 Ok(PropertyValue::Unsigned(self.records().len() as u64))
             }
-            p if p == PropertyIdentifier::TOTAL_RECORD_COUNT => Ok(PropertyValue::Unsigned(
-                self.log_buffer.total_record_count() as u64,
-            )),
+            p if p == PropertyIdentifier::TOTAL_RECORD_COUNT => {
+                Ok(PropertyValue::Unsigned(u64::from(total)))
+            }
             // Clause 12.25.30 lets only IN_ALARM (from Event_State) and FAULT
             // (from Reliability) move on a Trend Log; OVERRIDDEN and
             // OUT_OF_SERVICE are always FALSE. Table 12-29 has no
@@ -272,11 +304,8 @@ impl BACnetObject for TrendLogObject {
                 StatusFlags::empty(),
                 self.reliability,
                 false,
-                EventState::NORMAL,
+                self.reporting.event_state(),
             )),
-            p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
-            }
             p if p == PropertyIdentifier::RELIABILITY => {
                 Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
             }
@@ -359,6 +388,10 @@ impl BACnetObject for TrendLogObject {
         if property == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY {
             return self.write_log_device_object_property(value);
         }
+        let total = self.log_buffer.total_record_count();
+        if let Some(result) = self.reporting.write(property, &value, total) {
+            return result;
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -396,6 +429,8 @@ impl BACnetObject for TrendLogObject {
     fn refresh_log_window_internal(&mut self) -> bool {
         self.lifecycle().refresh_window()
     }
+
+    impl_buffer_ready_reporting!(reporting, log_buffer);
 }
 
 #[cfg(test)]

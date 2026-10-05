@@ -316,3 +316,78 @@ fn a_log_that_refuses_the_record_leaves_the_others_logging() {
         assert_eq!(records(&mut db, log), [notification_record(alarm(av1()))]);
     }
 }
+
+/// Event Log `instance`, taking received notifications when `collects`.
+fn received_log(db: &mut ObjectDatabase, instance: u32, collects: bool) {
+    let mut log = EventLogObject::new(instance, format!("EL-{instance}"), 8).unwrap();
+    log.set_log_received_notifications(collects);
+    db.add(Box::new(log)).unwrap();
+}
+
+/// Device 50's alarm about its Analog Input 3, as it arrived from there.
+fn received() -> EventNotificationRequest {
+    EventNotificationRequest {
+        process_identifier: 9,
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 50).unwrap(),
+        ..alarm(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap())
+    }
+}
+
+/// Only a log that opts in takes received notifications, each as it
+/// arrived, Process Identifier included (#1346); the opt-in starts off.
+#[test]
+fn only_a_log_that_opts_in_records_received_notifications() {
+    let mut db = database(&[], 8);
+    db.add(Box::new(EventLogObject::new(1, "EL-1", 8).unwrap()))
+        .unwrap();
+    assert!(!db.takes_received_event_notification(&received()));
+    db.log_received_event_notification(&received());
+    assert!(records(&mut db, log_oid(1)).is_empty());
+
+    received_log(&mut db, 2, true);
+    received_log(&mut db, 3, false);
+    assert!(db.takes_received_event_notification(&received()));
+    db.log_received_event_notification(&received());
+    assert!(records(&mut db, log_oid(1)).is_empty());
+    assert_eq!(
+        records(&mut db, log_oid(2)),
+        [notification_record(received())]
+    );
+    assert!(records(&mut db, log_oid(3)).is_empty());
+    // The device's own notifications still go in every log.
+    db.log_event_notification(&alarm(av1()));
+    assert_eq!(records(&mut db, log_oid(1)).len(), 1);
+}
+
+/// A received report about an Event Log, and a notification claiming this
+/// device as its source, go in no log.
+#[test]
+fn received_reports_about_event_logs_and_this_devices_own_go_in_no_log() {
+    let mut db = database(&[], 8);
+    received_log(&mut db, 1, true);
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            instance: 7,
+            name: "Device-7".into(),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    let about_a_log = EventNotificationRequest {
+        event_object_identifier: ObjectIdentifier::new(ObjectType::EVENT_LOG, 1).unwrap(),
+        event_type: EventType::BUFFER_READY,
+        ..received()
+    };
+    let own = EventNotificationRequest {
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap(),
+        ..received()
+    };
+    for notification in [about_a_log, own] {
+        assert!(!db.takes_received_event_notification(&notification));
+        db.log_received_event_notification(&notification);
+    }
+    assert!(records(&mut db, log_oid(1)).is_empty());
+    db.log_received_event_notification(&received());
+    assert_eq!(records(&mut db, log_oid(1)).len(), 1);
+}

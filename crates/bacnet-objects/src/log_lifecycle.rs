@@ -11,6 +11,7 @@ use bytes::BytesMut;
 use crate::clock::ClockReader;
 use crate::common::protocol_error;
 use crate::log_buffer::{LogRecordBuffer, OrdinaryAdmission, ResidentLogRecord};
+use crate::log_reporting::BufferReadyReporting;
 use crate::log_window::LogWindow;
 use crate::property_metadata::{
     PropertyConformance::{RequiredRead, RequiredWrite},
@@ -32,13 +33,15 @@ pub(crate) const RECORD_COUNT_METADATA: PropertyMetadata =
 ///
 /// A log collects only while Enable is TRUE and its Start_Time / Stop_Time
 /// window admits the current local time; each LOG_DISABLED it records
-/// reflects both. A window with both ends unspecified is always open.
+/// reflects both. A window with both ends unspecified is always open. A
+/// purge also restarts the log's Records_Since_Notification.
 pub(crate) struct LogLifecycle<'a, R: ResidentLogRecord> {
     buffer: &'a mut LogRecordBuffer<R>,
     enabled: &'a mut bool,
     stop_when_full: &'a mut bool,
     clock: Option<&'a Arc<dyn ClockReader>>,
     window: &'a mut LogWindow,
+    reporting: &'a mut BufferReadyReporting,
 }
 
 impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
@@ -48,6 +51,7 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         stop_when_full: &'a mut bool,
         clock: Option<&'a Arc<dyn ClockReader>>,
         window: &'a mut LogWindow,
+        reporting: &'a mut BufferReadyReporting,
     ) -> Self {
         Self {
             buffer,
@@ -55,6 +59,7 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
             stop_when_full,
             clock,
             window,
+            reporting,
         }
     }
 
@@ -232,6 +237,10 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         let disabled = !*self.enabled || status_fills || !self.window_open();
 
         self.buffer.clear();
+        // Records_Since_Notification starts again from zero, so the
+        // BUFFER_PURGED record below is the first it counts.
+        self.reporting
+            .restart_count(self.buffer.total_record_count());
         if status_fills {
             *self.enabled = false;
         }

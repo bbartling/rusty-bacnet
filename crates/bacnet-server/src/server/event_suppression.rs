@@ -36,9 +36,12 @@ use std::sync::atomic::AtomicU64;
 /// destinations are walked, so a well-formed transition always encodes, and
 /// the send loop only logs and skips if that invariant is ever broken.
 ///
-/// The last three concern the Notification Forwarder objects (#1225): copies
+/// The next three concern the Notification Forwarder objects (#1225): copies
 /// too large to send unsegmented, received notifications no forwarder took,
 /// and destinations past the cap on one notification's copies (#1259).
+///
+/// The last one counts received notifications the Event Logs that collect
+/// them would have taken but for their source's allowance (#1346).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EventNotificationCounters {
     /// No Notification Class object has the class number the event object
@@ -105,6 +108,12 @@ pub struct EventNotificationCounters {
     /// A capped notification logs a warning at most once a minute,
     /// process-wide, and at debug level otherwise.
     pub forwarding_cap_dropped: u64,
+    /// Received ConfirmedEventNotification and UnconfirmedEventNotification
+    /// requests not logged because their source had used its allowance of
+    /// [`RECEIVED_EVENT_LOG_RATE`] records
+    /// in the current second, one per notification whatever the number of
+    /// logs. Notifications no Event Log collects are not counted.
+    pub received_not_logged: u64,
 }
 
 /// One undelivered event notification, as counted in
@@ -125,6 +134,7 @@ pub(crate) enum EventSuppression {
     ApduTooLarge,
     ReceivedNotForwarded,
     ForwardingCapDropped,
+    ReceivedNotLogged,
 }
 
 impl EventSuppression {
@@ -149,7 +159,7 @@ impl EventSuppression {
 
 /// The server's shared storage behind [`EventNotificationCounters`].
 #[derive(Debug, Default)]
-pub(crate) struct EventSuppressions([AtomicU64; 14]);
+pub(crate) struct EventSuppressions([AtomicU64; 15]);
 
 impl EventSuppressions {
     pub(crate) fn record(&self, suppression: EventSuppression) {
@@ -163,7 +173,7 @@ impl EventSuppressions {
     }
 
     pub(crate) fn snapshot(&self) -> EventNotificationCounters {
-        let [notification_class_missing, recipient_list_unavailable, recipient_list_invalid, recipient_list_too_long, device_recipient_unbound, recipient_unroutable, confirmed_broadcast_recipient, confirmed_no_invoke_id, confirmed_rejected, confirmed_unanswered, unconfirmed_send_failed, apdu_too_large, received_not_forwarded, forwarding_cap_dropped] =
+        let [notification_class_missing, recipient_list_unavailable, recipient_list_invalid, recipient_list_too_long, device_recipient_unbound, recipient_unroutable, confirmed_broadcast_recipient, confirmed_no_invoke_id, confirmed_rejected, confirmed_unanswered, unconfirmed_send_failed, apdu_too_large, received_not_forwarded, forwarding_cap_dropped, received_not_logged] =
             self.0.each_ref().map(|n| n.load(Ordering::Relaxed));
         EventNotificationCounters {
             notification_class_missing,
@@ -180,6 +190,7 @@ impl EventSuppressions {
             apdu_too_large,
             received_not_forwarded,
             forwarding_cap_dropped,
+            received_not_logged,
         }
     }
 }
@@ -197,7 +208,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 mod tests {
     use super::*;
 
-    const ALL: [EventSuppression; 14] = [
+    const ALL: [EventSuppression; 15] = [
         EventSuppression::NotificationClassMissing,
         EventSuppression::RecipientListUnavailable,
         EventSuppression::RecipientListInvalid,
@@ -212,6 +223,7 @@ mod tests {
         EventSuppression::ApduTooLarge,
         EventSuppression::ReceivedNotForwarded,
         EventSuppression::ForwardingCapDropped,
+        EventSuppression::ReceivedNotLogged,
     ];
 
     #[test]
@@ -239,6 +251,7 @@ mod tests {
                 apdu_too_large: 12,
                 received_not_forwarded: 13,
                 forwarding_cap_dropped: 14,
+                received_not_logged: 15,
             }
         );
     }

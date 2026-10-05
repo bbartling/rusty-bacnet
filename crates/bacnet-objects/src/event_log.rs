@@ -4,8 +4,9 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::BACnetEventLogRecord;
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::enums::{NotifyType, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 
@@ -15,6 +16,7 @@ use crate::log_buffer::{
     log_buffer_read_denied, LogBufferRecords, LogRecordBuffer, LogRecordIdentity,
 };
 use crate::log_lifecycle::LogLifecycle;
+use crate::log_reporting::{impl_buffer_ready_reporting, BufferReadyReporting};
 use crate::log_window::LogWindow;
 use crate::traits::BACnetObject;
 
@@ -24,12 +26,19 @@ mod metadata;
 ///
 /// Ring buffer of timestamped event log records. A server running the
 /// database logs the event notifications the device builds into its Event
-/// Logs ([`ObjectDatabase::log_event_notification`]); the application calls
-/// `add_record()` for anything else, such as a clock change or a notification
-/// it received. The log adds its own status records. Records are kept only
-/// while Enable is TRUE and the local time lies between Start_Time and
-/// Stop_Time; the database's trend poller looks at that window on every
-/// pass, so an opening or closing is recorded even when no record arrives.
+/// Logs ([`ObjectDatabase::log_event_notification`]), and those it receives
+/// into the logs that opt in with
+/// [`set_log_received_notifications`](Self::set_log_received_notifications);
+/// the application calls `add_record()` for anything else, such as a clock
+/// change. The log adds its own status records. Records are kept only while
+/// Enable is TRUE and the local time lies between Start_Time and Stop_Time;
+/// the database's trend poller looks at that window on every pass, so an
+/// opening or closing is recorded even when no record arrives.
+///
+/// The log reports intrinsically with the BUFFER_READY algorithm (Clause
+/// 13.3.7): once Notification_Threshold is set, the server tells the
+/// recipients of its Notification Class each time that many more records
+/// have been collected. No log takes a record for such a report.
 ///
 /// [`ObjectDatabase::log_event_notification`]: crate::database::ObjectDatabase::log_event_notification
 pub struct EventLogObject {
@@ -41,9 +50,10 @@ pub struct EventLogObject {
     buffer_size: u32,
     log_buffer: LogRecordBuffer<BACnetEventLogRecord>,
     status_flags: StatusFlags,
-    event_state: EventState,
     reliability: Reliability,
     window: LogWindow,
+    reporting: BufferReadyReporting,
+    log_received_notifications: bool,
     clock: Option<Arc<dyn ClockReader>>,
 }
 
@@ -60,9 +70,10 @@ impl EventLogObject {
             buffer_size,
             log_buffer: LogRecordBuffer::new(buffer_size),
             status_flags: StatusFlags::empty(),
-            event_state: EventState::NORMAL,
             reliability: Reliability::NO_FAULT_DETECTED,
             window: LogWindow::default(),
+            reporting: BufferReadyReporting::default(),
+            log_received_notifications: false,
             clock: None,
         })
     }
@@ -118,6 +129,45 @@ impl EventLogObject {
             .configure_window(PropertyIdentifier::STOP_TIME, (date, time))
     }
 
+    /// Whether the log takes the event notifications the device receives,
+    /// as well as those it builds. Off unless set.
+    pub fn logs_received_notifications(&self) -> bool {
+        self.log_received_notifications
+    }
+
+    /// Have the log take the Confirmed and UnconfirmedEventNotifications the
+    /// device receives, unicast or broadcast, each kept as it arrived, or
+    /// stop it doing so. Clause 12.27 leaves the choice to the device, and
+    /// it's off by default. A running server holds what it logs to a small
+    /// number of records per source each second; see
+    /// [`ObjectDatabase::log_received_event_notification`](crate::database::ObjectDatabase::log_received_event_notification).
+    pub fn set_log_received_notifications(&mut self, log: bool) {
+        self.log_received_notifications = log;
+    }
+
+    /// Set Notification_Threshold, the number of records that makes a
+    /// BUFFER_READY report; zero, the default, makes none.
+    pub fn set_notification_threshold(&mut self, threshold: u32) {
+        self.reporting.set_notification_threshold(threshold);
+    }
+
+    /// Set Notification_Class: the number of the Notification Class whose
+    /// recipients get the log's reports (0 by default).
+    pub fn set_notification_class(&mut self, class: u32) {
+        self.reporting.set_notification_class(class);
+    }
+
+    /// Set Event_Enable; a report goes out only while its TO_NORMAL flag is
+    /// set, as it is by default.
+    pub fn set_event_enable(&mut self, enable: EventTransitionBits) {
+        self.reporting.set_event_enable(enable);
+    }
+
+    /// Set Notify_Type, sent with each report (EVENT by default).
+    pub fn set_notify_type(&mut self, notify_type: NotifyType) {
+        self.reporting.set_notify_type(notify_type);
+    }
+
     fn lifecycle(&mut self) -> LogLifecycle<'_, BACnetEventLogRecord> {
         LogLifecycle::new(
             &mut self.log_buffer,
@@ -125,6 +175,7 @@ impl EventLogObject {
             &mut self.stop_when_full,
             self.clock.as_ref(),
             &mut self.window,
+            &mut self.reporting,
         )
     }
 }
@@ -153,6 +204,10 @@ impl BACnetObject for EventLogObject {
         if let Some(value) = self.window.read(property) {
             return Ok(value);
         }
+        let total = self.log_buffer.total_record_count();
+        if let Some(result) = self.reporting.read(property, array_index, total) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::EVENT_LOG.to_raw()))
@@ -169,11 +224,8 @@ impl BACnetObject for EventLogObject {
             p if p == PropertyIdentifier::RECORD_COUNT => {
                 Ok(PropertyValue::Unsigned(self.records().len() as u64))
             }
-            p if p == PropertyIdentifier::TOTAL_RECORD_COUNT => Ok(PropertyValue::Unsigned(
-                self.log_buffer.total_record_count() as u64,
-            )),
-            p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
+            p if p == PropertyIdentifier::TOTAL_RECORD_COUNT => {
+                Ok(PropertyValue::Unsigned(u64::from(total)))
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -209,6 +261,10 @@ impl BACnetObject for EventLogObject {
                 return self.lifecycle().purge();
             }
             return Err(common::invalid_data_type_error());
+        }
+        let total = self.log_buffer.total_record_count();
+        if let Some(result) = self.reporting.write(property, &value, total) {
+            return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
@@ -247,6 +303,12 @@ impl BACnetObject for EventLogObject {
     fn refresh_log_window_internal(&mut self) -> bool {
         self.lifecycle().refresh_window()
     }
+
+    fn logs_received_event_notifications_internal(&self) -> bool {
+        self.log_received_notifications
+    }
+
+    impl_buffer_ready_reporting!(reporting, log_buffer);
 }
 
 #[cfg(test)]

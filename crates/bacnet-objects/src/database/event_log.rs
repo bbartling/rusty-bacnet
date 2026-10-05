@@ -1,5 +1,5 @@
-//! The device's own event notifications into its Event Log objects
-//! (Clause 12.27). The caller owns synchronization.
+//! The event notifications the device builds, and those it receives, into
+//! its Event Log objects (Clause 12.27). The caller owns synchronization.
 
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventLogRecord, EventLogDatum,
@@ -42,6 +42,77 @@ impl ObjectDatabase {
         if logs.is_empty() {
             return;
         }
+        if self.reports_on_an_event_log(notification.event_object_identifier) {
+            debug!(
+                event_object = %notification.event_object_identifier,
+                "Notification about an Event Log not logged"
+            );
+            return;
+        }
+        self.log_notification(logs, notification);
+    }
+
+    /// Whether [`log_received_event_notification`](Self::log_received_event_notification)
+    /// would record `notification`, received from another device, anywhere:
+    /// some Event Log has opted in, and the notification is one a log may
+    /// take. The server asks before it spends any of a source's allowance.
+    pub fn takes_received_event_notification(
+        &self,
+        notification: &EventNotificationRequest,
+    ) -> bool {
+        !self.received_notification_logs().is_empty() && self.may_log_received(notification)
+    }
+
+    /// Record an event notification this device received, as it arrived, in
+    /// each Event Log that has opted in with
+    /// [`EventLogObject::set_log_received_notifications`](crate::event_log::EventLogObject::set_log_received_notifications),
+    /// stamped with the Device clock's local date and time. Each log's
+    /// lifecycle decides what it keeps, as for the device's own
+    /// notifications, and each record counts toward the log's
+    /// Notification_Threshold.
+    ///
+    /// Two kinds are kept out. A notification about an Event Log isn't
+    /// logged, as for the device's own: logging another device's
+    /// BUFFER_READY report could prompt a report here that, logged there in
+    /// turn, prompts the next. And one whose Initiating Device Identifier
+    /// names this device isn't logged a second time: the device logged it
+    /// when it built it.
+    ///
+    /// This records whatever it is given. The server calls it only for a
+    /// notification that decoded in full, after holding each source to a few
+    /// records a second, so a flood of them can't push the device's own
+    /// records out of a log faster than that bound.
+    pub fn log_received_event_notification(&mut self, notification: &EventNotificationRequest) {
+        let logs = self.received_notification_logs();
+        if !logs.is_empty() && self.may_log_received(notification) {
+            self.log_notification(logs, notification);
+        }
+    }
+
+    /// The Event Logs that take received notifications.
+    fn received_notification_logs(&self) -> Vec<ObjectIdentifier> {
+        let mut logs = self.find_by_type(ObjectType::EVENT_LOG);
+        logs.retain(|oid| {
+            self.get(oid)
+                .is_some_and(|log| log.logs_received_event_notifications_internal())
+        });
+        logs
+    }
+
+    /// Whether a received notification is one a log may take: it isn't
+    /// about an Event Log, and doesn't claim to come from this device.
+    fn may_log_received(&self, notification: &EventNotificationRequest) -> bool {
+        notification.event_object_identifier.object_type() != ObjectType::EVENT_LOG
+            && self.local_device().identifier() != Some(notification.initiating_device_identifier)
+    }
+
+    /// Add `notification` to each of `logs` as a notification record stamped
+    /// with the Device clock, which has to be valid.
+    fn log_notification(
+        &mut self,
+        logs: Vec<ObjectIdentifier>,
+        notification: &EventNotificationRequest,
+    ) {
         let Some(frame) = self
             .clock_frame()
             .filter(|frame| frame.is_valid_actual_datetime())
@@ -52,13 +123,6 @@ impl ObjectDatabase {
             );
             return;
         };
-        if self.reports_on_an_event_log(notification.event_object_identifier) {
-            debug!(
-                event_object = %notification.event_object_identifier,
-                "Notification about an Event Log not logged"
-            );
-            return;
-        }
         for oid in logs {
             let Some(log) = self.get_mut(&oid) else {
                 continue;

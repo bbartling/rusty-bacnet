@@ -9,6 +9,7 @@ use bacnet_objects::{
     event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource},
     file::{FileConfiguration, FileStorage},
     log_buffer::{LogBufferRecords, LogRecordIdentity},
+    log_reporting::BufferReadyReport,
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
     traits::{BACnetObject, CovReportedProperty},
 };
@@ -405,6 +406,12 @@ impl BACnetObject for DeviceReadView<'_> {
     }
     fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
         self.object.log_buffer_internal()
+    }
+    fn logs_received_event_notifications_internal(&self) -> bool {
+        self.object.logs_received_event_notifications_internal()
+    }
+    fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
+        self.object.buffer_ready_report_internal()
     }
 }
 

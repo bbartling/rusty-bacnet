@@ -222,6 +222,12 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("log_buffer_internal", |o| {
         format!("{:?}", o.log_buffer_internal().map(address))
     }),
+    ("logs_received_event_notifications_internal", |o| {
+        o.logs_received_event_notifications_internal().to_string()
+    }),
+    ("buffer_ready_report_internal", |o| {
+        format!("{:?}", o.buffer_ready_report_internal())
+    }),
 ];
 
 pub const COMMANDS: &[(&str, Command)] = &[
