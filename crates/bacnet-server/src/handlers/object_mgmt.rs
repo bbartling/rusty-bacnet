@@ -110,10 +110,11 @@ pub(crate) fn handle_create_object_observed(
         *target = Some(oid);
     }
     let created_oid = create(db, &request, target).map_err(CreateObjectRefusal::Failed)?;
+    let counts = StateCounts::of(db, created_oid, &request);
 
     // Apply initial values; on failure, remove the created object.
-    for (position, pv) in apply_counts_first(db, created_oid, &request, command_origin) {
-        if let Err(refusal) = initialize(db, created_oid, pv, command_origin) {
+    for (position, pv) in apply_counts_first(db, created_oid, &request, counts, command_origin) {
+        if let Err(refusal) = initialize(db, created_oid, pv, counts, command_origin) {
             let _ = db.remove(&created_oid);
             return Err(refusal.of_initial_value(position));
         }
@@ -123,39 +124,81 @@ pub(crate) fn handle_create_object_observed(
     Ok(())
 }
 
-/// Apply the request's Number_Of_States values first, on an object that
-/// takes one at creation (the multi-state types), and return the initial
-/// values left to apply, with their positions, in request order (#1429).
+/// Which initial values give a multi-state object its state count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StateCounts {
+    /// The object has no state count to give (any other type).
+    None,
+    /// The request's Number_Of_States values give it (#1429). A State_Text
+    /// written whole then has to label exactly those states.
+    Given,
+    /// The request has no Number_Of_States, so State_Text written whole
+    /// gives the count, as a WriteProperty of it would (#1443).
+    FromStateText,
+}
+
+impl StateCounts {
+    fn of(
+        db: &ObjectDatabase,
+        created_oid: ObjectIdentifier,
+        request: &CreateObjectRequest,
+    ) -> Self {
+        let object = db.get(&created_oid).expect("created above");
+        if !object
+            .creation_only_properties()
+            .contains(&PropertyIdentifier::NUMBER_OF_STATES)
+        {
+            Self::None
+        } else if request
+            .list_of_initial_values
+            .iter()
+            .any(|pv| pv.property_identifier == PropertyIdentifier::NUMBER_OF_STATES)
+        {
+            Self::Given
+        } else {
+            Self::FromStateText
+        }
+    }
+
+    /// Whether `pv` is one of the values that give the count.
+    fn gives(self, pv: &bacnet_services::common::BACnetPropertyValue) -> bool {
+        match self {
+            Self::None => false,
+            Self::Given => pv.property_identifier == PropertyIdentifier::NUMBER_OF_STATES,
+            Self::FromStateText => {
+                pv.property_identifier == PropertyIdentifier::STATE_TEXT
+                    && pv.property_array_index.is_none()
+            }
+        }
+    }
+}
+
+/// Apply the initial values that give a multi-state object its state count
+/// first ([`StateCounts`]), and return the initial values left to apply,
+/// with their positions, in request order (#1429, #1443).
 ///
 /// Present_Value, Relinquish_Default, Alarm_Values, the State_Text elements
 /// and State_Text written whole are then judged against the count the
-/// request asks for, wherever it stands in the list. A Number_Of_States
-/// that fails its own checks (an index, its datatype, its range) isn't
-/// applied here: it stays in its place among the rest, so a bad value
-/// before it is still the one named. With several, each that passes is
-/// applied in request order, so the last of those sets the count. A refusal
-/// always names the value's own position. On a fresh object the count can
-/// only fail its own checks here, since every state the object holds is 1.
+/// request asks for, wherever it stands in the list. A count value that
+/// fails its own checks (an index, its datatype, its range) isn't applied
+/// here: it stays in its place among the rest, so a bad value before it is
+/// still the one named. With several, each that passes is applied in
+/// request order, so the last of those sets the count. A refusal always
+/// names the value's own position. On a fresh object a count can only fail
+/// its own checks here, since every state the object holds is 1.
 fn apply_counts_first<'a>(
     db: &mut ObjectDatabase,
     created_oid: ObjectIdentifier,
     request: &'a CreateObjectRequest,
+    counts: StateCounts,
     command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Vec<(u32, &'a bacnet_services::common::BACnetPropertyValue)> {
-    let values = (1u32..).zip(&request.list_of_initial_values);
-    let object = db.get(&created_oid).expect("created above");
-    if !object
-        .creation_only_properties()
-        .contains(&PropertyIdentifier::NUMBER_OF_STATES)
-    {
-        return values.collect();
-    }
     // A refused attempt leaves the object as it was, and the value is tried
     // again in its place.
-    values
+    (1u32..)
+        .zip(&request.list_of_initial_values)
         .filter(|(_, pv)| {
-            pv.property_identifier != PropertyIdentifier::NUMBER_OF_STATES
-                || initialize(db, created_oid, pv, command_origin).is_err()
+            !counts.gives(pv) || initialize(db, created_oid, pv, counts, command_origin).is_err()
         })
         .collect()
 }
@@ -314,7 +357,10 @@ fn default_name(db: &ObjectDatabase, object_type: ObjectType, instance: u32) -> 
 /// ([`relinquish`]). A whole value for one of the object's
 /// [`creation_only_properties`] goes to its
 /// [`initialize_property`] instead of the write route, which keeps refusing
-/// it (#1429). The caller removes the object when this fails.
+/// it (#1429). A State_Text written whole goes the write route, which sets
+/// the state count from it (#1443); when the request gives the count
+/// itself ([`StateCounts::Given`]), one that would change it is
+/// VALUE_OUT_OF_RANGE. The caller removes the object when this fails.
 ///
 /// [`creation_only_properties`]: bacnet_objects::traits::BACnetObject::creation_only_properties
 /// [`initialize_property`]: bacnet_objects::traits::BACnetObject::initialize_property
@@ -322,6 +368,7 @@ fn initialize(
     db: &mut ObjectDatabase,
     created_oid: ObjectIdentifier,
     pv: &bacnet_services::common::BACnetPropertyValue,
+    counts: StateCounts,
     command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Result<(), CreateObjectRefusal> {
     use super::write_property::{
@@ -369,9 +416,30 @@ fn initialize(
         priority: pv.priority,
         value: &pv.value,
     };
+    let fixed_count = (counts == StateCounts::Given
+        && property == PropertyIdentifier::STATE_TEXT
+        && array_index.is_none())
+    .then(|| state_count(db, created_oid));
     commit_attempt(db, None, target, value, None, command_origin)
-        .map(|_| ())
-        .map_err(CreateObjectRefusal::Failed)
+        .map_err(CreateObjectRefusal::Failed)?;
+    // The labels have to fit the count the request gives; the caller drops
+    // the object on a refusal, so the resize needs no undoing.
+    match fixed_count {
+        Some(count) if state_count(db, created_oid) != count => {
+            Err(CreateObjectRefusal::Failed(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
+            }))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The created object's Number_Of_States, as it reads.
+fn state_count(db: &ObjectDatabase, created_oid: ObjectIdentifier) -> Option<PropertyValue> {
+    db.get(&created_oid)?
+        .read_property(PropertyIdentifier::NUMBER_OF_STATES, None)
+        .ok()
 }
 
 /// Handle a DeleteObject request.

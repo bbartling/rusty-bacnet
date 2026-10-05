@@ -155,6 +155,7 @@ fn pics_property_union_required_row_wins_and_access_is_a_union() {
                 writable: true,
                 optional: true,
             },
+            written_through: None,
         },
         PropertySupport {
             property_id: PropertyIdentifier::RECORD_COUNT,
@@ -163,6 +164,7 @@ fn pics_property_union_required_row_wins_and_access_is_a_union() {
                 writable: false,
                 optional: true,
             },
+            written_through: None,
         },
         PropertySupport {
             property_id: PropertyIdentifier::DESCRIPTION,
@@ -171,6 +173,7 @@ fn pics_property_union_required_row_wins_and_access_is_a_union() {
                 writable: false,
                 optional: false,
             },
+            written_through: None,
         },
     ];
     let expected = vec![

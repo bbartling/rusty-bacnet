@@ -587,6 +587,15 @@ impl BACnetObject for SourceReporter {
     fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
         self.wrapped.buffer_ready_report_internal()
     }
+
+    fn event_algorithm_inhibit_reference_internal(&self) -> Option<BACnetObjectPropertyReference> {
+        self.wrapped.event_algorithm_inhibit_reference_internal()
+    }
+
+    fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
+        self.wrapped
+            .follow_event_algorithm_inhibit_internal(inhibit)
+    }
 }
 
 #[cfg(test)]

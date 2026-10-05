@@ -3,18 +3,23 @@ use std::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
+use crate::event::options::REPORTING_OPTION_METADATA;
 use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
-    PropertyPresenceCondition::{Commandable, IntrinsicReporting, PairedText},
+    PropertyPresenceCondition::{
+        Commandable, IntrinsicReportingOptional, IntrinsicReportingRequired, PairedText,
+    },
     PropertyPresenceCondition::{CommandableValueSourceTracking, ValueSourceTracking},
     PropertyWriteCapability::WhenCommandOwner,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
 // Base conformance is independent of implemented writability. Commandable and
-// intrinsic rows retain their optional base code. Preserve legacy list order.
+// intrinsic rows retain their optional base code; the intrinsic ones carry
+// Table 12-10's footnote 6 (required) or footnote 8 alone (only permitted) as
+// their condition (#1485). Preserve legacy list order.
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, Always),
@@ -26,42 +31,61 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         P::EVENT_DETECTION_ENABLE,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
-    PropertyMetadata::new(P::EVENT_ENABLE, Optional, Some(IntrinsicReporting), Always),
-    PropertyMetadata::new(P::TIME_DELAY, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::EVENT_ENABLE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::TIME_DELAY,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::TIME_DELAY_NORMAL,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         Always,
     ),
-    PropertyMetadata::new(P::NOTIFY_TYPE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::NOTIFY_TYPE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::NOTIFICATION_CLASS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
     PropertyMetadata::new(
         P::ACKED_TRANSITIONS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_TIME_STAMPS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_MESSAGE_TEXTS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
+    // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+    REPORTING_OPTION_METADATA[0],
+    REPORTING_OPTION_METADATA[1],
+    REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
@@ -75,7 +99,12 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY_EVALUATION_INHIBIT, Optional, None, Always),
     PropertyMetadata::new(P::ACTIVE_TEXT, Optional, Some(PairedText), Always),
     PropertyMetadata::new(P::INACTIVE_TEXT, Optional, Some(PairedText), Always),
-    PropertyMetadata::new(P::ALARM_VALUE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::ALARM_VALUE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::VALUE_SOURCE,
         Optional,
@@ -161,6 +190,9 @@ mod tests {
             P::ACKED_TRANSITIONS,
             P::EVENT_TIME_STAMPS,
             P::EVENT_MESSAGE_TEXTS,
+            P::EVENT_MESSAGE_TEXTS_CONFIG,
+            P::EVENT_ALGORITHM_INHIBIT_REF,
+            P::EVENT_ALGORITHM_INHIBIT,
             P::OUT_OF_SERVICE,
             P::PRIORITY_ARRAY,
             P::RELINQUISH_DEFAULT,
@@ -174,7 +206,7 @@ mod tests {
             let output = object.object_identifier().object_type() == ObjectType::BINARY_OUTPUT;
             let mut expected = base.to_vec();
             if output {
-                expected.insert(20, P::POLARITY);
+                expected.insert(23, P::POLARITY);
                 expected.insert(5, P::FEEDBACK_VALUE);
             } else {
                 expected.push(P::ALARM_VALUE);
@@ -196,17 +228,6 @@ mod tests {
                 let required = object.required_properties();
                 for row in &original {
                     let p = row.property_identifier;
-                    let conformance = if output && p == P::PRESENT_VALUE {
-                        RequiredWrite
-                    } else if required.contains(&p)
-                        && ![P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]
-                            .contains(&p)
-                    {
-                        RequiredRead
-                    } else {
-                        Optional
-                    };
-                    assert_eq!(row.conformance, conformance, "{p:?}");
                     let condition = match p {
                         P::VALUE_SOURCE => Some(ValueSourceTracking),
                         P::VALUE_SOURCE_ARRAY | P::LAST_COMMAND_TIME => {
@@ -216,20 +237,47 @@ mod tests {
                             (!output).then_some(Commandable)
                         }
                         P::ACTIVE_TEXT | P::INACTIVE_TEXT => Some(PairedText),
+                        // Tables 12-8 and 12-10 require these of an object
+                        // that reports intrinsically, and only permit the
+                        // next two (#1485).
                         P::EVENT_DETECTION_ENABLE
                         | P::EVENT_ENABLE
                         | P::TIME_DELAY
-                        | P::TIME_DELAY_NORMAL
                         | P::NOTIFY_TYPE
                         | P::NOTIFICATION_CLASS
                         | P::ACKED_TRANSITIONS
                         | P::EVENT_TIME_STAMPS
-                        | P::EVENT_MESSAGE_TEXTS
                         | P::ALARM_VALUE
-                        | P::FEEDBACK_VALUE => Some(IntrinsicReporting),
+                        | P::FEEDBACK_VALUE => Some(IntrinsicReportingRequired),
+                        P::TIME_DELAY_NORMAL
+                        | P::EVENT_MESSAGE_TEXTS
+                        | P::EVENT_MESSAGE_TEXTS_CONFIG
+                        | P::EVENT_ALGORITHM_INHIBIT_REF
+                        | P::EVENT_ALGORITHM_INHIBIT => Some(IntrinsicReportingOptional),
                         _ => None,
                     };
                     assert_eq!(row.presence_condition, condition, "{p:?}");
+                    let conformance = if output && p == P::PRESENT_VALUE {
+                        RequiredWrite
+                    } else if condition.is_none() && required.contains(&p) {
+                        RequiredRead
+                    } else {
+                        Optional
+                    };
+                    assert_eq!(row.conformance, conformance, "{p:?}");
+                    assert_eq!(
+                        required.contains(&p),
+                        conformance != Optional
+                            || matches!(
+                                condition,
+                                Some(
+                                    IntrinsicReportingRequired
+                                        | ValueSourceTracking
+                                        | CommandableValueSourceTracking
+                                )
+                            ),
+                        "{p:?}"
+                    );
                     assert!(object.read_property(p, None).is_ok(), "{p:?}");
                 }
                 let wire: Vec<_> = expected
@@ -289,6 +337,16 @@ mod tests {
                         None,
                     )
                     .unwrap();
+                // Event_Algorithm_Inhibit takes a write only while detection is
+                // on, which an output doesn't start with (#1329).
+                object
+                    .write_property(
+                        P::EVENT_DETECTION_ENABLE,
+                        None,
+                        PropertyValue::Boolean(true),
+                        None,
+                    )
+                    .unwrap();
                 let metadata = object.property_metadata().into_owned();
                 for row in metadata {
                     let p = row.property_identifier;
@@ -309,7 +367,10 @@ mod tests {
                         | P::ACTIVE_TEXT
                         | P::INACTIVE_TEXT
                         | P::ALARM_VALUE
-                        | P::FEEDBACK_VALUE => Always,
+                        | P::FEEDBACK_VALUE
+                        | P::EVENT_MESSAGE_TEXTS_CONFIG
+                        | P::EVENT_ALGORITHM_INHIBIT_REF
+                        | P::EVENT_ALGORITHM_INHIBIT => Always,
                         P::RELIABILITY => WhenOutOfService,
                         _ => ReadOnly,
                     };

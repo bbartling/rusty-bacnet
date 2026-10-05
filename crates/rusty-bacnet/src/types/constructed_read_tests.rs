@@ -115,6 +115,18 @@ fn assert_typed(
     assert!(read.eq(expected).unwrap(), "{read} != {expected}");
 }
 
+/// `PropertyValue._typed_element`, which pickles call (#1500), finds every
+/// element by its tag.
+#[test]
+fn every_element_is_found_by_its_tag() {
+    let mut tags = std::collections::HashSet::new();
+    for element in Element::ALL {
+        assert!(tags.insert(element.tag()), "{element:?} listed twice");
+        assert_eq!(Element::from_tag(element.tag()), Some(element));
+    }
+    assert_eq!(Element::from_tag("list"), None);
+}
+
 #[test]
 fn recipient_lists_read_as_the_destinations_written() {
     with_value(

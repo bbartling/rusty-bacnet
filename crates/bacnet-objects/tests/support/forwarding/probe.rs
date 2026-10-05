@@ -702,6 +702,18 @@ impl BACnetObject for Probe {
             current_notification: 9,
         })
     }
+    fn event_algorithm_inhibit_reference_internal(&self) -> Option<BACnetObjectPropertyReference> {
+        self.called("event_algorithm_inhibit_reference_internal", ());
+        Some(BACnetObjectPropertyReference {
+            object_identifier: oid(ObjectType::BINARY_VALUE, 43),
+            property_identifier: P::PRESENT_VALUE.to_raw(),
+            property_array_index: None,
+        })
+    }
+    fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
+        self.called("follow_event_algorithm_inhibit_internal", (inhibit,));
+        true
+    }
 }
 
 /// What the probe's log-record hooks answer: an error of the wrapped

@@ -289,7 +289,9 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            // The last twelve identifiers, from 234, are the rows #1149 added.
+            // The last twelve identifiers, from 234, are the rows #1149 added,
+            // with the message texts and the inhibit pair (352, 355, 354)
+            // after Event_Message_Texts (#1329).
             (
                 P::PROPERTY_LIST,
                 None,
@@ -298,10 +300,10 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
                     0x91, 111, 0x91, 81, 0x91, 103, 0x91, 36, 0x91, 87, 0x91, 104, 0x91, 230, 0x91,
                     227, 0x91, 229, 0x92, 0x01, 0xAF, 0x91, 234, 0x91, 113, 0x91, 17, 0x91, 7,
                     0x91, 39, 0x91, 35, 0x91, 0, 0x91, 72, 0x91, 130, 0x92, 0x01, 0x5f, 0x92, 0x01,
-                    0x61, 0x92, 0x01, 0x64,
+                    0x60, 0x92, 0x01, 0x63, 0x92, 0x01, 0x62, 0x92, 0x01, 0x61, 0x92, 0x01, 0x64,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 29])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 32])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 231])),
@@ -318,10 +320,11 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(14), Ok(&[0x91, 230])),
             (P::PROPERTY_LIST, Some(17), Ok(&[0x92, 0x01, 0xAF])),
             (P::PROPERTY_LIST, Some(18), Ok(&[0x91, 234])),
-            (P::PROPERTY_LIST, Some(29), Ok(&[0x92, 0x01, 0x64])),
+            (P::PROPERTY_LIST, Some(28), Ok(&[0x92, 0x01, 0x60])),
+            (P::PROPERTY_LIST, Some(32), Ok(&[0x92, 0x01, 0x64])),
             (
                 P::PROPERTY_LIST,
-                Some(30),
+                Some(33),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -668,12 +671,14 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
                     0x91, 28, 0x92, 0x01, 0x43, 0x92, 0x01, 0x22, 0x92, 0x01, 0x0c, 0x92, 0x01,
                     0x0d, 0x91, 111, 0x91, 81, 0x91, 103, 0x92, 0x01, 0x28, 0x91, 36, 0x92, 0x01,
                     0x24, 0x91, 176, 0x92, 0x01, 0x29, 0x92, 0x01, 0x26,
-                    // The event rows #1305 added.
+                    // The event rows #1305 added, and #1329's three after
+                    // Event_Message_Texts.
                     0x91, 113, 0x91, 17, 0x91, 7, 0x91, 35, 0x91, 0, 0x91, 72, 0x91, 130, 0x92,
-                    0x01, 0x5f, 0x92, 0x01, 0x61, 0x92, 0x01, 0x64,
+                    0x01, 0x5f, 0x92, 0x01, 0x60, 0x92, 0x01, 0x63, 0x92, 0x01, 0x62, 0x92, 0x01,
+                    0x61, 0x92, 0x01, 0x64,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 24])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 27])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x43])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x22])),
@@ -685,10 +690,11 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(9), Ok(&[0x92, 0x01, 0x28])),
             (P::PROPERTY_LIST, Some(14), Ok(&[0x92, 0x01, 0x26])),
             (P::PROPERTY_LIST, Some(15), Ok(&[0x91, 113])),
-            (P::PROPERTY_LIST, Some(24), Ok(&[0x92, 0x01, 0x64])),
+            (P::PROPERTY_LIST, Some(24), Ok(&[0x92, 0x01, 0x63])),
+            (P::PROPERTY_LIST, Some(27), Ok(&[0x92, 0x01, 0x64])),
             (
                 P::PROPERTY_LIST,
-                Some(25),
+                Some(28),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

@@ -46,7 +46,7 @@ async fn concurrent_ports_share_one_capacity_and_exact_depth_during_receive() {
     );
     let mut seen = std::collections::HashSet::new();
     while let Ok(apdu) = apdus.try_recv() {
-        assert!(seen.insert(u16::from_be_bytes(apdu.apdu.as_ref().try_into().unwrap())));
+        assert!(seen.insert(id_of(&apdu.apdu)));
     }
     assert_eq!(seen.len(), 256);
     assert_eq!(counters.snapshot().current_depth, 0);
@@ -71,7 +71,7 @@ async fn concurrent_ports_share_one_capacity_and_exact_depth_during_receive() {
             .await
             .unwrap()
             .unwrap();
-        assert!(seen.insert(u16::from_be_bytes(apdu.apdu.as_ref().try_into().unwrap())));
+        assert!(seen.insert(id_of(&apdu.apdu)));
         assert!(counters.snapshot().current_depth <= 256);
     }
     for producer in producers {

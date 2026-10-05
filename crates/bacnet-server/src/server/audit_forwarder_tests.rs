@@ -44,15 +44,20 @@ impl Capture {
         Ok(())
     }
 
-    /// A closed link with local MAC `[1]` whose unicasts run [`Self::send`].
+    /// A closed link with local MAC `[1]` whose unicasts run [`Self::send`],
+    /// and for which [`GROUP`] is a group address (#1493).
     fn port(&self) -> TestTransport {
         let sends = self.clone();
         TestTransport::builder()
+            .group_mac(GROUP)
             .broadcast(SendMode::Panic("forwarding must be unicast"))
             .on_send(move |frame| sends.clone().send(frame))
             .build()
     }
 }
+
+/// A group address of the fixture link that isn't its broadcast.
+const GROUP: &[u8] = &[0xE0];
 
 struct Fixture {
     server: BACnetServer<TestTransport>,

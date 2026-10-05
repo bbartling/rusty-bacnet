@@ -650,6 +650,15 @@ The list is read at each start, so an address added later is accepted after
 the next restart. If the addresses cannot be listed, or none is usable,
 `start()` fails and suggests binding an explicit interface address.
 
+The stack takes a Forwarded-NPDU's originating address as the NPDU's source,
+so an origin that is one of the link's group destinations
+(`is_group_destination`: the limited broadcast, the configured broadcast IP
+at any port, or a multicast address) makes the frame malformed. The receive
+loop drops it before the network layer sees it, a BBMD forwards it nowhere,
+and `forwarded_group_origin_drops()` counts it (#1493). Otherwise a forged
+I-Am could bind a device to a group, and the answer to a request would go to
+every node in it.
+
 ### BIP6 (IPv6)
 
 ```rust
@@ -688,6 +697,11 @@ usable for the configured BBMD; an explicit source is retained. The production
 socket is bound to that source, so registration, DBTN and ordinary unicast agree
 with `local_mac()`. This branch requires the existing configured Device instance
 and preserves trusted-BBMD handling without normal multicast prerequisites.
+
+A Forwarded-NPDU whose original source address is an IPv6 multicast group, a
+group destination at any port, is malformed for the same reason as on B/IP:
+it is dropped before the network layer sees it and counted in
+`forwarded_group_origin_drops()` (#1493).
 
 The selected-link wire fixtures qualify Linux on isolated ULA bridges and macOS
 on loopback for multicast intake and unicast/control replies. Windows code is
@@ -1580,6 +1594,19 @@ draws one. Each counts it in `global_broadcast_dadr_drops()`, apart from
 `address_length_drops()`: the lengths are fine, and the count points at the
 peer that sent it. A global broadcast with DLEN 0 is unaffected.
 
+Both also drop an NPDU addressed to a broadcast, global (DNET 0xFFFF) or
+remote (a DNET with DLEN 0), whose APDU isn't an Unconfirmed-Request (#1491).
+Only that PDU type may use a broadcast network address (Clause 6.3); a
+Confirmed-Request, an ACK, an Error, a Reject or an Abort belongs to one peer's
+transaction, so every device reached would get one that names no one.
+`BACnetRouter` passes such an NPDU on to no network, delivers it nowhere and
+sends no reject; `NetworkLayer` hands it to no receiver. Each counts it in
+`broadcast_pdu_type_drops()`. The PDU type is the high nibble of the first
+APDU octet, so nothing is decoded, and an empty APDU counts too. Network
+messages, an Unconfirmed-Request, and an APDU to one device (a DADR, or no
+DNET at all) are not affected; the server judges a confirmed request that
+arrives by link broadcast itself.
+
 `BACnetRouter` sends each Reject-Message-To-Network it originates to whoever
 first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
@@ -1653,11 +1680,15 @@ its link DA is the broadcast MAC. `send_apdu` to the MAC the transport reports
 as its broadcast, or any other group address the medium carries
 (`TransportPort::is_group_destination`: on B/IP the limited broadcast, the
 configured broadcast IP or a multicast address at any port, on B/IPv6 any
-multicast group), is a local broadcast too, but the layer doesn't ask the
-transport on every unicast: `BACnetClient`'s confirmed requests, the
-endpoint's egress and its requester, which take caller-chosen MACs, refuse
-anything but an Unconfirmed-Request there themselves. `is_broadcast_mac` keeps
-its narrower meaning, this link's own broadcast.
+multicast group, on Ethernet any MAC with the group bit set), is a local
+broadcast too, but the layer doesn't ask the transport on every unicast:
+`BACnetClient`'s confirmed requests, the endpoint's egress and its requester,
+which take caller-chosen MACs, refuse anything but an Unconfirmed-Request there
+themselves. The server refuses one for the confirmed requests it starts
+itself, to event recipients, Channel and Command targets, audit recipients and
+bound devices, and binds no device to one (#1493); its replies and COV
+notifications go to the source a request came from. `is_broadcast_mac` keeps
+its narrower meaning, this link's own broadcast, which routing relies on.
 
 ---
 
@@ -1764,23 +1795,42 @@ whole only at creation, and the server gives such a value, sent without an
 array index, to `BACnetObject::initialize_property` instead of the write
 route (#1429). The built-in Analog Input and Analog Output take Units (an
 Enumerated up to 65535). The Multi-state Input, Output and Value take
-Number_Of_States (1 to `multistate::MAX_CREATED_NUMBER_OF_STATES`, 1024),
-which resizes State_Text, and State_Text written whole, which needs one
-CharacterString per state. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
+Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
+which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
 if a value the object holds would name a state past it. WriteProperty still
 answers `PROPERTY/WRITE_ACCESS_DENIED` for each. The PICS lists each
 createable type's set.
 
-On these objects the order of the initial values follows one rule: a
-Number_Of_States that passes its own checks (no array index, an Unsigned, 1
-to 1024) is applied before every other initial value, and everything else,
-including a Number_Of_States that fails those checks, is applied in request
-order. So Present_Value, Relinquish_Default, Alarm_Values and State_Text are
-judged against the requested count wherever it stands, and a bad value
-earlier in the list than a bad count is the one named. A refusal always
-names the value's own position: `[Relinquish_Default 2, Number_Of_States 1]`
-is refused at 1, the default being past the one state. With several good
-counts, the last one sets the states.
+State_Text written whole, by WriteProperty, WritePropertyMultiple or a
+CreateObject initial value, sets Number_Of_States to its number of labels
+(#1443), with the same checks: 1 to 1024 labels, and a shrink that would
+leave Present_Value, Relinquish_Default, a Priority_Array command or an
+Alarm_Values entry past the new count is `PROPERTY/VALUE_OUT_OF_RANGE` and
+changes nothing. A Multi-state Output's Feedback_Value doesn't block a
+shrink; past the count it shows as CONFIGURATION_ERROR. Since a whole
+write can resize State_Text, its size at index 0 takes a write as well
+(Clause 12.1.5.1): an Unsigned count with the same checks, which truncates
+State_Text on a shrink and, on a grow, appends the `State {n}` labels a new
+object starts with. A WriteProperty naming Number_Of_States is still
+refused. The metadata gives Number_Of_States
+`PropertyWriteCapability::Through(STATE_TEXT)`, which doesn't count as
+writable, and the PICS keeps its row read-only, marks it "resized through
+STATE_TEXT: a whole write or its size at index 0", and leaves it off the
+creation-only line.
+
+On these objects the order of the initial values follows one rule: the
+values that give the state count are applied before every other initial
+value, and everything else, including a count value that fails its own
+checks (an array index, its datatype, its range), is applied in request
+order. Those values are the request's Number_Of_States, or, when it has
+none, State_Text written whole; with a Number_Of_States, a whole State_Text
+has to label exactly that many states. So Present_Value,
+Relinquish_Default, Alarm_Values and State_Text are judged against the
+requested count wherever it stands, and a bad value earlier in the list than
+a bad count is the one named. A refusal always names the value's own
+position: `[Relinquish_Default 2, Number_Of_States 1]` is refused at 1, the
+default being past the one state. With several good counts, the last one
+sets the states.
 
 A Multi-state Input or Value refuses an Alarm_Values entry past its
 Number_Of_States with `PROPERTY/VALUE_OUT_OF_RANGE` naming the element, over
@@ -2662,7 +2712,41 @@ the Event Logs like any other notification; those logs take no notifications,
 so it can't count toward their own next report. A purge restarts Records_Since_Notification at the BUFFER_PURGED
 record but leaves the threshold counting from Last_Notify_Record;
 Event_Detection_Enable TRUE again restarts both from the current count.
-Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair aren't served.
+While Event_Algorithm_Inhibit is TRUE no report goes out; the records keep
+counting, so one falls due as soon as it clears.
+
+Every object here that reports intrinsically (the analog, binary and
+multi-state families, Access Door, Access Zone and the three logs) also
+serves Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair
+(#1329), all three writable:
+
+- Event_Message_Texts_Config holds one CharacterString per transition,
+  TO_OFFNORMAL, TO_FAULT and TO_NORMAL. A non-empty entry replaces the
+  server's own Message Text for that transition, in the notification and in
+  Event_Message_Texts; an empty one, the default, leaves it. The text goes
+  out as written: the stack defines no substitution codes.
+- Event_Algorithm_Inhibit TRUE stops the event algorithm but not fault
+  detection (Clause 13.2.2.1): no offnormal or normal transition of its own,
+  any time delay under way dropped, and an offnormal object back to NORMAL at
+  once. Once it is FALSE, a condition has to last its whole Time_Delay again.
+  A client writes it while Event_Detection_Enable is TRUE and there is no
+  reference.
+- Event_Algorithm_Inhibit_Ref names a Boolean or BinaryPV property of this
+  device (the datatype has no device member) for the inhibit to follow, and
+  the inhibit is then read-only. The server reads the property, through
+  `ObjectDatabase::follow_event_algorithm_inhibit`, each time it evaluates
+  the object: on a write to it and on the one-second tick, so a change
+  reaches the inhibit within a second. A Boolean TRUE inhibits, and so does
+  ACTIVE read from a property known to hold a BinaryPV: Present_Value,
+  Relinquish_Default, a Priority_Array element, Alarm_Value and
+  Feedback_Value of the binary types, and an Access Credential's
+  Credential_Status. Anything else doesn't, an Event_State of FAULT or a
+  Reliability that reads as Enumerated 1 included, nor does a missing
+  property. Unset, it reads as Binary Value 4194303's Present_Value, and
+  writing that clears it and puts the inhibit back to FALSE.
+- Event_Message_Texts_Config is always three entries: the tables fix its
+  size, so a write at index 0 is `PROPERTY/WRITE_ACCESS_DENIED` (Clause
+  12.1.5.1).
 
 Every Trend Log samples a BACnet property, so its Start_Time, Stop_Time,
 Log_Interval and Log_DeviceObjectProperty are classed required (Table 12-29
@@ -2832,7 +2916,10 @@ follow In_Process.
 A command whose `device_identifier` names another device goes there as a
 confirmed WriteProperty (#1180). The address comes from the server's device
 bindings: a `DeviceBinding` registered on the builder, or an I-Am the server
-heard in the last ten minutes. For a device with neither, the server first
+heard in the last ten minutes. A binding never takes a group address of the
+link (`TransportPort::is_group_destination`), as the device's own MAC or as its
+router's: one registered so stops the server from starting, with an error
+naming the device and the address, and an I-Am from one binds nothing (#1493). For a device with neither, the server first
 broadcasts one Who-Is whose low and high limits are both that device's
 instance (#1322). A device it has never heard from is asked on every network
 (a global broadcast, DNET 65535). One whose stale I-Am is still held is asked
@@ -3440,7 +3527,8 @@ CHANGE_OF_STATE algorithm (Clause 12.32). It serves the event rows the
 Multi-state Input does: Time_Delay, Notification_Class, Alarm_Values,
 Event_Enable, Acked_Transitions, Notify_Type, Event_Time_Stamps,
 Event_Message_Texts, Event_Detection_Enable and Time_Delay_Normal, the
-configuration writable over the network. Alarm_Values is a list of
+configuration writable over the network, and the message texts and inhibit
+rows every intrinsic reporter serves (#1329). Alarm_Values is a list of
 BACnetAccessZoneOccupancyState values other than NORMAL (named, or
 proprietary from 64 to 65535; anything else, NORMAL included, is
 VALUE_OUT_OF_RANGE naming the element), which
@@ -5249,11 +5337,12 @@ its MAC, or a local broadcast when the MAC is empty or the link's broadcast
 MAC. A Device binding routed to that network is sent straight to its final
 MAC rather than through its router, and a confirmed notification then waits
 for the answer from that MAC directly. Such a binding whose final MAC is the
-link's broadcast MAC names no single device here, so it is skipped and counts
-in `recipient_unroutable`, as a local binding at a broadcast MAC does, so no
-forwarded copy goes to it either. Clause 6.5.1 sends traffic for the local
-network without a DNET, and a non-routing node drops an NPDU whose DNET names
-a network (Clause 6.5.2.1), so the routed form might never arrive. The
+link's broadcast MAC, or any other group address of the link, names no
+single device here, so it is skipped and counts in `recipient_unroutable`, as
+a local binding at such a MAC does, so no forwarded copy goes to it either.
+Clause 6.5.1 sends traffic for the local network without a DNET, and a
+non-routing node drops an NPDU whose DNET names a network (Clause 6.5.2.1),
+so the routed form might never arrive. The
 number is read once per notification from `NetworkLayer::local_network_number`,
 without the database lock, and a confirmed notification keeps the route it
 was first sent on for its retries. While the number is unknown, an address
@@ -5474,7 +5563,7 @@ counters.recipient_list_invalid;        // the list did not decode as a whole
 counters.recipient_list_too_long;       // a custom class served more than 32 destinations
 counters.device_recipient_unbound;      // a Device recipient with no current binding
 counters.recipient_unroutable;          // a recipient no binding or retry can route
-counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast address
+counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast or group address
 counters.confirmed_no_invoke_id;        // no invoke ID free for a confirmed notification
 counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
 counters.confirmed_unanswered;          // no acknowledgment after the last retry
@@ -5524,9 +5613,12 @@ fixes them, and the warning logged with each skip gives the finer reason:
   identifier names an object that isn't a Device (or its binding is unusable on
   this link), or its address puts a MAC on network 65535.
 - `confirmed_broadcast_recipient`: the entry asks for confirmed notifications at
-  a local, remote or global broadcast address. Clause 6.3 allows only
-  unconfirmed requests there, and sending one unconfirmed would lose the
-  acknowledgment, so the entry is skipped before any invoke ID is reserved.
+  a local, remote or global broadcast address, or at any other group address
+  of the link, such as a B/IP multicast address or the broadcast IP at
+  another port (#1493). Clause 6.3 allows only unconfirmed requests there,
+  and sending one unconfirmed would lose the acknowledgment, so the entry is
+  skipped before any invoke ID is reserved. An unconfirmed notification still
+  goes to such an address.
 
 ### Concurrency
 
@@ -5781,7 +5873,7 @@ B/IP BBMD and configured foreign modes start UNKNOWN with no registered Network 
 
 B/IPv6 starts UNKNOWN with no configured IPv6 Network Port authority. Normal mode learns admitted OriginalBroadcast announcements and answers by multicast OriginalBroadcast on the selected link. In the Rust configured foreign-device mode, an admitted Forwarded-NPDU from the configured BBMD is a logical broadcast despite its unicast UDP hop; replies use DBTN to that BBMD. A different BBMD endpoint cannot teach. Unicast NNI, routed controls and malformed payloads remain ineligible. Existing selected-link, source-address, destination/interface and VMAC checks still apply. There is no new IPv6 endpoint builder, number setter or Python foreign-device API.
 
-Linux Ethernet full servers and standalone Rust clients start UNKNOWN with no configured Ethernet Network Port authority. The AF_PACKET receive path admits only the bound MAC and all-FF broadcast, before UI, XID or TEST handling; only all-FF is a logical group. This is the local single-link admission policy, not an additional quoted Clause 7 mandate. Existing self-source refusal remains. Actual isolated Docker Ethernet tests independently inspect destination/source, 802.3 length, LLC bytes, exact learned reply flag zero and padding, and verify stop/drop raw-FD release plus canceled transport-stop resumption. No privileged host interface or physical LAN is involved. The [opt-in fixture](../crates/bacnet-integration-tests/tests/ethernet_network_numbers/README.md) requires Linux and CAP_NET_RAW and is excluded from ordinary CI. There is no Ethernet endpoint builder or Python Ethernet API in this slice.
+Linux Ethernet full servers and standalone Rust clients start UNKNOWN with no configured Ethernet Network Port authority. The AF_PACKET receive path admits only the bound MAC and all-FF broadcast, before UI, XID or TEST handling; of those, only all-FF is a logical group. As a destination, though, every MAC with the group bit (the low bit of its first octet) set is a group destination (`bacnet_transport::ethernet::is_group_mac`), so no confirmed request goes to a multicast MAC either (#1493). No station sends from a group address, so a frame whose source MAC has the group bit set is dropped before the XID and TEST handlers and before decoding, and counted in `EthernetTransport::group_source_drops()` (#1492): otherwise an answer to it, or to a confirmed request in it, would go to the whole group. This is the local single-link admission policy, not an additional quoted Clause 7 mandate. Existing self-source refusal remains. Actual isolated Docker Ethernet tests independently inspect destination/source, 802.3 length, LLC bytes, exact learned reply flag zero and padding, and verify stop/drop raw-FD release plus canceled transport-stop resumption. No privileged host interface or physical LAN is involved. The [opt-in fixture](../crates/bacnet-integration-tests/tests/ethernet_network_numbers/README.md) requires Linux and CAP_NET_RAW and is excluded from ordinary CI. There is no Ethernet endpoint builder or Python Ethernet API in this slice.
 
 MS/TP starts UNKNOWN with no configured MS/TP Network Port API. The full server, shared endpoint and standalone client learn only broadcast DataNotExpectingReply announcements; either a local unicast or broadcast query receives a DataNotExpectingReply to station `0xFF` after token opportunity. Both Tokio and DedicatedThread modes use the existing serial/MAC owner. LoopbackSerial tests run all three owners in both modes. They independently decode complete standard frames, check precedence and invalid-control recovery with a later valid response as an ordering fence, and qualify application progress while the Number producer is held: the server and endpoint answer a peer's ReadProperty, and the client's own ReadProperty to the peer completes. Separate post-enqueue and serial-write gates prove canceled stop and drop release that producer without completing a held Number frame. Queue admission alone is not frame transmission; already completed bytes cannot be retracted. This simulator evidence does not qualify physical RS-485 timing, transceiver control or hardware interoperability.
 

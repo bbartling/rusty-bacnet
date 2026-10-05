@@ -94,7 +94,7 @@ impl MstpEndpointConfig {
 /// `TokioSerialPort` like the current wrappers. Timing qualification is RB-26.
 ///
 /// Lifecycle mirrors `BipEndpoint`. BIPv6/Ethernet have no endpoint owner.
-#[pyclass(name = "MstpEndpoint")]
+#[pyclass(name = "MstpEndpoint", module = "rusty_bacnet")]
 pub struct PyMstpEndpoint {
     lifecycle: Lifecycle<MstpSession, PendingObject>,
     config: MstpEndpointConfig,

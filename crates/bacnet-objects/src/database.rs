@@ -12,6 +12,7 @@ use crate::event_enrollment::EventEnrollmentMonitoredSource;
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 
 mod averaging_sampling;
+mod event_algorithm_inhibit;
 mod event_log;
 mod input_references;
 mod local_device;

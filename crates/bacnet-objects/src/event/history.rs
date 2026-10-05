@@ -7,8 +7,12 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 use bytes::BytesMut;
 
+use super::options::ReportingOptions;
 use super::{EventTransition, EventTransitionCommit, EventTransitionCommitError};
 
+/// The event state an intrinsic reporter keeps beside its detector: the
+/// history behind Event_Time_Stamps and Event_Message_Texts, and the
+/// optional rows that shape its transitions ([`ReportingOptions`]).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EventHistory {
     /// Transition slots ordered `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
@@ -21,6 +25,9 @@ pub(crate) struct EventHistory {
     pub(crate) message_texts: [String; 3],
     /// Coordinate of the most recent successful commit, independent of timestamp choice.
     last_transition: Option<EventTransition>,
+    /// Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair.
+    /// Configuration rather than history, so [`Self::reset`] keeps them.
+    pub(crate) options: ReportingOptions,
 }
 
 /// Borrowed object-owned state for one atomic event-transition commit.
@@ -76,7 +83,12 @@ impl<'a> EventTransitionState<'a> {
         self.history.original_from_states[index] = Some(commit.change.from);
         self.history.original_to_states[index] = Some(commit.change.to);
         if let Some(message_text) = commit.message_text {
-            self.history.message_texts[index] = message_text;
+            // A configured text takes the server's place (#1329).
+            self.history.message_texts[index] =
+                match self.history.options.message_text(commit.coordinate) {
+                    Some(configured) => configured.to_owned(),
+                    None => message_text,
+                };
         }
         self.history.last_transition = Some(commit.coordinate);
 
@@ -115,6 +127,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
             self.$detector_field.propose(
                 $(self.$input_field,)+
                 self.$reliability_field,
+                self.$history_field.options.inhibited(),
             )
         }
 
@@ -125,7 +138,18 @@ macro_rules! impl_builtin_intrinsic_reporting {
             self.$detector_field.tick_proposal(
                 $(self.$input_field,)+
                 self.$reliability_field,
+                self.$history_field.options.inhibited(),
             )
+        }
+
+        fn event_algorithm_inhibit_reference_internal(
+            &self,
+        ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
+            self.$history_field.options.inhibit_reference().cloned()
+        }
+
+        fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
+            self.$history_field.options.follow(inhibit)
         }
 
         fn commit_event_transition_internal(
@@ -206,6 +230,7 @@ impl Default for EventHistory {
             original_to_states: [None, None, None],
             message_texts: [String::new(), String::new(), String::new()],
             last_transition: None,
+            options: ReportingOptions::default(),
         }
     }
 }
@@ -215,8 +240,28 @@ impl EventHistory {
         self.last_transition
     }
 
+    /// Back to the starting history, as Event_Detection_Enable FALSE asks;
+    /// the [`ReportingOptions`] stay as configured.
     pub(crate) fn reset(&mut self) {
-        *self = Self::default();
+        let options = std::mem::take(&mut self.options);
+        *self = Self {
+            options,
+            ..Self::default()
+        };
+    }
+
+    /// Take a write of one of the [`ReportingOptions`] rows, or `None` for
+    /// any other property; `detection_enabled` is the object's
+    /// Event_Detection_Enable.
+    pub(crate) fn write(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: &PropertyValue,
+        detection_enabled: bool,
+    ) -> Option<Result<(), Error>> {
+        self.options
+            .write(property, array_index, value, detection_enabled)
     }
 
     /// Validate an acknowledgment against the latest committed transition slot.
@@ -293,7 +338,7 @@ impl EventHistory {
                 )),
                 Some(_) => Err(crate::common::invalid_array_index_error()),
             }),
-            _ => None,
+            _ => self.options.read(property, array_index),
         }
     }
 }
@@ -399,6 +444,7 @@ mod tests {
                 "old-normal".into(),
             ],
             last_transition: None,
+            options: ReportingOptions::default(),
         };
 
         commit(
@@ -526,6 +572,7 @@ mod tests {
             original_to_states: [None, None, None],
             message_texts: ["offnormal".into(), "fault".into(), "normal".into()],
             last_transition: Some(EventTransition::ToFault),
+            options: ReportingOptions::default(),
         };
         let messages_before = history.message_texts.clone();
 
@@ -586,6 +633,7 @@ mod tests {
             ],
             message_texts: ["offnormal".into(), "fault".into(), "normal".into()],
             last_transition: Some(EventTransition::ToOffnormal),
+            options: ReportingOptions::default(),
         };
         let expected_state = state;
         let expected_acked = acked;

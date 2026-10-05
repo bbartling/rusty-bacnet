@@ -215,6 +215,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let db = ctx.db;
         let resolved = {
             let mut db = db.write().await;
+            // Event_Algorithm_Inhibit follows its reference as of now (#1329).
+            db.follow_event_algorithm_inhibit(oid);
             let outcome = db
                 .get_mut(oid)
                 .and_then(|object| object.evaluate_intrinsic_reporting());

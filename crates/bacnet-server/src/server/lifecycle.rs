@@ -41,10 +41,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             profile.canonicalize()?;
         }
         // Validate every configured route against the concrete transport before
-        // mutating the database or starting network work.
-        let is_broadcast = |mac: &[u8]| transport.is_broadcast_mac(mac);
+        // mutating the database or starting network work. No binding takes a
+        // group address (#1493).
+        let is_group = |mac: &[u8]| transport.is_group_destination(mac);
         let device_bindings =
-            DeviceBindingTable::from_configured(configured_device_bindings, is_broadcast)?;
+            DeviceBindingTable::from_configured(configured_device_bindings, is_group)?;
         let audit_routes = AuditRoutes::prepare(&mut db, &config, &device_bindings, &transport)?;
         super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
         super::network_port::validate_apdu_capacity(&mut config, &transport)?;

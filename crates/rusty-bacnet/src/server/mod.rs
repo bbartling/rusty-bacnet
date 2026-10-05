@@ -83,7 +83,7 @@ use audit_configuration::AuditNotificationSink;
 /// start() loads the files before dialing or draining registrations; local TLS
 /// configuration errors raise RuntimeError and permit retry after file repair.
 /// Later startup failures retain existing behavior, not general rollback.
-#[pyclass(name = "BACnetServer")]
+#[pyclass(name = "BACnetServer", module = "rusty_bacnet")]
 pub struct BACnetServer {
     inner: Arc<Mutex<Option<server::BACnetServer<AnyTransport<crate::mstp_py::PySerial>>>>>,
     device_instance: u32,
