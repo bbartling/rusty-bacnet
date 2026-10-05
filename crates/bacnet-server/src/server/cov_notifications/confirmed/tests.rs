@@ -16,7 +16,7 @@ struct Fixture {
     permits: Arc<Semaphore>,
     transactions: Arc<NotificationTransactions>,
     comm: Arc<CommState>,
-    config: ServerConfig,
+    config: Arc<ServerConfig>,
 }
 
 fn av1() -> ObjectIdentifier {
@@ -76,7 +76,7 @@ impl Fixture {
             permits: Arc::new(Semaphore::new(255)),
             transactions: NotificationTransactions::new(),
             comm: Arc::new(CommState::default()),
-            config,
+            config: Arc::new(config),
         }
     }
 

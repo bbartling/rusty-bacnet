@@ -371,3 +371,28 @@ fn a_life_safety_rearm_outside_a_tokio_runtime_fails_and_changes_nothing() {
     assert_eq!(runtime.block_on(read_db(&h, point, expected, None)), before);
     runtime.block_on(h.server.stop()).unwrap();
 }
+
+/// The work a committed local change owes shares the server's config with
+/// it, not a copy (#1521): while that work waits, it holds one more
+/// reference to the server's own config.
+#[tokio::test(start_paused = true)]
+async fn the_work_a_local_change_owes_shares_the_server_config() {
+    let h = Harness::start_with(ServerConfig::default(), life_safety_point).await;
+    let shared = Arc::strong_count(&h.server.config);
+    let (target, point) = (av1(), lsp1());
+    let changes = [
+        write_local(&h, &target, PropertyValue::Real(70.0), None),
+        silence(&h, &point),
+    ];
+    for mut change in changes {
+        let table = Arc::clone(&h.server.cov_table).write_owned().await;
+        assert!(change
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending());
+        assert_eq!(Arc::strong_count(&h.server.config), shared + 1);
+        drop(table);
+        change.await.unwrap();
+        assert_eq!(Arc::strong_count(&h.server.config), shared);
+    }
+}

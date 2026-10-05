@@ -564,7 +564,9 @@ pub(super) struct LocalWriter<'a, T: TransportPort + 'static> {
     pub(super) learned_routers: &'a Arc<Mutex<LearnedRouterCache>>,
     pub(super) device_bindings: &'a Arc<RwLock<DeviceBindingTable>>,
     pub(super) event_suppressions: &'a Arc<super::event_suppression::EventSuppressions>,
-    pub(super) config: &'a ServerConfig,
+    /// The server's config, which a run's task shares rather than copies
+    /// (#1521).
+    pub(super) config: &'a Arc<ServerConfig>,
 }
 
 impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
