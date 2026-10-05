@@ -694,6 +694,8 @@ mod channel_run_tests;
 #[cfg(test)]
 mod channel_wire_tests;
 #[cfg(test)]
+mod color_engine_task_tests;
+#[cfg(test)]
 mod command_action_run_tests;
 #[cfg(test)]
 mod command_action_wire_tests;

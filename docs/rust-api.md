@@ -3255,8 +3255,65 @@ values. Each object checks a command against its own table of colour commands:
 Any other operation, NONE and those past STOP included, is refused with
 VALUE_OUT_OF_RANGE, as is a missing target. Any other datatype, an OCTET STRING
 included, is INVALID_DATA_TYPE, and octets that aren't exactly one command are
-INVALID_DATA_ENCODING. Neither object carries a command out: Present_Value,
-Tracking_Value and In_Progress stay as they are.
+INVALID_DATA_ENCODING.
+
+Both objects carry out each command they take (#1474), and `Color_Command`
+keeps reporting it as written. There is no priority array, so at most one fade
+or ramp runs, and Present_Value holds its target from the moment it starts:
+
+- FADE_TO_COLOR, FADE_TO_CCT and RAMP_TO_CCT set Present_Value to the target
+  and move Tracking_Value to it in a straight line from where it stood, over
+  the fade time (or `Default_Fade_Time`) or at the ramp rate (or
+  `Default_Ramp_Rate`), with In_Progress FADE_ACTIVE or RAMP_ACTIVE until it
+  arrives. A Color object's fade moves x and y together, so the colour crosses
+  the xy diagram in a straight line.
+- STEP_UP_CCT and STEP_DOWN_CCT set Present_Value and Tracking_Value at once
+  to Tracking_Value plus or minus the step increment (or
+  `Default_Step_Increment`).
+- A Color Temperature object clamps a target and a step result to
+  `Min_Pres_Value` and `Max_Pres_Value`.
+- STOP ends a fade or ramp, and Present_Value takes the value it reached;
+  with none running it changes nothing. Any other command, or a Present_Value
+  write, ends the one in progress too (Clauses 12.X.6.1 and 12.Y.6.1), and a
+  new fade or ramp starts from where Tracking_Value stood.
+
+Present_Value is writable on both (Tables 12-X and 12-Y code it W), and
+`set_present_value` takes a value the same way. A Color object takes an xy
+colour, a `PropertyValue::List` of two REALs as a WriteProperty decodes it,
+with both coordinates 0.0 to 1.0. A Color Temperature object refuses a value
+outside 1000 to 30000 K and clamps one inside to `Min_Pres_Value` and
+`Max_Pres_Value` (Clause 12.Y.4), which `set_min_max` sets within that range;
+a Present_Value outside new limits moves to the nearer one. The write halts a
+fade or ramp in progress, then moves as `Transition` says: NONE (the default)
+at once, FADE over `Default_Fade_Time`, or, on a Color Temperature object
+only, RAMP at `Default_Ramp_Rate`.
+
+Fades and ramps run on the server's monotonic task, as a Lighting Output's
+do, and Tracking_Value is worked out from the clock when read. While it
+moves, the task samples it for COV each time it has moved 0.001 along the xy
+line (a Color object) or 10 K (a Color Temperature object), on the shared
+100 ms grid, and once more when it arrives. Neither object has a COV_Increment
+to change that step.
+
+The rows follow the addendum's property tables. Present_Value and
+`Color_Command` are W; `Default_Color`, `Default_Color_Temperature`,
+`Default_Fade_Time`, `Default_Ramp_Rate` and `Default_Step_Increment` are R;
+`Min_Pres_Value`, `Max_Pres_Value` and `Transition` are O. The defaults and
+`Transition` are writable: `Default_Fade_Time` takes 100 to 86,400,000 ms,
+`Default_Ramp_Rate` and `Default_Step_Increment` 1 to 30000, and
+`Default_Color` any colour in range. `Default_Color_Temperature` is clamped as
+Present_Value is, except that 0 is kept: Clause 12.Y.4 gives a zero default a
+meaning of its own at restart. Neither table has `Status_Flags`,
+`Event_State`, `Reliability` or `Out_Of_Service`, so neither object serves
+them, and a whole-object COV report carries Present_Value alone. The optional
+`Value_Source`, audit, `Tags` and profile rows aren't implemented.
+
+Two choices here go past the addendum's text. A new object's
+`Default_Fade_Time` is 100 ms, the shortest the range allows, as Lighting
+Output's is: the addendum gives no initial value, and 0 lies outside its
+range. Neither object models a restart, so `Default_Color` and
+`Default_Color_Temperature` are only stored, and In_Progress never reads
+NOT_CONTROLLED or OTHER.
 
 The colour properties use their standard identifiers: `DEFAULT_COLOR` is
 4194330, `DEFAULT_COLOR_TEMPERATURE` 4194331 and `COLOR_COMMAND` 4194334

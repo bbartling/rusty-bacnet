@@ -22,7 +22,6 @@ mod dcc;
 #[doc(hidden)]
 pub mod endpoint_responder;
 #[cfg(test)]
-#[path = "endpoint_shared_runtime_tests.rs"]
 mod endpoint_shared_runtime_tests;
 mod enrollment_summary;
 mod event_information;
@@ -30,6 +29,8 @@ mod mutations;
 use mutations::{InitialCovNotification, MutationEffects};
 #[cfg(test)]
 mod audit_log_buffer_wire_tests;
+#[cfg(test)]
+mod color_command_wire_tests;
 #[cfg(test)]
 mod durable_stop_tests;
 #[cfg(test)]
