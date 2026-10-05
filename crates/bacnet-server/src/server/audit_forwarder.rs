@@ -14,14 +14,15 @@ const DEADLINE: Duration = Duration::from_secs(3);
 /// this device must have a concrete identity to tell the two apart. A
 /// binding routed through `local_network`, this network's own number when
 /// known, is taken as the local one it is (#1358), so the copy goes to the
-/// parent's MAC with no DNET.
+/// parent's MAC with no DNET. A binding at a group address of the link
+/// (`is_group`) gives no route, so no copy goes there (#1493).
 fn resolve(
     profile: &AuditLogForwarding,
     local: LocalDevice,
     bindings: &DeviceBindingTable,
     local_mac: &[u8],
     local_network: Option<u16>,
-    is_broadcast: impl Fn(&[u8]) -> bool,
+    is_group: impl Fn(&[u8]) -> bool,
 ) -> Option<ConfirmedRecipientRoute> {
     let parent = profile.parent();
     let device = parent.device_identifier?;
@@ -35,10 +36,11 @@ fn resolve(
     let route = RecipientRoute::from_device_resolution(bindings.resolve_at(
         &device,
         Instant::now(),
-        &is_broadcast,
+        &is_group,
     ))
-    .localize(local_network, &is_broadcast)
-    .into_confirmed()?;
+    .localize(local_network, &is_group, &is_group)
+    .into_confirmed(&is_group)
+    .ok()?;
     if route.freshness != Some(BindingFreshness::Configured)
         || route.local_target.as_deref() == Some(local_mac)
     {
@@ -67,7 +69,7 @@ pub(super) fn initialize<T: TransportPort>(
                 bindings,
                 transport.local_mac(),
                 None,
-                |mac| transport.is_broadcast_mac(mac),
+                |mac| transport.is_group_destination(mac),
             )
             .is_some(),
         );
@@ -125,7 +127,7 @@ impl ForwardBatch {
             &bindings,
             network.local_mac(),
             network.local_network_number().get(),
-            |mac| network.transport().is_broadcast_mac(mac),
+            |mac| network.transport().is_group_destination(mac),
         );
         drop(bindings);
         self.profile.status().set_configured(route.is_some());

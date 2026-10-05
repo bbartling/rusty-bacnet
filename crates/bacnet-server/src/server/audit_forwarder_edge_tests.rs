@@ -87,6 +87,35 @@ async fn audit_forwarding_to_a_parent_routed_through_this_network_goes_without_a
     f.server.stop().await.unwrap();
 }
 
+/// #1493: a parent bound at a group address of the link, as its own MAC or
+/// its router's, names no device. Forwarding finds no route, so no copy goes
+/// out and the log reports a configuration error.
+#[tokio::test(start_paused = true)]
+async fn audit_forwarding_to_a_parent_bound_at_a_group_address_never_sends() {
+    let parent_device = oid(ObjectType::DEVICE, 20);
+    for binding in [
+        DeviceBinding::local(parent_device, GROUP),
+        DeviceBinding::routed(parent_device, 200, [9], GROUP),
+    ] {
+        let mut f = fixture(Some(parent()), None).await;
+        // Inserted past the link's check, which no started server skips.
+        f.server
+            .device_bindings
+            .write()
+            .await
+            .insert_configured(binding.unwrap(), |_| false)
+            .unwrap();
+        f.unconfirmed(payload(false)).await;
+        settle().await;
+        assert!(f.requests().is_empty());
+        assert_eq!(
+            f.reliability().await,
+            PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+        );
+        f.server.stop().await.unwrap();
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_observed_binding_and_local_alias_do_not_send() {
     let mut f = fixture(Some(parent()), None).await;

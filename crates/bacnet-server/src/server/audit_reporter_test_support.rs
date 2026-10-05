@@ -39,6 +39,12 @@ pub(super) struct AuditCapture {
     /// The bound B/IP endpoint a registered Network Port publishes.
     pub(super) normal_bip: Option<std::net::SocketAddrV4>,
     pub(super) learned_broadcast: Option<MacAddr>,
+    /// A MAC the link reports as a group destination, not its broadcast,
+    /// once started (#1493).
+    pub(super) learned_group: Option<MacAddr>,
+    /// MACs the link's owned group rule takes in from the start, as a B/IP
+    /// link's takes in its broadcast IP at any port (#1493).
+    pub(super) group_macs: Vec<MacAddr>,
     pub(super) reject_route_callbacks: Arc<AtomicBool>,
     pub(super) route_callbacks: Arc<AtomicUsize>,
     pub(super) started: Arc<AtomicBool>,
@@ -77,6 +83,17 @@ impl AuditCapture {
                 .learned_broadcast
                 .as_ref()
                 .is_some_and(|broadcast| broadcast.as_slice() == mac)
+    }
+
+    /// The link's answer for a group destination beyond its broadcast,
+    /// counted as a route callback.
+    pub(super) fn is_learned_group(&self, mac: &[u8]) -> bool {
+        self.route_callback();
+        self.started.load(Ordering::Acquire)
+            && self
+                .learned_group
+                .as_ref()
+                .is_some_and(|group| group.as_slice() == mac)
     }
 
     async fn send(self: Arc<Self>, frame: SentFrame) -> Result<(), Error> {
@@ -123,7 +140,8 @@ impl AuditCapture {
             &[1]
         };
         let capture = Arc::new(self.clone());
-        let (on_start, on_routes, on_endpoint, on_send) = (
+        let (on_start, on_routes, on_groups, on_endpoint, on_send) = (
+            Arc::clone(&capture),
             Arc::clone(&capture),
             Arc::clone(&capture),
             Arc::clone(&capture),
@@ -139,8 +157,12 @@ impl AuditCapture {
             })
             .on_start(move || on_start.started.store(true, Ordering::Release))
             .on_is_broadcast_mac(move |mac| on_routes.is_broadcast_mac(mac))
+            .on_is_group_destination(move |mac| on_groups.is_learned_group(mac))
             .on_bip_broadcast_endpoint(move || on_endpoint.bip_broadcast_endpoint())
             .on_send(move |frame| Arc::clone(&on_send).send(frame));
+        for group in &self.group_macs {
+            builder = builder.group_mac(group);
+        }
         if self.number_controls {
             builder = builder.number_controls();
         }

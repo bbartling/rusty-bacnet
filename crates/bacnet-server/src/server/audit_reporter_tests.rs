@@ -26,6 +26,9 @@ mod indexed_absence;
 #[path = "audit_recipient_routes_tests.rs"]
 mod recipient_routes;
 
+#[path = "audit_group_recipient_tests.rs"]
+mod group_recipients;
+
 #[path = "audit_recipient_tests.rs"]
 mod recipient_changes;
 

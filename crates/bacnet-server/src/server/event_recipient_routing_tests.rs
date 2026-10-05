@@ -21,6 +21,7 @@ use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
 use std::borrow::Cow;
 
+mod group_routes;
 mod post_route_counters;
 mod route_skip_counters;
 mod suppression_counters;

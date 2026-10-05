@@ -38,7 +38,7 @@ pub(super) fn routed_entry_names_direct_source(
         mac: bacnet_types::MacAddr::from_slice(address),
     };
     // A source MAC is never a link broadcast, so none is assumed here.
-    matches!(route.localize(local_network, |_| false),
+    matches!(route.localize(local_network, |_| false, |_| false),
         RecipientRoute::LocalUnicast(station) if station.as_slice() == mac)
 }
 

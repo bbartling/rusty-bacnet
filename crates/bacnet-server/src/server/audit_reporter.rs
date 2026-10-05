@@ -334,7 +334,7 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
                     transactions
                         .audit_routes
                         .get()
-                        .is_some_and(|routes| routes.is_broadcast(mac))
+                        .is_some_and(|routes| routes.is_group(mac))
                 })
         } else {
             None
