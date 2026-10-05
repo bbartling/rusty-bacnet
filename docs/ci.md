@@ -304,10 +304,9 @@ cargo nextest run -p rusty-bacnet --locked --profile ci
 
 The CLI's default-feature tests build `bacnet-cli` with its default features,
 which the Tests job's build can't reuse, so they run in the shorter job.
-PyO3 builds link setup-python's interpreter (`PYO3_PYTHON`), not the venv's;
-the Tests jobs set up Python too, because the conformance ledger test runs
-`python3`. Within a job every step runs even when an earlier one failed, so
-one run reports each failure. `STACK_GUARD_TESTS` (in the workflow's `env`)
+PyO3 builds link setup-python's interpreter (`PYO3_PYTHON`), not the venv's.
+Within a job every step runs even when an earlier one failed, so one run
+reports each failure. `STACK_GUARD_TESTS` (in the workflow's `env`)
 selects every server, client, endpoint, integration and CLI test, the
 benchmark SC mTLS tests and bacnet-transport's BACnet/SC tests; the guard step
 runs `--no-run` first because rustc reads `RUST_MIN_STACK` too, and adds about
@@ -506,11 +505,9 @@ cargo nextest run -p rusty-bacnet --locked # the PyO3 crate's Rust tests
 bash scripts/ci/check-file-size.sh
 bash scripts/ci/test-check-no-secrets.sh && bash scripts/ci/check-no-secrets.sh
 python3 scripts/ci/test-check-msrv.py
-python3 scripts/check_ledger_style.py && python3 scripts/check_ledger_links.py
 python3 -m unittest discover -s scripts/release
 python3 -m unittest discover -s scripts -p 'test_changelog.py'
 python3 scripts/changelog.py check
-python3 -m unittest discover -s scripts -p 'test_ledger_*.py'
 actionlint .github/workflows/*.yml          # after editing a workflow
 ```
 

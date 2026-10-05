@@ -22,7 +22,7 @@ Default behavior:
 - Record commands, files, symbols, and sources used as evidence.
 - Keep PRs small: one BACnet layer, state-machine family, or measured hotspot per PR.
 - Do not add new CI unless explicitly requested.
-- Do not broaden README or public support claims without conformance ledger rows, tests, and evidence.
+- Do not broaden README or public support claims without tests and evidence.
 - Use `_spec/rusty-bacnet-compliance-execution-plan/` for the current roadmap: read the current block of `NEXT_HANDOFF.md`, then relevant `CURRENT_STATUS.md`, `WORK_QUEUE.md`, `DECISIONS.md`, and packet/gate files. Historical blocks preserve evidence, not current instructions. The older `_spec/rusty_bacnet_compliance_specs_v1/` path is absent in this checkout. Locate the licensed Standard through `STANDARD_NAVIGATION.md` before protocol work; never infer a missing source.
 
 

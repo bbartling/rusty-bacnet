@@ -307,7 +307,7 @@ fn a_purge_leaves_one_buffer_purged_record_and_nothing_to_query() {
     assert_eq!(committed.total_record_count, 4);
     assert_eq!(committed.generation, before.generation + 1);
 
-    // The receipt ledger survives: the confirmed batch sent again is still a
+    // The completed receipts survive: the confirmed batch sent again is still a
     // duplicate, and a new report follows the purge record.
     assert!(matches!(
         log.stage_notification_batch(&[notification(1)], 3_000, Some(receipt(b"kept"))),

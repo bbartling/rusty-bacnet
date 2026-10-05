@@ -92,5 +92,4 @@ sequential cancellation-safe behavior.
 Behavioral evidence is in `audit_batching_tests`, `audit_batch_resources_tests`,
 `audit_batch_history_tests`, `audit_batch_shutdown_tests`,
 `audit_historical_loss_tests`, `reporter_delay_tests`, and installed
-`test_delayed_target_audit.py`. See the [conformance summary](conformance/support-summary.md)
-for the bounded claim and remaining qualification limits.
+`test_delayed_target_audit.py`.

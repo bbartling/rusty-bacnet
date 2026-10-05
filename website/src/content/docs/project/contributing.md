@@ -25,7 +25,7 @@ Use descriptive headings, visible keyboard focus, copyable code, and clear link 
 
 ## Preserve technical evidence
 
-The website is the task-oriented entry point. Generated rustdoc, distributed Python stubs, command help, the changelog, and conformance artifacts retain their specific roles. Avoid creating a second handwritten copy of a large API table or evidence ledger.
+The website is the task-oriented entry point. Generated rustdoc, distributed Python stubs, command help, and the changelog retain their specific roles. Avoid creating a second handwritten copy of a large API table.
 
 No private keys, real customer identifiers, or unredacted operational captures belong in site source or public issue attachments.
 

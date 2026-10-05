@@ -352,8 +352,7 @@ requested indexes remain on known arrays, including index zero and inline array
 errors; scalar results omit them. Unknown objects/properties or unavailable
 legacy declarations conservatively omit the response index. This does not alter
 read error precedence or add a property read. Target Audit records retain the
-requested index independently. See the
-[scoped conformance evidence](conformance/support-summary.md).
+requested index independently.
 
 ```rust
 use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadAccessResult};
@@ -379,8 +378,7 @@ bundled server returns a formal WPM Error with `SERVICES / PARAMETER_OUT_OF_RANG
 for a valid Unsigned priority outside 1..16, retaining the failed coordinate and
 any successful prefix. Syntax failures retain initial Reject and post-prefix
 `INVALID_TAG` behavior. Whole-request `WritePropertyMultipleRequest::decode`
-returns `Error::Decoding` for either failure. Executed scope and evidence are
-recorded in `BACNET-15-WPM-ORDERED-PREFIX-ERROR` in the conformance ledger.
+returns `Error::Decoding` for either failure.
 
 ### COV
 
@@ -560,7 +558,7 @@ values use the library's `u64` implementation limit (1-8 octet canonical
 forms). Storage filtering enforces all three states, and the continuation
 cursor is literal (only identities below the cursor match, newest-first
 insertion order even across `u64::MAX`-to-1 wrap). These codecs are not an
-unqualified Clause 13.19 support claim; see the conformance ledger.
+unqualified Clause 13.19 support claim.
 
 ---
 
@@ -746,8 +744,7 @@ possibly empty URI list) only while a registered direct listener is live, its
 VMAC/UUID matches, and both NPDU intakes remain open. Otherwise the node returns
 COMMUNICATION/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (`7/45`). This current-live
 availability policy is shared with Advertisement. Capability NAKs use the
-existing rejection deadline and retirement behavior. See the
-[scoped conformance evidence](conformance/standard-135-2020-ledger.md#node-address-resolution-accepting-capability).
+existing rejection deadline and retirement behavior.
 
 
 ### Direct peer membership and limits
@@ -842,8 +839,7 @@ transaction; this is not proof of same-leaf continuity. Optional historical-rout
 filtering is separate from the selected original-socket policy for incoming replies.
 No outgoing transaction/retry policy changes here. This source behavior postdates
 published 0.11.0 and adds no Python direct-entry API, Hub-relayed end-to-end identity,
-full Annex AB or certification claim. See the
-[scoped evidence](conformance/standard-135-2020-ledger.md#bidirectional-direct-traffic).
+full Annex AB or certification claim.
 
 ### Accepted direct TLS identity
 
@@ -946,8 +942,7 @@ on a historical socket. It postdates published 0.11.0 and qualifies only the
 native server consumer described here. The [client and endpoint supplement](#accepted-direct-client-and-endpoint-replies)
 qualifies those additional inbound reply consumers. Outgoing client transaction
 correlation retains the [standard path-switching behavior](#bidirectional-direct-traffic). No full
-Annex AB, external interoperability or certification claim follows. See the
-[scoped response evidence](conformance/standard-135-2020-ledger.md#accepted-direct-server-responses).
+Annex AB, external interoperability or certification claim follows.
 
 ### Accepted-direct client and endpoint replies
 
@@ -987,10 +982,10 @@ revoke the original authorization or roll back an admitted Device write.
 Direct responses use empty outgoing Data Options; ordinary endpoint egress keeps
 its existing data-attribute and destination behavior.
 
-[Scoped real-TLS and lifecycle evidence](conformance/standard-135-2020-ledger.md#accepted-direct-client-and-endpoint-replies)
-uses public client/session paths, held A envelopes and distinct-leaf B replacements,
-mixed prompt channels, exact response budgets and cancellation barriers. It is
-neither a full Annex AB claim nor Python direct-listener/API support.
+Real-TLS and lifecycle tests use public client/session paths, held A envelopes
+and distinct-leaf B replacements, mixed prompt channels, exact response budgets
+and cancellation barriers. This is neither a full Annex AB claim nor Python
+direct-listener/API support.
 
 ### Hub certificate bindings
 
@@ -1025,9 +1020,7 @@ ingress consistently. It does not convey a certificate principal in relayed BVLC
 frames, authorize BACnet operations, bind direct-peer requests, or complete the
 Annex AB security profile (#518/#524 remain separate; accepted-direct identity
 is described [above](#accepted-direct-tls-identity)). Runtime tests use
-distinct real same-CA leaves, native registration/relay and joined shutdown;
-[the ledger](conformance/standard-135-2020-ledger.md#hub-certificate-bindings)
-records the bounded evidence.
+distinct real same-CA leaves, native registration/relay and joined shutdown.
 
 ### BACnet/SC Hub
 
@@ -1078,8 +1071,8 @@ upgraded peers that have not sent Connect and peers closing while the Hub awaits
 Disconnect-Ack. Cleanup flushes the queued reciprocal frame within the local
 five-second sink acquisition/I/O bound after retiring the matching registration.
 Close without Disconnect-Ack still yields a forced graceful-shutdown outcome;
-forceful abort may forgo the reply. The [scoped conformance evidence](conformance/standard-135-2020-ledger.md#hub-reciprocal-websocket-close)
-covers WebSocket replies, not TLS `close_notify` behavior.
+forceful abort may forgo the reply. Tests cover the WebSocket replies, not TLS
+`close_notify` behavior.
 
 `ScHubTlsConfig::with_relay_send_budget(Duration)` validates this separate
 transit budget; `validate_relay_send_budget` supports preflight before
@@ -1104,7 +1097,7 @@ policies, separate from the initiating node's normative 3–300s heartbeat range
 global_per_second)` checks the existing continuously refilled broadcast policy
 before I/O. `with_broadcast_rate_policy` applies it unchanged; rates and bursts
 must be in `1..=u64::MAX / 1_000_000_000`. Existing sender/global exhaustion
-counters and silent-drop semantics remain. See [Hub operator policy evidence](conformance/standard-135-2020-ledger.md#hub-operator-timing-and-broadcast-policy).
+counters and silent-drop semantics remain.
 
 `ScHub::status().await.outcomes` is a fixed `ScHubOutcomeCounts` snapshot:
 committed UUID replacements, selected VMAC/capacity refusals, ordered accept
@@ -1117,7 +1110,7 @@ Malformed, pre-registration, stale-source, self/local, broadcast, and forwarded
 Result paths are excluded from unicast counters. Retirement skips do not imply
 send success. Existing admin/broadcast counters retain their meanings.
 Rust status remains available after stop; a new Hub using the same address and
-config owns fresh counters. See [Hub outcome evidence](conformance/standard-135-2020-ledger.md#hub-outcome-status).
+config owns fresh counters.
 
 With `sc-tls`, every public hub startup requires `ScHubTlsConfig`:
 explicit nonempty CA trust anchors, mandatory WebPKI client verification, and
@@ -1707,7 +1700,7 @@ also report absence; present read-only record File counts remain denied. Earlier
 state, command-source, authorization and indexed-write
 guards retain their precedence; custom object implementations retain their own
 write dispatch. WPM reports the failed coordinate and retains its successful
-prefix. See [bounded error evidence](conformance/support-summary.md#ledger-rows).
+prefix.
 
 At the indexed WP/WPM service gate, nonempty effective metadata that omits the
 property produces `PROPERTY/UNKNOWN_PROPERTY` before value decoding. A served
@@ -1883,8 +1876,7 @@ returns `Unsupported`; it never authorizes an intrinsic notification.
 The pre-1.0 API removes `intrinsic_reporting_requires_atomic_commit` and the
 exported `impl_intrinsic_reporting!` macro. Migrate custom objects to the hooks
 above; there is no alternate immediate-commit path. Standalone detector
-`probe`/`tick` methods retain their own detector-local behavior. Executed evidence
-is recorded in `BACNET-13-INTRINSIC-PROPOSAL-COMMIT` in the conformance ledger.
+`probe`/`tick` methods retain their own detector-local behavior.
 
 ### Constructed property framing
 
@@ -2736,10 +2728,8 @@ log, and on every pass calls the hidden `refresh_log_window_internal` hook on
 each Trend Log, Trend Log Multiple and Event Log, so each records its window
 opening or closing. Wrappers forward that hook, as `SourceReporter` does.
 `TrendLogObject::set_logging_type` returns `Result`, as Trend Log
-Multiple's does. Only POLLED and TRIGGERED logs are polled. Bounded evidence
-is recorded in
-`BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance is not
-claimed.
+Multiple's does. Only POLLED and TRIGGERED logs are polled. Complete log-family
+conformance is not claimed.
 
 #### Audit Reporter configuration and send delay
 
@@ -3861,7 +3851,6 @@ unchanged; the server returns INCONSISTENT_PARAMETERS before object lookup,
 expiry cleanup or subscription changes. Public Rust/Python ordinary subscribe
 methods already supply the mode and retain their optional lifetime signatures.
 Python exposes ordinary COV and PropertyMultiple, not the single-property API.
-These boundaries are tracked in the [COV subscription ledger](conformance/support-summary.md).
 
 The full server owns the served Device execution profile. Every Device's
 `Protocol_Services_Supported` reports the fixed `EXECUTED_SERVICES`, with the
@@ -4750,7 +4739,7 @@ peer-reported payload; only the confirmed context has an invoke ID. Accepted
 lists merge or create records atomically through the sink's durable backend.
 For the built-in `AuditLogObject`, a successful confirmed receipt also stores
 its complete exact-request identity and Unix UTC completion timestamp in that
-same snapshot transaction. The 60-second / 256-entry ledger survives a reopen;
+same snapshot transaction. The 60-second / 256-entry receipt list survives a reopen;
 retained duplicates are discarded before authorization without a SimpleACK
 replay. Entries expire at 60 seconds, and a stored future timestamp fails open
 rather than suppressing indefinitely. The general process-local confirmed-
@@ -4771,14 +4760,14 @@ both services. `RangeSpec::ByPosition::reference_index`,
 
 `AuditLogSnapshot::completed_receipts` is part of the public custom-persistence
 snapshot contract. `FileAuditLogPersistence` writes schema v3, reads schema v2
-and schema v1 (as an empty receipt ledger), rejects unknown future versions,
+and schema v1 (as an empty receipt list), rejects unknown future versions,
 and retains the
 existing two-slot generation/checksum recovery policy. When migrating a custom
 `AuditLogPersistence` implementation to 0.11.0, add `completed_receipts: Vec::new()`
 to newly constructed snapshots and when decoding an older format without
-receipts. Thereafter, `commit` must durably store the supplied receipt ledger
+receipts. Thereafter, `commit` must durably store the supplied receipt list
 and records in the same atomic snapshot, and `load` must restore both. Dropping
-or separately committing the ledger loses confirmed-request duplicate
+or separately committing the receipts loses confirmed-request duplicate
 protection after a reopen. The built-in file backend needs no separate v1
 conversion: it writes the current schema on the next successful commit.
 
@@ -4794,7 +4783,7 @@ Back up both `.slot0` and `.slot1` files before the first commit under a newer s
 supports only an older schema cannot read newer snapshots; rolling back to such an implementation
 requires restoring a compatible backup and loses changes made after that backup.
 
-Unconfirmed receipt never emits a response and never writes the confirmed ledger.
+Unconfirmed receipt never emits a response and never stores a confirmed receipt.
 Query authorization, sustained rate limiting, and multi-log routing
 policy are not provided. The standalone server optionally forwards changed
 accepted batches from its selected log after local commit: configure
@@ -4860,7 +4849,7 @@ other logs' (Clause 12.64.11), so a Record_Count write fails with
 log it holds itself. A purge clears the ring and appends a BUFFER_PURGED
 status record, whether or not logging is enabled, flagged LOG_DISABLED too
 while it is not (Clause 12.64.10). Total_Record_Count keeps counting, and the
-completed-receipt ledger survives, so a confirmed notification already stored
+completed receipts survive, so a confirmed notification already stored
 is still a duplicate afterwards. AuditLogQuery then returns no records, since
 it returns notifications only; ReadRange shows the purge record.
 
@@ -4956,7 +4945,6 @@ This behavior postdates published 0.11.0. `NetworkLayer::send_apdu_on_issuance`
 provides the narrow post-NPDU-encoding callback used by these response owners;
 constructing its lazy future does not invoke the callback. This does not resolve
 response socket affinity or segmented-response ACK/Abort confinement (#524).
-See the [bounded TSM evidence](conformance/standard-135-2020-ledger.md#ordinary-confirmed-transaction-lifetimes).
 
 ### Building a Server
 
@@ -5597,7 +5585,7 @@ its hosting device's lifetime UUID: see [hub identity migration](#bacnetsc-hub).
 Raw `ScTransport` now has the [startup guard](#bacnetsc-client-transport) above;
 remote-peer VMAC rules remain unchanged. This does not move
 higher-level builder checks or promise that every local VMAC is rejected before
-dialing. The owner-approved [#517 acceptance closeout](conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout)
+dialing. The owner-approved #517 acceptance closeout
 resolves the scoped default/nil identity problem under these boundaries, not all
 low-level public paths or RFC bit-profile/lifetime enforcement; no PICS/profile promotion.
 
@@ -5620,7 +5608,7 @@ otherwise-valid wrong-ID Accepts retain the terminal mismatch error. Failed
 restoration probes do not replace the active failover or reseed the local VMAC.
 This receive-shape policy adds no UUID version/variant, generation or storage
 requirements; optional [Hub certificate bindings](#hub-certificate-bindings) are
-configured separately. See the [scoped evidence](conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
+configured separately.
 
 **Current-dev zero-limit receive policy (Refs #519):** the shared Connect validator
 rejects zero Max-BVLC or Max-NPDU in either received Connect message, after the
@@ -5639,7 +5627,6 @@ Local defaults, adapter caps and independent per-peer outgoing budgets remain
 unchanged; generic codecs/constructors and manual raw sending still permit zero
 syntax. Post-start public mutation is outside this receive guard. #519 remains
 open/partial; closed #517 identity acceptance and lifetime exclusions remain valid.
-See [zero-capacity evidence](conformance/standard-135-2020-ledger.md#received-zero-capacity-admission).
 
 ```rust
 use bacnet_client::client::BACnetClient;
@@ -5762,7 +5749,7 @@ MS/TP starts UNKNOWN with no configured MS/TP Network Port API. The full server,
 
 Control work has its own 256-entry receiver and serial worker, so a blocked learning operation or SC Hub write does not stop incoming APDU handling or already-admitted Audit acknowledgment dispatch. A blocked socket writer still serializes physical egress; this does not promise a second concurrent send. Stop seals, aborts and joins that worker before transport cleanup; cancellation retains cleanup ownership. Queued endpoint control sends are caller-owned and canceled with the worker, while a send already started may have reached the wire. The registered-object lease remains with the final socket and admitted work.
 
-The `BACNET-06-NONROUTER-NETWORK-NUMBER` row in the [conformance evidence](conformance/support-summary.md#ledger-rows) covers actual inbound BVLL controls through both B/IP owners, outgoing NPDU observation after a successful real broadcast send, and independent tests of the unchanged BVLL framing layer. The NORMAL B/IP owner fixture does not capture outgoing BVLL frames. Separate full-server BBMD/foreign tests independently decode actual loopback UDP: Linux BBMD tests distinguish own Original-Broadcast replies from Forwarded-NPDU fanout, and cross-platform foreign tests capture DBTN directly. Positive response fences cover refusal and recovery; held producer tests qualify APDU progress, canceled stop, drop and socket release. This loopback evidence does not qualify a physical LAN. Separate constrained-TLS SC fixtures independently decode actual broadcast-VMAC NNI bytes through both owners and `AnyTransport`; deterministic single-writer socket gates qualify bounded control queues, ACK/handler progress, cancellation and joined teardown. Already-admitted detached ordinary APDU sends retain their existing ownership; canceling Number work is not their retraction. Separate opt-in Linux tests capture full-server normal multicast and foreign DBTN bytes with an independent raw observer/BBMD, and a fresh installed Python extension qualifies normal multicast intake/output on the same isolated topology. These external-network tests are distinct from ordinary CI coverage. These controls do not establish a complete Network Port, Annex U/AB or router profile.
+Tests cover actual inbound BVLL controls through both B/IP owners and outgoing NPDU observation after a successful real broadcast send, and separate tests cover the unchanged BVLL framing layer. The NORMAL B/IP owner fixture does not capture outgoing BVLL frames. Separate full-server BBMD/foreign tests independently decode actual loopback UDP: Linux BBMD tests distinguish own Original-Broadcast replies from Forwarded-NPDU fanout, and cross-platform foreign tests capture DBTN directly. Positive response fences cover refusal and recovery; held producer tests qualify APDU progress, canceled stop, drop and socket release. This loopback evidence does not qualify a physical LAN. Separate constrained-TLS SC fixtures independently decode actual broadcast-VMAC NNI bytes through both owners and `AnyTransport`; deterministic single-writer socket gates qualify bounded control queues, ACK/handler progress, cancellation and joined teardown. Already-admitted detached ordinary APDU sends retain their existing ownership; canceling Number work is not their retraction. Separate opt-in Linux tests capture full-server normal multicast and foreign DBTN bytes with an independent raw observer/BBMD, and a fresh installed Python extension qualifies normal multicast intake/output on the same isolated topology. These external-network tests are distinct from ordinary CI coverage. These controls do not establish a complete Network Port, Annex U/AB or router profile.
 
 
 A configured object becomes the receiving port only through explicit selection:
@@ -5901,9 +5888,8 @@ WritePropertyMultiple remain excluded, including source Reporter configuration.
 
 Deterministic request/reply tests cover authorization, framing, routing,
 reply channels, group silence, segmentation and shutdown; a B/IP loopback test
-covers an authorized write and service-profile readback. Evidence is tracked
-in `BACNET-15-ENDPOINT-DEVICE-WRITE` (in progress). This is not general endpoint
-mutation parity or inbound replay suppression. The source recipient extension
+covers an authorized write and service-profile readback. This is not general
+endpoint mutation parity or inbound replay suppression. The source recipient extension
 is described below and in the [Device recipient contract](device-audit-recipient.md).
 
 ### Direct endpoint WriteProperty and source WRITE reporting

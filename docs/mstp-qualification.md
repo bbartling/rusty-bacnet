@@ -199,8 +199,8 @@ USB buffering. Leave #502/#707 open pending their remaining evidence/owner revie
 
 ## Result format and repository checks
 
-The JSON template is an **unrun form**, not sample success data or a second
-conformance ledger. Copy `cell_template` into `runs` per cell/repetition. Replace
+The JSON template is an **unrun form**, not sample success data or a
+conformance record. Copy `cell_template` into `runs` per cell/repetition. Replace
 nulls with measured values; use `not_run`, `indeterminate`, `pass`, or `fail` and
 explain unavailable evidence. A measurement with zero samples cannot pass.
 Each router/mini `before`, `after`, and `delta` map must contain exactly the listed

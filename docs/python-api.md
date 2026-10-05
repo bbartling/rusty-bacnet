@@ -661,7 +661,6 @@ can trigger after a delivered absent observation. Multiple samples each context
 separately under one DB/snapshot borrow and retains existing lifetime fences.
 These server guarantees do not add a Python Single-property API, empty finite
 Multiple contexts, delayed Multiple notifications or general numeric-array reduction.
-See the [COV subscription ledger](conformance/support-summary.md).
 
 #### `subscribe_cov(address, subscriber_process_identifier, monitored_object_identifier, confirmed, lifetime=None)`
 
@@ -2986,7 +2985,7 @@ MS/TP uses the same unregistered UNKNOWN state through the Python full server's 
 
 Control work has its own 256-entry receiver and serial worker, so a blocked learning operation or SC Hub write does not stop incoming APDU handling or already-admitted Audit acknowledgment dispatch. A blocked socket writer still serializes physical egress; this does not promise a second concurrent send. Stop seals, aborts and joins that worker before transport cleanup; cancellation retains cleanup ownership. Queued endpoint control sends are caller-owned and canceled with the worker, while a send already started may have reached the wire. The registered-object lease remains with the final socket and admitted work.
 
-The `BACNET-06-NONROUTER-NETWORK-NUMBER` row in the [conformance evidence](conformance/support-summary.md#ledger-rows) covers actual inbound BVLL controls through both B/IP owners, outgoing NPDU observation after a successful real broadcast send, and independent tests of the unchanged BVLL framing layer. The NORMAL B/IP owner fixture does not capture outgoing BVLL frames. Separate full-server BBMD/foreign tests independently decode actual loopback UDP: Linux BBMD tests distinguish own Original-Broadcast replies from Forwarded-NPDU fanout, and cross-platform foreign tests capture DBTN directly. Positive response fences cover refusal and recovery; held producer tests qualify APDU progress, canceled stop, drop and socket release. This loopback evidence does not qualify a physical LAN. Separate constrained-TLS SC fixtures independently decode actual broadcast-VMAC NNI bytes through both owners and `AnyTransport`; deterministic single-writer socket gates qualify bounded control queues, ACK/handler progress, cancellation and joined teardown. Already-admitted detached ordinary APDU sends retain their existing ownership; canceling Number work is not their retraction. Separate opt-in Linux tests capture full-server normal multicast and foreign DBTN bytes with an independent raw observer/BBMD, and a fresh installed Python extension qualifies normal multicast intake/output on the same isolated topology. These external-network tests are distinct from ordinary CI coverage. These controls do not establish a complete Network Port, Annex U/AB or router profile.
+Tests cover actual inbound BVLL controls through both B/IP owners and outgoing NPDU observation after a successful real broadcast send, and separate tests cover the unchanged BVLL framing layer. The NORMAL B/IP owner fixture does not capture outgoing BVLL frames. Separate full-server BBMD/foreign tests independently decode actual loopback UDP: Linux BBMD tests distinguish own Original-Broadcast replies from Forwarded-NPDU fanout, and cross-platform foreign tests capture DBTN directly. Positive response fences cover refusal and recovery; held producer tests qualify APDU progress, canceled stop, drop and socket release. This loopback evidence does not qualify a physical LAN. Separate constrained-TLS SC fixtures independently decode actual broadcast-VMAC NNI bytes through both owners and `AnyTransport`; deterministic single-writer socket gates qualify bounded control queues, ACK/handler progress, cancellation and joined teardown. Already-admitted detached ordinary APDU sends retain their existing ownership; canceling Number work is not their retraction. Separate opt-in Linux tests capture full-server normal multicast and foreign DBTN bytes with an independent raw observer/BBMD, and a fresh installed Python extension qualifies normal multicast intake/output on the same isolated topology. These external-network tests are distinct from ordinary CI coverage. These controls do not establish a complete Network Port, Annex U/AB or router profile.
 
 
 `BipEndpoint(..., network_port_instance=2, registered_network_port=2)` explicitly
@@ -3670,8 +3669,7 @@ contents in status/errors.
 This is explicit installation policy under Annex AB.7.4. It does not authenticate
 relayed operations end to end, authorize operations, or secure direct SC ingress.
 Every Hub feeding a trusted router ingress must enforce the selected policy;
-#518/#524 remain separate. See the [native contract](rust-api.md#hub-certificate-bindings)
-and [scoped evidence](conformance/standard-135-2020-ledger.md#hub-certificate-bindings).
+#518/#524 remain separate. See the [native contract](rust-api.md#hub-certificate-bindings).
 
 ## ScHub
 
@@ -3779,8 +3777,8 @@ normative BACnet probe ranges. Broadcast burst/refill fields use the existing
 native rate policy with bounds `1..=(2**64 - 1)//1_000_000_000`; one token admits
 one broadcast request, not one recipient. Exhaustion silently drops and updates
 `broadcast_sender_exhausted` or `broadcast_global_exhausted`. All these settings
-are validated in the constructor before file I/O or bind. [Executed scope](conformance/standard-135-2020-ledger.md#hub-operator-timing-and-broadcast-policy)
-includes installed mutual-TLS probe and rate/counter tests.
+are validated in the constructor before file I/O or bind. Installed mutual-TLS
+tests cover the probe and the rate and counter settings.
 
 The UUID identifies the hosting **device**, while VMAC identifies its hosting
 **port**; Connect-Accept carries their exact configured bytes (base 2020 AB.2.11,
@@ -3877,7 +3875,6 @@ Result paths are excluded. Only actual committed replacement or matching-generat
 heartbeat removal counts. No send-success inference, payloads, peer identifiers,
 or raw errors are retained. Fields are sampled independently and never drive
 policy. Existing admin/broadcast counters and Python status lifecycle are unchanged.
-See [scoped evidence](conformance/standard-135-2020-ledger.md#hub-outcome-status).
 
 #### Context manager
 
@@ -4090,7 +4087,7 @@ it cannot undo a caller's prior WebSocket dial. Python signatures and earlier
 constructor preflights are unchanged. The raw guard runs at startup, and the Rust
 transport gives applications no mutable access to its connection afterwards; see the
 [Rust startup/retry limits](rust-api.md#bacnetsc-client-transport).
-The owner-approved [#517 acceptance closeout](conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout)
+The owner-approved #517 acceptance closeout
 resolves the scoped default/nil identity problem with caller-owned provisioning
 and storage. These local API checks are not certificate-to-UUID
 binding, full identity-profile validation, or full Annex AB conformance.
@@ -4111,7 +4108,6 @@ later valid Accept can complete that handshake; nil-only traffic times out.
 Generated-certificate installed-native tests cover both paths without changing
 Python signatures or exception mapping. This is local policy, not UUID-profile
 or lifetime-storage validation; post-handshake startup rollback is not expanded.
-See the [scoped evidence](conformance/standard-135-2020-ledger.md#received-peer-uuid-admission).
 
 **Current-dev zero-limit receive policy (Refs #519):** native `BACnetClient` async
 entry and `BACnetServer.start()` also silently discard Connect-Accept advertising
@@ -4128,7 +4124,6 @@ pairs; positive floors and field relationship checks are deferred. Defaults,
 outgoing budgets and Python signatures/exception mapping remain unchanged.
 Generic Rust zero codec syntax and post-start public mutation exclusions remain.
 #519 stays open/partial and does not reopen the closed #517 identity acceptance.
-See [zero-capacity evidence](conformance/standard-135-2020-ledger.md#received-zero-capacity-admission).
 
 #### Required operational credentials
 

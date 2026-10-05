@@ -80,9 +80,6 @@ commit: 0123456789abcdef0123456789abcdef01234567
   have no link where exactly one dev merge names their issue. It needs full
   history, and running it twice changes nothing.
 
-Conformance ledger claims keep citing `CHANGELOG.md`, with the issue in the
-note, since that is where the entry lands at release.
-
 ## Commands
 
 ```bash

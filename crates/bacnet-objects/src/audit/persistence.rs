@@ -557,7 +557,7 @@ pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error
             )));
         }
     }
-    // An empty ledger contributes no projected bytes here so every valid
+    // An empty receipt list contributes no projected bytes here so every valid
     // schema-v1 snapshot remains loadable. The v2 encoder's final concrete
     // length check still includes its four-byte zero count.
     let receipt_len = if snapshot.completed_receipts.is_empty() {

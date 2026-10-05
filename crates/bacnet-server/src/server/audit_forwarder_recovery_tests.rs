@@ -8,7 +8,7 @@ use bacnet_types::primitives::{Date, Time};
 
 fn write_v1_fixture(storage: &FileAuditLogPersistence, record: BACnetAuditLogRecord) {
     // Use the existing file encoder for the record and envelope. The only v1
-    // layout difference is the absent v2 receipt ledger. Keep this fixture local
+    // layout difference is the absent v2 receipt list. Keep this fixture local
     // to the server crate (no source include from another published package).
     storage
         .commit(&AuditLogSnapshot {
@@ -307,7 +307,7 @@ async fn audit_forwarding_file_v1_reopen_has_no_replay_or_historical_receipt() {
             .unwrap(),
         original
     );
-    // A pre-v2 request has no ledger identity. Exact old content is a fresh
+    // A pre-v2 request has no stored receipt. Exact old content is a fresh
     // request (ACK + v2 receipt), although the complete record does not change.
     assert!(matches!(
         f.confirmed(201, &[3], data.clone()).await,
