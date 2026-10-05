@@ -129,43 +129,27 @@ class TruncateTests(unittest.TestCase):
         self.assertIsNone(notes.open_fence("~~~\n```\n~~~~\n"))
 
 
-class GithubRefsTests(unittest.TestCase):
-    ZWSP = "#&#8203;"
-
-    def test_issue_numbers_stop_autolinking_and_a_note_says_where_they_live(self):
-        body = "### Fixed\n\n- Fix (#1134).\n- Two (#1029, #1028), and #7 mid-sentence.\n"
-        out = notes.github_refs(body)
-        self.assertEqual(
-            out,
-            notes.GITHUB_NOTE + "\n\n### Fixed\n\n- Fix (#&#8203;1134).\n"
-            "- Two (#&#8203;1029, #&#8203;1028), and #&#8203;7 mid-sentence.\n",
-        )
-        self.assertNotRegex(out.removeprefix(notes.GITHUB_NOTE), r"(?<![\w&])#\d")
-
-    def test_code_links_anchors_and_headings_are_left_alone(self):
-        body = (
-            "### Fixed\n\n"
-            "- Keep `#12` in code, [docs](docs/x.md#hub-unknown), a/b#3, x#4, &#8203;, "
-            "and [#9](https://example.invalid/9) ([abc1234](https://github.com/o/r/commit/abc1234)).\n"
-            "\n```text\n#5 inside a fence\n```\n"
-        )
-        self.assertEqual(notes.github_refs(body), body)
-
-    def test_cut_notes_stay_within_max_chars(self):
+class IssueRefsTests(unittest.TestCase):
+    def test_cut_notes_stay_within_max_chars_and_keep_issue_references(self):
+        # The issues live on GitHub now (#1472), so #N is left for GitHub to link.
         body = "".join(f"- Entry {i} (#{i}).\n\n" for i in range(1, 400))
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp, "CHANGELOG.md")
             path.write_text(f"## [Unreleased]\n\n## [1.0.0]\n\n{body}", encoding="utf-8")
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                args = ["--changelog", str(path), "--version", "1.0.0", "--github"]
+                args = ["--changelog", str(path), "--version", "1.0.0"]
                 code = notes.main([*args, "--max-chars", "2000", "--full-url", "https://example.invalid/c"])
             self.assertEqual(code, 0)
             text = out.getvalue()
             self.assertLessEqual(len(text), 2000)
-            self.assertTrue(text.startswith(notes.GITHUB_NOTE))
-            self.assertIn("- Entry 1 (#&#8203;1).", text)
+            self.assertTrue(text.startswith("- Entry 1 (#1).\n"))
+            self.assertNotIn("&#8203;", text)
             self.assertIn("cut short", text)
+
+    def test_the_github_option_is_gone(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            notes.main(["--version", "1.0.0", "--github"])
 
 
 class MainTests(unittest.TestCase):

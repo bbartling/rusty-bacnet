@@ -1,0 +1,686 @@
+name: Release
+
+# Builds, tests and publishes a release on GitHub-hosted runners (#943, #1472).
+# Each artifact is built on a runner of its own platform and architecture:
+# Linux in the manylinux2014 image (glibc 2.17) on the x86_64 and arm64 Ubuntu
+# runners, macOS with Xcode on the Apple Silicon and Intel runners, Windows
+# with MSVC. Each is then checked and run on its platform before anything is
+# published. See docs/ci.md, "Release".
+#
+#   v* tag pushed     Validate, the CI gate (CI OK and Native OK on the tag's
+#                     commit), build, check and smoke-test every artifact, then
+#                     one step at a time: stage the GitHub draft, publish to
+#                     crates.io, publish to PyPI, publish the GitHub draft.
+#   manual dispatch   dry_run (default true) builds and tests everything,
+#                     plans the publish steps read only and publishes nothing.
+#                     dry_run=false is accepted only on a v* tag, and runs that
+#                     tag's release again.
+#   pull request      a dry run, when a PR changes what the release builds
+#                     with (the paths below), so release changes are tested
+#                     before they merge.
+#
+# A dry run uses no secret and never deploys to the release environment, so a
+# fork's PR runs it too. Every publish step is safe to re-run: resume a partial
+# release with "Re-run failed jobs", which keeps the artifacts the first
+# attempt built and tested.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and test only; publish nothing
+        type: boolean
+        default: true
+  pull_request:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/release.yml
+      - .github/ci-pins.env
+      - scripts/release/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - crates/rusty-bacnet/pyproject.toml
+
+# Each job asks for what it needs.
+permissions: {}
+
+concurrency:
+  # One run per ref. A newer push to a PR replaces its dry run; nothing else
+  # is cancelled, least of all a run that may be publishing.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # The newest glibc any Linux artifact may need: manylinux2014 for the wheels,
+  # and RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later for the CLI.
+  GLIBC: "2.17"
+  # The CPython versions with wheels. The build and smoke jobs set up exactly
+  # these with setup-python; change both together.
+  PYTHONS: "3.11 3.12 3.13 3.14"
+
+defaults:
+  run:
+    # bash -eo pipefail: a failing command in a pipeline fails the step.
+    shell: bash
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
+      gate_commit: ${{ steps.release.outputs.gate_commit }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Every branch, for the ancestry check.
+          fetch-depth: 0
+          persist-credentials: false
+      # The channel that rust-toolchain.toml pins, with the minimal profile
+      # plus the components that file lists. No job here uses a Rust cache.
+      - &toolchain
+        name: Install the pinned Rust toolchain
+        run: |
+          channel=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
+          components=$(sed -n 's/^components = \[\(.*\)\]$/\1/p' rust-toolchain.toml | tr -d '" ')
+          [[ $channel =~ ^[0-9A-Za-z.-]+$ && $components =~ ^[a-z,-]+$ ]] \
+            || { echo "::error::no channel or components line in rust-toolchain.toml"; exit 1; }
+          rustup toolchain install "$channel" --profile minimal --component "$components"
+          rustc -vV
+      - name: Release script tests
+        run: |
+          python3 -m unittest discover -s scripts/release
+          python3 -m unittest discover -s scripts -p 'test_changelog.py'
+      - name: Version, tag and mode
+        id: release
+        env:
+          EVENT: ${{ github.event_name }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Every publishable crate carries the workspace version, and the Python
+          # package takes it from crates/rusty-bacnet.
+          version=$(cargo metadata --no-deps --format-version 1 --locked | jq -r '
+            [.packages[] | select(.publish != []) | .version] | unique
+            | if length == 1 then .[0] else error("publishable crates disagree: \(.)") end')
+          tag=
+          case "$GITHUB_REF" in refs/tags/v*) tag=${GITHUB_REF#refs/tags/} ;; esac
+          commit=$(git rev-parse HEAD)
+          publish=false
+          if [ "$EVENT" = push ]; then publish=true; fi
+          if [ "$EVENT" = workflow_dispatch ] && [ "$DRY_RUN_INPUT" = false ]; then publish=true; fi
+          if [ "$publish" = true ] && [ -z "$tag" ]; then
+            echo "::error::only a v* tag publishes, and $GITHUB_REF is not one; dispatch with dry_run=true"
+            exit 1
+          fi
+          if [ -n "$tag" ]; then
+            [ "$tag" = "v$version" ] || { echo "::error::tag $tag does not match the workspace version $version"; exit 1; }
+            git merge-base --is-ancestor HEAD origin/dev || git merge-base --is-ancestor HEAD origin/main \
+              || { echo "::error::$tag ($commit) is on neither dev nor main"; exit 1; }
+          fi
+          # A PR's run builds the PR merged into its base; CI's checks are on the PR's head.
+          gate_commit=${PR_HEAD:-$commit}
+          echo "version $version, tag ${tag:-none}, commit $commit, CI gate on $gate_commit, publish $publish"
+          {
+            echo "version=$version"; echo "tag=$tag"; echo "commit=$commit"
+            echo "gate_commit=$gate_commit"; echo "publish=$publish"
+          } >>"$GITHUB_OUTPUT"
+      - name: Release notes from CHANGELOG.md
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          mkdir notes
+          # A tag needs its version's section, assembled from changelog.d/ with
+          # no fragment left over. A dry run uses that section if it exists,
+          # otherwise the section the waiting fragments would make (maybe none),
+          # assembled into a copy so CHANGELOG.md and changelog.d/ stay as they are.
+          if [ -n "$TAG" ]; then
+            python3 scripts/changelog.py check --no-fragments
+            section=(--version "$VERSION")
+          elif python3 scripts/release/changelog_notes.py --version "$VERSION" >/dev/null 2>&1; then
+            section=(--version "$VERSION")
+          else
+            assembled="$(mktemp -d)/CHANGELOG.md"
+            python3 scripts/changelog.py assemble --version "$VERSION" --allow-empty --output "$assembled"
+            section=(--version "$VERSION" --allow-empty --changelog "$assembled")
+          fi
+          echo "notes: changelog_notes.py ${section[*]}"
+          # GitHub refuses release bodies over 125,000 characters.
+          python3 scripts/release/changelog_notes.py "${section[@]}" --max-chars 120000 \
+            --full-url "https://github.com/$GITHUB_REPOSITORY/blob/${TAG:-dev}/CHANGELOG.md" >notes/notes.md
+          wc -c notes/notes.md
+      - name: Third-party notices
+        run: |
+          cargo fetch --locked
+          bash scripts/release/libpcap.sh "$RUNNER_TEMP/libpcap"
+          mkdir notices
+          python3 scripts/release/third_party_notices.py --out notices/THIRD-PARTY-NOTICES \
+            --libpcap "$RUNNER_TEMP/libpcap"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-notes
+          path: notes/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: notices
+          path: notices/
+          if-no-files-found: error
+
+  # In parallel with the builds; every publish job needs it. On a tag it waits
+  # up to 60 minutes for CI's run on the tag's commit. A dry run checks once
+  # and only warns. See docs/ci.md, "CI gate".
+  ci-gate:
+    name: CI gate
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    permissions:
+      actions: read # the commit's workflow runs
+      checks: read # their check runs
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/release
+      - name: CI OK and Native OK on the release commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate.outputs.gate_commit }}
+          PUBLISH: ${{ needs.validate.outputs.publish }}
+        run: |
+          mode=(--wait 3600)
+          [ "$PUBLISH" = true ] || mode=(--warn-only)
+          python3 scripts/release/ci_gate.py --commit "$COMMIT" "${mode[@]}"
+
+  source:
+    name: Crates and sdist
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - *toolchain
+      - name: Install maturin
+        run: bash scripts/ci/install-tools.sh maturin
+      # Packages every publishable crate and builds each against the others as
+      # they would be published (multi-package publish, Cargo 1.90 and later).
+      - name: cargo publish --workspace --dry-run
+        run: cargo publish --workspace --dry-run --locked
+      # pyproject.toml's license-files puts it in the sdist.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: notices
+          path: crates/rusty-bacnet
+      # The dry run keeps its .crate files in Cargo's scratch directories;
+      # `cargo package` writes the same packages to target/package/. Unlike
+      # publish, `package --workspace` would include the publish = false crates.
+      # SOURCE_DATE_EPOCH pins the sdist's timestamps.
+      - name: .crate files and sdist
+        run: |
+          packages=$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.publish != []) | "--package=\(.name)"')
+          # shellcheck disable=SC2086 # One flag per word.
+          cargo package --locked --no-verify $packages
+          mkdir crate-files
+          cp target/package/*.crate crate-files/
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) maturin sdist -m crates/rusty-bacnet/Cargo.toml --out dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: crates
+          path: crate-files/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: dist/
+          if-no-files-found: error
+
+  # The wheels for CPython PYTHONS and the CLI, on each platform's own runner.
+  # Packet capture (pcap) only on Linux, as in 0.11.0. The minimum macOS
+  # versions are those of the 0.11.0 wheels and Rust's defaults; the artifact
+  # check fails if a binary disagrees with its wheel tag.
+  build:
+    name: Build (${{ matrix.name }})
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      # Report every platform even when one fails.
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            arch: x86_64
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            arch: aarch64
+          - name: macos-x86_64
+            os: macos-26-intel
+            target: x86_64-apple-darwin
+            cli: bacnet-macos-amd64
+            macos: "10.12"
+          - name: macos-arm64
+            os: macos-26
+            target: aarch64-apple-darwin
+            cli: bacnet-macos-arm64
+            macos: "11.0"
+          - name: windows-x86_64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+            cli: bacnet-windows-amd64.exe
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # pyproject.toml's license-files puts it in each wheel's .dist-info/licenses/.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: notices
+          path: crates/rusty-bacnet
+      # Pins the wheels' timestamps.
+      - name: Commit time
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >>"$GITHUB_ENV"
+      # scripts/release/build_linux.sh installs the toolchain in the image.
+      - name: Build in the manylinux2014 image
+        if: runner.os == 'Linux'
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: bash scripts/release/build_linux.sh "$ARCH"
+      # On Linux too, though only the macOS and Windows builds use it there:
+      # Actions has no YAML merge keys to add an `if:` to an alias.
+      - *toolchain
+      # Each interpreter's path comes from its step's output; none is put on PATH.
+      - if: runner.os != 'Linux'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: py311
+        with:
+          python-version: "3.11"
+          update-environment: false
+      - if: runner.os != 'Linux'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: py312
+        with:
+          python-version: "3.12"
+          update-environment: false
+      - if: runner.os != 'Linux'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: py313
+        with:
+          python-version: "3.13"
+          update-environment: false
+      - if: runner.os != 'Linux'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: py314
+        with:
+          python-version: "3.14"
+          update-environment: false
+      - name: Build natively
+        if: runner.os != 'Linux'
+        env:
+          TARGET: ${{ matrix.target }}
+          CLI: ${{ matrix.cli }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
+          PY311: ${{ steps.py311.outputs.python-path }}
+          PY312: ${{ steps.py312.outputs.python-path }}
+          PY313: ${{ steps.py313.outputs.python-path }}
+          PY314: ${{ steps.py314.outputs.python-path }}
+        run: |
+          interpreters=()
+          for py in $PYTHONS; do
+            var=PY${py/./}
+            [ -n "${!var:-}" ] || { echo "::error::no CPython $py is set up for this job; add a setup-python step"; exit 1; }
+            interpreters+=("${!var}")
+          done
+          bash scripts/release/build_native.sh "$TARGET" "$CLI" "${interpreters[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-${{ matrix.name }}
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-${{ matrix.name }}
+          path: out/
+          if-no-files-found: error
+
+  # Static checks of every file, on one runner: what the publish jobs upload.
+  verify:
+    name: Check the artifacts
+    needs: [validate, source, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - *checkout
+      - *toolchain
+      # llvm-objdump and llvm-readobj for the Mach-O and PE files.
+      - name: LLVM tools
+        run: |
+          rustup component add llvm-tools
+          echo "$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin" >>"$GITHUB_PATH"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+      # Exactly what the publish jobs upload; artifacts drop the executable bit.
+      - name: Collect the release assets
+        run: |
+          mkdir release
+          cp artifacts/cli-*/* artifacts/wheels-*/* artifacts/sdist/* artifacts/notices/THIRD-PARTY-NOTICES release/
+          chmod +x release/bacnet-*
+          ls -l release
+          (cd release && sha256sum -- *)
+      - name: Versions, wheel tags, notices, architectures and linkage
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          llvm-objdump --version | head -2
+          # shellcheck disable=SC2086 # PYTHONS is a list.
+          python3 scripts/release/check_artifacts.py release --release-version "$VERSION" --glibc "$GLIBC" \
+            --python $PYTHONS \
+            --wheel-platform manylinux_2_17_x86_64.manylinux2014_x86_64 \
+              manylinux_2_17_aarch64.manylinux2014_aarch64 macosx_10_12_x86_64 macosx_11_0_arm64 win_amd64 \
+            --cli bacnet-linux-amd64=linux_x86_64 bacnet-linux-arm64=linux_aarch64 \
+              bacnet-macos-amd64=macosx_10_12_x86_64 bacnet-macos-arm64=macosx_11_0_arm64 \
+              bacnet-windows-amd64.exe=win_amd64 \
+            --notices release/THIRD-PARTY-NOTICES
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: release/
+          if-no-files-found: error
+
+  # Each platform's wheels and CLI, run on that platform, from the build's
+  # artifacts: the same files that release-assets holds. See docs/ci.md,
+  # "Smoke tests".
+  smoke:
+    name: Smoke test (${{ matrix.name }})
+    needs: [validate, build]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-24.04
+            platform: linux-x86_64
+            arch: x86_64
+            cli: bacnet-linux-amd64
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+            platform: linux-aarch64
+            arch: aarch64
+            cli: bacnet-linux-arm64
+          - name: macOS arm64
+            os: macos-26
+            platform: macos-arm64
+            cli: bacnet-macos-arm64
+          # GitHub's newest Intel macOS image.
+          - name: macOS x86_64
+            os: macos-26-intel
+            platform: macos-x86_64
+            cli: bacnet-macos-amd64
+          - name: Windows x86_64
+            os: windows-2025
+            platform: windows-x86_64
+            cli: bacnet-windows-amd64.exe
+    steps:
+      - *checkout
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wheels-${{ matrix.platform }}
+          path: assets
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cli-${{ matrix.platform }}
+          path: assets
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: py311
+        with:
+          python-version: "3.11"
+          update-environment: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: py312
+        with:
+          python-version: "3.12"
+          update-environment: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: py313
+        with:
+          python-version: "3.13"
+          update-environment: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: py314
+        with:
+          python-version: "3.14"
+          update-environment: false
+      # Each wheel in a fresh venv of its own CPython: import, version, the
+      # serial port listing (IOKit and CoreFoundation on macOS, SetupAPI on
+      # Windows) and a loopback client/server round trip (wheel_smoke.py).
+      - name: Wheels, each CPython
+        env:
+          PY311: ${{ steps.py311.outputs.python-path }}
+          PY312: ${{ steps.py312.outputs.python-path }}
+          PY313: ${{ steps.py313.outputs.python-path }}
+          PY314: ${{ steps.py314.outputs.python-path }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          uname -a
+          tmp=$RUNNER_TEMP
+          # D:/a/... paths, which both bash and native programs accept.
+          if [ "$RUNNER_OS" = Windows ]; then tmp=$(cygpath -m "$tmp"); fi
+          for py in $PYTHONS; do
+            tag=cp${py/./}
+            var=PY${py/./}
+            interpreter=${!var:-}
+            [ -n "$interpreter" ] || { echo "::error::no CPython $py is set up for this job; add a setup-python step"; exit 1; }
+            if [ "$RUNNER_OS" = Windows ]; then interpreter=$(cygpath -m "$interpreter"); fi
+            wheels=(assets/rusty_bacnet-*-"$tag-$tag"-*.whl)
+            [ ${#wheels[@]} = 1 ] && [ -f "${wheels[0]}" ] || { echo "::error::expected one $tag wheel, found: ${wheels[*]}"; exit 1; }
+            venv=$tmp/venv-$tag
+            "$interpreter" -m venv "$venv"
+            bin=$venv/bin
+            if [ "$RUNNER_OS" = Windows ]; then bin=$venv/Scripts; fi
+            "$bin/python" -m pip install -q --disable-pip-version-check --no-index --no-deps "${wheels[0]}"
+            echo "::group::${wheels[0]##*/}"
+            "$bin/python" -I scripts/release/wheel_smoke.py --version "$VERSION"
+            echo "::endgroup::"
+          done
+      # --version, --help and the README quickstart read against a server on
+      # the cp312 wheel, and on Linux an offline packet capture through the
+      # static libpcap. The macOS and Windows builds have no packet capture.
+      - name: CLI
+        env:
+          CLI: ${{ matrix.cli }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          tmp=$RUNNER_TEMP
+          python=$tmp/venv-cp312/bin/python
+          capture=()
+          if [ "$RUNNER_OS" != Linux ]; then capture=(--no-capture); fi
+          if [ "$RUNNER_OS" = Windows ]; then python=$(cygpath -m "$tmp")/venv-cp312/Scripts/python; fi
+          # Artifacts drop the executable bit.
+          chmod +x "assets/$CLI"
+          bash scripts/release/cli_smoke.sh "${capture[@]}" --expect-version "$VERSION" "assets/$CLI" "$python"
+      # The Python suite against the installed cp312 wheel. Native tests run it
+      # on macOS and Windows against each PR's own build.
+      - name: Python suite
+        if: runner.os == 'Linux'
+        run: |
+          openssl version
+          "$RUNNER_TEMP/venv-cp312/bin/python" -m unittest discover -s crates/rusty-bacnet/tests
+      - name: Wheel and CLI on glibc 2.17
+        if: runner.os == 'Linux'
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: bash scripts/release/smoke_glibc217.sh "$ARCH" "$VERSION" assets
+
+  # Dry runs only: what the publish jobs would do, read only. GitHub lists
+  # drafts only to a token that can write, so this plan doesn't see them.
+  release-plan:
+    name: Publish plan (dry run)
+    needs: [validate, verify]
+    if: needs.validate.outputs.publish != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - *checkout
+      - *toolchain
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: release
+      - name: GitHub release (read only)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.validate.outputs.version }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+        run: python3 scripts/release/release_api.py plan --tag "$TAG" --commit "$COMMIT" --assets release
+      - name: crates.io (read only)
+        run: bash scripts/release/publish_crates.sh --dry-run
+
+  # Publishing: tag runs only, after Validate, the CI gate, every check and
+  # every smoke test passed, one job at a time, so a failure stops everything
+  # after it. The GitHub draft comes first because it is the only reversible
+  # step: it proves GitHub takes the release before crates.io and PyPI, which
+  # can't be undone, and the draft is published last.
+  github-draft:
+    name: GitHub draft
+    needs: [validate, ci-gate, verify, smoke]
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      # Creates and fills the draft; GitHub shows drafts only to a token that can write.
+      contents: write # the draft release
+    outputs:
+      release_id: ${{ steps.stage.outputs.release_id }}
+      sums_sha256: ${{ steps.stage.outputs.sums_sha256 }}
+    steps:
+      - &release-scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/release
+      - &release-assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: release
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-notes
+          path: notes
+      - name: Stage the draft
+        id: stage
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          python3 scripts/release/release_api.py stage --tag "$TAG" --commit "$COMMIT" \
+            --notes notes/notes.md --assets release
+
+  crates-io:
+    name: Publish to crates.io
+    needs: [validate, github-draft]
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: release
+      url: https://crates.io/crates/bacnet-types
+    permissions:
+      contents: read
+    steps:
+      - *checkout
+      - *toolchain
+      - name: cargo publish (the crates not on crates.io yet)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: bash scripts/release/publish_crates.sh
+
+  # Trusted publishing: PyPI accepts this workflow's OIDC token for
+  # rusty-bacnet when its publisher names this repository, release.yml and the
+  # release environment. No skip-existing: PyPI accepts a file it already has
+  # with the same bytes as a no-op and refuses one that differs, so a re-run
+  # finishes a partial upload, and a rebuilt file that differs stops the
+  # release here instead of reaching only GitHub.
+  pypi:
+    name: Publish to PyPI
+    needs: [validate, crates-io]
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: release
+      url: https://pypi.org/project/rusty-bacnet/
+    permissions:
+      id-token: write # trusted publishing: the OIDC token PyPI checks
+    steps:
+      - *release-assets
+      - name: The wheels and the sdist
+        run: |
+          mkdir dist
+          cp release/*.whl release/*.tar.gz dist/
+          ls -l dist
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/
+
+  # Publishes the draft the GitHub draft job staged, unchanged: it must be that
+  # draft, holding exactly these files with their digests and the same
+  # SHA256SUMS. Nothing is uploaded or deleted.
+  github-release:
+    name: GitHub release
+    needs: [validate, github-draft, pypi]
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # reads the draft and publishes it
+    steps:
+      - *release-scripts
+      - *release-assets
+      - name: Publish the staged draft
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+          STAGED_RELEASE: ${{ needs.github-draft.outputs.release_id }}
+          STAGED_SUMS: ${{ needs.github-draft.outputs.sums_sha256 }}
+        run: |
+          # Fails closed: only the staged draft is ever published (the script checks too).
+          [ -n "$STAGED_RELEASE" ] && [ -n "$STAGED_SUMS" ] \
+            || { echo "::error::the GitHub draft job gave no staged draft, so nothing is published"; exit 1; }
+          python3 scripts/release/release_api.py publish --tag "$TAG" --commit "$COMMIT" --assets release \
+            --staged-release "$STAGED_RELEASE" --staged-sums "$STAGED_SUMS"

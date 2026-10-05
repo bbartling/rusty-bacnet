@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the release artifacts before anything is published (#943, #944).
+"""Check the release artifacts before anything is published (#943, #944, #1472).
 
     check_artifacts.py DIR --release-version 0.12.0 --glibc 2.17 --python 3.11 3.12 3.13 3.14 \
         --wheel-platform manylinux_2_17_x86_64.manylinux2014_x86_64 macosx_11_0_arm64 win_amd64 \
@@ -23,11 +23,11 @@ limit. The script fails unless:
     static libpcap);
   - macOS (Mach-O: `llvm-objdump`): its minimum macOS is the platform tag's;
     an arm64 file carries a code signature; it loads libSystem and may load
-    libiconv and libcharset. A CLI binary loads nothing else and leaves no
-    symbol to a flat lookup at load time. An extension module leaves Python's
-    C API (`_Py*`) to a flat lookup (`-undefined dynamic_lookup`), and may
-    also leave exactly the CoreFoundation and IOKit symbols listed below, each
-    only if it loads that framework; it loads no other library;
+    libiconv. A CLI binary loads nothing else and leaves no symbol to a flat
+    lookup at load time. An extension module may also load IOKit and
+    CoreFoundation, for its serial port listing, and leaves Python's C API
+    (`_Py*`), and nothing else, to a flat lookup (`-undefined
+    dynamic_lookup`): it binds everything else to the library that has it;
   - Windows (PE: `llvm-readobj`): a console program or a DLL as expected, which
     imports kernel32.dll, otherwise only Windows system DLLs, and an extension
     module also the Universal CRT, VCRUNTIME140.dll, its own Python's
@@ -59,44 +59,15 @@ PE_MACHINE = {"x86_64": "IMAGE_FILE_MACHINE_AMD64", "aarch64": "IMAGE_FILE_MACHI
 # Wheel tags name the architectures their own way.
 MACOS_ARCH = {"x86_64": "x86_64", "arm64": "aarch64"}
 WINDOWS_ARCH = {"amd64": "x86_64", "arm64": "aarch64"}
-MACOS_SYSTEM = {"/usr/lib/libSystem.B.dylib", "/usr/lib/libiconv.2.dylib", "/usr/lib/libcharset.1.dylib"}
+MACOS_SYSTEM = {"/usr/lib/libSystem.B.dylib", "/usr/lib/libiconv.2.dylib"}
 IOKIT = "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit"
 COREFOUNDATION = "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation"
+# Also allowed in an extension module, not in the CLI: serialport's port
+# listing (MS/TP), which list_serial_ports() uses.
+MACOS_EXTENSION_FRAMEWORKS = {IOKIT, COREFOUNDATION}
 # Python's C API, which the interpreter provides: an extension module leaves it
 # to a flat lookup.
 PYTHON_SYMBOL = re.compile(r"^__?Py")
-# The CoreFoundation and IOKit symbols the extension module leaves to a flat
-# lookup (serialport, for MS/TP, and the core-foundation crate; see
-# scripts/release/macos-frameworks), exactly as the macOS wheels of release dry
-# run 90 had them (#944). Any other symbol, a lookalike such as _CFNetwork* or
-# _IOSurface* included, fails until someone reviews it and adds it here.
-IOKIT_SYMBOLS = frozenset("""
-    _IOIteratorNext _IOMasterPort _IOObjectGetClass _IOObjectRelease _IORegistryEntryCreateCFProperties
-    _IORegistryEntryCreateCFProperty _IORegistryEntryGetParentEntry _IOServiceGetMatchingServices
-    _IOServiceMatching _kIOMasterPortDefault
-""".split())
-COREFOUNDATION_SYMBOLS = frozenset("""
-    _CFAttributedStringCreateMutable _CFBundleCopyBundleURL _CFBundleCopyExecutableURL
-    _CFBundleCopyPrivateFrameworksURL _CFBundleCopyResourcesDirectoryURL _CFBundleCopySharedSupportURL
-    _CFBundleCreate _CFBundleGetBundleWithIdentifier _CFBundleGetFunctionPointerForName
-    _CFBundleGetInfoDictionary _CFBundleGetMainBundle _CFCopyDescription _CFDataCreate
-    _CFDateGetAbsoluteTime _CFDictionaryGetValueIfPresent _CFDictionarySetValue _CFEqual
-    _CFErrorCopyDescription _CFErrorGetCode _CFErrorGetDomain _CFFileDescriptorCreate
-    _CFFileDescriptorCreateRunLoopSource _CFFileDescriptorDisableCallBacks _CFFileDescriptorEnableCallBacks
-    _CFFileDescriptorGetContext _CFFileDescriptorGetNativeDescriptor _CFFileDescriptorInvalidate
-    _CFFileDescriptorIsValid _CFGetTypeID _CFMachPortCreateRunLoopSource _CFNumberGetTypeID
-    _CFNumberGetValue _CFPropertyListCreateData _CFPropertyListCreateWithData _CFRelease _CFRetain
-    _CFRunLoopAddObserver _CFRunLoopAddSource _CFRunLoopAddTimer _CFRunLoopContainsObserver
-    _CFRunLoopContainsSource _CFRunLoopContainsTimer _CFRunLoopCopyCurrentMode _CFRunLoopGetCurrent
-    _CFRunLoopGetMain _CFRunLoopRemoveObserver _CFRunLoopRemoveSource _CFRunLoopRemoveTimer _CFRunLoopRun
-    _CFRunLoopRunInMode _CFRunLoopStop _CFRunLoopTimerCreate _CFShow _CFStringCreateWithBytes
-    _CFStringCreateWithBytesNoCopy _CFStringGetBytes _CFStringGetCStringPtr _CFStringGetLength
-    _CFStringGetTypeID _CFTimeZoneCopyDefault _CFTimeZoneGetName _CFTimeZoneGetSecondsFromGMT
-    _CFURLCopyAbsoluteURL _CFURLCopyFileSystemPath _CFURLCreateWithFileSystemPath
-    _CFURLGetFileSystemRepresentation _CFURLGetString _CFUUIDCreate _kCFAllocatorDefault _kCFAllocatorNull
-    _kCFBooleanFalse _kCFBooleanTrue
-""".split())
-MACOS_FRAMEWORK_SYMBOLS = {IOKIT: IOKIT_SYMBOLS, COREFOUNDATION: COREFOUNDATION_SYMBOLS}
 MACHO_LOAD_DYLIB = {"LC_LOAD_DYLIB", "LC_LOAD_WEAK_DYLIB", "LC_REEXPORT_DYLIB", "LC_LAZY_LOAD_DYLIB",
                     "LC_LOAD_UPWARD_DYLIB"}
 # Windows' own DLLs that the binaries import, and the API sets that map onto
@@ -265,7 +236,7 @@ def check_macho(path, label, arch, minos, extension):
         errors.append(f"{label} needs macOS {info['minos']}, its platform tag says {shown(minos)}")
     if arch == "aarch64" and not info["signed"]:
         errors.append(f"{label} has no code signature, which macOS requires on arm64")
-    allowed = MACOS_SYSTEM | (set(MACOS_FRAMEWORK_SYMBOLS) if extension else set())
+    allowed = MACOS_SYSTEM | (MACOS_EXTENSION_FRAMEWORKS if extension else set())
     print(f"{label}: macOS {info['minos']}, signed {info['signed']}, loads {', '.join(info['dylibs'])}")
     for dylib in sorted(set(info["dylibs"]) - allowed):
         errors.append(f"{label} loads {dylib}, which the release doesn't expect")
@@ -278,31 +249,22 @@ def check_macho(path, label, arch, minos, extension):
     if not binds_parsed(binds):
         errors.append(f"{label}: llvm-objdump's bind output has no bind table or libSystem bind; check its format")
         return errors
-    return errors + check_flat_lookups(label, flat_lookups(binds), info["dylibs"], extension)
+    return errors + check_flat_lookups(label, flat_lookups(binds), extension)
 
 
-def check_flat_lookups(label, flat, dylibs, extension):
+def check_flat_lookups(label, flat, extension):
     """Errors for the symbols a Mach-O file leaves to a flat lookup: none for a
     CLI binary; for an extension module, Python's C API, which must be there,
-    and the listed framework symbols, each only with its framework loaded."""
+    and nothing else."""
     if not extension:
         return [f"{label} leaves {len(flat)} symbols to a flat lookup, such as {', '.join(flat[:5])}"] if flat else []
     errors = []
-    python = [s for s in flat if PYTHON_SYMBOL.match(s)]
-    if not python:
+    if not any(PYTHON_SYMBOL.match(s) for s in flat):
         errors.append(f"{label} leaves no Python symbol to a flat lookup; the bind output didn't parse")
-    unexpected = []
-    for symbol in flat:
-        if PYTHON_SYMBOL.match(symbol):
-            continue
-        framework = next((f for f, names in MACOS_FRAMEWORK_SYMBOLS.items() if symbol in names), None)
-        if framework is None:
-            unexpected.append(symbol)
-        elif framework not in dylibs:
-            errors.append(f"{label} leaves {symbol} to a flat lookup but doesn't load {framework}")
-    if unexpected:
-        errors.append(f"{label} leaves symbols to a flat lookup that neither Python nor the listed"
-                      f" framework symbols cover ({len(unexpected)}): {', '.join(unexpected[:5])}")
+    others = [s for s in flat if not PYTHON_SYMBOL.match(s)]
+    if others:
+        errors.append(f"{label} leaves symbols other than Python's to a flat lookup ({len(others)}):"
+                      f" {', '.join(others[:5])}")
     return errors
 
 

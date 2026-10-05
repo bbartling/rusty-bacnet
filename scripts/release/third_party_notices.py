@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Write THIRD-PARTY-NOTICES for the release binaries (#943, #944).
+"""Write THIRD-PARTY-NOTICES for the release binaries (#943, #944, #1472).
 
-    third_party_notices.py --out THIRD-PARTY-NOTICES [--libpcap /opt/libpcap]
+    third_party_notices.py --out THIRD-PARTY-NOTICES [--libpcap DIR]
 
 Lists what the release binaries link statically, with where to get each
 component's source and every licence file it ships:
@@ -11,8 +11,8 @@ component's source and every licence file it ships:
   dev-dependencies, which end up in no binary, are left out, and so are the
   crates of targets that aren't released. A crate's source is its crates.io
   page for that version (or, for a crate from elsewhere, its repository);
-- libpcap, which the CLI links statically (--libpcap: a directory with its
-  LICENSE and VERSION, which the CI image installs under /opt/libpcap).
+- libpcap, which the Linux CLI links statically (--libpcap: a directory with
+  its LICENSE and VERSION, which scripts/release/libpcap.sh writes).
 
 Identical licence texts are printed once, followed by every crate that ships
 them. Generation fails if a crate under a licence that needs its notice kept
@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 # Each release target with the CLI's features there: packet capture (pcap)
-# only on Linux, as in .forgejo/workflows/release.yml. The Python extension has
+# only on Linux, as in .github/workflows/release.yml. The Python extension has
 # the same features everywhere.
 TARGETS = {
     "x86_64-unknown-linux-gnu": "sc-tls,pcap",
