@@ -346,6 +346,29 @@ async fn who_is_and_who_has_with_trailing_octets_are_dropped() {
     h.server.stop().await.unwrap();
 }
 
+/// A Who-Is carrying one limit without the other is malformed (#1447), so
+/// the server drops it rather than answering it as a Who-Is for every
+/// device.
+#[tokio::test(start_paused = true)]
+async fn a_who_is_with_one_limit_is_dropped() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    let who_is = UnconfirmedServiceChoice::WHO_IS;
+    // Low limit 0, then high limit 1000: either alone would take in the
+    // harness device (856) if read as unbounded.
+    for (what, body) in [
+        ("only the low limit", &[0x09, 0x00][..]),
+        ("only the high limit", &[0x1A, 0x03, 0xE8]),
+    ] {
+        assert_eq!(unconfirmed(&h, who_is, body).await, [], "{what}");
+    }
+    assert_eq!(
+        unconfirmed(&h, who_is, &[0x09, 0x00, 0x1A, 0x03, 0xE8]).await,
+        [UnconfirmedServiceChoice::I_AM]
+    );
+    assert_eq!(h.server.discovery_counters().who_is_received, 1);
+    h.server.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn an_i_am_with_trailing_octets_binds_nothing() {
     let mut h = Harness::start(ServerConfig::default()).await;

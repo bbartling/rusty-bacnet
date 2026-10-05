@@ -25,9 +25,9 @@ fn who_is_request() {
         ("low limit cut short", &[0x0A, 0x01], Short),
         ("high limit cut short", &[0x09, 0x01, 0x1A, 0x0A], Short),
         ("low limit above high", &[0x09, 0x0A, 0x19, 0x01], Malformed),
-        // One limit alone reads as no limits.
-        ("only the low limit", &[0x09, 0x01], Decodes),
-        ("only the high limit", &[0x19, 0x0A], Decodes),
+        // One limit needs the other (#1447).
+        ("only the low limit", &[0x09, 0x01], Malformed),
+        ("only the high limit", &[0x19, 0x0A], Malformed),
         // Anything the limits leave unread refuses the request.
         ("a context [2] alone", &[0x29, 0x00], Malformed),
         (
