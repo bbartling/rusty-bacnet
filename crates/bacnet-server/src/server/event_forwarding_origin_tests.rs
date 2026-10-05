@@ -128,7 +128,9 @@ async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
     );
 
     // A forwarder whose only destination cannot be routed: the skip is
-    // counted, and the sender's answer does not change.
+    // counted, and the sender's answer does not change. The server has no
+    // binding for the Device, so it asks for it first (#1368), and counts
+    // the skip once its device stays silent.
     let mut nf = NotificationForwarderObject::new(1, "NF").unwrap();
     nf.add_destination(destination(
         BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 77).unwrap()),
@@ -140,10 +142,17 @@ async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
     let sent = transport.sent();
     let services = confirmed_services(database(vec![nf]), transport);
     let suppressions = Arc::clone(&services.event_suppressions);
+    let bindings = Arc::clone(&services.device_bindings);
     let (reply, answered) = oneshot::channel();
     dispatch(services, encoded(&notification(5)), reply).await;
     assert!(is_simple_ack(&reply_apdu(answered.await.unwrap())));
-    assert!(sent.is_empty());
+    let frames = sent.frames();
+    assert!(frames.len() == 1 && super::event_recipient_routing_tests::is_who_is(&frames[0]));
+    bindings.write().await.probes.run_out_for_test();
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(sent.len(), 1);
     assert_eq!(suppressions.snapshot().device_recipient_unbound, 1);
 
     // A request the forwarders cannot read is rejected with the reason

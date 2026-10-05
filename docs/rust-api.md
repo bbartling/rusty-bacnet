@@ -5521,10 +5521,18 @@ transition's other destinations are still served. They are grouped by what
 fixes them, and the warning logged with each skip gives the finer reason:
 
 - `device_recipient_unbound`: no Device binding was configured or observed, or
-  the observed one expired. Observing the device's I-Am again, or configuring a
-  binding, clears it. A confirmed notification whose observed binding expires
-  before a retry ends at that retry, its invoke ID freed, and counts here, not
-  in `confirmed_unanswered` (#1371).
+  the observed one expired, and a look for the device found none. Before
+  skipping such a recipient the server looks for its device as it does for a
+  Command's remote write (#1368): one Who-Is limited to its instance, at most
+  one a minute per device, none under DCC, and the notification waits up to
+  `cov_retry_timeout_ms` from that Who-Is for the I-Am in a task of its own,
+  so the transition's other recipients aren't held up. A device that answers
+  gets the notification, which then counts as any other send does; one that
+  stays silent, or can't be looked for within the minute after a fruitless
+  Who-Is, counts here once. Observing the device's I-Am again, or configuring
+  a binding, clears it. A confirmed notification whose observed binding
+  expires before a retry ends at that retry, its invoke ID freed, and counts
+  here, not in `confirmed_unanswered` (#1371).
 - `recipient_unroutable`: the entry can't be routed as written. Its Device
   identifier names an object that isn't a Device (or its binding is unusable on
   this link), or its address puts a MAC on network 65535.

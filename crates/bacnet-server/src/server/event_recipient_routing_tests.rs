@@ -56,6 +56,16 @@ pub(super) fn destination_for(recipient: BACnetRecipient, confirmed: bool) -> BA
     }
 }
 
+/// Whether `frame` is a Who-Is, as a look for an unbound Device recipient
+/// sends (#1368).
+pub(super) fn is_who_is(frame: &crate::server::test_transport::SentFrame) -> bool {
+    matches!(
+        frame.apdu(),
+        Apdu::UnconfirmedRequest(request)
+            if request.service_choice == UnconfirmedServiceChoice::WHO_IS
+    )
+}
+
 pub(super) fn address_recipient(network_number: u16, mac: &[u8]) -> BACnetRecipient {
     BACnetRecipient::Address(BACnetAddress {
         network_number,
@@ -203,14 +213,24 @@ pub(super) async fn distribute_counted_through(
     for _ in 0..16 {
         tokio::task::yield_now().await;
     }
+    // A Device recipient with no binding is looked for with a Who-Is first
+    // (#1368). Its device stays silent here: its probe runs out now, and the
+    // notification waiting on it is skipped and counted.
+    device_bindings.write().await.probes.run_out_for_test();
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
     notifications.close();
     while let Some(result) = notifications.join_next().await {
         NotificationTransactions::observe(Some(result));
     }
 
+    // The notifications only: the Who-Is requests those lookups sent are
+    // left out (`who_is_sent` takes them).
     let broadcasts = sent
         .broadcasts()
         .into_iter()
+        .filter(|frame| !is_who_is(frame))
         .map(|frame| frame.npdu)
         .collect();
     let unicasts = sent

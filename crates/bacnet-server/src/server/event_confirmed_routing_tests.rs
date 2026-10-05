@@ -14,7 +14,7 @@
 use super::device_bindings::{DeviceBindingTable, OBSERVED_BINDING_TTL};
 use super::event_notifications::CommittedIntrinsicTransition;
 use super::event_notifications_tests::local_broadcast_destination;
-use super::event_recipient_routing_tests::{address_recipient, destination_for};
+use super::event_recipient_routing_tests::{address_recipient, destination_for, is_who_is};
 use super::*;
 use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
 use bacnet_encoding::constructed::decode_event_notification;

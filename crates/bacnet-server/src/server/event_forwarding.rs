@@ -114,8 +114,10 @@ impl ForwardingBudget {
     }
 
     /// Take room for one more copy, or, when none is left, note it as
-    /// dropped and return `false`. Copies of one notification are sent one
-    /// after another, so relaxed ordering is enough.
+    /// dropped and return `false`. Each take is one atomic update, and no
+    /// other memory is ordered by it, so relaxed ordering is enough, a copy
+    /// that waited for its device's I-Am taking room from its own task
+    /// included (#1368).
     pub(super) fn take(&self) -> bool {
         #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
         let taken = self
@@ -262,7 +264,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 notification_class: notification.notification_class,
                 priority: notification.priority,
                 encode_for: &encode_for,
-                admits: &|_| true,
+                admits: Arc::new(|_| true),
                 budget: None,
             };
             Self::send_event_notification(ctx, &outbound, &remote).await;
@@ -306,7 +308,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
         let mut taken = Vec::new();
         let mut sent: Vec<(BACnetRecipient, u32, bool)> = Vec::new();
-        let budget = ForwardingBudget::new();
+        // Shared with the copies that wait for their device's I-Am, which
+        // draw on it when they go out (#1368).
+        let budget = Arc::new(ForwardingBudget::new());
         // A stack, so each entry's hand-offs within the device run before the
         // next entry; reversed so the entries run in the order given.
         let mut pending = offered;
@@ -360,16 +364,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             sent.extend(recipients.iter().cloned());
             let encode_for = |process_identifier| Ok(notification.encode_for(process_identifier));
-            let admits = |route: &RecipientRoute| origin.admits(Reach::of(route));
             let outbound = OutboundNotification {
                 notification_class: notification.notification_class,
                 priority: notification.priority,
                 encode_for: &encode_for,
-                admits: &admits,
-                budget: Some(&budget),
+                admits: Arc::new(move |route: &RecipientRoute| origin.admits(Reach::of(route))),
+                budget: Some(Arc::clone(&budget)),
             };
             Self::send_event_notification(ctx, &outbound, &recipients).await;
         }
+        // A copy still waiting for its device's I-Am draws on the cap later;
+        // one dropped then is counted but not in this warning.
         let dropped = budget.dropped();
         if dropped > 0 {
             if CAP_WARNINGS.due(Instant::now()) {

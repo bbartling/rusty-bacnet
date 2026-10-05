@@ -1,12 +1,16 @@
-//! Targeted Who-Is probes for devices a remote write has no fresh binding
-//! for (#1322).
+//! Targeted Who-Is probes for devices the server has no fresh binding for:
+//! the device of a remote write (#1322), or a Device recipient of an event
+//! notification (#1368).
 //!
-//! A Command action or Channel member in another device is addressed from
-//! the device bindings. When the device has none, or only an I-Am older than
-//! the binding lifetime, the write asks for it: one Who-Is whose low and high
-//! limits are both the device's instance (Clause 16.10), then a bounded wait
-//! for the I-Am. The I-Am lands in the binding table like any other and wakes
-//! every write waiting on the probe; with none by the deadline, they fail.
+//! A Command action or Channel member in another device, and an event
+//! notification's Device recipient, are addressed from the device bindings.
+//! When the device has none, or only an I-Am older than the binding
+//! lifetime, the server asks for it ([`DeviceLookup`]): one Who-Is whose low
+//! and high limits are both the device's instance (Clause 16.10), then a
+//! bounded wait for the I-Am. The I-Am lands in the binding table like any
+//! other and wakes everything waiting on the probe; with none by the
+//! deadline, the writes fail and the notifications are not sent. Below, a
+//! "write" stands for either.
 //!
 //! Where the Who-Is goes is a [`WhoIsScope`]: the network the device's last
 //! I-Am came from while the table still holds that stale observation, or the
@@ -32,6 +36,7 @@
 //! The probes live inside the binding table, under its lock, so finding no
 //! binding and starting a probe are one step an I-Am can't fall between.
 
+use super::device_bindings::{DeviceBindingTable, DeviceResolution};
 use super::*;
 use tokio::time::Instant as TokioInstant;
 
@@ -233,11 +238,191 @@ impl BindingProbes {
     fn len(&self) -> usize {
         self.probes.len()
     }
+
+    /// End every probe out now, as a deadline passing with no I-Am would:
+    /// for tests whose looked-for devices stay silent.
+    #[cfg(test)]
+    pub(super) fn run_out_for_test(&mut self) {
+        self.probes.clear();
+    }
 }
 
 /// `wait` after `now`, or far in the future for a wait too long to add.
 fn after(now: TokioInstant, wait: Duration) -> TokioInstant {
     now.checked_add(wait).unwrap_or(now + FAR_FUTURE)
+}
+
+/// Whether a device with `resolution` may be looked for with a Who-Is: it
+/// has no binding, or only a stale one, and its instance isn't the wildcard,
+/// which in a Who-Is calls on unconfigured devices instead (Clause 16.11).
+pub(super) fn can_look_for(device: ObjectIdentifier, resolution: &DeviceResolution) -> bool {
+    matches!(
+        resolution,
+        DeviceResolution::Unknown | DeviceResolution::Stale
+    ) && device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE
+}
+
+/// How a look for a device began.
+#[derive(Debug)]
+pub(super) enum LookupStart {
+    /// No Who-Is: the table holds this for the device now, a binding an I-Am
+    /// brought in since the caller looked, or nothing it may look for.
+    Resolved(DeviceResolution),
+    /// A Who-Is for the device is out: wait on it, then ask
+    /// [`DeviceLookup::found`].
+    Waiting(ProbeWait),
+    /// No Who-Is may go out for it now: one drew nothing within the hold-off,
+    /// or [`MAX_PROBES`] other devices are being looked for.
+    NotLooking,
+    /// DeviceCommunicationControl restricts initiation, so nothing was sent.
+    Disabled,
+}
+
+/// Why a look for a device found no binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LookupMiss {
+    /// The Who-Is drew no I-Am in time.
+    Undiscovered,
+    /// DeviceCommunicationControl restricted initiation meanwhile.
+    Disabled,
+}
+
+/// Looks for a device the binding table holds no fresh binding for, through
+/// its probes: a remote write in another device (#1322), or an event
+/// notification to a Device recipient (#1368). The table's guard is never
+/// held across the Who-Is or the wait.
+pub(super) struct DeviceLookup<'a, T: TransportPort + 'static> {
+    pub(super) network: &'a NetworkLayer<T>,
+    pub(super) bindings: &'a RwLock<DeviceBindingTable>,
+    pub(super) comm_state: &'a CommState,
+    /// How long the probe waits for the I-Am, from its Who-Is.
+    pub(super) wait: Duration,
+}
+
+impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
+    /// `device`'s binding as the table holds it now.
+    pub(super) async fn resolve(&self, device: ObjectIdentifier) -> DeviceResolution {
+        let table = self.bindings.read().await;
+        table.resolve_at(&device, Instant::now(), |mac| self.is_group(mac))
+    }
+
+    /// Begin looking for `device`: join the Who-Is out for it, or send one
+    /// unless the hold-off, the cap or DCC stops it.
+    pub(super) async fn start(&self, device: ObjectIdentifier) -> LookupStart {
+        let (step, scope) = {
+            let mut table = self.bindings.write().await;
+            // An I-Am may have come in since the caller looked.
+            let resolution = table.resolve_at(&device, Instant::now(), |mac| self.is_group(mac));
+            if !can_look_for(device, &resolution) {
+                return LookupStart::Resolved(resolution);
+            }
+            if self.comm_state.initiation_restricted() {
+                return LookupStart::Disabled;
+            }
+            let step = table.probes.begin(device, TokioInstant::now(), self.wait);
+            (step, table.who_is_scope(&device))
+        };
+        match step {
+            ProbeStep::Send(wait) => {
+                if self.who_is(device, scope, wait.id()).await {
+                    LookupStart::Waiting(wait)
+                } else {
+                    LookupStart::Disabled
+                }
+            }
+            ProbeStep::Join(wait) => LookupStart::Waiting(wait),
+            ProbeStep::HeldOff | ProbeStep::Full => {
+                debug!(%device, ?step, "No Who-Is sent for an unbound device");
+                LookupStart::NotLooking
+            }
+        }
+    }
+
+    /// What `device`'s probe found once its wait is over: the binding its
+    /// I-Am brought, or a miss. Nothing having answered where the device was
+    /// last seen, its stale observation is dropped, so its next Who-Is asks
+    /// every network instead.
+    pub(super) async fn found(
+        &self,
+        device: ObjectIdentifier,
+    ) -> Result<DeviceResolution, LookupMiss> {
+        let resolution = self.resolve(device).await;
+        if matches!(
+            resolution,
+            DeviceResolution::ResolvedLocal { .. } | DeviceResolution::ResolvedRouted { .. }
+        ) {
+            return Ok(resolution);
+        }
+        // A probe withdrawn before its Who-Is went out ends here too.
+        if self.comm_state.initiation_restricted() {
+            return Err(LookupMiss::Disabled);
+        }
+        self.bindings
+            .write()
+            .await
+            .forget_stale(&device, Instant::now());
+        Err(LookupMiss::Undiscovered)
+    }
+
+    /// Whether `mac` reaches a group of nodes on this link: no binding takes
+    /// one (#1493).
+    fn is_group(&self, mac: &[u8]) -> bool {
+        self.network.transport().is_group_destination(mac)
+    }
+
+    /// Broadcast a Who-Is whose limits are both `device`'s instance across
+    /// `scope`, then start probe `probe`'s wait from the send. A failed send
+    /// leaves the probe to run out like a silent device's. If
+    /// DeviceCommunicationControl has restricted initiation since the probe
+    /// started, nothing is sent, the probe is withdrawn and this is `false`.
+    async fn who_is(&self, device: ObjectIdentifier, scope: WhoIsScope, probe: u64) -> bool {
+        let mut service = BytesMut::new();
+        WhoIsRequest {
+            range: Some(DeviceInstanceRange::device(device)),
+        }
+        .encode(&mut service);
+        let mut apdu = BytesMut::new();
+        encode_apdu(
+            &mut apdu,
+            &Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
+                service_choice: UnconfirmedServiceChoice::WHO_IS,
+                service_request: service.freeze(),
+            }),
+        )
+        .expect("valid APDU encoding");
+        let scope = scope.localize(self.network.local_network_number().get());
+        let priority = NetworkPriority::NORMAL;
+        if self.comm_state.initiation_restricted() {
+            self.bindings.write().await.probes.withdraw(&device, probe);
+            return false;
+        }
+        let sent = match scope {
+            WhoIsScope::Local => self.network.broadcast_apdu(&apdu, false, priority).await,
+            WhoIsScope::Remote(network) => {
+                self.network
+                    .broadcast_to_network(&apdu, network, false, priority)
+                    .await
+            }
+            WhoIsScope::Global => {
+                self.network
+                    .broadcast_global_apdu(&apdu, false, priority)
+                    .await
+            }
+        };
+        match sent {
+            Ok(()) => debug!(%device, ?scope, "Who-Is for an unbound device sent"),
+            Err(error) => warn!(
+                %error,
+                %device,
+                ?scope,
+                "Who-Is for an unbound device not sent"
+            ),
+        }
+        let now = TokioInstant::now();
+        let mut table = self.bindings.write().await;
+        table.probes.sent(&device, probe, now, self.wait);
+        true
+    }
 }
 
 #[cfg(test)]

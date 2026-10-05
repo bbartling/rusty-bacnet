@@ -42,7 +42,7 @@
 //! for an I-Am, and the binding table's guard is never held across a send or
 //! a wait.
 
-use super::binding_probes::{ProbeStep, WhoIsScope};
+use super::binding_probes::{can_look_for, DeviceLookup, LookupMiss, LookupStart};
 use super::device_bindings::{DeviceBindingTable, DeviceResolution};
 use super::event_recipient_route::{
     ConfirmedRecipientRoute, ConfirmedRouteRefusal, RecipientRoute,
@@ -296,56 +296,31 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         &self,
         device: ObjectIdentifier,
     ) -> Result<ConfirmedRecipientRoute, RemoteRequestError> {
-        let resolution = self.resolve(&*self.bindings.read().await, device);
+        let lookup = DeviceLookup {
+            network: self.network,
+            bindings: self.bindings,
+            comm_state: self.comm_state,
+            wait: self.timeout,
+        };
+        let resolution = lookup.resolve(device).await;
         if !can_look_for(device, &resolution) {
             return self.confirmed(resolution, RemoteRequestError::Unbound);
         }
-        let (step, scope) = {
-            let mut table = self.bindings.write().await;
-            // An I-Am may have come in since the read guard went.
-            let resolution = self.resolve(&table, device);
-            if !can_look_for(device, &resolution) {
-                return self.confirmed(resolution, RemoteRequestError::Unbound);
+        let wait = match lookup.start(device).await {
+            LookupStart::Resolved(resolution) => {
+                return self.confirmed(resolution, RemoteRequestError::Unbound)
             }
-            if self.initiation_restricted() {
-                return Err(RemoteRequestError::Disabled);
-            }
-            let now = tokio::time::Instant::now();
-            let step = table.probes.begin(device, now, self.timeout);
-            (step, table.who_is_scope(&device))
-        };
-        let wait = match step {
-            ProbeStep::Send(wait) => {
-                self.who_is(device, scope, wait.id()).await?;
-                wait
-            }
-            ProbeStep::Join(wait) => wait,
-            ProbeStep::HeldOff | ProbeStep::Full => {
-                debug!(%device, ?step, "No Who-Is sent for an unbound device");
-                return Err(RemoteRequestError::Unbound);
-            }
+            LookupStart::Waiting(wait) => wait,
+            LookupStart::NotLooking => return Err(RemoteRequestError::Unbound),
+            LookupStart::Disabled => return Err(RemoteRequestError::Disabled),
         };
         // Woken by the I-Am or the deadline, the write looks again either way.
         wait.answered().await;
-        let resolution = self.resolve(&*self.bindings.read().await, device);
-        if let Ok(route) = self.confirmed(resolution, RemoteRequestError::Undiscovered) {
-            return Ok(route);
+        match lookup.found(device).await {
+            Ok(resolution) => self.confirmed(resolution, RemoteRequestError::Undiscovered),
+            Err(LookupMiss::Disabled) => Err(RemoteRequestError::Disabled),
+            Err(LookupMiss::Undiscovered) => Err(RemoteRequestError::Undiscovered),
         }
-        // A probe withdrawn before its Who-Is went out ends here too.
-        if self.initiation_restricted() {
-            return Err(RemoteRequestError::Disabled);
-        }
-        // Nothing answered where the device was last seen, so its next
-        // Who-Is asks every network instead.
-        self.bindings
-            .write()
-            .await
-            .forget_stale(&device, Instant::now());
-        Err(RemoteRequestError::Undiscovered)
-    }
-
-    fn resolve(&self, table: &DeviceBindingTable, device: ObjectIdentifier) -> DeviceResolution {
-        table.resolve_at(&device, Instant::now(), |mac| self.is_group(mac))
     }
 
     /// Whether `mac` reaches a group of nodes on this link: no binding takes
@@ -381,78 +356,9 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
             })
     }
 
-    /// Broadcast a Who-Is whose limits are both `device`'s instance across
-    /// `scope`, then start probe `probe`'s wait from the send. A failed send
-    /// leaves the probe to run out like a silent device's. If
-    /// DeviceCommunicationControl has restricted initiation since the probe
-    /// started, nothing is sent and the probe is withdrawn.
-    async fn who_is(
-        &self,
-        device: ObjectIdentifier,
-        scope: WhoIsScope,
-        probe: u64,
-    ) -> Result<(), RemoteRequestError> {
-        let mut service = BytesMut::new();
-        WhoIsRequest {
-            range: Some(DeviceInstanceRange::device(device)),
-        }
-        .encode(&mut service);
-        let mut apdu = BytesMut::new();
-        encode_apdu(
-            &mut apdu,
-            &Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-                service_choice: UnconfirmedServiceChoice::WHO_IS,
-                service_request: service.freeze(),
-            }),
-        )
-        .expect("valid APDU encoding");
-        let scope = scope.localize(self.network.local_network_number().get());
-        let priority = NetworkPriority::NORMAL;
-        if self.initiation_restricted() {
-            self.bindings.write().await.probes.withdraw(&device, probe);
-            return Err(RemoteRequestError::Disabled);
-        }
-        let sent = match scope {
-            WhoIsScope::Local => self.network.broadcast_apdu(&apdu, false, priority).await,
-            WhoIsScope::Remote(network) => {
-                self.network
-                    .broadcast_to_network(&apdu, network, false, priority)
-                    .await
-            }
-            WhoIsScope::Global => {
-                self.network
-                    .broadcast_global_apdu(&apdu, false, priority)
-                    .await
-            }
-        };
-        match sent {
-            Ok(()) => debug!(%device, ?scope, "Who-Is for an unbound device sent"),
-            Err(error) => warn!(
-                %error,
-                %device,
-                ?scope,
-                "Who-Is for an unbound device not sent"
-            ),
-        }
-        let now = tokio::time::Instant::now();
-        let mut table = self.bindings.write().await;
-        table.probes.sent(&device, probe, now, self.timeout);
-        Ok(())
-    }
-
     fn initiation_restricted(&self) -> bool {
         self.comm_state.initiation_restricted()
     }
-}
-
-/// Whether a write may look for `device` with a Who-Is: it has no binding,
-/// or only a stale one, and its instance isn't the wildcard, which in a
-/// Who-Is calls on unconfigured devices instead (Clause 16.11).
-fn can_look_for(device: ObjectIdentifier, resolution: &DeviceResolution) -> bool {
-    matches!(
-        resolution,
-        DeviceResolution::Unknown | DeviceResolution::Stale
-    ) && device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE
 }
 
 /// One attempt: the request to the bound peer, a device on this network
