@@ -71,12 +71,14 @@
 //! notifications of the local maximum APDU have for items, whatever its
 //! subscriber's size, so many tiny changes cannot outgrow it: 23,216 bytes at
 //! a 1476-octet local maximum, about 116 of the smallest changes (one empty
-//! value each) or 87 REAL Present_Value and Status_Flags changes. A change
-//! takes four to twelve times the bytes in memory that it takes octets in a
-//! notification; four bytes an octet keeps about the history #1287 kept when
-//! it charged a fixed 32 octets per change, a quarter of what the smallest
+//! value each) or 87 REAL Present_Value and Status_Flags changes. A small
+//! change takes eight to thirteen times the bytes in memory that it takes
+//! octets in a notification, and the ratio falls toward one as its values
+//! grow; four bytes an octet keeps about the history #1287 kept when it
+//! charged a fixed 32 octets per change, a quarter of what the smallest
 //! change takes. Near the local maximum the ceiling binds before the room
-//! does; a small subscriber's room binds first. The room counts only octets
+//! does for small changes, the room for large ones; a small subscriber's
+//! room binds first. The room counts only octets
 //! that travel in a notification: charged with memory, it would let a
 //! 50-octet subscriber keep one REAL Present_Value change where four
 //! notifications carry four.

@@ -4905,8 +4905,10 @@ Call `stop()` before dropping the server. A server dropped without it in async
 code aborts its tasks and hands its object database to a task that drops it on
 Tokio's blocking pool once those tasks have let go (#1409), so the drop doesn't
 block a runtime worker while the objects' last saves run; nothing waits for
-those saves, though. An application still holding `server.database()` drops
-the last handle itself, best off the runtime as well.
+those saves, though. Storage may still change after the drop returns, as they
+and the put-back of a staged write land, so `stop().await` before building
+another server on the same storage. An application still holding
+`server.database()` drops the last handle itself, best off the runtime as well.
 The target-Audit drain retains the ingress needed for acknowledgments until its
 existing completion/deadline boundary. Cancelling a stop waiter retains cleanup:
 call `stop()` again to join it. Transport cleanup errors retain the owner for retry;
@@ -5022,7 +5024,8 @@ malformed input; other covered services authorize once after service decoding.
 A WPM element that an object saves before serving it (a forwarder or Notification
 Class list, an Access Rights rule array, Enable or Accompaniment, an Audit Log's
 Log_Enable or Buffer_Size) is decided before the server stages its save off the
-database lock (#1321): still once and in order, but possibly for an element the
+database lock (#1321): still once, and in wire order among those elements, so
+ahead of earlier elements no object saves first, and possibly for an element the
 request never reaches because an earlier one fails. Counters and audit records
 cover only the elements the handler reaches.
 Callbacks must be fast, nonblocking, and side-effect-free. Context addresses and

@@ -381,7 +381,9 @@ mod tests {
     /// never fewer than one, its newest. A subscriber as large as this
     /// device is held by the ceiling while its changes are small, and by its
     /// room once a value is large enough to take fewer bytes in memory per
-    /// octet it takes in a notification.
+    /// octet it takes in a notification. Where that happens depends on the
+    /// sizes `the_memory_terms_are_the_measured_sizes` pins.
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_bound_keeps_what_fits_both_its_notifications_and_its_memory_ceiling() {
         let (k, small) = (key(1, 1), context(1));

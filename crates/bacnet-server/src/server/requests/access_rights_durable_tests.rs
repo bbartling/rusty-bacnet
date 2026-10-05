@@ -450,16 +450,17 @@ async fn a_write_property_multiple_refused_at_its_first_rights_write_stages_noth
 }
 
 /// Wait, without the guard, until every save `rights` has queued has run.
-/// Nothing is staged by then, so settling drops nothing.
+/// The request released what it staged, so settling drops nothing: a write
+/// still staged here would be one the request never corrected.
 async fn saves_done(fixture: &Fixture, rights: ObjectIdentifier) {
-    let wait = fixture
-        .db
-        .write()
-        .await
+    let mut db = fixture.db.write().await;
+    let writes = db
         .get_mut(&rights)
         .and_then(|object| object.durable_writes_internal())
-        .and_then(|writes| writes.settle_forgotten_writes())
         .expect("the object saves");
+    assert!(!writes.has_staged_write(), "a write is still staged");
+    let wait = writes.settle_forgotten_writes().expect("the object saves");
+    drop(db);
     tokio::time::timeout(WAIT, wait)
         .await
         .expect("the saves ran");

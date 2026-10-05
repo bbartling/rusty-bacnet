@@ -6,16 +6,18 @@
 //! (`durable_writes`). Staging a save for an attempt policy then denies would
 //! put a state in storage that no client was told about. So with an
 //! authorizer installed, the request asks it about each such attempt first,
-//! in wire order and after the checks the handler makes on that attempt,
-//! and stages only those before the first it denies, since the request
-//! stops there.
+//! in wire order among those attempts and after the checks the handler makes
+//! on that attempt, and stages only those before the first it denies, or the
+//! first whose value doesn't decode, since the request stops there.
 //!
 //! The handler, reaching one of those attempts under the guard, takes the
 //! decision made here instead of asking again. The authorizer is asked once
 //! per attempt, and the decision counters count an attempt only when the
-//! handler reaches its gate, as before. The price: an attempt decided here
-//! that the request never reaches, because an earlier attempt failed, was
-//! still put to the authorizer.
+//! handler reaches its gate, as before. The price: such an attempt is asked
+//! about ahead of earlier attempts the objects don't save first, and one the
+//! request never reaches, because an earlier attempt failed, was still put
+//! to the authorizer. A request with no such attempt asks nothing ahead and
+//! takes no read guard.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -49,22 +51,18 @@ impl DecidedAhead {
         request: &Request<'_>,
         db: &Arc<RwLock<ObjectDatabase>>,
     ) -> Vec<DurableTarget> {
-        let service_data = &request.req.service_request;
-        match (
-            request.config.mutation_policy,
-            &request.config.mutation_authorizer,
-        ) {
-            (MutationPolicy::DenyAll, _) => Vec::new(),
-            (MutationPolicy::Permissive, None) => {
-                DurableTarget::write_property_multiple(service_data, |_| true)
-            }
-            (MutationPolicy::Permissive, Some(_)) => {
-                let db = db.read().await;
-                DurableTarget::write_property_multiple(service_data, |attempt| {
-                    self.decide(request, &db, attempt)
-                })
-            }
+        if request.config.mutation_policy == MutationPolicy::DenyAll {
+            return Vec::new();
         }
+        let attempts = DurableTarget::write_property_multiple(&request.req.service_request);
+        if attempts.is_empty() {
+            return Vec::new();
+        }
+        if request.config.mutation_authorizer.is_none() {
+            return DurableTarget::in_object_order(attempts, |_| true);
+        }
+        let db = db.read().await;
+        DurableTarget::in_object_order(attempts, |attempt| self.decide(request, &db, attempt))
     }
 
     /// Whether `request` may stage `attempt`, deciding it now and keeping

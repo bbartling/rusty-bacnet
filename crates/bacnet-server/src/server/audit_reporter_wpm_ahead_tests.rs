@@ -170,16 +170,17 @@ async fn deciding_attempts_ahead_counts_and_audits_only_the_attempts_reached() {
             property_array_index: None
         })
     );
-    // Storage holds what the object serves: Enable, and no rules.
-    let wait = fixture
-        .server
-        .db
-        .write()
-        .await
+    // Storage holds what the object serves: Enable, and no rules. The
+    // request released its staged rules itself, so settling, which would
+    // put storage back too, finds nothing staged.
+    let mut db = fixture.server.db.write().await;
+    let writes = db
         .get_mut(&target)
         .and_then(|object| object.durable_writes_internal())
-        .and_then(|writes| writes.settle_forgotten_writes())
         .unwrap();
+    assert!(!writes.has_staged_write(), "a write is still staged");
+    let wait = writes.settle_forgotten_writes().unwrap();
+    drop(db);
     tokio::time::timeout(Duration::from_secs(10), wait)
         .await
         .unwrap();

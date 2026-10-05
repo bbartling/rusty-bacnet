@@ -32,7 +32,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Call it before dropping the server. A server dropped without it in
     /// async code aborts its tasks and lets the object database go on Tokio's
     /// blocking pool once they have let go of it (#1409), so the drop returns
-    /// at once, but nothing waits for the objects' last saves.
+    /// at once, but nothing waits for the objects' last saves. Storage may
+    /// still change after such a drop returns, as those saves and the
+    /// put-back of a staged write (#1363) land, so `stop().await` before
+    /// building another server on the same storage.
     ///
     /// Once its requests are joined, a write a Notification Forwarder,
     /// Notification Class or Audit Log still holds staged for one of them is
@@ -182,6 +185,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 }
 
 impl<T: TransportPort> Drop for BACnetServer<T> {
+    /// Seal the server and abort its tasks. In async code the object
+    /// database then drops on Tokio's blocking pool (#1409): the drop returns
+    /// before the objects' last saves land, so storage may still change after
+    /// it. Call [`stop`](BACnetServer::stop) first to wait for them.
     fn drop(&mut self) {
         if let Some(network) = &self.network {
             network.seal_responses();
@@ -233,7 +240,8 @@ impl<T: TransportPort> BACnetServer<T> {
     /// to a task that waits until `tasks`, aborted, and the server's request
     /// and notification tasks have let go of theirs; then, if nothing else
     /// holds the database, it is dropped on the blocking pool, as DeleteObject
-    /// drops a removed object. An application still holding the database
+    /// drops a removed object. The server's drop returns first, so storage may
+    /// still change after it. An application still holding the database
     /// drops the last handle itself. With no runtime current, the database
     /// drops here, as it always has.
     fn let_database_go(&mut self, tasks: Vec<JoinHandle<()>>) {

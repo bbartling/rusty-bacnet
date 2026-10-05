@@ -250,12 +250,13 @@ impl std::fmt::Debug for MutationAuthorizationContext {
 /// Forwarder's or Notification Class's list, an Access Rights object's rules,
 /// Enable or Accompaniment, an Audit Log's Log_Enable or Buffer_Size) is
 /// decided earlier, under a database read guard, before the server stages its
-/// save to run off the write lock (#1321). It is still decided once, in wire
-/// order and after that element's own validation, and the handler applies the
-/// decision when it reaches the element. So the callback can be asked about
-/// such an element that the request never reaches, because an earlier element
-/// fails for another reason. Decision counters and audit records cover only
-/// the elements the handler reaches.
+/// save to run off the write lock (#1321). It is still decided once, after
+/// that element's own validation and in wire order among such elements, so
+/// ahead of earlier elements no object saves first, and the handler applies
+/// the decision when it reaches the element. So the callback can be asked
+/// about such an element that the request never reaches, because an earlier
+/// element fails for another reason. Decision counters and audit records
+/// cover only the elements the handler reaches.
 ///
 /// An inbound WriteGroup reaches the callback once per Channel it would write,
 /// after the change list is decoded and matched to the Channels and before each

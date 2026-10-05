@@ -178,6 +178,11 @@ impl Storage {
         self.saves.claim(property, None, value, base)
     }
 
+    /// Whether a list write is staged (see [`StagedSaves::is_staged`]).
+    pub(super) fn is_staged(&self) -> bool {
+        self.saves.is_staged()
+    }
+
     /// Drop the staged write, for a write that supersedes it (see
     /// [`StagedSaves::drop_staged`]).
     pub(super) fn drop_staged(&mut self) {

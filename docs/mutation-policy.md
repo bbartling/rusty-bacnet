@@ -92,10 +92,12 @@ Enable or Accompaniment, and an Audit Log's Log_Enable or Buffer_Size are saved
 before the object serves them, and the server stages that save so it runs with the
 database write lock released. For such an element the callback is asked before the
 save is staged, under a database read guard, after the element's own validation and
-in wire order; only allowed elements are staged, and the handler applies the
-recorded decision when it reaches the element instead of asking again. The callback
-is still asked once per element, but it can be asked about an element the request
-never reaches, when an earlier element fails for another reason. The decision
+in wire order among such elements, so ahead of earlier elements no object saves
+first; only allowed elements are staged, up to one whose value doesn't decode, and
+the handler applies the recorded decision when it reaches the element instead of
+asking again. The callback is still asked once per element, but it can be asked
+about an element the request never reaches, when an earlier element fails for
+another reason. A request with no such element asks nothing ahead. The decision
 counters and audit records cover only the elements the handler reaches, as before.
 
 Coverage is the ten confirmed `mutation::MutationTarget` services and the Channel

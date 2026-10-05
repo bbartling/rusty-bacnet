@@ -301,6 +301,12 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         Some(Ok(step.next))
     }
 
+    /// Whether writes are staged that their request has still to take or
+    /// release.
+    pub(crate) fn is_staged(&self) -> bool {
+        self.staged.is_some()
+    }
+
     /// Save `snapshot` and wait for the outcome, for a write nobody staged.
     pub(crate) fn save_now(&mut self, snapshot: S) -> Result<(), Error> {
         self.writer.submit(snapshot).take_outcome()

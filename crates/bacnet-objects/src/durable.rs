@@ -66,13 +66,14 @@
 //! DeleteObject therefore drops a removed object on a blocking thread after
 //! releasing the guard, and a server dropped without `stop()` in async code
 //! drops its database there too (#1409); application code that removes an
-//! object, or drops the last handle on the database, should do the same. An object dropped with a write still
-//! staged for a request that never came back first saves the state it
-//! serves, so storage never keeps a state no client was told about, and
-//! waits for that save too (#1363). The server's `stop()` settles such
-//! writes once it has joined its requests
-//! ([`DurableWrites::settle_forgotten_writes`]) and waits for their saves,
-//! so a database dropped after a stop has nothing more to save.
+//! object, or drops the last handle on the database, should do the same.
+//! An object dropped with a write still staged for a request that never
+//! came back first saves the state it serves, so storage never keeps a
+//! state no client was told about, and waits for that save too (#1363).
+//! The server's `stop()` settles such writes once it has joined its
+//! requests ([`DurableWrites::settle_forgotten_writes`]) and waits for
+//! their saves, so a database dropped after a stop has nothing more to
+//! save. A server dropped without `stop()` returns before those saves land.
 //!
 //! The writer's thread is a plain `std` thread with no Tokio runtime, so a
 //! storage implementation that needs one brings its own handle. A storage
@@ -691,6 +692,12 @@ pub trait DurableWrites {
     /// the object serves is queued at once, so storage follows the object
     /// again.
     fn release_staged_write(&mut self, staged: &SaveWait);
+
+    /// Whether the object holds something staged for a request that the
+    /// request has still to take or release. The default stages nothing.
+    fn has_staged_write(&self) -> bool {
+        false
+    }
 
     /// No request is left to take or release what is staged, as once the
     /// server's `stop()` has joined its requests (#1363). Settle it: a

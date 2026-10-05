@@ -450,6 +450,12 @@ impl DurableWrites for NotificationForwarderObject {
         self.with_storage(|storage, _| storage.release(staged));
     }
 
+    fn has_staged_write(&self) -> bool {
+        self.storage
+            .as_ref()
+            .is_some_and(saving::Storage::is_staged)
+    }
+
     fn settle_forgotten_writes(&mut self) -> Option<SaveWait> {
         self.with_storage(|storage, served| storage.drop_forgotten(served))
     }

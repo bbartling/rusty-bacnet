@@ -229,3 +229,35 @@ fn a_write_the_object_wont_make_leaves_another_requests_staged_write_alone() {
     assert_eq!(storage.saves(), 2);
     assert_eq!(storage.snapshot(), Some(positive_only(&new)));
 }
+
+#[test]
+fn a_failed_save_of_several_steps_drops_them_all_and_storage_keeps_the_served_state() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut rights = persistent(&storage);
+    let served = [zone_rule(1)];
+    write_positive(&mut rights, &served).unwrap();
+    storage
+        .fail
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let writes = provisioning();
+    let wait = staged(rights.stage_writes(&writes));
+    block_on(&wait);
+    assert!(rights.has_staged_write());
+    // The first write gets the save's error, and with it every step goes:
+    // none is left for the request's later writes to take.
+    assert_refused(
+        make(&mut rights, &writes[0]),
+        ErrorClass::DEVICE,
+        ErrorCode::OPERATIONAL_PROBLEM,
+    );
+    assert!(!rights.has_staged_write());
+    rights.release_staged_write(&wait);
+    rights.wait_for_saves();
+    // Nothing was saved, nothing needs putting back, and the object serves
+    // what it did.
+    assert_eq!(storage.saves(), 1);
+    assert_eq!(storage.snapshot(), Some(positive_only(&served)));
+    assert_eq!(rights.positive_access_rules(), served);
+    assert!(rights.negative_access_rules().is_empty());
+    assert!(rights.enable());
+}

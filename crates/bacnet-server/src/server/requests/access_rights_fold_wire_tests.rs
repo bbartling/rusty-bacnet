@@ -76,3 +76,54 @@ async fn a_write_another_path_cannot_make_leaves_a_staged_save_to_its_request() 
         expected_reads(&positive_only(&rules))
     );
 }
+
+/// Under an authorizer, attempts the objects save first are decided before
+/// they are staged, and the decisions end where the request will stop
+/// (#1321): at an attempt whose value doesn't decode, as well as at one
+/// denied.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_undecodable_rights_attempt_ends_what_is_decided_and_staged() {
+    let storage = Arc::new(RightsStorage::default());
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let fixture = Fixture::new(Some(Arc::new(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        true
+    })));
+    let object = rights_object(&storage);
+    let rights = object.object_identifier();
+    fixture.db.write().await.add(Box::new(object)).unwrap();
+    let fixture = Arc::new(fixture);
+    // An array's size, at index 0, takes an Unsigned, and the first attempt
+    // carries no octets at all. The request stops there, so Enable after it
+    // is never put to the authorizer, staged or saved.
+    let request = write_property_multiple(
+        rights,
+        vec![
+            attempt(P::POSITIVE_ACCESS_RULES, Some(0), Vec::new()),
+            attempt(P::LOG_ENABLE, None, value(PropertyValue::Boolean(true))),
+        ],
+    );
+    let service = ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE;
+    let response = wire(&fixture, service, request).await;
+    let Apdu::Error(error) = bacnet_encoding::apdu::decode_apdu(Bytes::from(response)).unwrap()
+    else {
+        panic!("expected a WritePropertyMultiple error");
+    };
+    let refused = bacnet_services::wpm::WritePropertyMultipleError::from_error_pdu(&error).unwrap();
+    assert_eq!(
+        (refused.error_class, refused.error_code),
+        (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_ENCODING)
+    );
+    let failed = refused.first_failed_write_attempt;
+    assert_eq!(failed.object_identifier, rights);
+    assert_eq!(
+        failed.property_identifier,
+        P::POSITIVE_ACCESS_RULES.to_raw()
+    );
+    assert_eq!(failed.property_array_index, Some(0));
+    saves_done(&fixture, rights).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 0);
+    assert_eq!(storage.load_saved(), None);
+}

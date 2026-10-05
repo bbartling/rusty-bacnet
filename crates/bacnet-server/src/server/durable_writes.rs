@@ -162,19 +162,15 @@ impl DurableTarget {
         }
     }
 
-    /// The writes a WritePropertyMultiple request makes to objects that may
-    /// save them, in object order and then request order. [`stage`] hands
-    /// each object its writes together.
-    ///
-    /// `allowed` decides each such attempt, in wire order, before it is
-    /// staged (#1321). The request stops at an attempt it denies, so neither
-    /// that attempt nor any after it is staged or decided.
+    /// The attempts of a WritePropertyMultiple request on objects that may
+    /// save them, in wire order, each with the write it makes. They end at
+    /// the first such attempt whose value doesn't decode, since the request
+    /// stops there, as it does at an undecodable suffix.
     pub(super) fn write_property_multiple(
         service_data: &[u8],
-        mut allowed: impl FnMut(&WritePropertyAttempt) -> bool,
-    ) -> Vec<Self> {
+    ) -> Vec<(WritePropertyAttempt, Self)> {
         let mut cursor = WritePropertyMultipleCursor::new(service_data);
-        let mut targets: Vec<Self> = Vec::new();
+        let mut attempts = Vec::new();
         while let Ok(Some(event)) = cursor.next_event() {
             let WritePropertyMultipleEvent::WriteAttempt(attempt) = event else {
                 continue;
@@ -191,18 +187,28 @@ impl DurableTarget {
                 held_as_list(oid, property),
                 &attempt.value,
             ) else {
-                continue;
-            };
-            if !allowed(&attempt) {
                 break;
-            }
-            targets.push(Self::write(
-                oid,
-                property,
-                reference.property_array_index,
-                TargetValue::Written(value),
-            ));
+            };
+            let index = reference.property_array_index;
+            let target = Self::write(oid, property, index, TargetValue::Written(value));
+            attempts.push((attempt, target));
         }
+        attempts
+    }
+
+    /// The writes of `attempts` to stage, in object order and then request
+    /// order; [`stage`] hands each object its writes together. `allowed`
+    /// decides each attempt in turn before it is staged (#1321). The request
+    /// stops at one it denies, so neither that attempt nor any after it is
+    /// staged or decided.
+    pub(super) fn in_object_order(
+        attempts: Vec<(WritePropertyAttempt, Self)>,
+        mut allowed: impl FnMut(&WritePropertyAttempt) -> bool,
+    ) -> Vec<Self> {
+        let mut targets: Vec<Self> = attempts
+            .into_iter()
+            .map_while(|(attempt, target)| allowed(&attempt).then_some(target))
+            .collect();
         targets.sort_by_key(|target| {
             (
                 target.oid.object_type().to_raw(),

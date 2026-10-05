@@ -394,6 +394,10 @@ impl DurableWrites for AccessRightsObject {
         self.with_storage(|storage| storage.release(staged));
     }
 
+    fn has_staged_write(&self) -> bool {
+        self.storage.as_ref().is_some_and(Storage::is_staged)
+    }
+
     fn settle_forgotten_writes(&mut self) -> Option<SaveWait> {
         let mut storage = self.storage.take()?;
         let wait = storage.drop_forgotten(|| self.snapshot());
