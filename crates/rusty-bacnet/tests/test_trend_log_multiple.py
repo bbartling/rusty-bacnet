@@ -58,12 +58,10 @@ def tuple_member(instance: int) -> tuple:
     )
 
 
-def reference_octets(instance: int, index: int | None = None) -> bytes:
-    """AI-``instance``'s Present_Value as a BACnetDeviceObjectPropertyReference
-    with no device: object identifier [0], property identifier [1] (85) and
-    the optional array index [2]."""
-    octets = bytes([0x0C]) + instance.to_bytes(4, "big") + bytes([0x19, 0x55])
-    return octets if index is None else octets + bytes([0x29, index])
+def read_member(instance: int, index: int | None = None) -> dict:
+    """AI-``instance``'s Present_Value as a read of a member gives it back
+    (#1345): a DeviceObjectPropertyReference mapping with every key."""
+    return {**member(instance), "property_array_index": index, "device_identifier": None}
 
 
 def installed_stub_method(name: str) -> ast.FunctionDef:
@@ -208,10 +206,10 @@ class TrendLogMultipleMemberFormTests(unittest.TestCase):
             self.assertEqual(
                 elements,
                 [
-                    reference_octets(1),
-                    reference_octets(2, 3),
-                    reference_octets(3),
-                    reference_octets(4),
+                    read_member(1),
+                    read_member(2, 3),
+                    read_member(3),
+                    read_member(4),
                 ],
             )
             with self.assertRaises(BacnetProtocolError):

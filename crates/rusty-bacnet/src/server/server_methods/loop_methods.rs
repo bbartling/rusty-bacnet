@@ -31,7 +31,7 @@ impl BACnetServer {
         proportional_constant_units: Option<u32>,
         integral_constant_units: Option<u32>,
         derivative_constant_units: Option<u32>,
-        priority_for_writing: Option<u32>,
+        priority_for_writing: Option<u8>,
     ) -> PyResult<()> {
         let lp = loop_object(
             instance,
@@ -87,7 +87,7 @@ struct LoopSettings {
     proportional_constant_units: Option<u32>,
     integral_constant_units: Option<u32>,
     derivative_constant_units: Option<u32>,
-    priority_for_writing: Option<u32>,
+    priority_for_writing: Option<u8>,
 }
 
 /// Build the Loop through the Rust setters, so Python gets their checks.
@@ -123,8 +123,7 @@ fn loop_object(
         }
     }
     if let Some(priority) = settings.priority_for_writing {
-        // A value too wide for u8 is out of 1..=16 too.
-        lp.set_priority_for_writing(u8::try_from(priority).unwrap_or(0))?;
+        lp.set_priority_for_writing(priority)?;
     }
     Ok(lp)
 }

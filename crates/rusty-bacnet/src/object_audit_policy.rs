@@ -5,7 +5,7 @@ use bacnet_types::{
     enums::AuditLevel,
 };
 use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
+    exceptions::{PyOverflowError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyBool, PyInt},
 };
@@ -38,8 +38,9 @@ pub(crate) fn parse(
                 return Ok(AuditPriorityPolicy::Inherit);
             }
             let bits = integer(v, "audit_priority_filter")?;
-            let bits = u16::try_from(bits)
-                .map_err(|_| PyValueError::new_err("audit_priority_filter must be in 0..=65535"))?;
+            let bits = u16::try_from(bits).map_err(|_| {
+                PyOverflowError::new_err("audit_priority_filter must be in 0..=65535")
+            })?;
             Ok(AuditPriorityPolicy::Filter(
                 BACnetPriorityFilter::from_bits(bits),
             ))
@@ -57,7 +58,7 @@ fn integer(value: &Bound<'_, PyAny>, name: &str) -> PyResult<u64> {
             "{name} must be an integer (not bool)"
         )));
     }
-    value
-        .extract::<u64>()
-        .map_err(|_| PyValueError::new_err(format!("{name} must be in 0..=18446744073709551615")))
+    value.extract::<u64>().map_err(|_| {
+        PyOverflowError::new_err(format!("{name} must be in 0..=18446744073709551615"))
+    })
 }

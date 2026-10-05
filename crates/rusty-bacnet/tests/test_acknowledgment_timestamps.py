@@ -69,7 +69,11 @@ class BACnetTimeStampArtifactTests(unittest.TestCase):
             time.value = (1, 2, 3, 4)  # type: ignore[misc]
 
     def test_factories_reject_types_booleans_ranges_and_lossy_years(self) -> None:
-        for invalid in (-1, 65_536, True, "1"):
+        # Outside unsigned16 overflows (#1360); a bool or str isn't an integer.
+        for invalid in (-1, 65_536):
+            with self.subTest(sequence=invalid), self.assertRaises(OverflowError):
+                BACnetTimeStamp.sequence_number(invalid)
+        for invalid in (True, "1"):
             with self.subTest(sequence=invalid), self.assertRaises(ValueError):
                 BACnetTimeStamp.sequence_number(invalid)  # type: ignore[arg-type]
 

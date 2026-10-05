@@ -1,6 +1,6 @@
 //! Python mapping boundary for Recipient_List destinations
-//! (`BACnetDestination`, Clause 21), as `add_notification_forwarder` seeds
-//! them.
+//! (`BACnetDestination`, Clause 21), as `add_notification_forwarder` and
+//! `add_notification_class` seed them (#1260, #1364).
 //!
 //! Each destination is a `Destination` mapping. Its recipient uses the
 //! recipient mapping the Audit services take, and its time window uses the
@@ -16,7 +16,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool};
 
 use super::audit::recipient;
-use super::mapping::{mapping, optional_item, ranged_integer, required_item, validate_keys};
+use super::mapping::{
+    fixed_integer, mapping, optional_item, ranged_integer, required_item, validate_keys,
+};
 use super::timestamp::time_tuple;
 
 const REQUIRED: &[&str] = &["recipient", "process_identifier"];
@@ -28,6 +30,19 @@ const OPTIONAL: &[&str] = &[
     "transitions",
 ];
 
+/// Read the `recipients=` seed of a Recipient_List, in order: nothing, or a
+/// list of `Destination` mappings.
+pub(crate) fn destinations(
+    recipients: Option<Vec<Bound<'_, PyAny>>>,
+) -> PyResult<Vec<BACnetDestination>> {
+    recipients
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(index, value)| destination(value, &format!("recipients[{index}]")))
+        .collect()
+}
+
 /// Read one `Destination` mapping. A key left out gives a destination that
 /// is active every day, all day, for every transition, with unconfirmed
 /// notifications.
@@ -37,9 +52,7 @@ pub(crate) fn destination(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACn
     let field = |key: &str| format!("{name}.{key}");
     let bits = |key: &str, maximum: u8| {
         optional_item(value, key)?
-            .map(|item| {
-                ranged_integer(&item, &field(key), 0, maximum.into()).map(|bits| bits as u8)
-            })
+            .map(|item| ranged_integer::<u8>(&item, &field(key), 0..=maximum))
             .transpose()
     };
     let time = |key: &str| {
@@ -77,12 +90,10 @@ pub(crate) fn destination(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACn
             &required_item(value, name, "recipient")?,
             &field("recipient"),
         )?,
-        process_identifier: ranged_integer(
+        process_identifier: fixed_integer::<u32>(
             &required_item(value, name, "process_identifier")?,
             &field("process_identifier"),
-            0,
-            u32::MAX.into(),
-        )? as u32,
+        )?,
         issue_confirmed_notifications,
         transitions: bits("transitions", EventTransitionBits::all().bits())?.map_or(
             EventTransitionBits::all(),

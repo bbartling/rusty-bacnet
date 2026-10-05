@@ -14,9 +14,9 @@ use super::super::*;
 use bacnet_types::constructed::BACnetAuthenticationFactorFormat;
 use bacnet_types::enums::{
     AccessZoneOccupancyState, AuthenticationFactorType, AuthorizationMode, DoorAlarmState,
-    ErrorClass, ErrorCode,
 };
 use bacnet_types::error::Error;
+use pyo3::types::PyTuple;
 
 /// One element of a reference array or list (Door_Members, Access_Doors,
 /// Entry_Points, Exit_Points and the Access User lists) as Python gives it:
@@ -71,36 +71,37 @@ fn device_references(
 /// names its vendor members (a CUSTOM format must name both). Each vendor
 /// member is optional in the datatype, so either may be `None`, the form a
 /// read gives a format that carries only one of them.
-#[derive(FromPyObject)]
 enum PyFactorFormat {
     Standard(u32),
-    Vendor(u32, Option<u32>, Option<u32>),
+    Vendor(u32, Option<u16>, Option<u16>),
 }
 
-impl TryFrom<PyFactorFormat> for BACnetAuthenticationFactorFormat {
-    type Error = Error;
+impl PyFactorFormat {
+    /// Read one format. A number outside its type (unsigned32 for the format
+    /// type, unsigned16 for a vendor member) raises OverflowError (#1360),
+    /// a triple of another length ValueError, and anything else TypeError.
+    fn from_py(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if value.is_instance_of::<PyTuple>() {
+            let (format_type, vendor_id, vendor_format) = value.extract()?;
+            return Ok(Self::Vendor(format_type, vendor_id, vendor_format));
+        }
+        Ok(Self::Standard(value.extract()?))
+    }
+}
 
-    /// A vendor member too wide for its Unsigned16 is VALUE_OUT_OF_RANGE, as
-    /// the object's own checks answer any other ill-formed format.
-    fn try_from(format: PyFactorFormat) -> Result<Self, Error> {
-        Ok(match format {
+impl From<PyFactorFormat> for BACnetAuthenticationFactorFormat {
+    fn from(format: PyFactorFormat) -> Self {
+        match format {
             PyFactorFormat::Standard(format_type) => {
                 Self::standard(AuthenticationFactorType::from_raw(format_type))
             }
             PyFactorFormat::Vendor(format_type, vendor_id, vendor_format) => Self {
                 format_type: AuthenticationFactorType::from_raw(format_type),
-                vendor_id: vendor_id.map(unsigned16).transpose()?,
-                vendor_format: vendor_format.map(unsigned16).transpose()?,
+                vendor_id,
+                vendor_format,
             },
-        })
+        }
     }
-}
-
-fn unsigned16(value: u32) -> Result<u16, Error> {
-    u16::try_from(value).map_err(|_| Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
-    })
 }
 
 #[pymethods]
@@ -175,7 +176,7 @@ impl BACnetServer {
         access_doors: Option<Vec<PyDeviceObjectReference>>,
         number_of_authentication_policies: Option<u32>,
         supported_authorization_modes: Option<Vec<u32>>,
-        priority_for_writing: Option<u32>,
+        priority_for_writing: Option<u8>,
     ) -> PyResult<()> {
         let settings = PointSettings {
             access_doors: device_references(access_doors, "access_doors")?,
@@ -257,16 +258,24 @@ impl BACnetServer {
     /// as `(format, format_class)` pairs. A format is a format type number,
     /// or a `(format_type, vendor_id, vendor_format)` triple whose vendor
     /// members may each be `None`, as a read gives them. A format outside
-    /// the closed production, a CUSTOM format without its vendor members, a
-    /// nonzero vendor member on another format or one above 65535 raises
-    /// VALUE_OUT_OF_RANGE.
+    /// the closed production, a CUSTOM format without its vendor members or
+    /// a nonzero vendor member on another format raises VALUE_OUT_OF_RANGE;
+    /// a vendor member above 65535 raises OverflowError (#1360).
     #[pyo3(signature = (instance, name, *, supported_formats=None))]
     fn add_credential_data_input(
         &self,
         instance: u32,
         name: &str,
-        supported_formats: Option<Vec<(PyFactorFormat, u32)>>,
+        supported_formats: Option<Vec<(Bound<'_, PyAny>, u32)>>,
     ) -> PyResult<()> {
+        let supported_formats = supported_formats
+            .map(|formats| {
+                formats
+                    .iter()
+                    .map(|(format, class)| Ok((PyFactorFormat::from_py(format)?, *class)))
+                    .collect::<PyResult<Vec<_>>>()
+            })
+            .transpose()?;
         let obj = credential_data_input(instance, name, supported_formats).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
@@ -313,7 +322,7 @@ struct PointSettings {
     access_doors: Option<Vec<BACnetDeviceObjectReference>>,
     number_of_authentication_policies: Option<u32>,
     supported_authorization_modes: Option<Vec<u32>>,
-    priority_for_writing: Option<u32>,
+    priority_for_writing: Option<u8>,
 }
 
 /// Build an Access Point through its validating setters.
@@ -333,8 +342,7 @@ fn access_point(
         obj.set_supported_authorization_modes(modes.into_iter().map(AuthorizationMode::from_raw))?;
     }
     if let Some(priority) = settings.priority_for_writing {
-        // A value too wide for u8 is out of 1..=16 too.
-        obj.set_priority_for_writing(u8::try_from(priority).unwrap_or(0))?;
+        obj.set_priority_for_writing(priority)?;
     }
     Ok(obj)
 }
@@ -406,11 +414,12 @@ fn credential_data_input(
 ) -> Result<CredentialDataInputObject, Error> {
     let mut obj = CredentialDataInputObject::new(instance, name)?;
     if let Some(formats) = formats {
-        let formats = formats
-            .into_iter()
-            .map(|(format, class)| Ok((format.try_into()?, class)))
-            .collect::<Result<Vec<_>, Error>>()?;
-        obj.set_supported_formats(formats)?;
+        obj.set_supported_formats(
+            formats
+                .into_iter()
+                .map(|(format, class)| (BACnetAuthenticationFactorFormat::from(format), class))
+                .collect::<Vec<_>>(),
+        )?;
     }
     Ok(obj)
 }

@@ -1,6 +1,6 @@
 use super::*;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 const LIST: PropertyIdentifier = PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES;
@@ -101,15 +101,15 @@ fn python_add_channel_settings_reach_the_channel() {
 
 #[test]
 fn python_add_channel_refusals_come_from_the_channel() {
-    let out_of_range = |settings: ChannelSettings, number: u32| {
+    let out_of_range = |settings: ChannelSettings, number: u16| {
         let error = channel(3, "CH-3", number, settings).err().unwrap();
         assert!(
             is_error(&error, ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE),
             "{error:?}"
         );
     };
-    // A channel number past Unsigned16.
-    out_of_range(ChannelSettings::default(), 65_536);
+    // A channel number past Unsigned16 never gets here: the parameter is a
+    // u16, so the binding raises OverflowError for it (#1360).
     // A delay count that isn't the member count, members given or not.
     out_of_range(
         ChannelSettings {

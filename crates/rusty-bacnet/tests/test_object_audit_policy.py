@@ -26,7 +26,7 @@ class ObjectAuditPolicyTests(unittest.IsolatedAsyncioTestCase):
                                {"auditable_operations": True}, {"auditable_operations": -1},
                                {"audit_priority_filter": 65536}, {"audit_priority_filter": True}):
                     with self.subTest(owner=type(owner).__name__, method=name, option=option):
-                        with self.assertRaises((ValueError, TypeError)):
+                        with self.assertRaises((ValueError, TypeError, OverflowError)):
                             method(1, name, **option)
                 # Same identifier/name succeeds: invalid calls stored nothing.
                 method(1, name, audit_level="default", auditable_operations=0,

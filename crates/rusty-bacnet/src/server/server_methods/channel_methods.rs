@@ -5,7 +5,6 @@
 use super::super::*;
 use bacnet_objects::channel::ChannelObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 
 #[pymethods]
@@ -30,8 +29,9 @@ impl BACnetServer {
     ///
     /// A wrong shape or type raises TypeError, an unknown or missing mapping
     /// key or a device that isn't a Device raises ValueError, and an integer
-    /// outside unsigned32 raises OverflowError (ValueError for a mapping's
-    /// index). The Channel's setters refuse the rest as a protocol error: a
+    /// outside its type (unsigned16 for `channel_number`, unsigned32 for the
+    /// rest), in a tuple or a mapping alike, raises OverflowError (#1360).
+    /// The Channel's setters refuse the rest as a protocol error: a
     /// delay count that differs from the member count or an empty group list
     /// (VALUE_OUT_OF_RANGE), and more than 1024 members or 64 groups
     /// (NO_SPACE_TO_WRITE_PROPERTY). Nothing is registered after any of them.
@@ -49,7 +49,7 @@ impl BACnetServer {
         &self,
         instance: u32,
         name: &str,
-        channel_number: u32,
+        channel_number: u16,
         members: Option<Bound<'_, PyAny>>,
         execution_delay: Option<Vec<u32>>,
         control_groups: Option<Vec<u32>>,
@@ -83,13 +83,9 @@ struct ChannelSettings {
 fn channel(
     instance: u32,
     name: &str,
-    channel_number: u32,
+    channel_number: u16,
     settings: ChannelSettings,
 ) -> Result<ChannelObject, Error> {
-    let channel_number = u16::try_from(channel_number).map_err(|_| Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
-    })?;
     let mut obj = ChannelObject::new(instance, name, channel_number)?;
     if let Some(members) = settings.members {
         obj.set_members(members)?;

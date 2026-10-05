@@ -3533,7 +3533,12 @@ as the device's.
 
 An Accumulator serves the optional Prescale only once `set_prescale` gives
 it one: BACnetPrescale has no NULL, so until then the property is absent from
-Property_List and the PICS, and a read is UNKNOWN_PROPERTY (#1417).
+Property_List and the PICS, and a read is UNKNOWN_PROPERTY (#1417). Scale
+(`set_scale`) and Prescale read as a `PropertyValue::ApplicationData` holding
+their context-tagged Clause 21 forms, encoded with
+`bacnet_encoding::constructed::{encode_scale, encode_prescale}`: Scale's
+float `[0]` or integer `[1]` alternative, and Prescale's multiplier `[0]` and
+modulo divide `[1]` (#1487). Both are read-only.
 
 A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
 takes writes like the Loop's variable references: the context-tagged

@@ -29,10 +29,13 @@ class MultipleTargetReporters(unittest.IsolatedAsyncioTestCase):
                         [configuration(1), configuration(True)],
                         [configuration(1), configuration("2")],
                         [configuration(1), {**configuration(2), "audit_level": "default"}],
-                        [configuration(1), {**configuration(2), "audit_priority_filter": 65536}],
                         [configuration(1), {**configuration(2), "unexpected": True}]):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 server.configure_audit_reporters(invalid)
+        # Outside unsigned16 overflows (#1360).
+        with self.assertRaises(OverflowError):
+            server.configure_audit_reporters(
+                [configuration(1), {**configuration(2), "audit_priority_filter": 65536}])
         for invalid in (None, (), {}, [None], [configuration(1), {**configuration(2), "issue_confirmed_notifications": 1}]):
             with self.subTest(invalid=invalid), self.assertRaises(TypeError):
                 server.configure_audit_reporters(invalid)

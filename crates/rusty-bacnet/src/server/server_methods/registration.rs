@@ -322,14 +322,29 @@ impl BACnetServer {
     /// old list stays. Without it the list lives in memory only. Give each
     /// class its own file: one that holds another object's list, or that
     /// this backend did not write, raises BacnetError here.
-    #[pyo3(signature = (instance, name, notification_class=0, storage_path=None))]
+    ///
+    /// `recipients` seeds Recipient_List with `Destination` mappings, as
+    /// `add_notification_forwarder` does (#1364): more than 32, or an
+    /// address MAC past 18 octets, raises BacnetProtocolError and nothing is
+    /// registered. With `storage_path`, a saved, written list wins, and
+    /// until a write sets the list the seed applies at every start.
+    #[pyo3(signature = (
+        instance,
+        name,
+        notification_class=0,
+        storage_path=None,
+        *,
+        recipients=None
+    ))]
     fn add_notification_class(
         &self,
         instance: u32,
         name: &str,
         notification_class: u32,
         storage_path: Option<&str>,
+        recipients: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<()> {
+        let recipients = crate::types::destinations(recipients)?;
         let mut nc = match storage_path {
             Some(path) => {
                 let storage =
@@ -339,6 +354,9 @@ impl BACnetServer {
             None => NotificationClass::new(instance, name).map_err(to_py_err)?,
         };
         nc.notification_class = notification_class;
+        for destination in recipients {
+            nc.add_destination(destination).map_err(to_py_err)?;
+        }
         self.push_pending(Box::new(nc))
     }
 
@@ -627,10 +645,35 @@ impl BACnetServer {
     // Pattern B: new(instance, name, extra_param) — three-param constructors
     // -----------------------------------------------------------------------
 
-    /// Add an Accumulator object to the server (before starting).
-    #[pyo3(signature = (instance, name, units=62))]
-    fn add_accumulator(&self, instance: u32, name: &str, units: u32) -> PyResult<()> {
-        let obj = AccumulatorObject::new(instance, name, units).map_err(to_py_err)?;
+    /// Add an Accumulator object to the server (before starting). `scale`
+    /// sets Scale: a float for a float scale, an int for a power-of-ten
+    /// scale. `prescale`, a `(multiplier, modulo_divide)` pair, serves the
+    /// optional Prescale (#1487); a `modulo_divide` of 0 raises ValueError.
+    #[pyo3(signature = (instance, name, units=62, *, scale=None, prescale=None))]
+    fn add_accumulator(
+        &self,
+        instance: u32,
+        name: &str,
+        units: u32,
+        scale: Option<&Bound<'_, PyAny>>,
+        prescale: Option<(u32, u32)>,
+    ) -> PyResult<()> {
+        let mut obj = AccumulatorObject::new(instance, name, units).map_err(to_py_err)?;
+        if let Some(scale) = scale {
+            obj.set_scale(crate::types::scale_from_py(scale)?);
+        }
+        if let Some((multiplier, modulo_divide)) = prescale {
+            // It fits the type, but a divisor of 0 converts no pulse.
+            if modulo_divide == 0 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "prescale's modulo_divide must be at least 1",
+                ));
+            }
+            obj.set_prescale(bacnet_types::constructed::BACnetPrescale {
+                multiplier,
+                modulo_divide,
+            });
+        }
         self.push_pending(Box::new(obj))
     }
 

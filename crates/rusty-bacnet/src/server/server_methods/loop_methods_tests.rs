@@ -59,7 +59,6 @@ fn python_add_loop_settings_are_checked_like_the_rust_setters() {
         units(|s| s.derivative_constant_units = Some(70_000)),
         units(|s| s.priority_for_writing = Some(0)),
         units(|s| s.priority_for_writing = Some(17)),
-        units(|s| s.priority_for_writing = Some(256 + 8)),
     ];
     for settings in refused {
         let error = loop_object(1, "LOOP-1", 62, settings).err().unwrap();

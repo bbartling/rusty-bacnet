@@ -1,5 +1,6 @@
-//! Typed read results for the constructed collection properties the binding
-//! also takes as typed values (#1310).
+//! Typed read results for constructed properties: the collections the
+//! binding also takes as typed values (#1310), and the other constructed
+//! lists, arrays and single values the stack has a codec for (#1344, #1345).
 //!
 //! Nothing in a list of constructed elements marks where one element ends,
 //! so the generic decoder in `read_value` can't split it. For the properties
@@ -7,35 +8,30 @@
 //! with that datatype's codec from `bacnet_encoding::constructed` (or, for a
 //! Group's Present_Value, the ReadPropertyMultiple ACK decoder). Each element
 //! keeps its own octets, so the value encodes back to exactly what was read,
-//! and its Python form is built from those octets when `.value` is asked for.
-//! A value that doesn't decode as the expected elements, to the last octet,
-//! is left to the generic decoder.
+//! and its Python form (see `constructed_py`) is built from those octets
+//! when `.value` is asked for. A value that doesn't decode as the expected
+//! elements, to the last octet, is left to the generic decoder.
 
 use bacnet_encoding::constructed::{
-    decode_action_list, decode_authentication_factor_format, decode_destination,
-    decode_device_object_reference, decode_port_permission, decode_read_access_specification,
-    decode_stage_limit_value,
+    decode_access_rule, decode_action_list, decode_authentication_factor_format,
+    decode_calendar_entry, decode_cov_subscription, decode_daily_schedule, decode_date_range,
+    decode_destination, decode_device_object_property_reference, decode_device_object_reference,
+    decode_port_permission, decode_prescale, decode_property_access_result,
+    decode_read_access_specification, decode_recipient, decode_scale, decode_special_event,
+    decode_stage_limit_value, decode_value_source,
 };
-use bacnet_encoding::primitives::encode_property_value;
+use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_encoding::tags;
 use bacnet_services::rpm::{ReadAccessResult, ReadPropertyMultipleACK};
-use bacnet_types::constructed::{
-    BACnetActionCommand, BACnetActionList, BACnetAuthenticationFactorFormat, BACnetDestination,
-    BACnetDeviceObjectReference, BACnetPortPermission, BACnetStageLimitValue,
-    ReadAccessSpecification,
-};
+use bacnet_types::constructed::BACnetAccessRule;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
-use bytes::BytesMut;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::PyBytes;
 
-use super::audit_projection::recipient_to_py;
-use super::read_value::decode_read_value;
-use super::rpm_wpm::read_access_result_to_py;
-use super::timestamp::time_value;
-use super::{PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
+use super::constructed_py::Decoded;
+use super::PyPropertyValue;
 
 /// The constructed production a typed read splits a value into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,26 +55,97 @@ pub(crate) enum Element {
     AuthenticationFactorFormat,
     /// A Stages element, as a `(limit, values, deadband)` triple.
     StageLimitValue,
+    /// An Access Rights rule, as an `AccessRule` mapping.
+    AccessRule,
+    /// A property reference, as a `DeviceObjectPropertyReference` mapping.
+    DeviceObjectPropertyReference,
+    /// A Global Group member's result: its reference, value and error.
+    PropertyAccessResult,
+    /// An audit recipient, as an `AuditRecipientInput` mapping.
+    Recipient,
+    /// A Weekly_Schedule day, as `[(time, value), ...]`.
+    DailySchedule,
+    /// An Exception_Schedule event, as a mapping.
+    SpecialEvent,
+    /// A Date_List entry, as a mapping whose `kind` names the alternative.
+    CalendarEntry,
+    /// An Effective_Period, as `(start_date, end_date)`.
+    DateRange,
+    /// A timestamp, as a `BACnetTimeStamp`.
+    TimeStamp,
+    /// An Active_COV_Subscriptions element, as a mapping.
+    CovSubscription,
+    /// A command source: `None`, an object reference, or an address mapping
+    /// with `kind` `"address"`.
+    ValueSource,
+    /// An Accumulator's Scale: a `float` for a float scale, an `int` for a
+    /// power-of-ten scale.
+    Scale,
+    /// An Accumulator's Prescale, as `(multiplier, modulo_divide)`.
+    Prescale,
 }
 
-/// The element production of `property` on `object_type`, for the
-/// collections the binding reads as typed values.
-pub(crate) fn element(object_type: ObjectType, property: PropertyIdentifier) -> Option<Element> {
+/// How a property holds its elements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Shape {
+    /// A BACnetARRAY or BACnetLIST: a whole read is a list of elements, and
+    /// an indexed read one element.
+    Collection,
+    /// One value: a whole read is the element itself.
+    Single,
+}
+
+/// The element production of `property` on `object_type`, and how the
+/// property holds it, for the properties the binding reads as typed values.
+pub(crate) fn element(
+    object_type: ObjectType,
+    property: PropertyIdentifier,
+) -> Option<(Element, Shape)> {
     type O = ObjectType;
     type P = PropertyIdentifier;
+    use Shape::{Collection, Single};
     Some(match (object_type, property) {
         (O::NOTIFICATION_CLASS | O::NOTIFICATION_FORWARDER, P::RECIPIENT_LIST) => {
-            Element::Destination
+            (Element::Destination, Collection)
         }
-        (O::NOTIFICATION_FORWARDER, P::PORT_FILTER) => Element::PortPermission,
-        (O::GROUP, P::LIST_OF_GROUP_MEMBERS) => Element::ReadAccessSpecification,
-        (O::GROUP, P::PRESENT_VALUE) => Element::ReadAccessResult,
-        (O::COMMAND, P::ACTION) => Element::ActionList,
+        (O::NOTIFICATION_FORWARDER, P::PORT_FILTER) => (Element::PortPermission, Collection),
+        (O::GROUP, P::LIST_OF_GROUP_MEMBERS) => (Element::ReadAccessSpecification, Collection),
+        (O::GROUP, P::PRESENT_VALUE) => (Element::ReadAccessResult, Collection),
+        (O::COMMAND, P::ACTION) => (Element::ActionList, Collection),
         (O::ACCESS_DOOR, P::DOOR_MEMBERS)
         | (O::ACCESS_POINT, P::ACCESS_DOORS)
-        | (O::STAGING, P::TARGET_REFERENCES) => Element::DeviceObjectReference,
-        (O::CREDENTIAL_DATA_INPUT, P::SUPPORTED_FORMATS) => Element::AuthenticationFactorFormat,
-        (O::STAGING, P::STAGES) => Element::StageLimitValue,
+        | (O::STAGING, P::TARGET_REFERENCES)
+        | (O::ACCESS_ZONE, P::ENTRY_POINTS | P::EXIT_POINTS)
+        | (O::ACCESS_USER, P::CREDENTIALS | P::MEMBERS | P::MEMBER_OF)
+        | (O::LIFE_SAFETY_POINT | O::LIFE_SAFETY_ZONE, P::MEMBER_OF)
+        | (O::LIFE_SAFETY_ZONE, P::ZONE_MEMBERS) => (Element::DeviceObjectReference, Collection),
+        (O::ACCESS_RIGHTS, P::ACCOMPANIMENT) => (Element::DeviceObjectReference, Single),
+        (O::CREDENTIAL_DATA_INPUT, P::SUPPORTED_FORMATS) => {
+            (Element::AuthenticationFactorFormat, Collection)
+        }
+        (O::STAGING, P::STAGES) => (Element::StageLimitValue, Collection),
+        (O::ACCESS_RIGHTS, P::POSITIVE_ACCESS_RULES | P::NEGATIVE_ACCESS_RULES) => {
+            (Element::AccessRule, Collection)
+        }
+        (O::GLOBAL_GROUP, P::GROUP_MEMBERS)
+        | (O::SCHEDULE | O::CHANNEL, P::LIST_OF_OBJECT_PROPERTY_REFERENCES)
+        | (O::TREND_LOG_MULTIPLE, P::LOG_DEVICE_OBJECT_PROPERTY) => {
+            (Element::DeviceObjectPropertyReference, Collection)
+        }
+        (O::GLOBAL_GROUP, P::PRESENT_VALUE) => (Element::PropertyAccessResult, Collection),
+        (O::DEVICE, P::AUDIT_NOTIFICATION_RECIPIENT) => (Element::Recipient, Single),
+        (O::SCHEDULE, P::WEEKLY_SCHEDULE) => (Element::DailySchedule, Collection),
+        (O::SCHEDULE, P::EXCEPTION_SCHEDULE) => (Element::SpecialEvent, Collection),
+        (O::SCHEDULE, P::EFFECTIVE_PERIOD) => (Element::DateRange, Single),
+        (O::CALENDAR, P::DATE_LIST) => (Element::CalendarEntry, Collection),
+        (O::DEVICE, P::ACTIVE_COV_SUBSCRIPTIONS) => (Element::CovSubscription, Collection),
+        (O::ACCUMULATOR, P::SCALE) => (Element::Scale, Single),
+        (O::ACCUMULATOR, P::PRESCALE) => (Element::Prescale, Single),
+        // Every object type that has these properties gives them one datatype.
+        (_, P::EVENT_TIME_STAMPS | P::COMMAND_TIME_ARRAY) => (Element::TimeStamp, Collection),
+        (_, P::LAST_COMMAND_TIME) => (Element::TimeStamp, Single),
+        (_, P::VALUE_SOURCE_ARRAY) => (Element::ValueSource, Collection),
+        (_, P::VALUE_SOURCE) => (Element::ValueSource, Single),
         _ => return None,
     })
 }
@@ -87,19 +154,26 @@ pub(crate) fn element(object_type: ObjectType, property: PropertyIdentifier) -> 
 /// the property has no element production here or `octets` don't decode as
 /// its elements; the generic decoder then takes the value.
 ///
-/// A whole read is a list of the elements and an indexed read one element.
-/// An empty value and index 0 (an array's size) are left to the generic
-/// decoder, which already gives them their shape.
+/// A whole read of a collection is a list of the elements, an indexed read
+/// one element, and a read of a single value that element. An empty value
+/// and index 0 (an array's size) are left to the generic decoder, which
+/// already gives them their shape.
 pub(crate) fn decode(
     object_type: ObjectType,
     property: PropertyIdentifier,
     array_index: Option<u32>,
     octets: &[u8],
 ) -> Option<PyPropertyValue> {
-    let element = element(object_type, property)?;
+    let (element, shape) = element(object_type, property)?;
     let ends = element.split(octets)?;
-    match array_index {
-        None if !ends.is_empty() => {
+    let one = || {
+        Some(PyPropertyValue::constructed(
+            PropertyValue::ApplicationData(octets.to_vec()),
+            element,
+        ))
+    };
+    match (shape, array_index) {
+        (Shape::Collection, None) if !ends.is_empty() => {
             let mut start = 0;
             let elements = ends
                 .into_iter()
@@ -114,24 +188,10 @@ pub(crate) fn decode(
                 element,
             ))
         }
-        Some(index) if index != 0 && ends.len() == 1 => Some(PyPropertyValue::constructed(
-            PropertyValue::ApplicationData(octets.to_vec()),
-            element,
-        )),
+        (Shape::Collection, Some(index)) if index != 0 && ends.len() == 1 => one(),
+        (Shape::Single, None) if ends.len() == 1 => one(),
         _ => None,
     }
-}
-
-/// One element, decoded.
-enum Decoded {
-    Destination(BACnetDestination),
-    PortPermission(BACnetPortPermission),
-    ReadAccessSpecification(ReadAccessSpecification),
-    ReadAccessResult(ReadAccessResult),
-    ActionList(BACnetActionList),
-    DeviceObjectReference(BACnetDeviceObjectReference),
-    AuthenticationFactorFormat(BACnetAuthenticationFactorFormat),
-    StageLimitValue(BACnetStageLimitValue),
 }
 
 impl Element {
@@ -146,6 +206,19 @@ impl Element {
             Self::DeviceObjectReference => "device_object_reference",
             Self::AuthenticationFactorFormat => "authentication_factor_format",
             Self::StageLimitValue => "stage_limit_value",
+            Self::AccessRule => "access_rule",
+            Self::DeviceObjectPropertyReference => "device_object_property_reference",
+            Self::PropertyAccessResult => "property_access_result",
+            Self::Recipient => "recipient",
+            Self::DailySchedule => "daily_schedule",
+            Self::SpecialEvent => "special_event",
+            Self::CalendarEntry => "calendar_entry",
+            Self::DateRange => "date_range",
+            Self::TimeStamp => "timestamp",
+            Self::CovSubscription => "cov_subscription",
+            Self::ValueSource => "value_source",
+            Self::Scale => "scale",
+            Self::Prescale => "prescale",
         }
     }
 
@@ -177,41 +250,88 @@ impl Element {
 
     /// Decode the element at `offset`, returning it and the offset past it.
     fn decode_at(self, octets: &[u8], offset: usize) -> Result<(Decoded, usize), Error> {
-        Ok(match self {
-            Self::Destination => {
-                let (value, end) = decode_destination(octets, offset)?;
-                (Decoded::Destination(value), end)
-            }
-            Self::PortPermission => {
-                let (value, end) = decode_port_permission(octets, offset)?;
-                (Decoded::PortPermission(value), end)
-            }
-            Self::ReadAccessSpecification => {
-                let (value, end) = decode_read_access_specification(octets, offset)?;
-                (Decoded::ReadAccessSpecification(value), end)
-            }
-            Self::ReadAccessResult => {
-                let (value, end) = read_access_result(octets, offset)?;
-                (Decoded::ReadAccessResult(value), end)
-            }
-            Self::ActionList => {
-                let (value, end) = decode_action_list(octets, offset)?;
-                (Decoded::ActionList(value), end)
-            }
-            Self::DeviceObjectReference => {
-                let (value, end) = decode_device_object_reference(octets, offset)?;
-                (Decoded::DeviceObjectReference(value), end)
-            }
-            Self::AuthenticationFactorFormat => {
-                let (value, end) = decode_authentication_factor_format(octets, offset)?;
-                (Decoded::AuthenticationFactorFormat(value), end)
-            }
-            Self::StageLimitValue => {
-                let (value, end) = decode_stage_limit_value(octets, offset)?;
-                (Decoded::StageLimitValue(value), end)
-            }
-        })
+        /// Wrap a decoded value in `variant`.
+        fn with<T>(
+            decoded: Result<(T, usize), Error>,
+            variant: fn(T) -> Decoded,
+        ) -> Result<(Decoded, usize), Error> {
+            decoded.map(|(value, end)| (variant(value), end))
+        }
+        match self {
+            Self::Destination => with(decode_destination(octets, offset), Decoded::Destination),
+            Self::PortPermission => with(
+                decode_port_permission(octets, offset),
+                Decoded::PortPermission,
+            ),
+            Self::ReadAccessSpecification => with(
+                decode_read_access_specification(octets, offset),
+                Decoded::ReadAccessSpecification,
+            ),
+            Self::ReadAccessResult => with(
+                read_access_result(octets, offset),
+                Decoded::ReadAccessResult,
+            ),
+            Self::ActionList => with(decode_action_list(octets, offset), Decoded::ActionList),
+            Self::DeviceObjectReference => with(
+                decode_device_object_reference(octets, offset),
+                Decoded::DeviceObjectReference,
+            ),
+            Self::AuthenticationFactorFormat => with(
+                decode_authentication_factor_format(octets, offset),
+                Decoded::AuthenticationFactorFormat,
+            ),
+            Self::StageLimitValue => with(
+                decode_stage_limit_value(octets, offset),
+                Decoded::StageLimitValue,
+            ),
+            Self::AccessRule => with(access_rule(octets, offset), Decoded::AccessRule),
+            Self::DeviceObjectPropertyReference => with(
+                decode_device_object_property_reference(octets, offset),
+                Decoded::DeviceObjectPropertyReference,
+            ),
+            Self::PropertyAccessResult => with(
+                decode_property_access_result(octets, offset),
+                Decoded::PropertyAccessResult,
+            ),
+            Self::Recipient => with(decode_recipient(octets, offset), Decoded::Recipient),
+            Self::DailySchedule => with(
+                decode_daily_schedule(octets, offset),
+                Decoded::DailySchedule,
+            ),
+            Self::SpecialEvent => with(decode_special_event(octets, offset), Decoded::SpecialEvent),
+            Self::CalendarEntry => with(
+                decode_calendar_entry(octets, offset),
+                Decoded::CalendarEntry,
+            ),
+            Self::DateRange => with(decode_date_range(octets, offset), Decoded::DateRange),
+            Self::TimeStamp => with(decode_timestamp_choice(octets, offset), Decoded::TimeStamp),
+            Self::CovSubscription => with(
+                decode_cov_subscription(octets, offset),
+                Decoded::CovSubscription,
+            ),
+            Self::ValueSource => with(decode_value_source(octets, offset), Decoded::ValueSource),
+            Self::Scale => with(decode_scale(octets, offset), Decoded::Scale),
+            Self::Prescale => with(decode_prescale(octets, offset), Decoded::Prescale),
+        }
     }
+}
+
+/// Decode one access rule at `offset`. Its Python form says ALWAYS and ALL
+/// by leaving the time range and location out, so only a rule whose
+/// specifiers agree with the references it carries has one; any other rule
+/// leaves the value to the generic decoder.
+fn access_rule(octets: &[u8], offset: usize) -> Result<(BACnetAccessRule, usize), Error> {
+    let (rule, end) = decode_access_rule(octets, offset)?;
+    let canonical = BACnetAccessRule::new(rule.time_range.clone(), rule.location.clone(), true);
+    if rule.time_range_specifier != canonical.time_range_specifier
+        || rule.location_specifier != canonical.location_specifier
+    {
+        return Err(Error::decoding(
+            offset,
+            "access rule specifiers disagree with its references",
+        ));
+    }
+    Ok((rule, end))
 }
 
 /// Decode one Group Present_Value element at `offset`: an object identifier
@@ -241,147 +361,14 @@ fn read_access_result(octets: &[u8], offset: usize) -> Result<(ReadAccessResult,
     Ok((result, end))
 }
 
-impl Decoded {
-    fn into_python(self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Ok(match self {
-            Self::Destination(destination) => {
-                destination_to_py(py, &destination)?.into_any().unbind()
-            }
-            Self::PortPermission(permission) => (permission.port_id, permission.enabled)
-                .into_pyobject(py)?
-                .into_any()
-                .unbind(),
-            Self::ReadAccessSpecification(specification) => specification_to_py(py, specification)?,
-            Self::ReadAccessResult(result) => {
-                read_access_result_to_py(py, result)?.into_any().unbind()
-            }
-            Self::ActionList(list) => {
-                let commands = PyList::empty(py);
-                for command in &list.commands {
-                    commands.append(action_command_to_py(py, command)?)?;
-                }
-                commands.into_any().unbind()
-            }
-            Self::DeviceObjectReference(reference) => {
-                let object = PyObjectIdentifier::from_rust(reference.object_identifier);
-                match reference.device_identifier {
-                    None => object.into_pyobject(py)?.into_any().unbind(),
-                    Some(device) => (PyObjectIdentifier::from_rust(device), object)
-                        .into_pyobject(py)?
-                        .into_any()
-                        .unbind(),
-                }
-            }
-            Self::AuthenticationFactorFormat(format) => {
-                let format_type = format.format_type.to_raw();
-                match (format.vendor_id, format.vendor_format) {
-                    (None, None) => format_type.into_pyobject(py)?.into_any().unbind(),
-                    (vendor_id, vendor_format) => (format_type, vendor_id, vendor_format)
-                        .into_pyobject(py)?
-                        .into_any()
-                        .unbind(),
-                }
-            }
-            Self::StageLimitValue(stage) => (
-                f64::from(stage.limit),
-                stage.values,
-                f64::from(stage.deadband),
-            )
-                .into_pyobject(py)?
-                .into_any()
-                .unbind(),
-        })
-    }
-}
-
-/// One destination, in the `Destination` mapping `add_notification_forwarder`
-/// takes, with every key present.
-fn destination_to_py<'py>(
-    py: Python<'py>,
-    destination: &BACnetDestination,
-) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("recipient", recipient_to_py(py, &destination.recipient)?)?;
-    dict.set_item("process_identifier", destination.process_identifier)?;
-    dict.set_item("valid_days", destination.valid_days.bits())?;
-    dict.set_item("from_time", time_value(&destination.from_time))?;
-    dict.set_item("to_time", time_value(&destination.to_time))?;
-    dict.set_item(
-        "issue_confirmed_notifications",
-        destination.issue_confirmed_notifications,
-    )?;
-    dict.set_item("transitions", destination.transitions.bits())?;
-    Ok(dict)
-}
-
-/// One member, as `(object, [(property, array_index), ...])`.
-fn specification_to_py(
-    py: Python<'_>,
-    specification: ReadAccessSpecification,
-) -> PyResult<Py<PyAny>> {
-    let references: Vec<_> = specification
-        .list_of_property_references
-        .into_iter()
-        .map(|reference| {
-            (
-                PyPropertyIdentifier {
-                    inner: reference.property_identifier,
-                },
-                reference.property_array_index,
-            )
-        })
-        .collect();
-    Ok((
-        PyObjectIdentifier::from_rust(specification.object_identifier),
-        references,
-    )
-        .into_pyobject(py)?
-        .into_any()
-        .unbind())
-}
-
-/// One command, in the `ActionCommand` mapping `add_command` takes, with
-/// every key present. Its value reads as a read of the property it writes
-/// would, so a typed value stays typed.
-fn action_command_to_py<'py>(
-    py: Python<'py>,
-    command: &BACnetActionCommand,
-) -> PyResult<Bound<'py, PyDict>> {
-    let mut encoded = BytesMut::new();
-    let value = encode_property_value(&mut encoded, &command.property_value)
-        .and_then(|()| {
-            decode_read_value(
-                command.object_identifier.object_type(),
-                command.property_identifier,
-                command.property_array_index,
-                &encoded,
-            )
-        })
-        .unwrap_or_else(|_| PyPropertyValue::from_rust(command.property_value.clone()));
-    let dict = PyDict::new(py);
-    dict.set_item(
-        "device_identifier",
-        command.device_identifier.map(PyObjectIdentifier::from_rust),
-    )?;
-    dict.set_item(
-        "object_identifier",
-        PyObjectIdentifier::from_rust(command.object_identifier),
-    )?;
-    dict.set_item(
-        "property_identifier",
-        PyPropertyIdentifier {
-            inner: command.property_identifier,
-        },
-    )?;
-    dict.set_item("property_array_index", command.property_array_index)?;
-    dict.set_item("property_value", value)?;
-    dict.set_item("priority", command.priority)?;
-    dict.set_item("post_delay", command.post_delay)?;
-    dict.set_item("quit_on_failure", command.quit_on_failure)?;
-    dict.set_item("write_successful", command.write_successful)?;
-    Ok(dict)
-}
-
 #[cfg(test)]
 #[path = "constructed_read_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "constructed_read_more_tests.rs"]
+mod more_tests;
+
+#[cfg(test)]
+#[path = "constructed_read_scale_tests.rs"]
+mod scale_tests;

@@ -65,6 +65,7 @@ mod property_access_result;
 mod property_value;
 mod read_access;
 pub mod recipient;
+mod scale;
 pub mod schedule;
 mod shed_level;
 pub mod staging;
@@ -143,6 +144,7 @@ pub use recipient::{
     check_decoded_mac_len, check_encoded_mac_len, decode_destination, decode_destination_list,
     decode_recipient, encode_destination, encode_destination_list, encode_recipient,
 };
+pub use scale::{decode_prescale, decode_scale, encode_prescale, encode_scale};
 pub use schedule::{
     decode_daily_schedule, decode_exception_schedule, decode_special_event,
     decode_special_event_period, decode_time_value, decode_weekly_schedule, encode_daily_schedule,

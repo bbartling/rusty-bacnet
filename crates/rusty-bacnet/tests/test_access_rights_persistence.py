@@ -25,6 +25,29 @@ GROWN = bytes(
     [0x09, 0x00, 0x1E, 0x0C, 0x04, 0x7F, 0xFF, 0xFF, 0x19, 0x55, 0x1F]
     + [0x29, 0x00, 0x3E, 0x1C, 0x08, 0x7F, 0xFF, 0xFF, 0x3F, 0x49, 0x00]
 )
+
+# The same rules as a read gives them back (#1344): every key present, None
+# standing for ALWAYS and ALL.
+def reference(oid: ObjectIdentifier) -> dict:
+    return {
+        "object_identifier": oid,
+        "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+        "property_array_index": None,
+        "device_identifier": None,
+    }
+
+
+ANYWHERE_OFF_RULE = {"enable": False, "time_range": None, "location": None}
+REMOTE_LOCKDOWN_RULE = {
+    "enable": True,
+    "time_range": None,
+    "location": (ObjectIdentifier(ObjectType.DEVICE, 99), ObjectIdentifier(ObjectType.ACCESS_ZONE, 3)),
+}
+GROWN_RULE = {
+    "enable": False,
+    "time_range": reference(ObjectIdentifier(ObjectType.SCHEDULE, 4194303)),
+    "location": ObjectIdentifier(ObjectType.ACCESS_POINT, 4194303),
+}
 # A rule whose location is an Access Door, which the object refuses.
 DOOR_RULE = bytes([0x09, 0x01, 0x29, 0x00, 0x3E, 0x1C, 0x07, 0x80, 0x00, 0x04, 0x3F, 0x49, 0x01])
 
@@ -138,7 +161,7 @@ class AccessRightsRestartTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 3,
             )
-            self.assertEqual(await self.read(1, POSITIVE), ANYWHERE_OFF + ANYWHERE_OFF)
+            self.assertEqual(await self.read(1, POSITIVE), [ANYWHERE_OFF_RULE, ANYWHERE_OFF_RULE])
         finally:
             await server.stop()
 
@@ -146,8 +169,8 @@ class AccessRightsRestartTests(unittest.IsolatedAsyncioTestCase):
         try:
             # The kept object serves what was written, over the configuration
             # it was registered with again.
-            self.assertEqual(await self.read(1, POSITIVE), ANYWHERE_OFF + ANYWHERE_OFF)
-            self.assertEqual(await self.read(1, NEGATIVE), REMOTE_LOCKDOWN + GROWN)
+            self.assertEqual(await self.read(1, POSITIVE), [ANYWHERE_OFF_RULE, ANYWHERE_OFF_RULE])
+            self.assertEqual(await self.read(1, NEGATIVE), [REMOTE_LOCKDOWN_RULE, GROWN_RULE])
             self.assertIs(await self.read(1, ENABLE), False)
             # The other starts from its configuration.
             self.assertEqual(await self.read(2, POSITIVE), configured)
@@ -182,7 +205,7 @@ class AccessRightsRestartTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(
                         raised.exception.error_code, ErrorCode.OPERATIONAL_PROBLEM.to_raw()
                     )
-            self.assertEqual(await self.read(1, POSITIVE), ANYWHERE_OFF)
+            self.assertEqual(await self.read(1, POSITIVE), [ANYWHERE_OFF_RULE])
             self.assertIs(await self.read(1, ENABLE), True)
             # Object 2 keeps its rules in memory, so the same write succeeds.
             await self.write(2, POSITIVE, PropertyValue.application_data(REMOTE_LOCKDOWN))

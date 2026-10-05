@@ -9,13 +9,23 @@ use bacnet_encoding::constructed::{
     encode_device_object_reference, encode_port_permission, encode_read_access_specification,
     encode_stage_limit_value,
 };
+use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::rpm::ReadResultElement;
+use bacnet_types::constructed::{
+    BACnetAuthenticationFactorFormat, BACnetDeviceObjectReference, BACnetPortPermission,
+    BACnetStageLimitValue,
+};
 use bacnet_types::enums::AuthenticationFactorType;
 use bacnet_types::primitives::ObjectIdentifier;
+use bytes::BytesMut;
+use pyo3::types::{PyDict, PyList};
 use std::ffi::CStr;
 
+use crate::types::destination::destination as destination_from_py;
+use crate::types::read_value::decode_read_value;
 use crate::types::{
-    action_lists_from_py, destination_from_py, py_to_rpm_specs, rpm_ack_to_py, PyReadAccessSpec,
+    action_lists_from_py, py_to_rpm_specs, rpm_ack_to_py, PyObjectIdentifier, PyPropertyIdentifier,
+    PyReadAccessSpec,
 };
 
 const NF: ObjectType = ObjectType::NOTIFICATION_FORWARDER;

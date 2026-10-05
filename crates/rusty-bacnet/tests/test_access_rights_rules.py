@@ -54,6 +54,34 @@ GROWN = bytes(
     + [0x29, 0x00, 0x3E, 0x1C, 0x08, 0x7F, 0xFF, 0xFF, 0x3F, 0x49, 0x00]
 )
 
+# The same rules as a read gives them back (#1344): every key present, None
+# standing for ALWAYS and ALL.
+def reference(oid: ObjectIdentifier) -> dict:
+    return {
+        "object_identifier": oid,
+        "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+        "property_array_index": None,
+        "device_identifier": None,
+    }
+
+
+ANYWHERE_OFF_RULE = {"enable": False, "time_range": None, "location": None}
+REMOTE_LOCKDOWN_RULE = {
+    "enable": True,
+    "time_range": None,
+    "location": (ObjectIdentifier(ObjectType.DEVICE, 99), ObjectIdentifier(ObjectType.ACCESS_ZONE, 3)),
+}
+GROWN_RULE = {
+    "enable": False,
+    "time_range": reference(ObjectIdentifier(ObjectType.SCHEDULE, 4194303)),
+    "location": ObjectIdentifier(ObjectType.ACCESS_POINT, 4194303),
+}
+BUSINESS_HOURS_RULE = {
+    "enable": True,
+    "time_range": reference(ObjectIdentifier(ObjectType.SCHEDULE, 1)),
+    "location": ObjectIdentifier(ObjectType.ACCESS_POINT, 2),
+}
+
 RULE_KEYWORDS = ["positive_access_rules", "negative_access_rules"]
 KEYWORDS = [*RULE_KEYWORDS, "enable", "accompaniment", "storage_path"]
 
@@ -158,12 +186,12 @@ class AccessRightsRulesTests(unittest.TestCase):
             return value.value
 
         self.assertEqual(await read(rights, positive, 0), 2)
-        self.assertEqual(await read(rights, positive, 1), BUSINESS_HOURS)
-        self.assertEqual(await read(rights, positive, 2), ANYWHERE_OFF)
-        # A whole read keeps every element's octets, in order.
-        self.assertEqual(await read(rights, positive), BUSINESS_HOURS + ANYWHERE_OFF)
+        self.assertEqual(await read(rights, positive, 1), BUSINESS_HOURS_RULE)
+        self.assertEqual(await read(rights, positive, 2), ANYWHERE_OFF_RULE)
+        # A whole read is every rule, in order.
+        self.assertEqual(await read(rights, positive), [BUSINESS_HOURS_RULE, ANYWHERE_OFF_RULE])
         self.assertEqual(await read(rights, negative, 0), 1)
-        self.assertEqual(await read(rights, negative, 1), REMOTE_LOCKDOWN)
+        self.assertEqual(await read(rights, negative, 1), REMOTE_LOCKDOWN_RULE)
         with self.assertRaises(BacnetProtocolError) as raised:
             await client.read_property(address, rights, negative, 2)
         self.assertEqual(raised.exception.error_code, ErrorCode.INVALID_ARRAY_INDEX.to_raw())
@@ -212,14 +240,14 @@ class AccessRightsRulesTests(unittest.TestCase):
 
         # A whole array, one element, then a resize at index 0.
         await write(positive, PropertyValue.application_data(BUSINESS_HOURS + ANYWHERE_OFF))
-        self.assertEqual(await read(positive), BUSINESS_HOURS + ANYWHERE_OFF)
+        self.assertEqual(await read(positive), [BUSINESS_HOURS_RULE, ANYWHERE_OFF_RULE])
         await write(positive, PropertyValue.application_data(REMOTE_LOCKDOWN), 2)
-        self.assertEqual(await read(positive, 2), REMOTE_LOCKDOWN)
+        self.assertEqual(await read(positive, 2), REMOTE_LOCKDOWN_RULE)
         await write(negative, PropertyValue.unsigned(2), 0)
         self.assertEqual(await read(negative, 0), 2)
-        self.assertEqual(await read(negative), GROWN + GROWN)
+        self.assertEqual(await read(negative), [GROWN_RULE, GROWN_RULE])
         await write(positive, PropertyValue.unsigned(1), 0)
-        self.assertEqual(await read(positive), BUSINESS_HOURS)
+        self.assertEqual(await read(positive), [BUSINESS_HOURS_RULE])
 
         # WritePropertyMultiple writes both arrays and Enable in one request.
         await client.write_property_multiple(
@@ -235,8 +263,8 @@ class AccessRightsRulesTests(unittest.TestCase):
                 )
             ],
         )
-        self.assertEqual(await read(negative), ANYWHERE_OFF + GROWN)
-        self.assertEqual(await read(positive), REMOTE_LOCKDOWN)
+        self.assertEqual(await read(negative), [ANYWHERE_OFF_RULE, GROWN_RULE])
+        self.assertEqual(await read(positive), [REMOTE_LOCKDOWN_RULE])
         self.assertIs(await read(enable), False)
 
         # A rule whose location is an Access Door is refused, and the array
@@ -247,7 +275,7 @@ class AccessRightsRulesTests(unittest.TestCase):
         with self.assertRaises(BacnetProtocolError) as raised:
             await write(positive, PropertyValue.application_data(door_rule), 1)
         self.assertEqual(raised.exception.error_code, ErrorCode.VALUE_OUT_OF_RANGE.to_raw())
-        self.assertEqual(await read(positive), REMOTE_LOCKDOWN)
+        self.assertEqual(await read(positive), [REMOTE_LOCKDOWN_RULE])
 
     def test_ill_formed_rules_register_nothing(self) -> None:
         asyncio.run(self._ill_formed_rules())

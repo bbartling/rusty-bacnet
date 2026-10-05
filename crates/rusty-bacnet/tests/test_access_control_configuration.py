@@ -39,25 +39,10 @@ REMOTE_DEVICE = ObjectIdentifier(ObjectType.DEVICE, 99)
 REMOTE_DOOR = ObjectIdentifier(ObjectType.ACCESS_DOOR, 4)
 LOBBY_POINT = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
 REMOTE_POINT = ObjectIdentifier(ObjectType.ACCESS_POINT, 4)
-
-# A BACnetDeviceObjectReference: device identifier [0] when present, object
-# identifier [1]. Entry_Points and Exit_Points still read as octets (#1344).
-LOBBY_POINT_REFERENCE = bytes([0x1C, 0x08, 0x40, 0x00, 0x01])
-REMOTE_POINT_REFERENCE = bytes(
-    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0x40, 0x00, 0x04]
-)
 BADGE = ObjectIdentifier(ObjectType.ACCESS_CREDENTIAL, 1)
 REMOTE_BADGE = ObjectIdentifier(ObjectType.ACCESS_CREDENTIAL, 4)
 TEAM_MEMBER = ObjectIdentifier(ObjectType.ACCESS_USER, 2)
 REMOTE_TEAM = ObjectIdentifier(ObjectType.ACCESS_USER, 5)
-BADGE_REFERENCE = bytes([0x1C, 0x08, 0x00, 0x00, 0x01])
-REMOTE_BADGE_REFERENCE = bytes(
-    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0x00, 0x00, 0x04]
-)
-TEAM_MEMBER_REFERENCE = bytes([0x1C, 0x08, 0xC0, 0x00, 0x02])
-REMOTE_TEAM_REFERENCE = bytes(
-    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0xC0, 0x00, 0x05]
-)
 
 
 # Each registration method and its keyword-only arguments.
@@ -289,13 +274,14 @@ class AccessControlConfigurationTests(unittest.TestCase):
             zone = ObjectIdentifier(ObjectType.ACCESS_ZONE, 1)
             entry = PropertyIdentifier.ENTRY_POINTS
             exit_ = PropertyIdentifier.EXIT_POINTS
-            # A list of context-tagged references reads back as its octets.
+            # The lists read back in the form the keywords take (#1344).
             self.assertEqual(
                 (await server.read_property(zone, entry)).value,
-                LOBBY_POINT_REFERENCE + REMOTE_POINT_REFERENCE,
+                [LOBBY_POINT, (REMOTE_DEVICE, REMOTE_POINT)],
             )
             self.assertEqual(
-                (await server.read_property(zone, exit_)).value, REMOTE_POINT_REFERENCE
+                (await server.read_property(zone, exit_)).value,
+                [(REMOTE_DEVICE, REMOTE_POINT)],
             )
             bare = ObjectIdentifier(ObjectType.ACCESS_ZONE, 2)
             self.assertEqual((await server.read_property(bare, entry)).value, [])
@@ -336,11 +322,11 @@ class AccessControlConfigurationTests(unittest.TestCase):
         try:
             user = ObjectIdentifier(ObjectType.ACCESS_USER, 1)
             credentials = PropertyIdentifier.CREDENTIALS
-            # A list of context-tagged references reads back as its octets.
+            # The lists read back in the form the keywords take (#1344).
             for property, expected in (
-                (credentials, BADGE_REFERENCE + REMOTE_BADGE_REFERENCE),
-                (PropertyIdentifier.MEMBERS, TEAM_MEMBER_REFERENCE),
-                (PropertyIdentifier.MEMBER_OF, REMOTE_TEAM_REFERENCE),
+                (credentials, [BADGE, (REMOTE_DEVICE, REMOTE_BADGE)]),
+                (PropertyIdentifier.MEMBERS, [TEAM_MEMBER]),
+                (PropertyIdentifier.MEMBER_OF, [(REMOTE_DEVICE, REMOTE_TEAM)]),
             ):
                 self.assertEqual((await server.read_property(user, property)).value, expected)
             # A BACnetLIST takes no index.
@@ -557,12 +543,17 @@ class AccessControlConfigurationTests(unittest.TestCase):
         for formats in (
             [(2, 0)],  # CUSTOM without its vendor members
             [((8, 260, 7), 0)],  # vendor members on a standard format
-            [((2, 65_536, 7), 0)],  # a vendor id past Unsigned16
             [(25, 0)],  # past the closed production
         ):
             with self.assertRaises(BacnetProtocolError) as raised:
                 server.add_credential_data_input(2, "Refused", supported_formats=formats)
             self.assert_value_out_of_range(raised.exception)
+        # A vendor member past Unsigned16 overflows before the object sees it
+        # (#1360), and a triple of another length is a ValueError.
+        with self.assertRaises(OverflowError):
+            server.add_credential_data_input(2, "Refused", supported_formats=[((2, 65_536, 7), 0)])
+        with self.assertRaises(ValueError):
+            server.add_credential_data_input(2, "Refused", supported_formats=[((2, 260), 0)])
         await server.start()
         try:
             reader = ObjectIdentifier(ObjectType.CREDENTIAL_DATA_INPUT, 1)

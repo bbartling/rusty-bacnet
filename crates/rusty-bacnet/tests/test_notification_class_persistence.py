@@ -1,4 +1,5 @@
-"""A Notification Class's Recipient_List kept across a restart (#1315)."""
+"""A Notification Class's Recipient_List kept across a restart (#1315), and
+seeded from add_notification_class(recipients=...) (#1364)."""
 import ast
 import asyncio
 import inspect
@@ -19,6 +20,7 @@ PARAMETERS = [
     ("name", POSITIONAL),
     ("notification_class", POSITIONAL),
     ("storage_path", POSITIONAL),
+    ("recipients", inspect.Parameter.KEYWORD_ONLY),
 ]
 
 # One destination: Device 99, every day, all day, every transition,
@@ -42,6 +44,12 @@ def destination_read(device_instance: int) -> dict[str, Any]:
         "issue_confirmed_notifications": False,
         "transitions": 0b111,
     }
+
+
+def seed(device_instance: int) -> dict[str, Any]:
+    """The seed for `device_instance`'s destination: the keys a read gives
+    back by default left out."""
+    return {"recipient": destination_read(device_instance)["recipient"], "process_identifier": 1}
 
 
 def stub_method() -> ast.FunctionDef:
@@ -72,12 +80,37 @@ class NotificationClassRegistrationTests(unittest.TestCase):
         )
         self.assertEqual(runtime["notification_class"].default, 0)
         self.assertIsNone(runtime["storage_path"].default)
+        self.assertIsNone(runtime["recipients"].default)
         method = stub_method()
         self.assertEqual(
-            [(arg.arg, POSITIONAL) for arg in method.args.args if arg.arg != "self"],
+            [(arg.arg, POSITIONAL) for arg in method.args.args if arg.arg != "self"]
+            + [(arg.arg, inspect.Parameter.KEYWORD_ONLY) for arg in method.args.kwonlyargs],
             PARAMETERS,
         )
         self.assertEqual([ast.unparse(default) for default in method.args.defaults], ["0", "None"])
+        self.assertEqual([ast.unparse(default) for default in method.args.kw_defaults], ["None"])
+
+    def test_refused_seeds_leave_nothing_pending(self) -> None:
+        server = BACnetServer(9877)
+        server.add_notification_class(1, "Full", recipients=[seed(99)] * 32)
+        # A 33rd destination is refused as a client's write would be.
+        with self.assertRaises(BacnetProtocolError) as raised:
+            server.add_notification_class(2, "Past the cap", recipients=[seed(99)] * 33)
+        self.assertEqual(raised.exception.error_class, ErrorClass.RESOURCES.to_raw())
+        self.assertEqual(raised.exception.error_code, ErrorCode.NO_SPACE_TO_WRITE_PROPERTY.to_raw())
+        long_mac = dict(seed(99), recipient={"kind": "address", "network_number": 0,
+                                             "mac_address": bytes(19)})
+        with self.assertRaises(BacnetProtocolError) as raised:
+            server.add_notification_class(2, "Long MAC", recipients=[long_mac])
+        self.assertEqual(raised.exception.error_code, ErrorCode.INVALID_DATA_TYPE.to_raw())
+        for recipients, error in (
+            (["device"], TypeError),
+            ([dict(seed(99), days=1)], ValueError),
+            ([{"recipient": seed(99)["recipient"]}], ValueError),
+        ):
+            with self.subTest(recipients=recipients), self.assertRaises(error):
+                server.add_notification_class(2, "Refused", recipients=recipients)
+        self.assertEqual(server._pending_registration_count(), 1)
 
     def test_an_empty_storage_path_is_refused(self) -> None:
         server = BACnetServer(9874)
@@ -110,11 +143,14 @@ class NotificationClassRestartTests(unittest.IsolatedAsyncioTestCase):
 
         self.addAsyncCleanup(stop_client)
 
-    async def start(self) -> BACnetServer:
-        """A server with class 1 kept in the state directory and class 2 in memory."""
+    async def start(self, recipients: list[dict[str, Any]] | None = None) -> BACnetServer:
+        """A server with class 1 kept in the state directory and class 2 in
+        memory, both seeded with `recipients`."""
         server = BACnetServer(9872, interface="127.0.0.1", port=0)
-        server.add_notification_class(1, "Kept", 1, str(self.state / "class-1"))
-        server.add_notification_class(2, "In memory", notification_class=2)
+        server.add_notification_class(1, "Kept", 1, str(self.state / "class-1"),
+                                      recipients=recipients)
+        server.add_notification_class(2, "In memory", notification_class=2,
+                                      recipients=recipients)
         await server.start()
         self.address = await server.local_address()
         return server
@@ -158,6 +194,27 @@ class NotificationClassRestartTests(unittest.IsolatedAsyncioTestCase):
         other = BACnetServer(9876)
         with self.assertRaisesRegex(BacnetError, "belongs to another object"):
             other.add_notification_class(3, "Shares a path", 3, str(self.state / "class-1"))
+
+    async def test_a_seeded_class_serves_the_seed_until_a_saved_write(self) -> None:
+        server = await self.start(recipients=[seed(98)])
+        try:
+            for instance in (1, 2):
+                self.assertEqual(await self.read(instance), [destination_read(98)])
+            # A client's write replaces the seed; class 1 saves it.
+            for instance in (1, 2):
+                await self.write(instance, DEVICE_99)
+                self.assertEqual(await self.read(instance), [destination_read(99)])
+        finally:
+            await server.stop()
+
+        # Restarted with the same seed: the saved list wins on class 1, and
+        # class 2, which saved nothing, serves the seed again.
+        server = await self.start(recipients=[seed(98)])
+        try:
+            self.assertEqual(await self.read(1), [destination_read(99)])
+            self.assertEqual(await self.read(2), [destination_read(98)])
+        finally:
+            await server.stop()
 
     async def test_a_list_that_cannot_be_saved_is_refused_and_the_old_list_stays(self) -> None:
         server = await self.start()

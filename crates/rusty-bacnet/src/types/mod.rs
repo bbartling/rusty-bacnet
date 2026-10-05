@@ -28,6 +28,7 @@ mod action_list;
 mod address;
 mod audit;
 mod audit_projection;
+mod constructed_py;
 mod constructed_read;
 mod cov;
 mod destination;
@@ -48,9 +49,10 @@ pub(crate) use audit::recipient as audit_recipient_from_py;
 pub(crate) use audit::{audit_log_query_request_from_py, audit_notification_request_from_py};
 pub(crate) use audit_projection::audit_log_query_ack_to_py;
 pub use cov::{PyCovNotification, PyCovNotificationIterator};
-pub(crate) use destination::destination as destination_from_py;
+pub(crate) use destination::destinations;
 pub use device::PyDiscoveredDevice;
 pub use enums::*;
+pub(crate) use mapping::scale as scale_from_py;
 pub use object_identifier::PyObjectIdentifier;
 pub(crate) use property_reference::{
     check_device, local_device, localize, property_references_from_py,

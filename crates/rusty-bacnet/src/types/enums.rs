@@ -5,11 +5,16 @@ use super::*;
 //
 // Constants are registered dynamically from `ALL_NAMED` during module init,
 // so there is zero constant duplication between bacnet-types and rusty-bacnet.
+//
+// Each class lives in the `rusty_bacnet` module, and `__reduce__` rebuilds a
+// value as `from_raw(to_raw())`, so `copy.copy`, `copy.deepcopy` and `pickle`
+// work (#1456). The classes have no constructor, so `__getnewargs__`, which
+// hands its arguments to `__new__`, has nothing to call.
 // ---------------------------------------------------------------------------
 
 macro_rules! py_bacnet_enum {
     ($py_name:literal, $PyStruct:ident, $RustType:ty, $raw_ty:ty) => {
-        #[pyclass(name = $py_name, frozen, from_py_object)]
+        #[pyclass(name = $py_name, module = "rusty_bacnet", frozen, from_py_object)]
         #[derive(Clone)]
         pub struct $PyStruct {
             pub(crate) inner: $RustType,
@@ -54,6 +59,17 @@ macro_rules! py_bacnet_enum {
 
             fn __hash__(&self) -> u64 {
                 self.inner.to_raw() as u64
+            }
+
+            /// Rebuild through `from_raw(to_raw())`: what `copy` and
+            /// `pickle` call.
+            fn __reduce__<'py>(
+                slf: &Bound<'py, Self>,
+            ) -> PyResult<(Bound<'py, PyAny>, ($raw_ty,))> {
+                Ok((
+                    slf.get_type().getattr("from_raw")?,
+                    (slf.get().inner.to_raw(),),
+                ))
             }
         }
     };

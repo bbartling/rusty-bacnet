@@ -419,18 +419,22 @@ class AuditContractArtifactTests(unittest.TestCase):
         ]
         for raw in (16, 31, 64, 2**32 - 1):
             value_errors.append(notification_request(minimal_notification(AuditOperation.from_raw(raw))))
-        for key, invalid in (
-            ("invoke_id", -1),
-            ("invoke_id", 256),
-            ("source_user_id", 65_536),
-            ("source_user_role", 256),
-            ("target_priority", 0),
-            ("target_priority", 17),
-        ):
+        for key, invalid in (("target_priority", 0), ("target_priority", 17)):
             value_errors.append(
                 notification_request({**minimal_notification(), key: invalid})
             )
-        value_errors.append(
+        # Outside the field's integer type overflows (#1360).
+        overflow_errors: list[Any] = [
+            notification_request({**minimal_notification(), key: invalid})
+            for key, invalid in (
+                ("invoke_id", -1),
+                ("invoke_id", 256),
+                ("source_user_id", 65_536),
+                ("source_user_role", 256),
+                ("target_priority", 256),
+            )
+        ]
+        overflow_errors.append(
             notification_request(
                 {
                     **minimal_notification(),
@@ -442,7 +446,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                 }
             )
         )
-        value_errors.append(
+        overflow_errors.append(
             notification_request(
                 {
                     **minimal_notification(),
@@ -456,6 +460,9 @@ class AuditContractArtifactTests(unittest.TestCase):
         value_errors.append({"notifications": [minimal_notification()] * 10_001})
         for request in value_errors:
             with self.subTest(value_error=request), self.assertRaises(ValueError):
+                _unused = method(ADDRESS, request)
+        for request in overflow_errors:
+            with self.subTest(overflow_error=request), self.assertRaises(OverflowError):
                 _unused = method(ADDRESS, request)
 
     def test_query_validation_accepts_both_choices_and_rejects_invalid_values(self) -> None:
@@ -510,12 +517,6 @@ class AuditContractArtifactTests(unittest.TestCase):
         value_errors = [
             {},
             {**target_query(), "extra": 1},
-            {**target_query(), "requested_count": -1},
-            {**target_query(), "requested_count": 65_536},
-            {**target_query(), "start_at_sequence_number": -1},
-            # Corrected Unsigned64 cursor (RB-20): u32-range values are valid;
-            # only the u64 domain edges are rejected.
-            {**target_query(), "start_at_sequence_number": 2**64},
             {**target_query(), "query_parameters": {"kind": "by_target"}},
             {
                 **target_query(),
@@ -525,28 +526,32 @@ class AuditContractArtifactTests(unittest.TestCase):
                 },
             },
         ]
-        for invalid_filter in (-1, 3, 2**32):
-            value_errors.append(
-                {
-                    **target_query(),
-                    "query_parameters": {
-                        **target_query()["query_parameters"],
-                        "successful_actions_only": invalid_filter,
-                    },
-                }
-            )
-        for operations in (-1, 2**64, 1 << 16, 1 << 31):
-            value_errors.append(
-                {
-                    **target_query(),
-                    "query_parameters": {
-                        **target_query()["query_parameters"],
-                        "operations": operations,
-                    },
-                }
-            )
+        def parameters(**fields: Any) -> Any:
+            return {
+                **target_query(),
+                "query_parameters": {**target_query()["query_parameters"], **fields},
+            }
+
+        value_errors.append(parameters(successful_actions_only=3))
+        value_errors += [parameters(operations=operations) for operations in (1 << 16, 1 << 31)]
         for request in value_errors:
             with self.subTest(value_error=request), self.assertRaises(ValueError):
+                _unused = method(ADDRESS, request)
+        # Outside the field's integer type overflows (#1360). Corrected
+        # Unsigned64 cursor (RB-20): u32-range values are valid; only the u64
+        # domain edges are refused.
+        overflow_errors = [
+            {**target_query(), "requested_count": -1},
+            {**target_query(), "requested_count": 65_536},
+            {**target_query(), "start_at_sequence_number": -1},
+            {**target_query(), "start_at_sequence_number": 2**64},
+            parameters(successful_actions_only=-1),
+            parameters(successful_actions_only=2**32),
+            parameters(operations=-1),
+            parameters(operations=2**64),
+        ]
+        for request in overflow_errors:
+            with self.subTest(overflow_error=request), self.assertRaises(OverflowError):
                 _unused = method(ADDRESS, request)
 
         async def accepted_before_lifecycle_check() -> None:
@@ -587,8 +592,11 @@ class AuditContractArtifactTests(unittest.TestCase):
                 configure(1, policy="allow_all")
             server.add_audit_log(1, "Sink", str(Path(directory) / "sink"))
             configure(1, policy="deny_all")
-            for instance in (-1, 2**22, 2**100, True, 1.0, "1", None):
+            for instance in (2**22, True, 1.0, "1", None):
                 with self.subTest(instance=instance), self.assertRaises(ValueError):
+                    configure(instance, policy="allow_all")
+            for instance in (-1, 2**100):  # outside unsigned32 (#1360)
+                with self.subTest(instance=instance), self.assertRaises(OverflowError):
                     configure(instance, policy="allow_all")
             for policy in ("", "ALLOW_ALL", "allow", None, True, lambda _: True):
                 with self.subTest(policy=policy), self.assertRaises(ValueError):
@@ -639,8 +647,11 @@ class AuditContractArtifactTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "duplicate configured Device"):
                     add(device, "127.0.0.1:47809")
         add(2**22 - 1, ADDRESS)
-        for value in (-1, 2**22, 2**100, True, 1.0, "1", None):
+        for value in (2**22, True, 1.0, "1", None):
             with self.subTest(instance=value), self.assertRaises(ValueError):
+                add(value, ADDRESS)
+        for value in (-1, 2**100):  # outside unsigned32 (#1360)
+            with self.subTest(instance=value), self.assertRaises(OverflowError):
                 add(value, ADDRESS)
         for address in ("", "not-an-address", "127.0.0.1", "127.0.0.1:65536",
                         "[::1:47808", "[invalid]:47808", "01:zz:03:04:05:06",
@@ -680,8 +691,10 @@ class AuditContractArtifactTests(unittest.TestCase):
             try:
                 value = await server.read_property(ObjectIdentifier(ObjectType.DEVICE, 8),
                                                    PropertyIdentifier.AUDIT_NOTIFICATION_RECIPIENT)
-                self.assertEqual(value.tag, "application_data")
-                self.assertEqual(value.value, bytes.fromhex("0c02000009"))
+                # The recipient reads back in the form it was configured in (#1345).
+                self.assertEqual(value.tag, "recipient")
+                self.assertEqual(value.value, {"kind": "device",
+                                               "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
             finally:
                 await server.stop()
             with self.assertRaises(RuntimeError):
@@ -701,7 +714,8 @@ class AuditContractArtifactTests(unittest.TestCase):
             try:
                 value = await server.read_property(ObjectIdentifier(ObjectType.DEVICE, 8),
                                                    PropertyIdentifier.AUDIT_NOTIFICATION_RECIPIENT)
-                self.assertEqual(value.value, bytes.fromhex("1e210065067f000001bac01f"))
+                self.assertEqual(value.value, {"kind": "address", "network_number": 0,
+                                               "mac_address": bytes.fromhex("7f000001bac0")})
             finally:
                 await server.stop()
         asyncio.run(bounded_reporter_test(exercise()))
@@ -782,7 +796,7 @@ class AuditContractArtifactTests(unittest.TestCase):
             server.add_audit_reporter(2, "Inert")
             with self.assertRaisesRegex(TypeError, r"monitored_objects\[1\]"):
                 configure([{"instance": 2, **settings, 'monitored_objects': [ObjectType.ANALOG_VALUE, True]}])
-            with self.assertRaisesRegex(ValueError, "audit_priority_filter"):
+            with self.assertRaisesRegex(OverflowError, "audit_priority_filter"):
                 configure([{"instance": 2, **settings, 'audit_priority_filter': 65536}])
             configure([{"instance": 1, **settings}])
             # All allowed u64 positions survive, including bit 63, without narrowing.
@@ -792,13 +806,18 @@ class AuditContractArtifactTests(unittest.TestCase):
             configure([{"instance": 1, 'audit_level': "audit_config", 'auditable_operations': valid_mask, 'issue_confirmed_notifications': True}])
 
             for field in ("instance",):
-                for invalid in (-1, 2**22 - 1, 2**22, 2**100, True, False, 1.0, "1", None):
+                for invalid in (2**22 - 1, 2**22, True, False, 1.0, "1", None):
                     with self.subTest(field=field, invalid=invalid), self.assertRaises(ValueError):
+                        configure([{**{**settings, "instance": 1, field: invalid}}])
+                # Outside unsigned32 overflows (#1360).
+                for invalid in (-1, 2**100):
+                    with self.subTest(field=field, invalid=invalid), self.assertRaises(OverflowError):
                         configure([{**{**settings, "instance": 1, field: invalid}}])
             cases = {
                 "audit_level": [(ValueError, v) for v in ("", "NONE", "default", "audit_all ", "4")]
                     + [(TypeError, v) for v in (None, 1, True, b"audit_all")],
-                "auditable_operations": [(ValueError, v) for v in (-1, 2**64, 2**100, 1 << 16, 1 << 31, 2**64 - 1)]
+                "auditable_operations": [(OverflowError, v) for v in (-1, 2**64, 2**100)]
+                    + [(ValueError, v) for v in (1 << 16, 1 << 31, 2**64 - 1)]
                     + [(TypeError, v) for v in (True, False, 2.0, "2", None)],
                 "issue_confirmed_notifications": [(TypeError, v) for v in (0, 1, "true", None, [], object())],
                 "monitored_objects": [(TypeError, v) for v in (
@@ -807,7 +826,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                     *([None, item] for item in (True, False, 1, 1.0, "1", b"1", {}, [],
                                                PropertyIdentifier.PRESENT_VALUE, object())),
                 )],
-                "audit_priority_filter": [(ValueError, v) for v in (-1, 65536, 2**100)]
+                "audit_priority_filter": [(OverflowError, v) for v in (-1, 65536, 2**100)]
                     + [(TypeError, v) for v in (True, False, 1.0, "128", b"128", [], {})],
             }
             for field, invalids in cases.items():
@@ -869,7 +888,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                 {"monitored_objects": [], "audit_priority_filter": 65536},
                 {"monitored_objects": [], "audit_priority_filter": 0, "auditable_operations": 1 << 16},
             ):
-                with self.assertRaises((TypeError, ValueError)):
+                with self.assertRaises((TypeError, ValueError, OverflowError)):
                     configure([{"instance": 1, **{**settings, **invalid}}])
             if isinstance(options.get("monitored_objects"), list):
                 options["monitored_objects"].clear()
@@ -1039,7 +1058,7 @@ class AuditContractArtifactTests(unittest.TestCase):
                         {"monitored_objects": [True]}, {"audit_priority_filter": 65536},
                     ]
                     for invalid in invalid_filters:
-                        with self.assertRaises((TypeError, ValueError)):
+                        with self.assertRaises((TypeError, ValueError, OverflowError)):
                             child.configure_audit_reporters([{"instance": 0, 'audit_level': "none", 'auditable_operations': 0, 'issue_confirmed_notifications': not confirmed, **invalid}])
                 if bound and not confirmed:
                     child.add_device_binding(9, parent_address)
@@ -1166,8 +1185,11 @@ class AuditContractArtifactTests(unittest.TestCase):
             configure(1, parent_device_instance=2**22 - 1, parent_audit_log_instance=0)
             configure(1, **parent)
             for name in ("instance", *parent):
-                for invalid in (-1, 2**22, 2**100, True, 1.0, "1", None):
+                for invalid in (2**22, True, 1.0, "1", None):
                     with self.subTest(field=name, value=invalid), self.assertRaises(ValueError):
+                        configure(**{**{"instance": 1, **parent}, name: invalid})
+                for invalid in (-1, 2**100):  # outside unsigned32 (#1360)
+                    with self.subTest(field=name, value=invalid), self.assertRaises(OverflowError):
                         configure(**{**{"instance": 1, **parent}, name: invalid})
             with self.assertRaisesRegex(ValueError, "must be remote"):
                 configure(1, parent_device_instance=8, parent_audit_log_instance=7)

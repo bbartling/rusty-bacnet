@@ -76,7 +76,7 @@ asyncio.run(main())
 
 ## Enums
 
-All enums have class-level named constants, plus `from_raw(int)` and `to_raw()` for raw access. They support `==`, `hash()`, and `repr()`.
+All enums have class-level named constants, plus `from_raw(int)` and `to_raw()` for raw access. They support `==`, `hash()`, and `repr()`, and `copy.copy`, `copy.deepcopy` and `pickle`, which rebuild a value with `from_raw(value.to_raw())` (#1456).
 
 ### ObjectType
 
@@ -227,7 +227,21 @@ v.value   # 72.5 (native Python float)
 | `"time"` | `tuple(hour, minute, second, hundredths)` |
 | `"list"` | `list` of native Python values |
 | `"application_data"` | `bytes`: the encoded value, octet for octet |
-| `"destination"`, `"port_permission"` and the other element tags of [typed collections](#typed-collections) | the element in the form its typed write takes |
+| `"destination"`, `"port_permission"` and the other element tags of [typed constructed values](#typed-constructed-values) | the element in its typed form |
+
+### Integer arguments
+
+An integer argument is read as the fixed-width type of the field it fills
+(unsigned8, unsigned16, unsigned32, unsigned64 or INTEGER). One outside
+that type, negative for an unsigned field or too wide, raises
+`OverflowError`, whether it is a parameter, a tuple member or a value in a
+mapping (#1360). A value that fits the type but that BACnet doesn't allow
+in the field raises `ValueError` when the binding checks it while reading
+the argument (an instance past 4194303, a month of 15, a `valid_days` of
+128), and `BacnetProtocolError` with `VALUE_OUT_OF_RANGE` when the object's
+own check refuses it (a priority of 17, units past 65535). So
+`add_access_point(..., priority_for_writing=256)` raises `OverflowError`,
+and `priority_for_writing=17` raises `BacnetProtocolError`.
 
 ### Read results
 
@@ -239,15 +253,17 @@ rule: `BACnetClient.read_property` and `read_property_multiple` (and their
 broken framing (a length past the end, an unmatched opening or closing tag)
 is an error.
 
-- **A typed collection**, one of the constructed lists and arrays in
-  [the table below](#typed-collections), reads in the form its typed write
-  takes: a whole read is a `list` of the elements, and an indexed read one
-  element tagged with its production. A value that doesn't decode as those
-  elements, to the last octet, falls through to the rules below.
+- **A typed constructed value**, one of the constructed properties in
+  [the table below](#typed-constructed-values), reads in its typed form
+  (the form its typed write takes, where the binding has one): a whole read
+  of a list or array is a `list` of the elements, an indexed read one
+  element, and a read of a single value that element, each tagged with its
+  production. A value that doesn't decode as those elements, to the last
+  octet, falls through to the rules below.
 - **Other context-tagged content** comes back as `application_data` whose
-  `.value` holds the octets as served. Constructed values such as
-  Active_COV_Subscriptions, a Load Control's Requested_Shed_Level or a
-  timestamp take this form, as local reads of them always have. Element
+  `.value` holds the octets as served. Constructed values with no typed form,
+  such as a Load Control's Requested_Shed_Level or an Event Enrollment's
+  Event_Parameters, take this form, as local reads of them always have. Element
   boundaries of a constructed list aren't marked in the octets, so the
   binding doesn't split one: decode the octets with the datatype's layout,
   or read single array elements with `array_index`. Writing the value back
@@ -274,8 +290,9 @@ is an error.
 shaped by the same rules: a single application value is bare
 (`Object_List[2]`), an element of a typed collection is that element
 (`Port_Filter[2]` is a `port_permission`), an element of several application
-fields is a `list`, and any other context-tagged element is
-`application_data` (`Event_Time_Stamps[1]`).
+fields is a `list`, an element of a typed array is that element
+(`Event_Time_Stamps[1]` is a `timestamp`), and any other context-tagged
+element is `application_data`.
 
 ```python
 objects = await client.read_property(address, device, PropertyIdentifier.OBJECT_LIST)
@@ -287,15 +304,19 @@ port = await client.read_property(address, nf, PropertyIdentifier.PORT_FILTER, 2
 port.tag, port.value  # ("port_permission", (1, False))
 ```
 
-#### Typed collections
+#### Typed constructed values
 
-These properties hold lists or arrays of constructed elements that the
-binding also takes as typed values, so their reads come back in the same
-form (#1310). A whole read's `.value` is a list of the elements in the shape
-the typed write takes, so a script can usually hand it back to that write. The
-exceptions are a Target_References `(device, object)` pair, which
-`add_staging` refuses because it takes local targets only, and a value the
-object's own checks refuse, which raises as it would if written by hand. An
+These properties hold constructed values, or lists or arrays of them, that
+read back typed (#1310, #1344, #1345). Where the binding also takes the
+property as a typed value, the read comes back in that form, so a script can
+usually hand it back to the write. The exceptions are a Target_References
+`(device, object)` pair, which `add_staging` refuses because it takes local
+targets only, and a value the object's own checks refuse, which raises as it
+would if written by hand. Where it has no typed write, the form is the one
+the table gives. A whole read of a list or array is a list of the elements,
+and a read of a single value (Accompaniment, Audit_Notification_Recipient,
+Effective_Period, Last_Command_Time, Value_Source, Scale, Prescale) the
+element itself. An
 empty collection is `PropertyValue.list([])`. Each element keeps the octets it
 was read from, so writing the value back (`write_property`,
 `write_property_local`) sends them unchanged. `PropertyValue.list` of
@@ -314,6 +335,28 @@ its octets.
 | Access Door, Access Point, Staging | Door_Members, Access_Doors, Target_References | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` when the reference names a device | `door_members=`, `access_doors=`; `target_references=` takes the `ObjectIdentifier` form only |
 | Credential Data Input | Supported_Formats | `"authentication_factor_format"` | the format type, or `(format_type, vendor_id, vendor_format)` when it has vendor members (a missing one is `None`, which the write also takes) | `add_credential_data_input(supported_formats=...)`, paired with Supported_Format_Classes |
 | Staging | Stages | `"stage_limit_value"` | `(limit, values, deadband)`, `values` a `list[bool]` | `add_staging(stages=...)` |
+| Access Rights | Positive_Access_Rules, Negative_Access_Rules | `"access_rule"` | an `AccessRule` mapping with every key; `None` stands for ALWAYS and ALL | `add_access_rights(positive_access_rules=..., negative_access_rules=...)` |
+| Access Rights | Accompaniment (one value) | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | `add_access_rights(accompaniment=...)` |
+| Access Zone, Access User | Entry_Points, Exit_Points; Credentials, Members, Member_Of | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | `add_access_zone(entry_points=..., exit_points=...)`, `add_access_user(credentials=..., members=..., member_of=...)` |
+| Life Safety Point, Life Safety Zone | Member_Of; Zone_Members | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
+| Global Group, Schedule, Channel, Trend Log Multiple | Group_Members; List_Of_Object_Property_References; Log_DeviceObjectProperty | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | `add_channel(members=...)`, `add_trend_log_multiple(members=...)` |
+| Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
+| Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
+| Device | Active_COV_Subscriptions | `"cov_subscription"` | `{"recipient", "process_identifier", "object_identifier", "property_identifier", "property_array_index", "issue_confirmed_notifications", "time_remaining", "cov_increment"}`; `recipient` an `AuditRecipientInput` mapping, `cov_increment` a `float` or `None` | none |
+| Schedule | Weekly_Schedule | `"daily_schedule"` | one day: `[(time, value), ...]`, `time` an `(hour, minute, second, hundredths)` tuple and `value` a `PropertyValue` | none |
+| Schedule | Exception_Schedule | `"special_event"` | `{"period", "time_values", "priority"}`; `period` a calendar entry mapping or a Calendar's `ObjectIdentifier`, `time_values` as for a day | none |
+| Schedule | Effective_Period (one value) | `"date_range"` | `(start_date, end_date)` | none |
+| Calendar | Date_List | `"calendar_entry"` | `{"kind": "date", "date"}`, `{"kind": "date_range", "start_date", "end_date"}` or `{"kind": "week_n_day", "month", "week_of_month", "day_of_week"}` | none |
+| any | Event_Time_Stamps, Command_Time_Array; Last_Command_Time (one value) | `"timestamp"` | a `BACnetTimeStamp` | none |
+| any | Value_Source_Array; Value_Source (one value) | `"value_source"` | `None` (none), an `ObjectIdentifier` or `(device, object)` (an object), or an `AuditRecipientAddress` mapping, `{"kind": "address", "network_number", "mac_address"}` (an address) | none |
+| Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
+| Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
+
+A date in these forms is a `(year, month, day, day_of_week)` tuple with the
+full year, as `BACnetTimeStamp` takes it, and 255 in any field left
+unspecified. An Access Rights rule whose specifiers disagree with the
+references it carries, which no typed write makes, has no `AccessRule` form,
+so its array reads as `application_data`.
 
 A Group's Present_Value results, and an `ActionCommand`'s `property_value`,
 are themselves read results: each value is shaped as a read of the property it
@@ -947,10 +990,9 @@ raw = await client.get_event_information("192.168.1.100:47808")
 Read a range of items from a list or log object. This method is shared by
 `BACnetClient` and `EndpointClient`. Python supports all-items (`range_type=None`),
 position and sequence forms; ByTime remains Rust-only. Invalid selectors,
-array index zero and omitted/zero/out-of-INTEGER16 counts for a selected range
-raise `ValueError` before address parsing or I/O, provided the supplied count fits
-a signed 32-bit integer. Counts outside that native argument range raise
-`OverflowError` before address parsing or I/O. Omitted reference values default
+array index zero and omitted or zero counts for a selected range raise
+`ValueError` before address parsing or I/O. A count outside INTEGER16
+(-32768 to 32767) raises `OverflowError` before address parsing or I/O (#1360). Omitted reference values default
 to zero; zero position/sequence references are valid and may return no matches.
 The typed `ReadRangeResult` dictionary preserves raw item bytes, the three-boolean
 flags tuple and optional first sequence number. Endpoint responses must be
@@ -1426,7 +1468,7 @@ optional corrected Unsigned64 cursor (0..=2**64-1). Query parameters use
 `successful_actions_only` as the corrected `BACnetSuccessFilter` integer:
 0 = all, 1 = successes-only, 2 = failures-only. The pre-RB-02 Boolean is
 rejected with `TypeError` (use 1 for the old `True`, 0 for the old `False`);
-an out-of-range integer raises `ValueError`. Optional fields follow the
+3 to 255 raises `ValueError`, and an integer outside unsigned8 `OverflowError`. Optional fields follow the
 installed `AuditLogQueryByTargetInput` and `AuditLogQueryBySourceInput`
 definitions. `operations` is an integer bit mask:
 bits 0..15 and 32..63 are permitted, while reserved bits 16..31, negative
@@ -1463,8 +1505,12 @@ listed above and include every optional key with either its decoded value or
 
 All mappings reject unknown keys. A non-mapping container, wrong field
 container, or wrong wrapper/value type raises `TypeError`; missing required
-keys, bad discriminators, reserved values, and out-of-range integers raise
-`ValueError`. Native validation, transport, and protocol failures use the
+keys, bad discriminators, reserved values, and integers that fit their field
+but fall outside BACnet's range (a `target_priority` of 17) raise
+`ValueError`. An integer outside its field's type raises `OverflowError`
+(#1360): `invoke_id` or `source_user_role` past 255, `source_user_id`,
+`requested_count` or a `network_number` past 65535, a negative or too wide
+`start_at_sequence_number` or `operations` mask. Native validation, transport, and protocol failures use the
 existing `BacnetError` hierarchy. Validation and native encoding complete
 before an APDU can be sent.
 
@@ -1634,6 +1680,13 @@ server.add_notification_class(
     name="Critical Alarms",
     notification_class=1,
     storage_path="/application/state/class-1",  # optional
+    recipients=[  # keyword-only; seeds Recipient_List in order
+        {
+            "recipient": {"kind": "device",
+                          "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 99)},
+            "process_identifier": 1,
+        },
+    ],
 )
 server.add_notification_forwarder(
     instance=1,
@@ -1686,7 +1739,10 @@ OPERATIONAL_PROBLEM, and the class keeps its old list. `storage_path` takes a
 class its own file: the file records which class it belongs to, so two
 classes sharing a path fail to register after a restart, and a file this
 backend did not write, or a corrupt one, makes `add_notification_class` raise
-`BacnetError`.
+`BacnetError`. `recipients` seeds the class's Recipient_List with
+`Destination` mappings, with the forwarder's checks, errors and precedence
+(see below): a written, saved list wins over the seed, which until then
+applies at every start and is not saved (#1364).
 
 The Notification Forwarder sends each event notification the server
 receives, and each one its own objects address to its Device, on to the
@@ -1709,8 +1765,9 @@ the forwarders, and the server ignores a confirmed request sent by broadcast.
 services use for a recipient, and `process_identifier` is required. A key
 left out gives a destination that is active every day, all day, for every
 transition, with unconfirmed notifications. The binding checks shapes and
-Python types (unknown keys, out-of-range values and malformed time tuples
-raise `ValueError`, other wrong types `TypeError`), and the object's own
+Python types (unknown keys, values outside BACnet's range and malformed time
+tuples raise `ValueError`, an integer outside its field's type
+`OverflowError`, other wrong types `TypeError`), and the object's own
 `add_destination` decides what the list holds, as it does for a client's
 write: more than 32 destinations, or an address MAC longer than 18 octets,
 raises `BacnetProtocolError`. `port_filter` serves Port_Filter as
@@ -1720,7 +1777,7 @@ change both lists over the network, within the limits Port_Filter's writes
 allow. With `storage_path`, a Recipient_List a client wrote, once saved, wins
 over `recipients`; until a write sets the list, `recipients` applies at every
 start and is not saved. Both lists read back in these forms, each destination
-with every key (see [typed collections](#typed-collections)).
+with every key (see [typed constructed values](#typed-constructed-values)).
 Save failures are counted by
 [`forwarder_save_counters()`](#forwarder_save_counters---dictint-forwardersavecounters).
 
@@ -1899,7 +1956,8 @@ allowlists. The existing runtime, database locks, error mapping and joined shutd
 remain in use.
 
 Malformed policy or instance (including booleans, non-integers and values outside
-`0..=4194303`) raises `ValueError`. Missing/wrong-type registrations and duplicate
+`0..=4194303`) raises `ValueError`, except an instance outside unsigned32, which
+raises `OverflowError`. Missing/wrong-type registrations and duplicate
 registrations of the selected Audit Log instance also raise `ValueError`. An object
 of another type with the same instance number is not an Audit Log. Selection is
 revalidated at `start()` before transport preparation or registration transfer, so
@@ -2104,8 +2162,8 @@ child.add_device_binding(9, await parent.local_address())
 - `auditable_operations` is a required non-Boolean integer mask, not a list or
   an operation ordinal: WRITE is `1 << AuditOperation.WRITE.to_raw()` (`2`).
   Bits 0–15 are standard operations; bits 32–63 are preserved proprietary positions.
-  Reserved bits 16–31, negatives and u64 overflow raise `ValueError`; wrong types,
-  including bool, raise `TypeError`. Accepting a bit does not implement its source.
+  Reserved bits 16–31 raise `ValueError`, and negatives and u64 overflow
+  `OverflowError` (#1360); wrong types, including bool, raise `TypeError`. Accepting a bit does not implement its source.
 - `issue_confirmed_notifications` requires actual `True` or `False`; integers
   and truthy objects raise `TypeError`. The three optional dict fields are
   `monitored_objects`, `audit_priority_filter`, and `maximum_send_delay`.
@@ -2120,7 +2178,7 @@ child.add_device_binding(9, await parent.local_address())
   mappings or other element types raise `TypeError`, with an index for bad elements.
 - `audit_priority_filter=None` (or omission) selects all priorities (`0xFFFF`).
   Otherwise it is a strict non-Boolean integer mask in `0..=65535`; `0x0000` is
-  valid. Wrong types/bool raise `TypeError`, negatives/overflow raise `ValueError`.
+  valid. Wrong types/bool raise `TypeError`, negatives/overflow raise `OverflowError`.
   Bit 0 selects priority 1 through bit 15 selecting priority 16. For example,
   `1 << 7` selects priority 8; `1 << 15` selects priority 16, also used by a write
   with omitted priority. Filtering applies to commandable-property writes, not
@@ -2129,7 +2187,8 @@ child.add_device_binding(9, await parent.local_address())
 - `maximum_send_delay=None` (or omission) leaves Maximum_Send_Delay and Send_Now
   absent. A non-Boolean integer in `0..=3600` exposes the pair: zero sends
   immediately, while positive values enable bounded ordinary target batching.
-  Wrong types/bool raise `TypeError`; out-of-range integers raise `ValueError`.
+  Wrong types/bool raise `TypeError`; an integer past 3600 raises `ValueError`,
+  and one outside unsigned32 `OverflowError`.
   See [delayed target controls and limits](delayed-target-audit.md).
 - Every valid call replaces the complete selected set. Omitted options reset to
   catch-all selectors, all priorities, and absent delay/control properties.
@@ -2201,8 +2260,10 @@ creation-time keyword arguments on `add_analog_value` and `add_binary_value`:
 - `auditable_operations`: `None` (absent) or a u64 operation mask. Reserved bits 16–31 are rejected.
 - `audit_priority_filter`: `None` (absent), `"inherit"` (present BACnet NULL), or a 16-bit mask. Bit 0 selects priority 1.
 
-Validation occurs before registration, with no I/O. Invalid names/ranges raise
-ValueError; noninteger masks, including bool, raise TypeError. Endpoint pending
+Validation occurs before registration, with no I/O. Invalid names and reserved
+operation bits raise ValueError; a mask outside its integer type (negative, past
+unsigned64 for `auditable_operations` or past 65535 for `audit_priority_filter`)
+raises OverflowError (#1360); noninteger masks, including bool, raise TypeError. Endpoint pending
 registrations retain the typed policy across their existing startup retry paths.
 These options provision readable optional rows; they do not enable an endpoint
 target Reporter or broaden its executing service set. The standalone target
@@ -2295,7 +2356,7 @@ per element, each a list of `ActionCommand` mappings with
 (False when omitted) and `device_identifier`. `action_text` serves
 Action_Text, one text per list. Both are read-only over the network. Action
 reads back as these mappings with every key, the Write_Successful flags
-included (see [typed collections](#typed-collections)). `write_successful` is
+included (see [typed constructed values](#typed-constructed-values)). `write_successful` is
 accepted so such a mapping can be given back, but ignored: only a run sets
 the flag, so every command starts False. A wrong shape or Python
 type raises TypeError, and an unknown or missing key raises ValueError, as
@@ -2352,8 +2413,9 @@ value. The server doesn't follow Controlled_Variable_Reference itself.
 `proportional_constant_units`, `integral_constant_units`,
 `derivative_constant_units` (NO_UNITS when omitted) and `priority_for_writing`
 (16 when omitted) set rows that are read-only over the network; units above
-65535 or a priority outside 1 to 16 raise VALUE_OUT_OF_RANGE. Peers can write
-the Loop's Action (DIRECT until written).
+65535 or a priority outside 1 to 16 raise VALUE_OUT_OF_RANGE, and a priority
+outside 0 to 255 `OverflowError`. Peers can write the Loop's Action (DIRECT
+until written).
 
 The Loop's Controlled_Variable_Reference and Manipulated_Variable_Reference,
 and a Pulse Converter's Input_Reference, read as `application_data` holding
@@ -2535,11 +2597,11 @@ Present_Value write meanwhile is refused with BUSY. A
 writes the value the same way.
 
 A wrong shape or Python type raises `TypeError`. An unknown or missing mapping
-key, a device that isn't a Device, or a mapping's index outside unsigned32
-raises `ValueError`, and a channel number, a tuple's index, a delay or a group
-outside unsigned32 raises `OverflowError`. The Channel's own checks raise
-`BacnetProtocolError`: VALUE_OUT_OF_RANGE for a channel number above 65535, a
-delay count that differs from the member count or an empty group list, and
+key or a device that isn't a Device raises `ValueError`. A channel number
+outside unsigned16, or an index (a tuple's or a mapping's), a delay or a group
+outside unsigned32, raises `OverflowError` (#1360). The Channel's own checks
+raise `BacnetProtocolError`: VALUE_OUT_OF_RANGE for a delay count that differs
+from the member count or an empty group list, and
 NO_SPACE_TO_WRITE_PROPERTY for more than 1024 members or 64 groups. Nothing is
 registered after any of them.
 
@@ -2603,17 +2665,19 @@ lists the same way: `credentials` names the user's Access Credentials, and
 `members` and `member_of` the Access Users one level below and above it,
 here or in another device. An element of another object type raises
 `BacnetProtocolError` (VALUE_OUT_OF_RANGE).
-A whole read of Entry_Points, Exit_Points, Credentials, Members or
-Member_Of returns the references' octets as `bytes`, or `[]` while the list
-is empty. `supported_formats` takes
+A read of Entry_Points, Exit_Points, Credentials, Members or Member_Of
+gives the references back in the forms the keywords take (#1344), or `[]`
+while the list is empty. `supported_formats` takes
 `(format, format_class)` pairs, a format being a
 BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format
-needs; an ill-formed format raises VALUE_OUT_OF_RANGE.
+needs; an ill-formed format raises VALUE_OUT_OF_RANGE, and a vendor member
+outside unsigned16 `OverflowError`.
 
 `add_access_point` also takes `number_of_authentication_policies` (1 when
 omitted, never 0) and `priority_for_writing` (16 when omitted, else 1 to
-16), which set rows that are read-only over the network, and
+16; outside 0 to 255 `OverflowError`), which set rows that are read-only over
+the network, and
 `supported_authorization_modes`: the BACnetAuthorizationMode numbers the
 application carries out, AUTHORIZE (0) alone when omitted, AUTHORIZE always
 among them, proprietary ones from 64 to 65535. A value outside those raises
@@ -2691,8 +2755,9 @@ access point (ALL). A wrong type raises `TypeError`; an unknown or missing key,
 or a device that isn't a Device, raises `ValueError`; a location naming
 another object type raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE), and so
 does a list of more than 1024 rules (NO_SPACE_TO_WRITE_PROPERTY). Each
-rule reads back as `application_data` holding its BACnetAccessRule octets
-(#1344 tracks reading it as an `AccessRule` mapping).
+rule reads back as an `AccessRule` mapping with every key, `None` standing
+for ALWAYS and ALL, so a read array can be handed back to the keyword
+(#1344).
 
 `enable` (a bool, `True` when omitted) sets Enable, which a peer reads and
 writes as `PropertyIdentifier.LOG_ENABLE` (property 133); `False` disables
@@ -2724,7 +2789,8 @@ server.add_access_rights(
 Without the keyword the object has no Accompaniment row, and a read or write
 of it gets UNKNOWN_PROPERTY. Once served, it is in Property_List and peers
 can write it as `PropertyValue.application_data` holding the reference's
-octets; a read returns those octets the same way. A pair whose device isn't a
+octets; a read gives the reference back in the form the keyword takes
+(#1344). A pair whose device isn't a
 Device raises `ValueError`, and another object type raises
 `BacnetProtocolError` (VALUE_OUT_OF_RANGE), from the keyword or a write.
 
@@ -2783,7 +2849,7 @@ return, each with the next Access_Event_Tag and the Device clock's time, and
 each sends the point's COV report. Supported_Formats,
 Supported_Format_Classes, Door_Members and Access_Doors read as arrays (index
 0 is the size), each reference and format in the form its keyword argument
-takes (see [typed collections](#typed-collections)).
+takes (see [typed constructed values](#typed-constructed-values)).
 
 #### Transportation
 
@@ -2825,7 +2891,7 @@ per member, and each member row counts against `rpm_max_result_elements`; a
 read past it is aborted with OUT_OF_RESOURCES (see [RPM budgets](rpm-budget.md)).
 List_Of_Group_Members reads back in the spec shape, and Present_Value as the
 `read_property_multiple` results of the members (see
-[typed collections](#typed-collections)).
+[typed constructed values](#typed-constructed-values)).
 
 #### Extended Value Types
 
@@ -2848,6 +2914,8 @@ server.add_date_time_pattern_value(instance=1, name="Schedule Pattern")
 
 ```python
 server.add_accumulator(instance=1, name="kWh Meter", units=70)      # 70 = kilowatt-hours
+# Present_Value x 10**-2 in units, and one count per 100 pulses.
+server.add_accumulator(instance=2, name="Gas Meter", units=80, scale=-2, prescale=(1, 100))
 server.add_pulse_converter(instance=1, name="Pulse Count", units=95) # 95 = counts
 server.add_file(instance=1, name="Config File", file_type="text/plain")
 server.set_file_data(instance=1, data=b"mode=occupied\n")
@@ -2856,6 +2924,16 @@ server.add_file(instance=2, name="Record File")
 server.set_file_access_method(instance=2, access_method="record")
 server.set_file_records(instance=2, records=[b"first", b"second"])
 ```
+
+`add_accumulator`'s keyword-only `scale` sets Scale: a `float` is a float
+scale, a single-precision REAL that multiplies Present_Value, and an `int` an
+integer scale, the power of ten that does. Left out, Scale is the float scale
+1.0. `prescale`, a `(multiplier, modulo_divide)` pair of unsigned32 values,
+serves the optional Prescale, which is absent (a read is UNKNOWN_PROPERTY)
+without it. Both go out in their context-tagged Clause 21 forms and read back
+as these values (#1487). A bool or another type raises `TypeError`, an
+integer outside its type `OverflowError`, and a float that isn't finite as a
+REAL or a `prescale` of another length `ValueError`.
 
 #### Configured Network Port snapshots
 
@@ -3073,8 +3151,8 @@ deprecated `DISABLE`, so `comm_state()` never returns it.
 - `EnableDisable` doesn't compare equal to an `int`, and it is truthy in both
   states, so `if await server.comm_state():` can't tell them apart. Compare
   with the constants; `state.to_raw()` gives the number.
-- `copy.copy`, `copy.deepcopy` and `pickle` raise `TypeError` on it. Keep
-  `state.to_raw()` and rebuild with `EnableDisable.from_raw()` instead.
+- Like every enum class here, it can be copied with `copy.copy` and
+  `copy.deepcopy` and pickled; each rebuilds the value with `from_raw`.
 
 `comm_state()` raises `RuntimeError` before start and after stop.
 

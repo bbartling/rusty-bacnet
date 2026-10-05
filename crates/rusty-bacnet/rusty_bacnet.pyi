@@ -93,6 +93,9 @@ class ObjectType:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class PropertyIdentifier:
@@ -593,6 +596,9 @@ class PropertyIdentifier:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class ErrorClass:
@@ -613,6 +619,9 @@ class ErrorClass:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class ErrorCode:
@@ -781,6 +790,9 @@ class ErrorCode:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class AuditOperation:
@@ -814,6 +826,9 @@ class AuditOperation:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class EnableDisable:
@@ -829,6 +844,9 @@ class EnableDisable:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class ReinitializedState:
@@ -849,6 +867,9 @@ class ReinitializedState:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class Segmentation:
@@ -865,6 +886,9 @@ class Segmentation:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class EventState:
@@ -883,6 +907,9 @@ class EventState:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class AcknowledgmentFilter:
@@ -898,6 +925,9 @@ class AcknowledgmentFilter:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class EnrollmentSummaryEventStateFilter:
@@ -915,6 +945,9 @@ class EnrollmentSummaryEventStateFilter:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class EventType:
@@ -947,6 +980,9 @@ class EventType:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class MessagePriority:
@@ -961,6 +997,9 @@ class MessagePriority:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class VTClass:
@@ -980,6 +1019,9 @@ class VTClass:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 class LifeSafetyOperation:
@@ -1002,6 +1044,9 @@ class LifeSafetyOperation:
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -1012,7 +1057,7 @@ class ObjectIdentifier:
     """BACnet Object Identifier (10-bit type + 22-bit instance number).
 
     For u32-representable values, types above 1023 or instances above 4,194,303
-    raise ValueError. Integers outside u32 retain their argument-conversion errors.
+    raise ValueError. Integers outside u32 raise OverflowError.
     Valid proprietary types and the wire wildcard instance are accepted.
     """
 
@@ -1040,7 +1085,8 @@ class BACnetTimeStamp:
 
     @staticmethod
     def sequence_number(value: int) -> BACnetTimeStamp:
-        """Construct the Sequence Number CHOICE with a value in 0..65535."""
+        """Construct the Sequence Number CHOICE with a value in 0..65535;
+        another integer raises OverflowError."""
         ...
     @staticmethod
     def time(
@@ -1089,7 +1135,8 @@ class ActionCommand(TypedDict):
     property_identifier: PropertyIdentifier
     property_value: PropertyValue
     property_array_index: NotRequired[int | None]
-    # 1..=16; other values raise BacnetProtocolError (VALUE_OUT_OF_RANGE).
+    # 1..=16; other values raise BacnetProtocolError (VALUE_OUT_OF_RANGE), and
+    # values outside 0..=255 OverflowError.
     priority: NotRequired[int | None]
     # Seconds to wait after this write, before the next one or the end.
     post_delay: NotRequired[int | None]
@@ -1110,10 +1157,13 @@ class DeviceObjectPropertyReference(TypedDict):
     property in this device, and stores a member naming the server's own
     Device in its local form.
 
-    Unknown or missing keys, a ``device_identifier`` that isn't a Device and a
-    ``property_array_index`` outside unsigned32 raise ValueError; wrong types
-    raise TypeError. The server reads only its own objects, so a Trend Log
+    Unknown or missing keys and a ``device_identifier`` that isn't a Device
+    raise ValueError, a ``property_array_index`` outside unsigned32
+    OverflowError, and wrong types TypeError. The server reads only its own objects, so a Trend Log
     Multiple member naming another Device logs a failure instead of a value.
+    A read of a Channel's, Schedule's or Trend Log Multiple's member list, or
+    of a Global Group's Group_Members, gives each reference in this form,
+    with every key present.
     """
 
     object_identifier: ObjectIdentifier
@@ -1130,6 +1180,8 @@ class AccessRule(TypedDict):
     (ALWAYS), and a missing or ``None`` ``location`` that it covers every
     access point (ALL). A ``location`` is an Access Point or Access Zone, as
     an ``ObjectIdentifier`` in this device or a ``(device, object)`` pair.
+    A read of Positive_Access_Rules or Negative_Access_Rules gives each
+    rule in this form, with every key present.
     """
 
     enable: bool
@@ -1165,6 +1217,7 @@ class AuditRecipientAddress(TypedDict):
     mac_address: bytes
 
 
+# A read of the Device's Audit_Notification_Recipient gives this form.
 AuditRecipientInput = AuditRecipientDevice | AuditRecipientAddress
 
 
@@ -1172,8 +1225,10 @@ class Destination(TypedDict):
     """One Recipient_List destination (``BACnetDestination``) for
     ``add_notification_forwarder(recipients=...)``.
 
-    Unknown keys, out-of-range values and malformed time tuples raise
-    ValueError; other wrong types raise TypeError. A key left out gives a
+    Unknown keys, values outside BACnet's range and malformed time tuples
+    raise ValueError, an integer outside its field's type (unsigned32 for
+    ``process_identifier``, unsigned8 for the bit masks and time fields)
+    OverflowError, and other wrong types TypeError. A key left out gives a
     destination active every day, all day, for every transition, with
     unconfirmed notifications. A read of Recipient_List gives each
     destination in this form, with every key present.
@@ -1341,27 +1396,42 @@ class PropertyValue:
     ``CovNotification`` value and ``BACnetServer.read_property``) keeps every
     element of the value; only broken framing raises:
 
-    - A constructed collection the binding also writes as typed values reads
-      typed: a whole read is a ``list`` of its elements in the typed write's
-      form, and an indexed read one element, tagged with its production.
-      These are Recipient_List (``"destination"``: a ``Destination`` with
-      every key), Port_Filter (``"port_permission"``: ``(port_id,
-      enabled)``), a Group's List_Of_Group_Members
-      (``"read_access_specification"``: ``(object_id, [(property_id,
-      array_index), ...])``) and Present_Value (``"read_access_result"``: a
-      ``ReadAccessResult``), a Command's Action (``"action_list"``: a list of
-      ``ActionCommand`` with every key), Door_Members, Access_Doors and a
-      Staging's Target_References (``"device_object_reference"``: an
-      ``ObjectIdentifier``, or ``(device, object)``), Supported_Formats
-      (``"authentication_factor_format"``: the format type, or
-      ``(format_type, vendor_id, vendor_format)``) and Stages
-      (``"stage_limit_value"``: ``(limit, values, deadband)``). Each element
-      keeps its octets, so the value writes back unchanged. A value that
-      isn't those elements, to the last octet, follows the rules below.
-    - Other context-tagged content (a timestamp, Active_COV_Subscriptions),
-      or content this type has no form for (a UCS-4, DBCS or JIS string,
-      bad UTF-8, an ENUMERATED past 32 bits), is ``application_data``
-      holding the octets exactly as served.
+    - A constructed property with a typed form reads typed. A whole read of
+      a collection is a ``list`` of its elements, an indexed read one
+      element, and a read of a single value that element, tagged with its
+      production. Where the binding also takes the property as a typed
+      value, the form is that value's. The properties and forms (see
+      docs/python-api.md, "Typed constructed values"): Recipient_List
+      (``"destination"``: a ``Destination`` with every key), Port_Filter
+      (``"port_permission"``: ``(port_id, enabled)``), a Group's
+      List_Of_Group_Members (``"read_access_specification"``:
+      ``(object_id, [(property_id, array_index), ...])``) and Present_Value
+      (``"read_access_result"``: a ``ReadAccessResult``), a Command's Action
+      (``"action_list"``: a list of ``ActionCommand`` with every key), the
+      object reference lists and Accompaniment
+      (``"device_object_reference"``: an ``ObjectIdentifier``, or
+      ``(device, object)``), Supported_Formats
+      (``"authentication_factor_format"``), Stages (``"stage_limit_value"``:
+      ``(limit, values, deadband)``), Access Rights rules (``"access_rule"``:
+      an ``AccessRule`` with every key), property reference lists
+      (``"device_object_property_reference"``: a
+      ``DeviceObjectPropertyReference`` with every key), a Global Group's
+      Present_Value (``"property_access_result"``),
+      Audit_Notification_Recipient (``"recipient"``: an
+      ``AuditRecipientInput``), Weekly_Schedule (``"daily_schedule"``),
+      Exception_Schedule (``"special_event"``), Effective_Period
+      (``"date_range"``), Date_List (``"calendar_entry"``), timestamps
+      (``"timestamp"``: a ``BACnetTimeStamp``), Active_COV_Subscriptions
+      (``"cov_subscription"``), Value_Source and Value_Source_Array
+      (``"value_source"``), and an Accumulator's Scale (``"scale"``: a
+      ``float`` or an ``int``) and Prescale (``"prescale"``: ``(multiplier,
+      modulo_divide)``). Each element keeps its octets, so the value
+      writes back unchanged. A value that isn't those elements, to the last
+      octet, follows the rules below.
+    - Other context-tagged content (a Load Control's shed levels, an Event
+      Enrollment's Event_Parameters), or content this type has no form for
+      (a UCS-4, DBCS or JIS string, bad UTF-8, an ENUMERATED past 32 bits),
+      is ``application_data`` holding the octets exactly as served.
     - A whole read (no ``array_index``) of a property the stack's
       classification table marks as an array or list on that object type
       (every BACnetARRAY and BACnetLIST of the 2020 object tables) is a
@@ -1370,7 +1440,7 @@ class PropertyValue:
       ``list`` in wire order when it holds none or several (a date-time is
       a date and then a time). An indexed read is one element under these
       rules: ``Port_Filter[2]`` is a port_permission, ``Event_Time_Stamps[1]``
-      application_data.
+      a timestamp.
 
     Two values are equal when they carry the same octets and, for a typed
     read, the same element production.
@@ -1427,14 +1497,18 @@ class PropertyValue:
         one typed constructed element: 'destination', 'port_permission',
         'read_access_specification', 'read_access_result', 'action_list',
         'device_object_reference', 'authentication_factor_format',
-        'stage_limit_value'."""
+        'stage_limit_value', 'access_rule', 'device_object_property_reference',
+        'property_access_result', 'recipient', 'daily_schedule',
+        'special_event', 'calendar_entry', 'date_range', 'timestamp',
+        'cov_subscription', 'value_source', 'scale', 'prescale'."""
         ...
 
     @property
     def value(self) -> Any:
         """The Python-native value (int, float, str, bytes, bool, dict, tuple,
         ObjectIdentifier, list, or None); ``application_data`` is ``bytes``,
-        and a typed constructed element the form its typed write takes."""
+        and a typed constructed element the form its typed write takes, or
+        the form docs/python-api.md gives it."""
         ...
 
     def __repr__(self) -> str: ...
@@ -2236,10 +2310,10 @@ class BACnetClient:
         """Read a range of items from a list or log object.
 
         ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
-        ByTime is not exposed. Invalid selectors, array index zero and missing,
-        zero or non-INTEGER16 counts raise ValueError before I/O when the supplied
-        count fits a signed 32-bit integer. Counts outside that native argument
-        range raise OverflowError before address parsing or I/O. Position/sequence
+        ByTime is not exposed. Invalid selectors, array index zero and missing
+        or zero counts raise ValueError before I/O; a count outside INTEGER16
+        (-32768..=32767) raises OverflowError before address parsing or I/O
+        (#1360). Position/sequence
         reference zero is valid; omitted references default to zero.
         Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
         "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,
@@ -2750,6 +2824,8 @@ class BACnetServer:
         name: str,
         notification_class: int = 0,
         storage_path: Optional[str] = None,
+        *,
+        recipients: Optional[list[Destination]] = None,
     ) -> None:
         """Add a Notification Class (Clause 12.21). With ``storage_path``, a
         Recipient_List a client writes is kept in that file across restarts; a
@@ -2762,7 +2838,15 @@ class BACnetServer:
         the file names the class it belongs to, so one that holds another
         object's list, or anything this backend did not write, makes this call
         raise BacnetError (BacnetProtocolError for a saved list a client's write
-        would be refused)."""
+        would be refused).
+
+        ``recipients`` seeds Recipient_List with ``Destination`` mappings, in
+        order, with the checks and errors ``add_notification_forwarder``'s
+        ``recipients`` has: more than 32, or an address MAC past 18 octets,
+        raises BacnetProtocolError, and nothing is registered. With
+        ``storage_path``, a Recipient_List a client wrote, once saved, wins:
+        until a write sets the list, the seed applies at every start and is
+        not saved."""
     def add_notification_forwarder(
         self,
         instance: int,
@@ -2933,7 +3017,11 @@ class BACnetServer:
         absent delay/control properties. maximum_send_delay accepts None or an
         integer 0..3600: zero exposes immediate Maximum_Send_Delay/Send_Now;
         positive values enable bounded ordinary target batching. Bool/non-integer
-        delay raises TypeError; an out-of-range integer raises ValueError.
+        delay raises TypeError; an integer outside unsigned32 raises
+        OverflowError and one past 3600 ValueError. An ``instance``,
+        ``auditable_operations`` or ``audit_priority_filter`` outside its
+        integer type (unsigned32, unsigned64, unsigned16) raises OverflowError
+        too.
         Enabled nominal overlaps expose CONFIGURATION_ERROR on every affected
         Reporter's RELIABILITY; the lowest instance emits, before operation filters.
         Empty/all-None selectors select no nominal targets. Mandatory Reporter
@@ -2962,7 +3050,8 @@ class BACnetServer:
         Controlled_Variable_Units and the three gain units rows (NO_UNITS when
         omitted) and Priority_For_Writing (16 when omitted). Units above 65535
         or a priority outside 1..=16 raise BacnetProtocolError with
-        VALUE_OUT_OF_RANGE. Peers can write Action (DIRECT until written).
+        VALUE_OUT_OF_RANGE; a priority outside 0..=255 raises OverflowError.
+        Peers can write Action (DIRECT until written).
 
         Controlled_Variable_Reference and Manipulated_Variable_Reference read
         as ``application_data`` holding the context-tagged reference; while
@@ -3043,12 +3132,11 @@ class BACnetServer:
         writable over the network too.
 
         A wrong shape or type raises TypeError. An unknown or missing mapping
-        key, a device that isn't a Device, or a mapping's
-        ``property_array_index`` outside unsigned32 raises ValueError; a
-        channel number, a tuple's index, a delay or a group outside
-        unsigned32 raises OverflowError. A channel number above 65535,
-        a delay count that differs from the member count or an empty group
-        list raises BacnetProtocolError with VALUE_OUT_OF_RANGE; more than
+        key or a device that isn't a Device raises ValueError. A channel
+        number outside unsigned16, or an index (a tuple's or a mapping's), a
+        delay or a group outside unsigned32, raises OverflowError. A delay
+        count that differs from the member count or an empty group list
+        raises BacnetProtocolError with VALUE_OUT_OF_RANGE; more than
         1024 members or 64 groups, NO_SPACE_TO_WRITE_PROPERTY. Nothing is
         registered after any of them.
         """
@@ -3135,9 +3223,9 @@ class BACnetServer:
         with VALUE_OUT_OF_RANGE; either way nothing is registered.
 
         ``number_of_authentication_policies`` (1 when omitted, never 0) and
-        ``priority_for_writing`` (16 when omitted, else 1 to 16) set
-        Number_Of_Authentication_Policies and Priority_For_Writing, which are
-        read-only over the network. ``supported_authorization_modes`` lists
+        ``priority_for_writing`` (16 when omitted, else 1 to 16; outside
+        0..=255 OverflowError) set Number_Of_Authentication_Policies and
+        Priority_For_Writing, which are read-only over the network. ``supported_authorization_modes`` lists
         the BACnetAuthorizationMode numbers the application carries out, the
         values a write of Authorization_Mode can take: AUTHORIZE (0) alone
         when omitted, and AUTHORIZE must be in any list given; proprietary
@@ -3183,7 +3271,7 @@ class BACnetServer:
         clients can't add one; once served, clients can write it. A pair
         whose device isn't a Device raises ValueError, and any other object
         type raises BacnetProtocolError with VALUE_OUT_OF_RANGE. A read
-        returns the reference's octets as ``application_data``.
+        gives the reference back in the form the keyword takes.
 
         With ``storage_path``, a rule array, Enable or Accompaniment that a
         client writes is kept in that file across restarts, and wins over the
@@ -3228,8 +3316,8 @@ class BACnetServer:
         identifier raises ValueError, and a reference to anything but an
         Access Credential in ``credentials``, or an Access User in the other
         two, raises BacnetProtocolError with VALUE_OUT_OF_RANGE; either way
-        nothing is registered. A whole read of a list returns the
-        references' octets as ``bytes``, or ``[]`` while it is empty.
+        nothing is registered. A read of a list gives the references back in
+        the forms the keywords take, or ``[]`` while it is empty.
         """
         ...
     def add_access_zone(
@@ -3253,7 +3341,8 @@ class BACnetServer:
         ``door_members``. A pair whose device isn't a Device object
         identifier raises ValueError, and a reference to anything but an
         Access Point raises BacnetProtocolError with VALUE_OUT_OF_RANGE;
-        either way nothing is registered.
+        either way nothing is registered. A read of either list gives the
+        references back in the forms the keywords take.
 
         ``alarm_values`` sets the starting Alarm_Values, the occupancy states
         the zone reports with a CHANGE_OF_STATE alarm after Time_Delay, as
@@ -3282,9 +3371,9 @@ class BACnetServer:
         ``(format_type, vendor_id, vendor_format)`` triple whose vendor
         members may each be None (absent), as a read gives them; a CUSTOM
         format (2) needs both. A format outside the closed production, a CUSTOM
-        format without its vendor members, a nonzero vendor member on another
-        format or one above 65535 raises BacnetProtocolError with
-        VALUE_OUT_OF_RANGE. While Out_Of_Service is TRUE a client's simulated
+        format without its vendor members or a nonzero vendor member on
+        another format raises BacnetProtocolError with VALUE_OUT_OF_RANGE; a
+        vendor member above 65535 raises OverflowError. While Out_Of_Service is TRUE a client's simulated
         Present_Value must name one of these formats with its class, or be
         the UNDEFINED or ERROR factor with class 0.
         """
@@ -3362,11 +3451,28 @@ class BACnetServer:
     def add_bit_string_value(self, instance: int, name: str) -> None: ...
 
     # --- Counters/accumulators ---
-    def add_accumulator(self, instance: int, name: str, units: int = 62) -> None:
+    def add_accumulator(
+        self,
+        instance: int,
+        name: str,
+        units: int = 62,
+        *,
+        scale: float | int | None = None,
+        prescale: Optional[tuple[int, int]] = None,
+    ) -> None:
         """Add an Accumulator (Clause 12.61) to the server (before starting).
 
-        No Prescale is configured this way, so the object doesn't serve that
-        optional property: a read of it is UNKNOWN_PROPERTY.
+        ``scale`` sets Scale: a ``float`` is a float scale, sent as a
+        single-precision REAL that multiplies Present_Value, and an ``int``
+        an integer scale, the power of ten Present_Value is multiplied by.
+        Left out, Scale is the float scale 1.0. ``prescale``, a
+        ``(multiplier, modulo_divide)`` pair of unsigned32 values, serves the
+        optional Prescale; left out, the object doesn't serve it and a read
+        of it is UNKNOWN_PROPERTY. Both read back as these values (tags
+        ``"scale"`` and ``"prescale"``). A bool or another type raises
+        TypeError, an integer outside its type OverflowError, a float that
+        isn't finite as a REAL or a ``prescale`` of another length
+        ValueError; nothing is registered then.
         """
         ...
     def add_pulse_converter(self, instance: int, name: str, units: int = 62) -> None:
@@ -3966,10 +4072,10 @@ class EndpointClient:
         """Read a range of items from a list or log object.
 
         ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
-        ByTime is not exposed. Invalid selectors, array index zero and missing,
-        zero or non-INTEGER16 counts raise ValueError before I/O when the supplied
-        count fits a signed 32-bit integer. Counts outside that native argument
-        range raise OverflowError before address parsing or I/O. Position/sequence
+        ByTime is not exposed. Invalid selectors, array index zero and missing
+        or zero counts raise ValueError before I/O; a count outside INTEGER16
+        (-32768..=32767) raises OverflowError before address parsing or I/O
+        (#1360). Position/sequence
         reference zero is valid; omitted references default to zero.
         Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
         "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,

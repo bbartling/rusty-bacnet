@@ -45,14 +45,7 @@ impl BACnetServer {
         recipients: Option<Vec<Bound<'_, PyAny>>>,
         port_filter: Option<Vec<(u8, bool)>>,
     ) -> PyResult<()> {
-        let recipients = recipients
-            .unwrap_or_default()
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                crate::types::destination_from_py(value, &format!("recipients[{index}]"))
-            })
-            .collect::<PyResult<Vec<_>>>()?;
+        let recipients = crate::types::destinations(recipients)?;
         let mut nf = match storage_path {
             Some(path) => {
                 let storage =

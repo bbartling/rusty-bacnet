@@ -220,16 +220,14 @@ mod tests {
             object.read_property(P::PRESENT_VALUE, None).unwrap(),
             PropertyValue::Unsigned(0)
         );
+        // Both in their context-tagged Clause 21 forms (#1487).
         assert_eq!(
             object.read_property(P::SCALE, None).unwrap(),
-            PropertyValue::List(vec![PropertyValue::Real(1.0)])
+            PropertyValue::ApplicationData(vec![0x0C, 0x3F, 0x80, 0x00, 0x00])
         );
         assert_eq!(
             object.read_property(P::PRESCALE, None).unwrap(),
-            PropertyValue::List(vec![
-                PropertyValue::Unsigned(1),
-                PropertyValue::Unsigned(100)
-            ])
+            PropertyValue::ApplicationData(vec![0x09, 0x01, 0x19, 0x64])
         );
         // Scale, Prescale, and Property_List-adjacent scalars are not
         // BACnetARRAY rows, so the service gate rejects an index on them.

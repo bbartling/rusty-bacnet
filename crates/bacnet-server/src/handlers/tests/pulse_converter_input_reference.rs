@@ -228,7 +228,8 @@ fn an_accumulator_serves_prescale_only_once_set() {
         modulo_divide: 100,
     });
     db.add(Box::new(configured)).unwrap();
-    assert_eq!(read(&db, prescale).unwrap(), [0x21, 5, 0x21, 100]);
+    // The multiplier [0], then the modulo divide [1] (#1487).
+    assert_eq!(read(&db, prescale).unwrap(), [0x09, 5, 0x19, 100]);
     refused_with(
         write_to(&mut db, acc, prescale, &[0x00]),
         ErrorCode::WRITE_ACCESS_DENIED,
