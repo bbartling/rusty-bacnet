@@ -1,11 +1,12 @@
 //! Inbound dispatch: what the router does with each frame a port receives.
 //!
-//! Every port runs one [`PortDispatch`] task. A frame that decodes is either
-//! a network message, which goes to [`dispatch_network_message`], or an APDU,
-//! which its DNET sends to another port, to the local application queue, or
-//! to both. Traffic the router cannot route draws a Reject-Message-To-Network
-//! (see [`super::reject`]), and a DNET with no route also triggers one bounded
-//! Who-Is-Router-To-Network solicitation.
+//! Every port runs one [`PortDispatch`] task. A frame that decodes is dropped
+//! and counted if its DNET 0xFFFF carries a DADR (#1379). Otherwise it is
+//! either a network message, which goes to [`dispatch_network_message`], or
+//! an APDU, which its DNET sends to another port, to the local application
+//! queue, or to both. Traffic the router cannot route draws a
+//! Reject-Message-To-Network (see [`super::reject`]), and a DNET with no route
+//! also triggers one bounded Who-Is-Router-To-Network solicitation.
 
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -24,7 +25,8 @@ use super::forwarding::{forward_broadcast, forward_unicast};
 use super::local_control::LocalControl;
 use super::reject::{refuse_address_too_long, route_refusal, send_reject, Refused};
 use super::{local_delivery, DiscoveryTracker, IngressContext, SendRequest};
-use crate::layer::{is_group_delivery, link_source_fits, AdmissionSender, ReceivedApdu};
+use crate::layer::{destination_is_coherent, is_group_delivery, link_source_fits};
+use crate::layer::{AdmissionSender, ReceivedApdu};
 use crate::router_table::{ReachabilityStatus, RouteEntry, RouterTable};
 
 /// One port's dispatch task, with what it shares with the rest of the router.
@@ -39,6 +41,8 @@ pub(super) struct PortDispatch {
     pub local_control: Arc<LocalControl>,
     /// Count of NPDUs refused for an over-long address.
     pub address_length_drops: Arc<AtomicU64>,
+    /// Count of NPDUs dropped for a DADR beside DNET 0xFFFF.
+    pub global_broadcast_dadr_drops: Arc<AtomicU64>,
     /// The local application receive queue.
     pub local_tx: AdmissionSender<ReceivedApdu>,
     /// Every port's send queue, by port index.
@@ -81,6 +85,11 @@ impl PortDispatch {
                 return;
             }
         };
+        // Before the NPDU is routed, delivered or handled as a control, so a
+        // contradictory global broadcast goes nowhere (#1379).
+        if !destination_is_coherent(npdu.destination.as_ref(), &self.global_broadcast_dadr_drops) {
+            return;
+        }
 
         if npdu.is_network_message {
             // RB-03 admission point: immutable ingress facts travel
@@ -113,8 +122,8 @@ impl PortDispatch {
             return;
         };
 
-        // Global broadcast: forward to all other ports, and deliver locally
-        // as well.
+        // Global broadcast (DLEN 0, as checked above): forward to all other
+        // ports, and deliver locally as well.
         if dest_net == 0xFFFF {
             forward_broadcast(
                 &self.send_txs,

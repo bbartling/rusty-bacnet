@@ -448,9 +448,9 @@ async fn zero_length_mac_on_remote_network_broadcasts_with_dnet() {
 /// X'FFFF' for the global form, which routers propagate everywhere.
 ///
 /// It needs its own send: `NetworkLayer::broadcast_to_network` rejects 0xFFFF
-/// ("reserved for global broadcasts; use broadcast_global_apdu instead"), so
-/// routing it as an ordinary remote broadcast turns the notification into a
-/// logged send error and delivers nothing.
+/// ("dest_network 0xFFFF is the global broadcast; use broadcast_global_apdu
+/// for a global broadcast"), so routing it as an ordinary remote broadcast
+/// turns the notification into a logged send error and delivers nothing.
 #[tokio::test]
 async fn zero_length_mac_on_network_65535_is_a_global_broadcast() {
     let (broadcasts, unicasts) =

@@ -1543,6 +1543,15 @@ a router learns no route from it. No built-in transport reports a MAC that long
 custom `TransportPort` can, and every address the stack learns off the network
 fits a `BACnetAddress`.
 
+Both also drop an NPDU whose DNET is 0xFFFF and that carries a DADR (#1379).
+DNET 0xFFFF already names every device on every network (Clauses 6.2.2 and
+6.3.2), so a DADR beside it contradicts it. `NetworkLayer` hands such an NPDU
+to neither receiver. `BACnetRouter` neither forwards nor delivers it, acts on
+no network message in it and sends no reject, since a global broadcast never
+draws one. Each counts it in `global_broadcast_dadr_drops()`, apart from
+`address_length_drops()`: the lengths are fine, and the count points at the
+peer that sent it. A global broadcast with DLEN 0 is unaffected.
+
 `BACnetRouter` sends each Reject-Message-To-Network it originates to whoever
 first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
@@ -1595,6 +1604,14 @@ answer goes back by the route its request arrived on. The full server and the
 standalone client make that choice on every path they start, and send a
 destination naming their own network's number as local traffic (#1358).
 `BACnetRouter` keeps its own per-port networks and is not affected.
+
+The routed sends (`send_apdu_routed`, `send_apdu_routed_via_local_broadcast`
+and their `_with_data_attributes` forms), `send_apdu_on_issuance` and
+`broadcast_to_network` refuse DNET 0 and DNET 0xFFFF with `Error::Encoding`
+before anything is sent (#1314, #1340, #1380). A global broadcast goes out only
+through `broadcast_global_apdu`, with DLEN 0 and the broadcast MAC, so that
+every router on the network can pass it on (Clause 6.3.2); a unicast would
+reach a single router.
 
 ---
 
@@ -3532,9 +3549,18 @@ client's own network (#1358). A routed confirmed request to it, from any of
 the methods above or for a device added with `add_routed_device`, passes the
 checks above and then goes as a local request: a unicast to the DADR with no
 DNET, not through the router, so a non-routing peer there takes it. It holds
-no routed-path state, and `router_mac` is not used. Only an answer from the
-DADR, with no SNET, completes it: an answer relayed back by a router with that
-number as its SNET matches nothing, and the request is retried. The peer's
+no routed-path state, and `router_mac` is not used. An answer from the DADR
+with no SNET completes it, and so does one a router relays back with that
+number as its SNET and the DADR as its SADR (#1465): network numbers are
+unique, so both name the same station. That holds for any request to a station
+on this network. A relayed answer still has to carry the request's invoke ID,
+one naming another network or another station completes nothing, and while
+the number is unknown only the direct answer counts. The link source of a
+relayed answer is not checked, so any node on this link could complete the
+request by claiming that SNET and SADR with the right invoke ID; a routed
+request already trusts a claimed SNET/SADR the same way. A request routed to
+this network before the number was learned keeps its routed key, and its
+relayed answer still completes it. The peer's
 limits still come from its routed device-table row, so a request past them is
 refused or segmented as for the routed peer.
 `broadcast_network_unconfirmed`, and `who_is_network` and a `write_group` to
@@ -3545,8 +3571,11 @@ arrived by.
 
 The shared endpoint's requester does the same once its session knows the
 number (#1403). A `Routed` or `RoutedViaLocalBroadcast` destination naming it
-passes the same checks, then goes to the DADR with no DNET; only the DADR's own
-answer, with no SNET, completes the read.
+passes the same checks, then goes to the DADR with no DNET. The DADR's own
+answer completes the read, and so does one relayed back with that number as
+its SNET and the DADR as its SADR (#1465). The client, the endpoint and the
+server's own confirmed requests match answers through one rule,
+`CanonicalPeer::from_source`.
 
 State is keyed by the immediate router MAC together with DNET. One confirmed
 request at a time owns that path; requests through a different router or to a

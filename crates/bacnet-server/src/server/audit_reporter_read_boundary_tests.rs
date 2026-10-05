@@ -428,6 +428,7 @@ async fn audit_reporter_rpm_256_results_reuse_64_permits_summary_deadline_and_no
             assert!(fixture.server.notification_transactions.admit_terminal(
                 LOGGER,
                 None,
+                None,
                 &Apdu::SimpleAck(SimpleAck {
                     invoke_id: request.invoke_id,
                     service_choice: request.service_choice,

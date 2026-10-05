@@ -11,6 +11,9 @@ pub mod router_table;
 mod address_bound_tests;
 
 #[cfg(test)]
+mod global_broadcast_dadr_tests;
+
+#[cfg(test)]
 mod link_source_bound_tests;
 
 #[cfg(test)]

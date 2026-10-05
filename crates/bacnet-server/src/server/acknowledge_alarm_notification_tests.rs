@@ -407,6 +407,7 @@ async fn recipient_policy_selects_confirmed_and_unconfirmed_services_with_proces
     assert!(harness.transactions.admit_terminal(
         CONFIRMED_RECIPIENT,
         None,
+        None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id: confirmed_invoke,
             service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
@@ -567,6 +568,7 @@ async fn pending_duplicate_is_silent_post_issuance_reuse_notifies_and_retry_is_i
     let invoke_id = invoke_id.unwrap();
     assert!(retry.transactions.admit_terminal(
         CONFIRMED_RECIPIENT,
+        None,
         None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id,

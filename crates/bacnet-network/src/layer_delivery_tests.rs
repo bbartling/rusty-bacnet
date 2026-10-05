@@ -405,12 +405,15 @@ async fn sends_naming_network_zero_are_refused_before_any_frame() {
     assert!(frames.try_recv().is_ok());
 }
 
-/// DNET 0xFFFF reaches every device on every network, so a send that pairs
-/// it with one device's MAC is refused by name and puts no frame on the link
-/// (#1340). The global broadcast itself (DLEN 0) and a routed send to a real
-/// network number with the same MAC still go out.
+/// DNET 0xFFFF reaches every device on every network. Its sender puts it on
+/// its own network with the broadcast MAC so each router there can pass it
+/// on (Clause 6.3.2), which only `broadcast_global_apdu` does. Every routed
+/// or on-issuance send refuses that DNET by name and puts no frame on the
+/// link: with a device's MAC beside it (#1340), and with none (#1380), where
+/// a unicast would reach a single router. The global broadcast itself and a
+/// routed send to a real network number with the same MAC still go out.
 #[tokio::test]
-async fn sends_pairing_the_global_network_with_a_device_are_refused_before_any_frame() {
+async fn sends_naming_the_global_network_are_refused_before_any_frame() {
     use bacnet_encoding::npdu::decode_npdu;
 
     let (transport, mut peer) = LoopbackTransport::pair(vec![1], vec![2]);
@@ -418,58 +421,73 @@ async fn sends_pairing_the_global_network_with_a_device_are_refused_before_any_f
     let net = NetworkLayer::new(transport);
     let apdu = [0x10, 0x08];
     let priority = NetworkPriority::NORMAL;
-    let global_device = NpduAddress {
-        network: 0xFFFF,
-        mac_address: MacAddr::from_slice(&[7]),
-    };
-    let target = |network| RoutedTarget {
-        network,
-        mac: &[7],
-        router_mac: &[2],
-    };
-    let refusals = [
-        net.send_apdu_routed(&apdu, 0xFFFF, &[7], &[2], false, priority)
+    fn target(network: u16, mac: &[u8]) -> RoutedTarget<'_> {
+        RoutedTarget {
+            network,
+            mac,
+            router_mac: &[2],
+        }
+    }
+    for dadr in [&[7][..], &[]] {
+        let global = NpduAddress {
+            network: 0xFFFF,
+            mac_address: MacAddr::from_slice(dadr),
+        };
+        let refusals = [
+            net.send_apdu_routed(&apdu, 0xFFFF, dadr, &[2], false, priority)
+                .await,
+            net.send_apdu_routed_with_data_attributes(
+                &apdu,
+                target(0xFFFF, dadr),
+                false,
+                priority,
+                &[],
+            )
             .await,
-        net.send_apdu_routed_with_data_attributes(&apdu, target(0xFFFF), false, priority, &[])
+            net.send_apdu_routed_via_local_broadcast(&apdu, 0xFFFF, dadr, false, priority)
+                .await,
+            net.send_apdu_routed_via_local_broadcast_with_data_attributes(
+                &apdu,
+                0xFFFF,
+                dadr,
+                false,
+                priority,
+                &[],
+            )
             .await,
-        net.send_apdu_routed_via_local_broadcast(&apdu, 0xFFFF, &[7], false, priority)
+            net.send_apdu_on_issuance(&apdu, &[2], Some(&global), false, priority, || {
+                panic!("a refused send is never issued")
+            })
             .await,
-        net.send_apdu_routed_via_local_broadcast_with_data_attributes(
-            &apdu,
-            0xFFFF,
-            &[7],
-            false,
-            priority,
-            &[],
-        )
-        .await,
-        net.send_apdu_on_issuance(&apdu, &[2], Some(&global_device), false, priority, || {
-            panic!("a refused send is never issued")
-        })
-        .await,
-    ];
-    for refusal in refusals {
-        let message = refusal.unwrap_err().to_string();
-        assert!(
-            message.contains("dest_network 0xFFFF is the global broadcast")
-                && message.contains("broadcast_global_apdu"),
-            "{message}"
-        );
+        ];
+        for refusal in refusals {
+            let message = refusal.unwrap_err().to_string();
+            assert!(
+                message.contains("dest_network 0xFFFF is the global broadcast")
+                    && message.contains("broadcast_global_apdu"),
+                "DADR {dadr:?}: {message}"
+            );
+        }
     }
     assert!(frames.try_recv().is_err());
 
-    let destination_of = |frame: bacnet_transport::port::ReceivedNpdu| {
-        decode_npdu(frame.npdu).unwrap().destination.unwrap()
+    let sent = |frame: bacnet_transport::port::ReceivedNpdu| {
+        let destination = decode_npdu(frame.npdu).unwrap().destination.unwrap();
+        (frame.link_layer_group, destination)
     };
     net.broadcast_global_apdu(&apdu, false, priority)
         .await
         .unwrap();
-    let global = destination_of(frames.try_recv().unwrap());
+    let (broadcast, global) = sent(frames.try_recv().unwrap());
+    assert!(
+        broadcast,
+        "a global broadcast goes out with the broadcast MAC"
+    );
     assert_eq!((global.network, global.mac_address.len()), (0xFFFF, 0));
 
-    net.send_apdu_routed_with_data_attributes(&apdu, target(5), false, priority, &[])
+    net.send_apdu_routed_with_data_attributes(&apdu, target(5, &[7]), false, priority, &[])
         .await
         .unwrap();
-    let routed = destination_of(frames.try_recv().unwrap());
+    let (_, routed) = sent(frames.try_recv().unwrap());
     assert_eq!((routed.network, &routed.mac_address[..]), (5, &[7][..]));
 }

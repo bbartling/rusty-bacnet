@@ -102,7 +102,7 @@ pub use issuance::IssuedApdu;
 
 #[path = "layer_admission.rs"]
 mod admission;
-pub(crate) use admission::{link_source_fits, AdmissionSender};
+pub(crate) use admission::{destination_is_coherent, link_source_fits, AdmissionSender};
 pub use admission::{AdmissionReceiver, QueueAdmissionCounters, QueueAdmissionSnapshot};
 
 /// A received APDU with source addressing information.
@@ -246,31 +246,34 @@ impl std::fmt::Debug for ReceivedApdu {
     }
 }
 
-/// Whether an NPDU destination names the global broadcast network.
+/// Whether an NPDU destination names the global broadcast network. Ingress
+/// has already dropped one that also carries a DADR (#1379), so on a
+/// delivered NPDU this is a plain global broadcast.
 pub(crate) fn is_global_broadcast(destination: Option<&NpduAddress>) -> bool {
     destination.is_some_and(|destination| destination.network == 0xFFFF)
 }
 
-/// Refuse a caller-supplied NPDU destination that no NPDU may name.
+/// Refuse a caller-supplied DNET that a send naming one network cannot take.
 /// Network numbers start at 1 (Clause 6.2.2.1); the local network is reached
 /// with no DNET at all, and `local_form` tells the caller how to do that.
 /// DNET 0xFFFF selects every device on every network (Clauses 6.1 and
-/// 6.3.2), so it goes out with DLEN 0; a DADR naming one device beside it
-/// contradicts it, and such a send is refused too.
-pub(crate) fn check_destination(network: u16, dadr: &[u8], local_form: &str) -> Result<(), Error> {
-    if network == 0 {
-        return Err(Error::Encoding(format!(
+/// 6.3.2), and its sender puts it on its own network with the broadcast MAC
+/// so that each router there can pass it on. Only
+/// [`NetworkLayer::broadcast_global_apdu`] sends it that way, so every send
+/// that checks here refuses DNET 0xFFFF, with or without a DADR (#1340,
+/// #1380), and points to that method.
+pub(crate) fn check_destination(network: u16, local_form: &str) -> Result<(), Error> {
+    match network {
+        0 => Err(Error::Encoding(format!(
             "dest_network 0 is not a network number; {local_form}"
-        )));
-    }
-    if network == 0xFFFF && !dadr.is_empty() {
-        return Err(Error::Encoding(
-            "dest_network 0xFFFF is the global broadcast and takes no device address; \
+        ))),
+        0xFFFF => Err(Error::Encoding(
+            "dest_network 0xFFFF is the global broadcast; \
              use broadcast_global_apdu for a global broadcast"
                 .into(),
-        ));
+        )),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 pub(crate) fn is_group_delivery(link_layer_group: bool, destination: Option<&NpduAddress>) -> bool {
@@ -301,7 +304,9 @@ pub struct RoutedTarget<'a> {
 /// receiver choices, admission limits, drop attribution and lifecycle.
 /// An inbound frame from a link-layer source MAC longer than
 /// [`NpduAddress::MAX_MAC_LEN`], or whose DLEN or SLEN is past it, is dropped
-/// before admission and counted by [`Self::address_length_drops`].
+/// before admission and counted by [`Self::address_length_drops`]; one whose
+/// DNET 0xFFFF carries a DADR is dropped and counted by
+/// [`Self::global_broadcast_dadr_drops`].
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     response_scope: bacnet_transport::port::DirectResponseScope,
@@ -309,6 +314,7 @@ pub struct NetworkLayer<T: TransportPort> {
     network_control_tx: Option<AdmissionSender<ReceivedNetworkControl>>,
     network_control_ingress_sequence: Arc<AtomicU64>,
     address_length_drops: Arc<AtomicU64>,
+    global_broadcast_dadr_drops: Arc<AtomicU64>,
     local_network_number: LocalNetworkNumber,
 }
 
@@ -322,6 +328,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             network_control_tx: None,
             network_control_ingress_sequence: Arc::new(AtomicU64::new(0)),
             address_length_drops: Arc::new(AtomicU64::new(0)),
+            global_broadcast_dadr_drops: Arc::new(AtomicU64::new(0)),
             local_network_number: LocalNetworkNumber::default(),
         }
     }
@@ -476,16 +483,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        check_destination(
-            dest_network,
-            &[],
-            "use broadcast_apdu for the local network",
-        )?;
-        if dest_network == 0xFFFF {
-            return Err(Error::Encoding(
-                "dest_network 0xFFFF is reserved for global broadcasts; use broadcast_global_apdu instead".into(),
-            ));
-        }
+        check_destination(dest_network, "use broadcast_apdu for the local network")?;
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,
@@ -511,9 +509,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     ///
     /// The NPDU is sent via unicast to `router_mac` (the next-hop router on
     /// the local network), but the NPDU header addresses the final destination
-    /// with `dest_network` / `dest_mac`. Refuses `dest_network` 0, and 0xFFFF
-    /// with a non-empty `dest_mac`, without sending anything; this form and
-    /// [`Self::send_apdu_routed_via_local_broadcast`] share that check.
+    /// with `dest_network` / `dest_mac`. Refuses `dest_network` 0 and 0xFFFF
+    /// without sending anything; this form and
+    /// [`Self::send_apdu_routed_via_local_broadcast`] share that check. A
+    /// global broadcast unicast to one router would reach only that router's
+    /// networks, so it goes through [`Self::broadcast_global_apdu`] instead.
     pub async fn send_apdu_routed(
         &self,
         apdu: &[u8],
@@ -568,7 +568,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// for Unconfirmed-Request PDUs, but that limits the network-layer
     /// address, not the link DA: a link broadcast carrying a one-device
     /// DNET/DADR is fine for any PDU type, so this send form stays
-    /// conformant.
+    /// conformant. DNET 0xFFFF would make it a global broadcast, which this
+    /// form neither means nor checks the PDU type for, so it refuses that
+    /// DNET as [`Self::send_apdu_routed`] does.
     pub async fn send_apdu_routed_via_local_broadcast(
         &self,
         apdu: &[u8],
@@ -659,6 +661,21 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.address_length_drops.load(Ordering::Relaxed)
     }
 
+    /// Inbound NPDUs dropped since this layer was created because their DNET
+    /// was 0xFFFF and they also carried a DADR (#1379). Saturates at
+    /// `u64::MAX`.
+    ///
+    /// DNET 0xFFFF already names every device on every network (Clauses
+    /// 6.2.2 and 6.3.2), so a DADR beside it contradicts it. Such an NPDU
+    /// reaches neither the APDU nor the control receiver, so it never shows
+    /// up in their admission counters. It is counted here rather than in
+    /// [`Self::address_length_drops`], whose addresses are too long to hold:
+    /// this one is well formed, only contradictory, and points at the peer
+    /// that sent it.
+    pub fn global_broadcast_dadr_drops(&self) -> u64 {
+        self.global_broadcast_dadr_drops.load(Ordering::Relaxed)
+    }
+
     /// Encode an APDU into an NPDU whose destination is `dest_network` /
     /// `dest_mac`, ready for whichever link send the caller chooses.
     fn encode_routed_npdu_buf(
@@ -668,7 +685,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         expecting_reply: bool,
         priority: NetworkPriority,
     ) -> Result<BytesMut, Error> {
-        check_destination(dest_network, dest_mac, "use send_apdu for a local device")?;
+        check_destination(dest_network, "use send_apdu for a local device")?;
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,
@@ -716,9 +733,9 @@ pub(crate) fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
     previous.saturating_add(1)
 }
 
-/// Count one NPDU refused for an over-long DADR or SADR, saturating at
-/// `u64::MAX`. Shared by [`NetworkLayer`] and the router.
-pub(crate) fn count_address_length_drop(counter: &AtomicU64) {
+/// Count one dropped NPDU in `counter`, saturating at `u64::MAX`. Shared by
+/// [`NetworkLayer`] and the router for each of their drop counters.
+pub(crate) fn count_drop(counter: &AtomicU64) {
     #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
     let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1));
 }

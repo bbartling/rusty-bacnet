@@ -614,6 +614,7 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
         assert!(transactions.admit_terminal(
             source,
             None,
+            None,
             &Apdu::SimpleAck(SimpleAck {
                 invoke_id,
                 service_choice: service,

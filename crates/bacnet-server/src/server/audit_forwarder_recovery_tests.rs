@@ -134,6 +134,7 @@ async fn audit_forwarding_old_instance_completion_and_cancellation_cannot_update
             assert!(f.server.notification_transactions.admit_terminal(
                 &[2],
                 None,
+                None,
                 &Apdu::Reject(RejectPdu {
                     invoke_id: first.invoke_id,
                     reject_reason: RejectReason::OTHER,
@@ -175,6 +176,7 @@ async fn audit_forwarding_old_instance_completion_and_cancellation_cannot_update
             assert!(f.server.notification_transactions.admit_terminal(
                 &[2],
                 None,
+                None,
                 &Apdu::Reject(RejectPdu {
                     invoke_id: new_request.invoke_id,
                     reject_reason: RejectReason::OTHER,
@@ -198,6 +200,7 @@ async fn audit_forwarding_old_instance_completion_and_cancellation_cannot_update
             "ack" => assert!(f.ack(old_request.invoke_id, &[2], old_request.service_choice)),
             "reject" => assert!(f.server.notification_transactions.admit_terminal(
                 &[2],
+                None,
                 None,
                 &Apdu::Reject(RejectPdu {
                     invoke_id: old_request.invoke_id,

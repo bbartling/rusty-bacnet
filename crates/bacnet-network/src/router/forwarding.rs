@@ -97,6 +97,9 @@ pub(super) fn forward_unicast(
 }
 
 /// Forward a global broadcast to all ports except the source port.
+///
+/// The destination is copied as it arrived. Ingress has already dropped a
+/// DNET 0xFFFF that carries a DADR (#1379), so what goes out is DLEN 0.
 pub(super) fn forward_broadcast(
     send_txs: &[mpsc::Sender<SendRequest>],
     source_port: usize,
@@ -105,6 +108,12 @@ pub(super) fn forward_broadcast(
     npdu: &Npdu,
     data_attributes: &[DataAttribute],
 ) {
+    debug_assert!(
+        npdu.destination
+            .as_ref()
+            .is_some_and(|destination| destination.mac_address.is_empty()),
+        "ingress drops a global broadcast with a DADR before forwarding"
+    );
     if npdu.hop_count == 0 {
         warn!("Discarding NPDU with hop_count=0");
         return;

@@ -474,7 +474,7 @@ async fn audit_reporter_missing_ack_and_failed_delivery_are_communication_failur
     assert!(!fixture
         .server
         .notification_transactions
-        .admit_terminal(SOURCE, None, &ack));
+        .admit_terminal(SOURCE, None, None, &ack));
     tokio::time::advance(Duration::from_secs(3)).await;
     settle().await;
     assert_eq!(
@@ -497,6 +497,7 @@ async fn audit_reporter_missing_ack_and_failed_delivery_are_communication_failur
     let request = confirmed_notification(&fixture.transport.sent, 2);
     assert!(fixture.server.notification_transactions.admit_terminal(
         LOGGER,
+        None,
         None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id: request.invoke_id,
@@ -725,6 +726,7 @@ async fn immediate_and_delayed_reporter_raw_1474_emit_header_1024() {
         assert_eq!(request.max_apdu_length, 1024);
         assert!(f.server.notification_transactions.admit_terminal(
             LOGGER,
+            None,
             None,
             &Apdu::SimpleAck(SimpleAck {
                 invoke_id: request.invoke_id,

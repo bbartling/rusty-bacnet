@@ -172,6 +172,7 @@ async fn mixed_case(initial: bool, confirmed: bool, retain_value: bool) {
                 assert!(fixture.transactions.admit_terminal(
                     &snapshots[1].subscriber_mac,
                     None,
+                    None,
                     &Apdu::SimpleAck(SimpleAck {
                         invoke_id: request.invoke_id,
                         service_choice: request.service_choice

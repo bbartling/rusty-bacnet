@@ -161,24 +161,6 @@ fn notification_abort_releases_for_reuse_and_stale_cleanup_cannot_release_replac
 }
 
 #[test]
-fn canonical_peer_uses_routed_source_instead_of_immediate_router() {
-    let source = NpduAddress {
-        network: 200,
-        mac_address: MacAddr::from_slice(&[0xaa, 0xbb]),
-    };
-    let through_first_router = CanonicalPeer::from_source(&[1], Some(&source));
-    let through_second_router = CanonicalPeer::from_source(&[2], Some(&source));
-
-    assert_eq!(through_first_router, through_second_router);
-    assert_eq!(
-        through_first_router,
-        CanonicalPeer::routed(200, &[0xaa, 0xbb])
-    );
-    assert_ne!(CanonicalPeer::from_source(&[1], None), peer(2));
-    assert_eq!(CanonicalPeer::from_source(&[1], None), peer(1));
-}
-
-#[test]
 fn simple_ack_claims_once_and_completion_is_idempotent() {
     let coordinator = OutboundTransactionCoordinator::new();
     let expected_peer = peer(1);

@@ -42,6 +42,7 @@ async fn exact_confirmed_multiple_preserves_routed_peer_and_mode() {
     assert!(fixture.transactions.admit_terminal(
         &router,
         Some(&remote),
+        None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id,
             service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
