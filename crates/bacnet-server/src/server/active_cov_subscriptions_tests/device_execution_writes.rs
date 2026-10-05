@@ -88,7 +88,8 @@ async fn device_execution_owned_wp_rejects_custom_writer() {
             description: "custom".into(),
         }))
         .unwrap();
-    for property in [SERVICES, ACTIVE, MULTIPLE, LIST] {
+    let bindings = PropertyIdentifier::DEVICE_ADDRESS_BINDING;
+    for property in [SERVICES, ACTIVE, MULTIPLE, LIST, bindings] {
         let before = wire
             .server
             .read_local(&device(), property, None)

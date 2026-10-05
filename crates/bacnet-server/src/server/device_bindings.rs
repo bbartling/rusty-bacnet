@@ -1,6 +1,9 @@
 use super::binding_probes::{BindingProbes, WhoIsScope};
 use super::event_recipient_route::RecipientRoute;
 use super::*;
+use bacnet_encoding::primitives::{
+    encode_app_object_id, encode_app_octet_string, encode_app_unsigned,
+};
 
 /// Maximum number of configured and observed device bindings held by a server.
 pub(super) const MAX_DEVICE_BINDINGS: usize = 4096;
@@ -154,6 +157,13 @@ enum BindingEntry {
     },
 }
 
+/// The server's device bindings, behind one `RwLock`.
+///
+/// Lock order: the database guard, when a caller holds one, comes first. A
+/// read of Device_Address_Binding takes this table's read guard under the
+/// database read guard, after the COV table's guard is gone, and nothing
+/// that holds this table's guard waits for the database or the COV table,
+/// or across a send or a wait.
 #[derive(Debug, Default)]
 pub(super) struct DeviceBindingTable {
     entries: HashMap<ObjectIdentifier, BindingEntry>,
@@ -385,6 +395,56 @@ impl DeviceBindingTable {
                 ObservationOutcome::Inserted
             }
         }
+    }
+
+    /// The Device object's Device_Address_Binding at `now` (Clause 12.11.34,
+    /// #1369): one BACnetAddressBinding for each configured binding and each
+    /// I-Am observation younger than [`OBSERVED_BINDING_TTL`], devices found
+    /// by a targeted Who-Is included, in Device instance order. A binding on
+    /// this network reads network 0 and the peer's MAC; a routed one reads
+    /// its network and the device's MAC there, not the router's. A stale
+    /// observation drops out here, with no sweep, as it stops routing.
+    pub(crate) fn address_binding_list(&self, now: Instant) -> PropertyValue {
+        let mut bindings: Vec<_> = self
+            .entries
+            .iter()
+            .filter_map(|(device, entry)| {
+                let target = match entry {
+                    BindingEntry::Configured(target) => target,
+                    BindingEntry::Observed {
+                        target,
+                        observed_at,
+                    } => {
+                        if now.saturating_duration_since(*observed_at) >= OBSERVED_BINDING_TTL {
+                            return None;
+                        }
+                        target
+                    }
+                };
+                Some((*device, target))
+            })
+            .collect();
+        bindings.sort_by_key(|(device, _)| device.instance_number());
+        PropertyValue::List(
+            bindings
+                .into_iter()
+                .map(|(device, target)| {
+                    let (network, mac) = match target {
+                        DeviceBindingTarget::Local { peer_mac } => (0, peer_mac),
+                        DeviceBindingTarget::Routed {
+                            network, final_mac, ..
+                        } => (*network, final_mac),
+                    };
+                    // The device's identifier, then its BACnetAddress: the
+                    // network number and the MAC, each application tagged.
+                    let mut encoded = BytesMut::new();
+                    encode_app_object_id(&mut encoded, &device);
+                    encode_app_unsigned(&mut encoded, u64::from(network));
+                    encode_app_octet_string(&mut encoded, mac);
+                    PropertyValue::ApplicationData(encoded.to_vec())
+                })
+                .collect(),
+        )
     }
 
     /// Where a targeted Who-Is for `device` goes: the network its last I-Am

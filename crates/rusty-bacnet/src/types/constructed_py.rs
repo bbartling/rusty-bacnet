@@ -52,6 +52,8 @@ pub(super) enum Decoded {
     ValueSource(BACnetValueSource),
     Scale(BACnetScale),
     Prescale(BACnetPrescale),
+    /// The Device, then its network number and MAC.
+    AddressBinding(super::constructed_read::AddressBinding),
 }
 
 impl Decoded {
@@ -126,6 +128,13 @@ impl Decoded {
             Self::Scale(BACnetScale::FloatScale(factor)) => any(py, f64::from(factor))?,
             Self::Scale(BACnetScale::IntegerScale(power)) => any(py, power)?,
             Self::Prescale(prescale) => any(py, (prescale.multiplier, prescale.modulo_divide))?,
+            Self::AddressBinding((device, network_number, mac_address)) => {
+                let dict = PyDict::new(py);
+                dict.set_item("device_identifier", PyObjectIdentifier::from_rust(device))?;
+                dict.set_item("network_number", network_number)?;
+                dict.set_item("mac_address", PyBytes::new(py, &mac_address))?;
+                dict.into_any().unbind()
+            }
         })
     }
 }

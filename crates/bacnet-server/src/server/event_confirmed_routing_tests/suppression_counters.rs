@@ -171,7 +171,23 @@ async fn confirmed_route_skips_reserve_no_invoke_id() {
     )
     .await;
     harness.distribute().await;
-    assert!(harness.unicast_frames().is_empty() && harness.broadcast_frames().is_empty());
+    // The unbound Device recipient is looked for first (#1368): one Who-Is,
+    // and no notification goes anywhere.
+    let broadcasts = harness.sent.broadcasts();
+    assert!(broadcasts.len() == 1 && is_who_is(&broadcasts[0]));
+    assert!(harness.unicast_frames().is_empty());
+    assert_eq!(harness.notification_transactions.active_count(), 0);
+    // Its device stays silent, so its notification is skipped too.
+    harness
+        .device_bindings
+        .write()
+        .await
+        .probes
+        .run_out_for_test();
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(harness.sent.broadcasts().len(), 1);
     assert_eq!(harness.notification_transactions.active_count(), 0);
     assert_eq!(
         counters(&harness),

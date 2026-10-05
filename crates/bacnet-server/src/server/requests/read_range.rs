@@ -4,16 +4,16 @@ use bacnet_services::read_range::ReadRangeRequest;
 
 /// ReadRange under one database read guard, through the same executor Device
 /// view as ReadProperty (#1046). A request whose plan reads the selected
-/// Device's `Active_COV_Subscriptions` or `Active_COV_Multiple_Subscriptions`,
-/// by name or through the planned members of a Group's Present_Value (#1171,
-/// #1213), samples the COV table once, after the database guard (the server
-/// lock order), so every item, flag and count of the page comes from one
-/// instant. The page follows
+/// Device's `Active_COV_Subscriptions`, `Active_COV_Multiple_Subscriptions`
+/// or `Device_Address_Binding`, by name or through the planned members of a
+/// Group's Present_Value (#1171, #1213, #1369), samples the table that holds
+/// it once, after the database guard (the server lock order), so every item,
+/// flag and count of the page comes from one instant. The page follows
 /// the configured ReadRange budget, and a Group's Present_Value counts
 /// against the ReadPropertyMultiple work limit as in ReadProperty (#1172).
 pub(super) async fn response(
     db: &RwLock<ObjectDatabase>,
-    cov_table: &RwLock<CovSubscriptionTable>,
+    tables: confirmed_response::LiveTables<'_>,
     request: &ConfirmedRequestPdu,
     config: &ServerConfig,
     effective_max_apdu: u16,
@@ -48,8 +48,7 @@ pub(super) async fn response(
                 Ok(plan) => {
                     let live = match plan.live_cov(&db) {
                         Some(selection) => Some(
-                            confirmed_response::active_cov_snapshot(&db, cov_table, selection)
-                                .await,
+                            confirmed_response::active_cov_snapshot(&db, tables, selection).await,
                         ),
                         None => None,
                     };

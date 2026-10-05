@@ -26,7 +26,7 @@ use bacnet_services::rpm::{ReadAccessResult, ReadPropertyMultipleACK};
 use bacnet_types::constructed::BACnetAccessRule;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::PropertyValue;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -83,6 +83,9 @@ pub(crate) enum Element {
     Scale,
     /// An Accumulator's Prescale, as `(multiplier, modulo_divide)`.
     Prescale,
+    /// A Device_Address_Binding element (#1369), as a mapping of
+    /// `device_identifier`, `network_number` and `mac_address`.
+    AddressBinding,
 }
 
 /// How a property holds its elements.
@@ -139,6 +142,7 @@ pub(crate) fn element(
         (O::SCHEDULE, P::EFFECTIVE_PERIOD) => (Element::DateRange, Single),
         (O::CALENDAR, P::DATE_LIST) => (Element::CalendarEntry, Collection),
         (O::DEVICE, P::ACTIVE_COV_SUBSCRIPTIONS) => (Element::CovSubscription, Collection),
+        (O::DEVICE, P::DEVICE_ADDRESS_BINDING) => (Element::AddressBinding, Collection),
         (O::ACCUMULATOR, P::SCALE) => (Element::Scale, Single),
         (O::ACCUMULATOR, P::PRESCALE) => (Element::Prescale, Single),
         // Every object type that has these properties gives them one datatype.
@@ -197,7 +201,7 @@ pub(crate) fn decode(
 impl Element {
     /// Every element production, each once; a new one goes here too, so
     /// that [`Self::from_tag`] knows it.
-    const ALL: [Self; 21] = [
+    const ALL: [Self; 22] = [
         Self::Destination,
         Self::PortPermission,
         Self::ReadAccessSpecification,
@@ -219,6 +223,7 @@ impl Element {
         Self::ValueSource,
         Self::Scale,
         Self::Prescale,
+        Self::AddressBinding,
     ];
 
     /// The element whose [`Self::tag`] is `tag`.
@@ -255,6 +260,7 @@ impl Element {
             Self::ValueSource => "value_source",
             Self::Scale => "scale",
             Self::Prescale => "prescale",
+            Self::AddressBinding => "address_binding",
         }
     }
 
@@ -348,6 +354,7 @@ impl Element {
             Self::ValueSource => with(decode_value_source(octets, offset), Decoded::ValueSource),
             Self::Scale => with(decode_scale(octets, offset), Decoded::Scale),
             Self::Prescale => with(decode_prescale(octets, offset), Decoded::Prescale),
+            Self::AddressBinding => with(address_binding(octets, offset), Decoded::AddressBinding),
         }
     }
 }
@@ -368,6 +375,28 @@ fn access_rule(octets: &[u8], offset: usize) -> Result<(BACnetAccessRule, usize)
         ));
     }
     Ok((rule, end))
+}
+
+/// One BACnetAddressBinding: the Device, its network number and its MAC.
+pub(crate) type AddressBinding = (ObjectIdentifier, u16, Vec<u8>);
+
+/// Decode one BACnetAddressBinding at `offset`: the Device's identifier,
+/// then its address's network number and MAC, each application tagged.
+fn address_binding(octets: &[u8], offset: usize) -> Result<(AddressBinding, usize), Error> {
+    use bacnet_encoding::primitives::decode_application_value as next;
+    let unexpected =
+        |at, what| Error::decoding(at, format!("expected the address binding's {what}"));
+    let (PropertyValue::ObjectIdentifier(device), at) = next(octets, offset)? else {
+        return Err(unexpected(offset, "Device identifier"));
+    };
+    let (PropertyValue::Unsigned(network), mac_at) = next(octets, at)? else {
+        return Err(unexpected(at, "network number"));
+    };
+    let network = u16::try_from(network).map_err(|_| unexpected(at, "Unsigned16 network"))?;
+    let (PropertyValue::OctetString(mac), end) = next(octets, mac_at)? else {
+        return Err(unexpected(mac_at, "MAC"));
+    };
+    Ok(((device, network, mac), end))
 }
 
 /// Decode one Group Present_Value element at `offset`: an object identifier

@@ -6,6 +6,8 @@ use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use support::*;
 
+// The Device's other server-owned list, sampled beside the COV lists (#1369).
+mod address_bindings;
 mod command_source;
 mod device_execution;
 mod device_selection;

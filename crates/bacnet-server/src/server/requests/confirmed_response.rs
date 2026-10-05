@@ -25,32 +25,63 @@ pub(super) async fn read_property_response(
     .await
 }
 
-/// Request-local live Device `Active_COV_Subscriptions` and
-/// `Active_COV_Multiple_Subscriptions` (Clause 12.11), as selected.
+/// The server tables a read samples the selected Device's server-owned lists
+/// from: the COV table for its COV lists, the binding table for its
+/// Device_Address_Binding (#1369).
+#[derive(Clone, Copy)]
+pub(in crate::server) struct LiveTables<'a> {
+    pub(in crate::server) cov: &'a RwLock<CovSubscriptionTable>,
+    pub(in crate::server) bindings: &'a RwLock<DeviceBindingTable>,
+}
+
+/// Request-local live Device `Active_COV_Subscriptions`,
+/// `Active_COV_Multiple_Subscriptions` and `Device_Address_Binding` (Clause
+/// 12.11), as selected.
 ///
-/// Lock order is database, then COV table: the caller holds the database read
-/// guard; the table read guard is held only to sample one instant and copy the
-/// selected live entries, and is released before any object read or encoding.
+/// Lock order is database, then COV table, then binding table: the caller
+/// holds the database read guard; each table's read guard is held only to
+/// copy what is live at one instant, and is released before the next is
+/// taken and before any object read or encoding. A request that selects
+/// neither COV list doesn't touch the COV table.
 pub(in crate::server) async fn active_cov_snapshot(
     db: &ObjectDatabase,
-    cov_table: &RwLock<CovSubscriptionTable>,
+    tables: LiveTables<'_>,
     selection: LiveCovSelection,
 ) -> LiveDeviceCov {
-    let entries = {
-        let table = cov_table.read().await;
-        table.live_cov_entries(selection, Instant::now())
+    let live = if selection.reads_cov() {
+        let entries = {
+            let table = tables.cov.read().await;
+            table.live_cov_entries(selection, Instant::now())
+        };
+        LiveDeviceCov::project(db, selection, entries)
+    } else {
+        LiveDeviceCov::default()
     };
-    LiveDeviceCov::project(db, selection, entries)
+    let bindings = address_bindings(tables.bindings, selection).await;
+    live.with_address_bindings(selection, bindings)
+}
+
+/// The selected Device's Device_Address_Binding, when `selection` reads it:
+/// the bindings `table` holds now, copied under its read guard (#1369).
+pub(in crate::server) async fn address_bindings(
+    table: &RwLock<DeviceBindingTable>,
+    selection: LiveCovSelection,
+) -> Option<PropertyValue> {
+    if !selection.address_bindings {
+        return None;
+    }
+    let table = table.read().await;
+    Some(table.address_binding_list(Instant::now()))
 }
 
 /// Budgeted ReadPropertyMultiple under one database read guard. The request
-/// is planned first; when the plan reads either Device COV list, one
-/// request-local projection serves every such row, a Group's member rows
-/// included (#1171, #1213). A request past its work limit fails in planning,
-/// before the COV table is sampled.
+/// is planned first; when the plan reads one of the Device's server-owned
+/// lists, one request-local projection serves every such row, a Group's
+/// member rows included (#1171, #1213). A request past its work limit fails
+/// in planning, before any table is sampled.
 pub(super) async fn read_property_multiple_observed(
     db: &RwLock<ObjectDatabase>,
-    cov_table: &RwLock<CovSubscriptionTable>,
+    tables: LiveTables<'_>,
     service_request: &[u8],
     service_ack: &mut BytesMut,
     budget: crate::server::ReadPropertyMultipleBudget,
@@ -70,7 +101,7 @@ pub(super) async fn read_property_multiple_observed(
         .with_registered_port(registered_port);
     let plan = handlers::RpmPlan::new(&db, &request, budget.max_result_elements, Some(&view))?;
     let live = match plan.live_cov(&db) {
-        Some(selection) => Some(active_cov_snapshot(&db, cov_table, selection).await),
+        Some(selection) => Some(active_cov_snapshot(&db, tables, selection).await),
         None => None,
     };
     let view = view.with_live(live.as_ref());
@@ -83,13 +114,13 @@ pub(super) async fn read_property_multiple_observed(
     )
 }
 
-/// ReadProperty under one database read guard, planned before the COV table
-/// is sampled (#1213). A Group's Present_Value counts against `work_limit` as
+/// ReadProperty under one database read guard, planned before any table is
+/// sampled (#1213). A Group's Present_Value counts against `work_limit` as
 /// a ReadPropertyMultiple naming only it would, and a read past it is aborted
 /// as that request would be.
 pub(super) async fn read_property_response_observed(
     db: &RwLock<ObjectDatabase>,
-    cov_table: Option<&RwLock<CovSubscriptionTable>>,
+    tables: Option<LiveTables<'_>>,
     execution: DeviceExecution,
     registered_port: Option<ObjectIdentifier>,
     work_limit: usize,
@@ -120,9 +151,9 @@ pub(super) async fn read_property_response_observed(
                 decoded.property_array_index,
             ) {
                 Ok(plan) => {
-                    let live = match (cov_table, plan.live_cov(&db)) {
-                        (Some(cov_table), Some(selection)) => {
-                            Some(active_cov_snapshot(&db, cov_table, selection).await)
+                    let live = match (tables, plan.live_cov(&db)) {
+                        (Some(tables), Some(selection)) => {
+                            Some(active_cov_snapshot(&db, tables, selection).await)
                         }
                         _ => None,
                     };

@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 const SERVICES: PropertyIdentifier = PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED;
 const LIST: PropertyIdentifier = PropertyIdentifier::PROPERTY_LIST;
+const BINDINGS: PropertyIdentifier = PropertyIdentifier::DEVICE_ADDRESS_BINDING;
 
 fn value(bytes: &[u8]) -> PropertyValue {
     let (value, end) = bacnet_encoding::primitives::decode_application_value(bytes, 0).unwrap();
@@ -56,7 +57,7 @@ impl BACnetObject for CustomDevice {
         _: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         assert!(
-            ![SERVICES, LIST, ACTIVE, MULTIPLE].contains(&property),
+            ![SERVICES, LIST, ACTIVE, MULTIPLE, BINDINGS].contains(&property),
             "served owned property reached custom reader: {property:?}"
         );
         Ok(PropertyValue::CharacterString("custom-description".into()))
@@ -431,7 +432,7 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
         assert_eq!(observations, 0);
     }
     let mut out = BytesMut::new();
-    crate::handlers::RpmPlan::new(&db, &request(PropertyIdentifier::ALL), 4, Some(&view))
+    crate::handlers::RpmPlan::new(&db, &request(PropertyIdentifier::ALL), 5, Some(&view))
         .unwrap()
         .read_observed(&db, Some(&view), &mut out, 4096, |_, _, _, _| {})
         .unwrap();
@@ -443,7 +444,13 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
         .collect();
     assert_eq!(
         properties,
-        vec![PropertyIdentifier::DESCRIPTION, SERVICES, ACTIVE, MULTIPLE]
+        vec![
+            PropertyIdentifier::DESCRIPTION,
+            BINDINGS,
+            SERVICES,
+            ACTIVE,
+            MULTIPLE
+        ]
     );
 }
 

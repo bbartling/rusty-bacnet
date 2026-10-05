@@ -2930,9 +2930,10 @@ where that I-Am came from: the local network, or the remote network it was
 routed from, where a remote network numbered as this device's own counts as
 local. If that Who-Is draws nothing, the stale I-Am is dropped, so the
 device's next Who-Is goes global. The server then waits
-`ServerConfig::cov_retry_timeout_ms`, counted from the send, for the I-Am,
-which binds the device as any I-Am does, and the write goes ahead; with no
-I-Am by then the command fails and no WriteProperty is sent. Writes that miss
+`ServerConfig::cov_retry_timeout_ms`, but never more than a minute (#1368),
+counted from the send, for the I-Am, which binds the device as any I-Am does,
+and the write goes ahead; with no I-Am by then the command fails and no
+WriteProperty is sent. Writes that miss
 while that Who-Is is out share it and its wait. A device gets at most one
 Who-Is a minute, counted from when it went out, so a command naming it within
 a minute of one that drew nothing fails at once. At most 256 devices with a
@@ -2963,14 +2964,19 @@ the database, such as one a write made straight into the database queued.
 `stop()` doesn't wait for a database the application holds: those runs end as
 soon as it lets go.
 
-A run doesn't need `stop()` to end when the `write_local` that started it is
-dropped after its write committed, by a timeout or a `select!` (#1324). The
-write stays made, and the run, which hadn't reached its task yet, ends as if
-none of its writes were made: In_Process FALSE with every command
-unsuccessful, or a Channel's Write_Status FAILED with Reliability
-PROCESS_ERROR. It ends at once, or as soon as a database the application holds
-is free. The COV and event work the dropped call hadn't done yet is skipped
-(#1367).
+A `write_local` dropped after its write committed, by a timeout, a `select!`
+or a cancelled Python task, skips nothing (#1367): the commit hands its
+database guard, and the event pass, COV fanout, Schedule fanout, Staging plan
+and runs the write owes, to a task of its own in the server's request task
+set, which the call only waits for. The run the write started goes ahead and
+reports its end. `stop()` aborts that task with the other request tasks, and
+a run it hadn't started then ends as if none of its writes were made (#1324):
+In_Process FALSE with every command unsuccessful, or a Channel's Write_Status
+FAILED with Reliability PROCESS_ERROR. The call still returns `Ok(())` then,
+since the write was made. Every local write (`write_local`,
+`write_local_encoded`, `set_present_value_local` and the other `*_local`
+setters) must therefore be awaited inside a Tokio runtime: outside one it
+fails with `Error::Encoding` before anything is written.
 
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,
@@ -3399,8 +3405,8 @@ WriteGroup's, carry the priority, and Audit_Priority_Filter applies to them
 endpoint responder ignores WriteGroup.
 
 Channel runs are owned as Command runs are (#1178). A `write_local` dropped
-after the Channel took its value ends the distribution FAILED without
-`stop()`, as it ends a Command's run (#1324). Without a server,
+after the Channel took its value leaves the distribution running, as it does
+a Command's run (#1367). Without a server,
 `tick_schedules` runs a distribution its Schedule writes start before it
 returns, delays included, and ends it FAILED if its future is dropped first.
 The bare `handle_write_property` and `handle_write_property_multiple` handlers
@@ -3987,13 +3993,20 @@ The full server owns the served Device execution profile. Every Device's
 `Protocol_Services_Supported` reports the fixed `EXECUTED_SERVICES`, with the
 existing clock-dependent time-service filter. Both `Active_COV_Subscriptions`
 and `Active_COV_Multiple_Subscriptions` are present: the selected lowest Device
-gets live lists and other Devices get empty lists. Network RP, budgeted RPM,
-`read_local` and `generate_pics` share effective Device definitions, including
+gets live lists and other Devices get empty lists. Its `Device_Address_Binding`
+lists the server's device bindings at the time of the read (#1369): each
+configured `DeviceBinding` and each device whose I-Am arrived in the last ten
+minutes (a targeted Who-Is's answer included), in instance order, with network
+number 0 for a device on this network and the device's own MAC, not its
+router's, for one elsewhere. Other Devices read an empty list. Network RP,
+budgeted RPM, `read_local` and `generate_pics` share effective Device
+definitions, including
 Property_List, ALL/OPTIONAL/REQUIRED classification and array-index behavior.
 Normal public Device profile mutation, same-OID replacement and custom object
 readers cannot change this served contract. Other properties retain their object
 behavior. WP, WPM and network-equivalent `write_local` reject writes to Device
-`Protocol_Services_Supported`, both COV lists and `Property_List` before calling
+`Protocol_Services_Supported`, both COV lists, `Device_Address_Binding` and
+`Property_List` before calling
 a custom writer. Existing object/index/value validation and authorization remain
 in force; WPM retains its successful prefix and first failed write coordinate.
 Direct object/database mutation remains the raw declaration boundary. Device
@@ -5632,8 +5645,27 @@ transition's other destinations are still served. They are grouped by what
 fixes them, and the warning logged with each skip gives the finer reason:
 
 - `device_recipient_unbound`: no Device binding was configured or observed, or
-  the observed one expired. Observing the device's I-Am again, or configuring a
-  binding, clears it.
+  the observed one expired, and a look for the device found none. Before
+  skipping such a recipient the server looks for its device as it does for a
+  Command's remote write (#1368): one Who-Is limited to its instance, at most
+  one a minute per device, none under DCC, and the notification waits up to
+  `cov_retry_timeout_ms` (a minute at most) from that Who-Is for the I-Am.
+  It waits in a queue for its device, which a task of its own drains, so the
+  transition's other recipients aren't held up; while the queue holds
+  anything, the device's later notifications join it, and each device drains
+  on its own. Notifications the server makes for one device one after
+  another reach it in that order, across the wait too. Notifications made at
+  once from different tasks have no order between them, and a confirmed
+  notification's attempts run in a transaction task of their own, so two
+  confirmed ones may start in either order. A device that answers gets the
+  notification, which then counts as any other send does, DCC checked again
+  before each send; one that stays silent, or can't be looked for within the
+  minute after a fruitless Who-Is, counts here once. At most 1,024
+  notifications wait at once across every device; one more is skipped and
+  counts here at once, with no Who-Is. Observing the device's I-Am again, or
+  configuring a binding, clears it. A confirmed notification whose observed
+  binding expires before a retry ends at that retry, its invoke ID freed, and
+  counts here, not in `confirmed_unanswered` (#1371).
 - `recipient_unroutable`: the entry can't be routed as written. Its Device
   identifier names an object that isn't a Device (or its binding is unusable on
   this link), or its address puts a MAC on network 65535.
@@ -5647,9 +5679,17 @@ fixes them, and the warning logged with each skip gives the finer reason:
 
 ### Concurrency
 
-- Lock ordering: always `db` before `cov_table`
+- Lock ordering: always `db` before `cov_table`, and `db` before the device
+  binding table, which a read of Device_Address_Binding samples after the
+  COV table's guard is gone (#1369); no binding-table guard is held across
+  a send or a wait
 - `seg_receivers` capped at 128 (DoS prevention)
 - `cov_in_flight` semaphore: max 255 concurrent confirmed COV notifications
+- Targeted Who-Is probes for unbound devices: at most 256 devices tracked,
+  one Who-Is a minute per device, and a wait for the I-Am of
+  `cov_retry_timeout_ms` held to a minute (#1322, #1368)
+- Event notifications waiting for their Device recipient's I-Am: at most
+  1,024 at once, across every device (#1368)
 - `comm_state`: `Arc<CommState>`, a lock-free DCC state that only the DCC
   timer (an accepted request and its expiry) changes
 

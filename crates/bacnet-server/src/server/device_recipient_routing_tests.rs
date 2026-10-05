@@ -3,7 +3,7 @@ use super::device_bindings::{
 };
 use super::event_recipient_routing_tests::{
     destination_for, distribute_counted, distribute_from_database_with_bindings, npdu_destination,
-    LITERAL_BROADCAST_MAC,
+    split_who_is, LITERAL_BROADCAST_MAC,
 };
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;
@@ -151,6 +151,10 @@ async fn unknown_stale_invalid_and_capacity_rejected_devices_emit_zero_frames() 
         DccState::Enable,
     )
     .await;
+    // The three unbound Devices are looked for, each with one Who-Is
+    // (#1368); none answers, and no notification goes anywhere.
+    let (who_is, broadcasts) = split_who_is(broadcasts);
+    assert_eq!(who_is.len(), 3);
     assert!(broadcasts.is_empty());
     assert!(unicasts.is_empty());
     // A Device the full table refused is as unbound as one never seen (#1160).
@@ -172,6 +176,9 @@ async fn mixed_valid_and_unresolved_device_recipients_preserve_valid_delivery() 
         .insert_configured(DeviceBinding::local(valid, LOCAL_PEER).unwrap(), |_| false)
         .unwrap();
     let (broadcasts, unicasts) = distribute(&[(device(51), false), (valid, false)], table).await;
+    // Device 51 is looked for with one Who-Is (#1368).
+    let (who_is, broadcasts) = split_who_is(broadcasts);
+    assert_eq!(who_is.len(), 1);
     assert!(broadcasts.is_empty());
     assert_eq!(unicasts.len(), 1);
     assert_eq!(unicasts[0].0.as_slice(), LOCAL_PEER);

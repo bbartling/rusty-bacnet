@@ -164,6 +164,26 @@ impl RequestTasks {
         }
     }
 
+    /// [`Self::spawn`] onto the runtime `handle` names, for a caller that
+    /// checked for one before it changed anything.
+    pub(super) fn spawn_on(
+        &self,
+        task: impl Future<Output = ()> + Send + 'static,
+        handle: &tokio::runtime::Handle,
+    ) {
+        let mut state = self.0.lock().unwrap();
+        if !state.closed {
+            let owner = state.audit_owner.as_ref().and_then(Weak::upgrade);
+            state.tasks.spawn_on(
+                async move {
+                    let _owner = owner;
+                    task.await;
+                },
+                handle,
+            );
+        }
+    }
+
     pub(super) fn close(&self) {
         let mut state = self.0.lock().unwrap();
         state.closed = true;

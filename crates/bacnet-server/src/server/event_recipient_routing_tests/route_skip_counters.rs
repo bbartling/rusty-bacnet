@@ -123,6 +123,9 @@ async fn each_route_skip_moves_only_its_own_counter_once() {
     ] {
         let (broadcasts, unicasts, counters) =
             distribute(vec![destination_for(recipient, confirmed)]).await;
+        // An unbound Device is looked for with one Who-Is first (#1368).
+        let (who_is, broadcasts) = split_who_is(broadcasts);
+        assert_eq!(who_is.len(), usize::from(expected == unbound), "{case}");
         assert!(broadcasts.is_empty() && unicasts.is_empty(), "{case}");
         assert_eq!(counters, expected, "{case}");
     }
@@ -152,6 +155,9 @@ async fn one_transition_counts_each_skipped_destination_and_serves_the_rest() {
     );
     assert_eq!(unicasts.len(), 1);
     assert_eq!(unicasts[0].0, PEER);
+    // One Who-Is for each unbound Device (#1368), and the one notification.
+    let (who_is, broadcasts) = split_who_is(broadcasts);
+    assert_eq!(who_is.len(), 2);
     assert_eq!(broadcasts.len(), 1);
 }
 
