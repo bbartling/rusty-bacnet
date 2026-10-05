@@ -1,6 +1,7 @@
-//! Number_Of_States and State_Text written whole as CreateObject initial
-//! values (#1429): `initialize_property` checks each and changes nothing on
-//! a refusal, and WriteProperty keeps refusing both.
+//! Number_Of_States as a CreateObject initial value (#1429):
+//! `initialize_property` checks it and changes nothing on a refusal, and
+//! WriteProperty keeps refusing it. State_Text written whole goes the write
+//! route now, which sets the count from it (#1443).
 
 use super::super::*;
 use crate::command_source::test_origin;
@@ -41,16 +42,16 @@ fn all_three(number_of_states: u32) -> [Box<dyn BACnetObject>; 3] {
 }
 
 #[test]
-fn a_new_count_resizes_state_text_and_whole_labels_must_match_it() {
+fn a_new_count_resizes_state_text() {
     for mut object in all_three(2) {
         let kind = object.object_identifier().object_type();
         assert_eq!(
             object.creation_only_properties(),
-            &[P::NUMBER_OF_STATES, P::STATE_TEXT],
+            &[P::NUMBER_OF_STATES],
             "{kind:?}"
         );
         object
-            .initialize_property(P::STATE_TEXT, labels(&["Off", "On"]))
+            .write_property(P::STATE_TEXT, None, labels(&["Off", "On"]), None)
             .unwrap();
         object
             .initialize_property(P::NUMBER_OF_STATES, PropertyValue::Unsigned(3))
@@ -66,33 +67,9 @@ fn a_new_count_resizes_state_text_and_whole_labels_must_match_it() {
         );
         let before = states(&*object);
         for (value, expected) in [
-            (labels(&["a", "b"]), ErrorCode::VALUE_OUT_OF_RANGE),
-            (labels(&["a", "b", "c", "d"]), ErrorCode::VALUE_OUT_OF_RANGE),
-            (
-                PropertyValue::CharacterString("a".into()),
-                ErrorCode::VALUE_OUT_OF_RANGE,
-            ),
-            (
-                PropertyValue::List(vec![
-                    PropertyValue::CharacterString("a".into()),
-                    PropertyValue::Unsigned(2),
-                    PropertyValue::CharacterString("c".into()),
-                ]),
-                ErrorCode::INVALID_DATA_TYPE,
-            ),
-            (PropertyValue::Null, ErrorCode::INVALID_DATA_TYPE),
-        ] {
-            assert_eq!(
-                code(object.initialize_property(P::STATE_TEXT, value.clone())),
-                expected,
-                "{kind:?} {value:?}"
-            );
-            assert_eq!(states(&*object), before, "{kind:?}");
-        }
-        for (value, expected) in [
             (PropertyValue::Unsigned(0), ErrorCode::VALUE_OUT_OF_RANGE),
             (
-                PropertyValue::Unsigned(u64::from(MAX_CREATED_NUMBER_OF_STATES) + 1),
+                PropertyValue::Unsigned(u64::from(MAX_NUMBER_OF_STATES) + 1),
                 ErrorCode::VALUE_OUT_OF_RANGE,
             ),
             (
@@ -112,34 +89,35 @@ fn a_new_count_resizes_state_text_and_whole_labels_must_match_it() {
         object
             .initialize_property(
                 P::NUMBER_OF_STATES,
-                PropertyValue::Unsigned(MAX_CREATED_NUMBER_OF_STATES.into()),
+                PropertyValue::Unsigned(MAX_NUMBER_OF_STATES.into()),
             )
             .unwrap();
         object
             .initialize_property(P::NUMBER_OF_STATES, PropertyValue::Unsigned(1))
             .unwrap();
-        object
-            .initialize_property(P::STATE_TEXT, PropertyValue::CharacterString("Only".into()))
-            .unwrap();
         assert_eq!(
             states(&*object),
-            (PropertyValue::Unsigned(1), labels(&["Only"]))
+            (PropertyValue::Unsigned(1), labels(&["Off"]))
         );
-        // Nothing else is set this way; WriteProperty refuses both wholes.
-        assert_eq!(
-            code(object.initialize_property(P::DESCRIPTION, PropertyValue::Null)),
-            ErrorCode::WRITE_ACCESS_DENIED
-        );
-        for (property, value) in [
-            (P::NUMBER_OF_STATES, PropertyValue::Unsigned(1)),
-            (P::STATE_TEXT, labels(&["Only"])),
-        ] {
+        // Nothing else is set this way, State_Text written whole included;
+        // WriteProperty refuses a whole Number_Of_States.
+        for property in [P::DESCRIPTION, P::STATE_TEXT] {
             assert_eq!(
-                code(object.write_property(property, None, value, None)),
+                code(object.initialize_property(property, labels(&["Only"]))),
                 ErrorCode::WRITE_ACCESS_DENIED,
                 "{kind:?} {property:?}"
             );
         }
+        assert_eq!(
+            code(object.write_property(
+                P::NUMBER_OF_STATES,
+                None,
+                PropertyValue::Unsigned(1),
+                None
+            )),
+            ErrorCode::WRITE_ACCESS_DENIED,
+            "{kind:?}"
+        );
     }
 }
 

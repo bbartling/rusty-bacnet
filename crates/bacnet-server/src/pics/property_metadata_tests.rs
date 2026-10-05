@@ -604,7 +604,8 @@ fn pics_multistate_property_metadata_is_exact() {
         (P::EVENT_TIME_STAMPS, false, false),
         (P::EVENT_MESSAGE_TEXTS, true, false),
         (P::OUT_OF_SERVICE, false, true),
-        (P::NUMBER_OF_STATES, false, false),
+        // Writable through a whole State_Text write (#1443).
+        (P::NUMBER_OF_STATES, false, true),
         (P::RELIABILITY, true, true),
         (P::RELIABILITY_EVALUATION_INHIBIT, true, true),
         (P::STATE_TEXT, true, true),

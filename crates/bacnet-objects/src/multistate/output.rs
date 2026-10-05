@@ -82,6 +82,19 @@ impl MultiStateOutputObject {
         let _ = self.recompute_reliability();
     }
 
+    /// The values the object keeps that name a state, which a new count
+    /// may not strand: the commands in Priority_Array, Present_Value and
+    /// Relinquish_Default. Feedback_Value is left out: it is sensed, and
+    /// outside the states it is reported as CONFIGURATION_ERROR rather than
+    /// refused.
+    fn held_states(&self) -> impl Iterator<Item = u32> + '_ {
+        self.priority_array
+            .iter()
+            .flatten()
+            .copied()
+            .chain([self.present_value, self.relinquish_default])
+    }
+
     fn configuration_invalid(&self) -> bool {
         let is_invalid = |value: u32| !(1..=self.number_of_states).contains(&value);
         self.priority_array
@@ -340,17 +353,17 @@ impl BACnetObject for MultiStateOutputObject {
             return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::STATE_TEXT {
-            match array_index {
-                Some(idx) if idx >= 1 && (idx as usize) <= self.state_text.len() => {
-                    if let PropertyValue::CharacterString(s) = value {
-                        self.state_text[(idx - 1) as usize] = s;
-                        return Ok(());
-                    }
-                    return Err(common::invalid_data_type_error());
-                }
-                None => return Err(common::write_access_denied_error()),
-                _ => return Err(common::invalid_array_index_error()),
-            }
+            // Written whole, State_Text sets Number_Of_States too (#1443).
+            let held: Vec<u32> = self.held_states().collect();
+            write_state_text(
+                &mut self.number_of_states,
+                &mut self.state_text,
+                held,
+                array_index,
+                value,
+            )?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             if let PropertyValue::Boolean(v) = value {
@@ -443,10 +456,7 @@ impl BACnetObject for MultiStateOutputObject {
         property: PropertyIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        // Feedback_Value is left out: it is sensed, and outside the states it
-        // is reported as CONFIGURATION_ERROR rather than refused.
-        let held = self.priority_array.iter().flatten().copied();
-        let held = held.chain([self.present_value, self.relinquish_default]);
+        let held: Vec<u32> = self.held_states().collect();
         initialize_states(
             &mut self.number_of_states,
             &mut self.state_text,

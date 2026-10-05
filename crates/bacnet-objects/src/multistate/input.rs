@@ -119,6 +119,12 @@ impl MultiStateInputObject {
         self.description = desc.into();
     }
 
+    /// The values the object keeps that name a state, which a new count
+    /// may not strand: Present_Value and Alarm_Values.
+    fn held_states(&self) -> impl Iterator<Item = u32> + '_ {
+        std::iter::once(self.present_value).chain(self.event_detector.alarm_values.iter().copied())
+    }
+
     fn recompute_reliability(&mut self) -> ReliabilityEvaluation {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return ReliabilityEvaluation::Unchanged;
@@ -248,17 +254,17 @@ impl BACnetObject for MultiStateInputObject {
             return self.apply_present_value(value);
         }
         if property == PropertyIdentifier::STATE_TEXT {
-            match array_index {
-                Some(idx) if idx >= 1 && (idx as usize) <= self.state_text.len() => {
-                    if let PropertyValue::CharacterString(s) = value {
-                        self.state_text[(idx - 1) as usize] = s;
-                        return Ok(());
-                    }
-                    return Err(common::invalid_data_type_error());
-                }
-                None => return Err(common::write_access_denied_error()),
-                _ => return Err(common::invalid_array_index_error()),
-            }
+            // Written whole, State_Text sets Number_Of_States too (#1443).
+            let held: Vec<u32> = self.held_states().collect();
+            write_state_text(
+                &mut self.number_of_states,
+                &mut self.state_text,
+                held,
+                array_index,
+                value,
+            )?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if property == PropertyIdentifier::ALARM_VALUES {
             let values = decode_alarm_values_write(array_index, value, self.number_of_states)?;
@@ -349,8 +355,7 @@ impl BACnetObject for MultiStateInputObject {
         property: PropertyIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        let held = std::iter::once(self.present_value)
-            .chain(self.event_detector.alarm_values.iter().copied());
+        let held: Vec<u32> = self.held_states().collect();
         initialize_states(
             &mut self.number_of_states,
             &mut self.state_text,

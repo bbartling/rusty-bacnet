@@ -77,6 +77,11 @@ pub enum PropertyWriteCapability {
     WhenOutOfService,
     /// Correction is restricted to the original command owner at that priority.
     WhenCommandOwner,
+    /// The property has no write route of its own, but a write to the named
+    /// property changes it too: State_Text written whole sets a multi-state
+    /// object's Number_Of_States (#1443). A WriteProperty naming this
+    /// property itself is refused.
+    Through(PropertyIdentifier),
 }
 
 impl PropertyWriteCapability {

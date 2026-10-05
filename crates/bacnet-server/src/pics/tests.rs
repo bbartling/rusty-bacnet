@@ -658,19 +658,21 @@ fn pics_input_present_value_writable_only_when_out_of_service() {
 
 #[test]
 fn pics_state_text_writable_on_multistate_types() {
+    use PropertyIdentifier as P;
     let db = make_real_objects_db();
     let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
 
-    // All three multistate types accept STATE_TEXT writes (array-indexed).
+    // All three multistate types accept STATE_TEXT writes, by element or
+    // whole, and a whole write sets Number_Of_States (#1443).
+    let states = [P::STATE_TEXT, P::NUMBER_OF_STATES];
     for ot in [
         ObjectType::MULTI_STATE_INPUT,
         ObjectType::MULTI_STATE_OUTPUT,
         ObjectType::MULTI_STATE_VALUE,
     ] {
-        assert!(
-            pics_writable(&pics, ot, PropertyIdentifier::STATE_TEXT),
-            "{ot:?}: STATE_TEXT should be writable"
-        );
+        for property in states {
+            assert!(pics_writable(&pics, ot, property), "{ot:?}: {property:?}");
+        }
     }
 }
 
@@ -679,15 +681,14 @@ fn pics_fixed_readonly_properties_never_writable() {
     let db = make_real_objects_db();
     let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
 
-    // The universal identifiers below are never writable. Number_Of_States is
-    // likewise fixed on every object type that exposes it.
+    // The universal identifiers below are never writable. Number_Of_States
+    // isn't among them: State_Text written whole sets it (#1443).
     for ot in pics.supported_object_types.iter() {
         for pid in [
             PropertyIdentifier::OBJECT_IDENTIFIER,
             PropertyIdentifier::OBJECT_TYPE,
             PropertyIdentifier::PROPERTY_LIST,
             PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::NUMBER_OF_STATES,
         ] {
             if ot.supported_properties.iter().any(|p| p.property_id == pid) {
                 assert!(

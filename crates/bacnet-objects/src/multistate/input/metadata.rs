@@ -7,7 +7,7 @@ use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
     PropertyPresenceCondition::{IntrinsicReportingOptional, IntrinsicReportingRequired},
-    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
+    PropertyWriteCapability::{Always, ReadOnly, Through, WhenOutOfService},
 };
 
 // Base conformance and implemented writability are independent. Preserve the
@@ -75,10 +75,16 @@ const BASE: &[PropertyMetadata] = &[
         ReadOnly,
     ),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::NUMBER_OF_STATES, RequiredRead, None, ReadOnly),
+    // No write of its own: a whole State_Text write sets it (#1443).
+    PropertyMetadata::new(
+        P::NUMBER_OF_STATES,
+        RequiredRead,
+        None,
+        Through(P::STATE_TEXT),
+    ),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::RELIABILITY_EVALUATION_INHIBIT, Optional, None, Always),
-    // Always denotes the element-write route, not whole-array replacement.
+    // Element writes, and whole writes that also set Number_Of_States.
     PropertyMetadata::new(P::STATE_TEXT, Optional, None, Always),
     PropertyMetadata::new(
         P::ALARM_VALUES,
@@ -320,6 +326,8 @@ mod tests {
                         }
                         P::PRESENT_VALUE if input => WhenOutOfService,
                         P::RELIABILITY => WhenOutOfService,
+                        // Set by a whole State_Text write (#1443).
+                        P::NUMBER_OF_STATES => Through(P::STATE_TEXT),
                         P::OBJECT_NAME
                         | P::DESCRIPTION
                         | P::PRESENT_VALUE
@@ -378,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn property_metadata_multistate_state_text_is_element_writable_only() {
+    fn property_metadata_multistate_state_text_writes_by_element_or_whole() {
         for mut object in objects() {
             assert!(object.is_array_property(P::STATE_TEXT));
             assert!(!object.is_array_property(P::NUMBER_OF_STATES));
@@ -405,10 +413,11 @@ mod tests {
                 expected[index as usize - 1] = value;
             }
             for (index, value, error) in [
+                // Whole, it sets Number_Of_States, which can't be zero (#1443).
                 (
                     None,
                     PropertyValue::List(vec![]),
-                    ErrorCode::WRITE_ACCESS_DENIED,
+                    ErrorCode::VALUE_OUT_OF_RANGE,
                 ),
                 (
                     Some(0),

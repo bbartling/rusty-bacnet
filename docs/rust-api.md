@@ -1764,23 +1764,36 @@ whole only at creation, and the server gives such a value, sent without an
 array index, to `BACnetObject::initialize_property` instead of the write
 route (#1429). The built-in Analog Input and Analog Output take Units (an
 Enumerated up to 65535). The Multi-state Input, Output and Value take
-Number_Of_States (1 to `multistate::MAX_CREATED_NUMBER_OF_STATES`, 1024),
-which resizes State_Text, and State_Text written whole, which needs one
-CharacterString per state. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
+Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
+which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
 if a value the object holds would name a state past it. WriteProperty still
 answers `PROPERTY/WRITE_ACCESS_DENIED` for each. The PICS lists each
 createable type's set.
 
-On these objects the order of the initial values follows one rule: a
-Number_Of_States that passes its own checks (no array index, an Unsigned, 1
-to 1024) is applied before every other initial value, and everything else,
-including a Number_Of_States that fails those checks, is applied in request
-order. So Present_Value, Relinquish_Default, Alarm_Values and State_Text are
-judged against the requested count wherever it stands, and a bad value
-earlier in the list than a bad count is the one named. A refusal always
-names the value's own position: `[Relinquish_Default 2, Number_Of_States 1]`
-is refused at 1, the default being past the one state. With several good
-counts, the last one sets the states.
+State_Text written whole, by WriteProperty, WritePropertyMultiple or a
+CreateObject initial value, sets Number_Of_States to its number of labels
+(#1443), with the same checks: 1 to 1024 labels, and a shrink that would
+leave Present_Value, Relinquish_Default, a Priority_Array command or an
+Alarm_Values entry past the new count is `PROPERTY/VALUE_OUT_OF_RANGE` and
+changes nothing. A Multi-state Output's Feedback_Value doesn't block a
+shrink; past the count it shows as CONFIGURATION_ERROR. The metadata and the
+PICS show Number_Of_States as writable through State_Text
+(`PropertyWriteCapability::Through`), though a WriteProperty naming it is
+still refused.
+
+On these objects the order of the initial values follows one rule: the
+values that give the state count are applied before every other initial
+value, and everything else, including a count value that fails its own
+checks (an array index, its datatype, its range), is applied in request
+order. Those values are the request's Number_Of_States, or, when it has
+none, State_Text written whole; with a Number_Of_States, a whole State_Text
+has to label exactly that many states. So Present_Value,
+Relinquish_Default, Alarm_Values and State_Text are judged against the
+requested count wherever it stands, and a bad value earlier in the list than
+a bad count is the one named. A refusal always names the value's own
+position: `[Relinquish_Default 2, Number_Of_States 1]` is refused at 1, the
+default being past the one state. With several good counts, the last one
+sets the states.
 
 A Multi-state Input or Value refuses an Alarm_Values entry past its
 Number_Of_States with `PROPERTY/VALUE_OUT_OF_RANGE` naming the element, over

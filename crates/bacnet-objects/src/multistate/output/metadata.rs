@@ -9,7 +9,7 @@ use crate::property_metadata::{
     PropertyPresenceCondition::{CommandableValueSourceTracking, ValueSourceTracking},
     PropertyPresenceCondition::{IntrinsicReportingOptional, IntrinsicReportingRequired},
     PropertyWriteCapability::WhenCommandOwner,
-    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
+    PropertyWriteCapability::{Always, ReadOnly, Through, WhenOutOfService},
 };
 
 // Output is always commandable. Preserve legacy order and keep feedback's
@@ -83,13 +83,19 @@ const BASE: &[PropertyMetadata] = &[
         ReadOnly,
     ),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::NUMBER_OF_STATES, RequiredRead, None, ReadOnly),
+    // No write of its own: a whole State_Text write sets it (#1443).
+    PropertyMetadata::new(
+        P::NUMBER_OF_STATES,
+        RequiredRead,
+        None,
+        Through(P::STATE_TEXT),
+    ),
     PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, RequiredRead, None, Always),
     PropertyMetadata::new(P::CURRENT_COMMAND_PRIORITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::RELIABILITY_EVALUATION_INHIBIT, Optional, None, Always),
-    // Always denotes the element-write route, not whole-array replacement.
+    // Element writes, and whole writes that also set Number_Of_States.
     PropertyMetadata::new(P::STATE_TEXT, Optional, None, Always),
     // The enabled command-source mechanism makes these paired properties required.
     PropertyMetadata::new(

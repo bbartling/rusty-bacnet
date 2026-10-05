@@ -236,6 +236,8 @@ fn cases() -> Vec<(ObjectIdentifier, P, Option<u32>, bool)> {
         (nc(), P::RECIPIENT_LIST, None, false),
         (msi(), P::ALARM_VALUES, None, false),
         (msi(), P::STATE_TEXT, Some(2), false),
+        // State_Text written whole, which sets the state count (#1443).
+        (msi(), P::STATE_TEXT, None, false),
         // An array of constructed elements the handler splits itself.
         (nf(), P::PORT_FILTER, None, false),
         (nf(), P::PORT_FILTER, Some(1), false),
@@ -293,7 +295,7 @@ fn null_to_a_noncommandable_property_succeeds_unchanged_over_wpm() {
 #[test]
 fn null_keeps_the_errors_its_checks_give() {
     let mut db = db();
-    let cases: [(ObjectIdentifier, P, Option<u32>, ErrorClass, ErrorCode); 9] = [
+    let cases: [(ObjectIdentifier, P, Option<u32>, ErrorClass, ErrorCode); 8] = [
         (
             oid(ObjectType::ANALOG_INPUT, 2),
             P::DESCRIPTION,
@@ -345,19 +347,11 @@ fn null_keeps_the_errors_its_checks_give() {
             ErrorClass::PROPERTY,
             ErrorCode::WRITE_ACCESS_DENIED,
         ),
-        // Weekly_Schedule always has seven days, and State_Text is written
-        // one state at a time.
+        // Weekly_Schedule always has seven days.
         (
             sch(),
             P::WEEKLY_SCHEDULE,
             Some(0),
-            ErrorClass::PROPERTY,
-            ErrorCode::WRITE_ACCESS_DENIED,
-        ),
-        (
-            msi(),
-            P::STATE_TEXT,
-            None,
             ErrorClass::PROPERTY,
             ErrorCode::WRITE_ACCESS_DENIED,
         ),

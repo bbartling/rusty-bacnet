@@ -39,7 +39,8 @@ fn each_createable_type_lists_what_only_creation_sets() {
             .creation_only_properties
             .clone()
     };
-    let states = vec![P::NUMBER_OF_STATES, P::STATE_TEXT];
+    // State_Text written whole is a WriteProperty too since #1443.
+    let states = vec![P::NUMBER_OF_STATES];
     for (object_type, expected) in [
         (ObjectType::ANALOG_INPUT, vec![P::UNITS]),
         (ObjectType::ANALOG_OUTPUT, vec![P::UNITS]),
@@ -71,11 +72,11 @@ fn each_createable_type_lists_what_only_creation_sets() {
         "  Object Type: ANALOG_INPUT (createable=true, deleteable=true)\n  \
          Whole value set only by CreateObject: UNITS\n"
     ));
-    assert!(text.contains("Whole value set only by CreateObject: NUMBER_OF_STATES, STATE_TEXT\n"));
+    assert!(text.contains("Whole value set only by CreateObject: NUMBER_OF_STATES\n"));
     let markdown = pics.generate_markdown();
     assert!(markdown.contains(
         "### MULTI_STATE_VALUE\n\n- Createable: true\n- Deleteable: true\n\
-         - Whole value set only by CreateObject: NUMBER_OF_STATES, STATE_TEXT\n\n"
+         - Whole value set only by CreateObject: NUMBER_OF_STATES\n\n"
     ));
     // A type with nothing to list keeps its old shape.
     assert!(markdown.contains("### BINARY_VALUE\n\n- Createable: true\n- Deleteable: true\n\n|"));

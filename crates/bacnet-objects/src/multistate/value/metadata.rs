@@ -11,7 +11,7 @@ use crate::property_metadata::{
     },
     PropertyPresenceCondition::{CommandableValueSourceTracking, ValueSourceTracking},
     PropertyWriteCapability::WhenCommandOwner,
-    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
+    PropertyWriteCapability::{Always, ReadOnly, Through, WhenOutOfService},
 };
 
 // Preserve legacy order and optional base codes for implemented conditional rows.
@@ -78,7 +78,13 @@ const BASE: &[PropertyMetadata] = &[
         ReadOnly,
     ),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::NUMBER_OF_STATES, RequiredRead, None, ReadOnly),
+    // No write of its own: a whole State_Text write sets it (#1443).
+    PropertyMetadata::new(
+        P::NUMBER_OF_STATES,
+        RequiredRead,
+        None,
+        Through(P::STATE_TEXT),
+    ),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
     PropertyMetadata::new(
@@ -89,7 +95,7 @@ const BASE: &[PropertyMetadata] = &[
     ),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::RELIABILITY_EVALUATION_INHIBIT, Optional, None, Always),
-    // Always denotes the element-write route, not whole-array replacement.
+    // Element writes, and whole writes that also set Number_Of_States.
     PropertyMetadata::new(P::STATE_TEXT, Optional, None, Always),
     PropertyMetadata::new(
         P::ALARM_VALUES,

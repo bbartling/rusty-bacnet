@@ -187,6 +187,18 @@ impl MultiStateValueObject {
         Ok(u as u32)
     }
 
+    /// The values the object keeps that name a state, which a new count
+    /// may not strand: the commands in Priority_Array, Present_Value,
+    /// Relinquish_Default and Alarm_Values.
+    fn held_states(&self) -> impl Iterator<Item = u32> + '_ {
+        self.priority_array
+            .iter()
+            .flatten()
+            .copied()
+            .chain([self.present_value, self.relinquish_default])
+            .chain(self.event_detector.alarm_values.iter().copied())
+    }
+
     fn set_present_value_directly(&mut self, value: PropertyValue) -> Result<(), Error> {
         self.present_value = Self::checked_present_value(self.number_of_states, value)?;
         let _ = self.recompute_reliability();
@@ -387,17 +399,17 @@ impl BACnetObject for MultiStateValueObject {
             return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::STATE_TEXT {
-            match array_index {
-                Some(idx) if idx >= 1 && (idx as usize) <= self.state_text.len() => {
-                    if let PropertyValue::CharacterString(s) = value {
-                        self.state_text[(idx - 1) as usize] = s;
-                        return Ok(());
-                    }
-                    return Err(common::invalid_data_type_error());
-                }
-                None => return Err(common::write_access_denied_error()),
-                _ => return Err(common::invalid_array_index_error()),
-            }
+            // Written whole, State_Text sets Number_Of_States too (#1443).
+            let held: Vec<u32> = self.held_states().collect();
+            write_state_text(
+                &mut self.number_of_states,
+                &mut self.state_text,
+                held,
+                array_index,
+                value,
+            )?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if property == PropertyIdentifier::ALARM_VALUES {
             let values = decode_alarm_values_write(array_index, value, self.number_of_states)?;
@@ -495,10 +507,7 @@ impl BACnetObject for MultiStateValueObject {
         property: PropertyIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        let held = self.priority_array.iter().flatten().copied();
-        let held = held
-            .chain([self.present_value, self.relinquish_default])
-            .chain(self.event_detector.alarm_values.iter().copied());
+        let held: Vec<u32> = self.held_states().collect();
         initialize_states(
             &mut self.number_of_states,
             &mut self.state_text,

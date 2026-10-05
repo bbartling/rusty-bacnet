@@ -148,7 +148,8 @@ macro_rules! assert_number_of_states_policy {
                 None,
             )
             .is_err());
-        assert!(!object.is_writable_property(PropertyIdentifier::NUMBER_OF_STATES));
+        // Writable only through a whole State_Text write (#1443).
+        assert!(object.is_writable_property(PropertyIdentifier::NUMBER_OF_STATES));
         assert_eq!(
             read_unsigned(&object, PropertyIdentifier::NUMBER_OF_STATES),
             4,

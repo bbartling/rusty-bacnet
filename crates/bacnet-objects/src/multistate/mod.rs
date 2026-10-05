@@ -103,30 +103,49 @@ fn resize_state_text(
 }
 
 /// What a multi-state object takes only from a CreateObject initial value
-/// (#1429): Number_Of_States, and State_Text written whole. WriteProperty
-/// refuses both; a State_Text element stays writable.
-const CREATION_ONLY: &[PropertyIdentifier] = &[
-    PropertyIdentifier::NUMBER_OF_STATES,
-    PropertyIdentifier::STATE_TEXT,
-];
+/// (#1429): Number_Of_States. WriteProperty refuses it; a whole State_Text
+/// write changes it instead (#1443).
+const CREATION_ONLY: &[PropertyIdentifier] = &[PropertyIdentifier::NUMBER_OF_STATES];
 
-/// The most states a CreateObject initial value may give a multi-state
-/// object. State_Text keeps a label for every state, so the count a client
-/// picks is bounded like the other tables a client sizes.
-pub const MAX_CREATED_NUMBER_OF_STATES: u32 = 1024;
+/// The most states a client may give a multi-state object, by a CreateObject
+/// initial value or by State_Text written whole. State_Text keeps a label
+/// for every state, so the count a client picks is bounded like the other
+/// tables a client sizes.
+pub const MAX_NUMBER_OF_STATES: u32 = 1024;
 
-/// Apply a CreateObject initial value to Number_Of_States or to the whole of
-/// State_Text (#1429), checked before anything changes.
+/// Check a state count a client asks for, given the `current` one and
+/// `held`, the values the object keeps that name a state (Present_Value,
+/// Relinquish_Default, the commands in Priority_Array, Alarm_Values).
 ///
-/// A state count runs from 1 to [`MAX_CREATED_NUMBER_OF_STATES`]. It is also
-/// VALUE_OUT_OF_RANGE when one of `held`, the values the object keeps that
-/// name a state (Present_Value, Relinquish_Default, the commands in
-/// Priority_Array, Alarm_Values), would fall outside it. A new count resizes
-/// State_Text as [`resize_state_text`] does (Clause 12.20.10 ties the two
-/// sizes together). State_Text needs exactly one CharacterString per state,
-/// VALUE_OUT_OF_RANGE for any other count; a single label arrives as that
-/// CharacterString, the way a one-element array value decodes. Any other
-/// property is WRITE_ACCESS_DENIED, as the trait default answers.
+/// The count runs from 1 to [`MAX_NUMBER_OF_STATES`]. Clause 12.20.10 and
+/// its Multi-state Input and Output counterparts leave it to the device
+/// whether a shrink repairs the values that name a state past it, or keeps
+/// them and reports a fault; this one refuses a count that would strand a
+/// held state that names one of the `current` states. Both refusals are
+/// VALUE_OUT_OF_RANGE, the code WriteProperty gives a value the property
+/// can't take (Clause 15.9.1.3.1). A held state already past the current
+/// count, which only a local shrink can leave, doesn't block a new count.
+fn check_state_count(
+    current: u32,
+    count: u64,
+    held: impl IntoIterator<Item = u32>,
+) -> Result<u32, Error> {
+    let count = u32::try_from(count)
+        .ok()
+        .filter(|count| (1..=MAX_NUMBER_OF_STATES).contains(count))
+        .ok_or_else(common::value_out_of_range_error)?;
+    let stranded = |state: u32| (1..=current).contains(&state) && state > count;
+    if held.into_iter().any(stranded) {
+        return Err(common::value_out_of_range_error());
+    }
+    Ok(count)
+}
+
+/// Apply a CreateObject initial value to Number_Of_States (#1429), checked
+/// before anything changes: [`check_state_count`], then State_Text resized
+/// as [`resize_state_text`] does (Clause 12.20.10 ties the two sizes
+/// together). Any other property is WRITE_ACCESS_DENIED, as the trait
+/// default answers.
 fn initialize_states(
     number_of_states: &mut u32,
     state_text: &mut Vec<String>,
@@ -134,39 +153,71 @@ fn initialize_states(
     property: PropertyIdentifier,
     value: PropertyValue,
 ) -> Result<(), Error> {
-    match property {
-        PropertyIdentifier::NUMBER_OF_STATES => {
-            let PropertyValue::Unsigned(count) = value else {
+    if property != PropertyIdentifier::NUMBER_OF_STATES {
+        return Err(common::write_access_denied_error());
+    }
+    let PropertyValue::Unsigned(count) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    let count = check_state_count(*number_of_states, count, held)?;
+    resize_state_text(number_of_states, state_text, count)
+}
+
+/// Take State_Text written whole, by WriteProperty, WritePropertyMultiple or
+/// a CreateObject initial value (#1443): one CharacterString per state,
+/// where a single label arrives as that CharacterString, the way a
+/// one-element array value decodes. The labels replace the old ones, and
+/// their number becomes Number_Of_States: Clause 12.20.11 and its
+/// Multi-state Input and Output counterparts tie the two sizes together in
+/// both directions. A new count is checked as [`check_state_count`] says;
+/// nothing changes on a refusal.
+fn write_whole_state_text(
+    number_of_states: &mut u32,
+    state_text: &mut Vec<String>,
+    held: impl IntoIterator<Item = u32>,
+    value: PropertyValue,
+) -> Result<(), Error> {
+    let labels = match value {
+        PropertyValue::CharacterString(label) => vec![label],
+        PropertyValue::List(values) => values
+            .into_iter()
+            .map(|value| match value {
+                PropertyValue::CharacterString(label) => Ok(label),
+                _ => Err(common::invalid_data_type_error()),
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(common::invalid_data_type_error()),
+    };
+    let count = if labels.len() == *number_of_states as usize {
+        *number_of_states
+    } else {
+        check_state_count(*number_of_states, labels.len() as u64, held)?
+    };
+    *state_text = labels;
+    *number_of_states = count;
+    Ok(())
+}
+
+/// Write one State_Text element, or the whole array
+/// ([`write_whole_state_text`]); an index past the states is
+/// INVALID_ARRAY_INDEX.
+fn write_state_text(
+    number_of_states: &mut u32,
+    state_text: &mut Vec<String>,
+    held: impl IntoIterator<Item = u32>,
+    array_index: Option<u32>,
+    value: PropertyValue,
+) -> Result<(), Error> {
+    match array_index {
+        None => write_whole_state_text(number_of_states, state_text, held, value),
+        Some(index) if index >= 1 && (index as usize) <= state_text.len() => {
+            let PropertyValue::CharacterString(label) = value else {
                 return Err(common::invalid_data_type_error());
             };
-            let count = u32::try_from(count)
-                .ok()
-                .filter(|count| (1..=MAX_CREATED_NUMBER_OF_STATES).contains(count))
-                .ok_or_else(common::value_out_of_range_error)?;
-            if held.into_iter().any(|state| !(1..=count).contains(&state)) {
-                return Err(common::value_out_of_range_error());
-            }
-            resize_state_text(number_of_states, state_text, count)
-        }
-        PropertyIdentifier::STATE_TEXT => {
-            let labels = match value {
-                PropertyValue::CharacterString(label) => vec![label],
-                PropertyValue::List(values) => values
-                    .into_iter()
-                    .map(|value| match value {
-                        PropertyValue::CharacterString(label) => Ok(label),
-                        _ => Err(common::invalid_data_type_error()),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-                _ => return Err(common::invalid_data_type_error()),
-            };
-            if labels.len() != *number_of_states as usize {
-                return Err(common::value_out_of_range_error());
-            }
-            *state_text = labels;
+            state_text[(index - 1) as usize] = label;
             Ok(())
         }
-        _ => Err(common::write_access_denied_error()),
+        Some(_) => Err(common::invalid_array_index_error()),
     }
 }
 
