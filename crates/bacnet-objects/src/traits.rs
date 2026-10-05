@@ -39,6 +39,10 @@ use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 #[doc(hidden)]
 pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
 
+/// Wakes the server's monotonic task to read object deadlines again (#1384).
+#[doc(hidden)]
+pub type DeadlineWaker = dyn Fn() + Send + Sync;
+
 mod defaults;
 use defaults::{
     array_property_default, cov_reported_properties_default, historical_writable_default,
@@ -296,6 +300,11 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     #[doc(hidden)]
     fn bind_monotonic_clock_internal(&mut self, _clock: Option<Arc<MonotonicClock>>) {}
 
+    /// Bind the waker an object calls when a write arms a monotonic deadline,
+    /// so the server's task looks again sooner than its next routine pass.
+    #[doc(hidden)]
+    fn bind_deadline_waker_internal(&mut self, _waker: Option<Arc<DeadlineWaker>>) {}
+
     /// Advance operations to an absolute process-local monotonic instant.
     #[doc(hidden)]
     fn advance_monotonic_time_internal(&mut self, _now: Duration) -> bool {
@@ -314,12 +323,13 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
-    /// Return the retained logical blink-request observation, when modeled.
+    /// Return how many blink-warn notifications a lighting object has
+    /// requested, for objects that model them.
     ///
     /// This is an internal conformance-test channel, not a BACnet property,
     /// host callback, or physical-output claim.
     #[doc(hidden)]
-    fn binary_lighting_blink_count_internal(&self) -> u64 {
+    fn lighting_blink_count_internal(&self) -> u64 {
         0
     }
 

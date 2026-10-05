@@ -1,10 +1,12 @@
-"""Installed-artifact tests for Lighting Output's Lighting_Command (#1263).
+"""Installed-artifact tests for Lighting Output's Lighting_Command (#1263, #1384).
 
 Lighting_Command reads as ``application_data`` holding the context-tagged
 BACnetLightingCommand, operation NONE until written. It takes writes in that
 encoding, locally, over the network and from a Channel. An ``octet_string``,
 the form it used to take, is refused with INVALID_DATA_TYPE, and a command its
-operation can't take with VALUE_OUT_OF_RANGE.
+operation can't take with VALUE_OUT_OF_RANGE. A command taken is carried out:
+a FADE_TO puts its level in Present_Value at once and moves Tracking_Value
+there over its fade time.
 """
 
 from __future__ import annotations
@@ -26,6 +28,9 @@ from rusty_bacnet import (
 )
 
 LC = PropertyIdentifier.LIGHTING_COMMAND
+PV = PropertyIdentifier.PRESENT_VALUE
+TV = PropertyIdentifier.TRACKING_VALUE
+IN_PROGRESS = PropertyIdentifier.IN_PROGRESS
 LO = ObjectIdentifier(ObjectType.LIGHTING_OUTPUT, 1)
 CH = ObjectIdentifier(ObjectType.CHANNEL, 1)
 # Write_Status SUCCESSFUL.
@@ -36,6 +41,11 @@ NONE = bytes([0x09, 0x00])
 FADE = bytes([0x09, 0x01, 0x1C, 0x42, 0x48, 0x00, 0x00, 0x59, 0x08])
 # STOP (10) at priority [5] 3.
 STOP = bytes([0x09, 0x0A, 0x59, 0x03])
+# FADE_TO (1), target level [1] 80.0 % (0x42A00000), fade time [4] 500 ms
+# (0x01F4), priority [5] 8.
+FADE_80 = bytes([0x09, 0x01, 0x1C, 0x42, 0xA0, 0x00, 0x00, 0x4A, 0x01, 0xF4, 0x59, 0x08])
+# In_Progress IDLE.
+IDLE = 0
 
 
 def make_server() -> BACnetServer:
@@ -122,6 +132,38 @@ class LightingCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await self.server.read_property(LO, LC), PropertyValue.application_data(NONE)
         )
+
+    async def test_a_fade_written_over_the_network_runs_to_its_level(self) -> None:
+        await self.client.write_property(
+            self.address, LO, LC, PropertyValue.application_data(FADE_80)
+        )
+        # The level is in Present_Value at once.
+        self.assertEqual(await self.server.read_property(LO, PV), PropertyValue.real(80.0))
+        # Tracking_Value gets there once the fade has run; In_Progress is IDLE.
+        deadline = time.monotonic() + 10.0
+        while (await self.server.read_property(LO, IN_PROGRESS)).value != IDLE:
+            if time.monotonic() > deadline:
+                raise AssertionError("the fade never finished")
+            await asyncio.sleep(0.05)
+        for value in (
+            await self.server.read_property(LO, TV),
+            await self.client.read_property(self.address, LO, TV),
+        ):
+            self.assertEqual(value, PropertyValue.real(80.0))
+
+    async def test_present_value_warn_off_turns_the_light_off(self) -> None:
+        # Blink_Warn_Enable is FALSE, so -3.0 (WARN_OFF) writes 0.0 at once.
+        await self.client.write_property(
+            self.address, LO, PV, PropertyValue.real(60.0), priority=8
+        )
+        await self.client.write_property(
+            self.address, LO, PV, PropertyValue.real(-3.0), priority=8
+        )
+        self.assertEqual(
+            await self.server.read_property(LO, PropertyIdentifier.PRIORITY_ARRAY, 8),
+            PropertyValue.real(0.0),
+        )
+        self.assertEqual(await self.server.read_property(LO, PV), PropertyValue.real(0.0))
 
     async def test_channel_passes_a_lighting_command_on(self) -> None:
         # A channel value frames the command in context tag 0.

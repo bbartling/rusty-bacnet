@@ -834,35 +834,6 @@ macro_rules! read_priority_array {
 }
 pub(crate) use read_priority_array;
 
-/// Validate priority index and write to a priority array slot.
-///
-/// Handles priority validation, Null (relinquish), and delegates value
-/// extraction/validation to the caller's `$extract` block.
-///
-/// `$extract` receives the `value` and must return `Result<T, Error>`.
-/// After a successful write, calls `$self.recalculate_present_value()`.
-macro_rules! write_priority_array {
-    ($self:expr, $value:expr, $priority:expr, $extract:expr) => {{
-        let prio = $priority.unwrap_or(16);
-        if !(1..=16).contains(&prio) {
-            return Err($crate::common::value_out_of_range_error());
-        }
-        let idx = (prio - 1) as usize;
-        match $value {
-            bacnet_types::primitives::PropertyValue::Null => {
-                $self.priority_array[idx] = None;
-            }
-            other => {
-                let extracted = ($extract)(other)?;
-                $self.priority_array[idx] = Some(extracted);
-            }
-        }
-        $self.recalculate_present_value();
-        Ok(())
-    }};
-}
-pub(crate) use write_priority_array;
-
 /// Write COV_INCREMENT with non-negative validation.
 ///
 /// Returns `Some(Ok(()))` if handled, `Some(Err(...))` for type/range errors,

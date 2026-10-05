@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::schedule::ScheduleWrite;
-use bacnet_objects::traits::MonotonicClock;
+use bacnet_objects::traits::{DeadlineWaker, MonotonicClock};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::Error;
@@ -58,6 +58,12 @@ pub fn clock() -> Arc<dyn ClockReader> {
 
 pub fn monotonic() -> Arc<MonotonicClock> {
     MONOTONIC.clone()
+}
+
+static WAKER: LazyLock<Arc<DeadlineWaker>> = LazyLock::new(|| Arc::new(|| {}));
+
+pub fn waker() -> Arc<DeadlineWaker> {
+    WAKER.clone()
 }
 
 /// A capability or handle, rendered as the address it points at.

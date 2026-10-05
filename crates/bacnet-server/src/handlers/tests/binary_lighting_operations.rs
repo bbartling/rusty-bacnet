@@ -78,7 +78,7 @@ fn read(
 }
 
 fn blink_count(db: &ObjectDatabase, oid: ObjectIdentifier) -> u64 {
-    db.get(&oid).unwrap().binary_lighting_blink_count_internal()
+    db.get(&oid).unwrap().lighting_blink_count_internal()
 }
 
 fn advance(db: &mut ObjectDatabase, oid: ObjectIdentifier, elapsed: Duration) -> bool {

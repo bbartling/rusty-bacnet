@@ -19,20 +19,36 @@ pub(in crate::server) fn event_enrollment_period(secs: u64) -> Duration {
     Duration::from_secs(secs)
 }
 
+/// The database's monotonic clock: its origin, and the notify its objects
+/// wake when a write arms a deadline (#1384).
+pub(in crate::server) struct MonotonicClocks {
+    pub(in crate::server) origin: tokio::time::Instant,
+    pub(in crate::server) deadline_armed: Arc<tokio::sync::Notify>,
+}
+
 /// Install wall and monotonic clocks before the database becomes shared.
 pub(super) fn install_database_clocks(
     db: &mut ObjectDatabase,
     clock_config: Option<ClockConfig>,
-) -> (Option<Arc<ServerClock>>, tokio::time::Instant) {
+) -> (Option<Arc<ServerClock>>, MonotonicClocks) {
     let clock = clock_config.map(|config| Arc::new(ServerClock::new(config)));
     let reader = clock
         .as_ref()
         .map(|clock| Arc::clone(clock) as Arc<dyn bacnet_objects::clock::ClockReader>);
     db.set_clock_reader(reader);
-    let monotonic_origin = tokio::time::Instant::now();
+    let origin = tokio::time::Instant::now();
     let monotonic_clock: Arc<bacnet_objects::traits::MonotonicClock> =
-        Arc::new(move || tokio::time::Instant::now().saturating_duration_since(monotonic_origin));
+        Arc::new(move || tokio::time::Instant::now().saturating_duration_since(origin));
     db.set_monotonic_clock_internal(Some(monotonic_clock));
+    let deadline_armed = Arc::new(tokio::sync::Notify::new());
+    let waker = Arc::clone(&deadline_armed);
+    db.set_deadline_waker_internal(Some(Arc::new(move || waker.notify_one())));
 
-    (clock, monotonic_origin)
+    (
+        clock,
+        MonotonicClocks {
+            origin,
+            deadline_armed,
+        },
+    )
 }

@@ -71,7 +71,7 @@ fn lighting_output_present_value_below_one_percent_reads_one_percent_over_the_wi
 fn lighting_output_present_value_outside_the_range_is_refused_over_the_wire() {
     let (mut db, oid) = db_with(Box::new(LightingOutputObject::new(1, "LO-1").unwrap()));
     write_wire(&mut db, oid, PV, PropertyValue::Real(0.5), Some(8)).unwrap();
-    for level in [-f32::from_bits(1), -1.0, 100.0f32.next_up(), f32::NAN] {
+    for level in [-f32::from_bits(1), -1.5, 100.0f32.next_up(), f32::NAN] {
         assert_refused(
             write_wire(&mut db, oid, PV, PropertyValue::Real(level), Some(8)),
             ErrorCode::VALUE_OUT_OF_RANGE,
