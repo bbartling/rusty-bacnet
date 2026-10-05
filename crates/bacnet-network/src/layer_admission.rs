@@ -534,6 +534,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         let network_control_ingress_sequence = Arc::clone(&self.network_control_ingress_sequence);
         let address_length_drops = Arc::clone(&self.address_length_drops);
         let global_broadcast_dadr_drops = Arc::clone(&self.global_broadcast_dadr_drops);
+        let broadcast_pdu_type_drops = Arc::clone(&self.broadcast_pdu_type_drops);
         let (apdu_tx, apdu_rx) = AdmissionSender::channel(track_depth);
         let counters = apdu_tx.counters.clone();
 
@@ -547,7 +548,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                         if !destination_is_coherent(
                             npdu.destination.as_ref(),
                             &global_broadcast_dadr_drops,
-                        ) {
+                        ) || !broadcast_carries_unconfirmed(&npdu, &broadcast_pdu_type_drops)
+                        {
                             continue;
                         }
                         if npdu.is_network_message {
@@ -672,6 +674,36 @@ pub(crate) fn destination_is_coherent(
     warn!(
         dlen = destination.mac_address.len(),
         "Dropping a global broadcast NPDU that also names a DADR"
+    );
+    false
+}
+
+/// Whether a decoded NPDU may go on: anything but an APDU sent to a broadcast
+/// network address, global (DNET 0xFFFF) or remote (a DNET with no DADR),
+/// whose PDU type isn't Unconfirmed-Request (#1491). Only that type may use
+/// a broadcast network address (Clause 6.3); any other belongs to one peer's
+/// transaction, so every device reached would get a request or an answer
+/// that names no one. The type is the high nibble of the APDU's first octet
+/// (Clause 20.1), so nothing is decoded, and an empty APDU names no type.
+/// Network messages pass. [`NetworkLayer`] and the router both ask right
+/// after [`destination_is_coherent`]: a refused NPDU is counted in `drops`
+/// and is not delivered, forwarded, answered or rejected.
+pub(crate) fn broadcast_carries_unconfirmed(npdu: &Npdu, drops: &AtomicU64) -> bool {
+    let Some(destination) = npdu.destination.as_ref() else {
+        return true;
+    };
+    let broadcast = destination.network == 0xFFFF || destination.mac_address.is_empty();
+    let unconfirmed = npdu
+        .payload
+        .first()
+        .is_some_and(|&first| PduType::from_raw(first >> 4) == PduType::UNCONFIRMED_REQUEST);
+    if npdu.is_network_message || !broadcast || unconfirmed {
+        return true;
+    }
+    count_drop(drops);
+    warn!(
+        dnet = destination.network,
+        "Dropping a broadcast NPDU whose APDU isn't an Unconfirmed-Request"
     );
     false
 }

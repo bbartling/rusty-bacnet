@@ -102,7 +102,9 @@ pub use issuance::IssuedApdu;
 
 #[path = "layer_admission.rs"]
 mod admission;
-pub(crate) use admission::{destination_is_coherent, link_source_fits, AdmissionSender};
+pub(crate) use admission::{
+    broadcast_carries_unconfirmed, destination_is_coherent, link_source_fits, AdmissionSender,
+};
 pub use admission::{AdmissionReceiver, QueueAdmissionCounters, QueueAdmissionSnapshot};
 
 /// A received APDU with source addressing information.
@@ -326,7 +328,8 @@ pub struct RoutedTarget<'a> {
 /// [`NpduAddress::MAX_MAC_LEN`], or whose DLEN or SLEN is past it, is dropped
 /// before admission and counted by [`Self::address_length_drops`]; one whose
 /// DNET 0xFFFF carries a DADR is dropped and counted by
-/// [`Self::global_broadcast_dadr_drops`].
+/// [`Self::global_broadcast_dadr_drops`], and a broadcast whose APDU isn't an
+/// Unconfirmed-Request by [`Self::broadcast_pdu_type_drops`].
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     response_scope: bacnet_transport::port::DirectResponseScope,
@@ -335,6 +338,7 @@ pub struct NetworkLayer<T: TransportPort> {
     network_control_ingress_sequence: Arc<AtomicU64>,
     address_length_drops: Arc<AtomicU64>,
     global_broadcast_dadr_drops: Arc<AtomicU64>,
+    broadcast_pdu_type_drops: Arc<AtomicU64>,
     local_network_number: LocalNetworkNumber,
 }
 
@@ -349,6 +353,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             network_control_ingress_sequence: Arc::new(AtomicU64::new(0)),
             address_length_drops: Arc::new(AtomicU64::new(0)),
             global_broadcast_dadr_drops: Arc::new(AtomicU64::new(0)),
+            broadcast_pdu_type_drops: Arc::new(AtomicU64::new(0)),
             local_network_number: LocalNetworkNumber::default(),
         }
     }
@@ -735,6 +740,22 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// that sent it.
     pub fn global_broadcast_dadr_drops(&self) -> u64 {
         self.global_broadcast_dadr_drops.load(Ordering::Relaxed)
+    }
+
+    /// Inbound NPDUs dropped since this layer was created because they were
+    /// addressed to a broadcast, global (DNET 0xFFFF) or remote (a DNET with
+    /// DLEN 0), and carried an APDU other than an Unconfirmed-Request
+    /// (#1491). Saturates at `u64::MAX`.
+    ///
+    /// Only an Unconfirmed-Request may go to a broadcast network address
+    /// (Clause 6.3), so this layer hands no other APDU sent that way to the
+    /// application, and the NPDU never shows up in the receivers' admission
+    /// counters. A remote broadcast, which a non-router discards anyway, is
+    /// counted here too when its APDU is of another type. The PDU type comes
+    /// from the first APDU octet, with no decode; network messages, and an
+    /// APDU sent with no DNET, are not affected.
+    pub fn broadcast_pdu_type_drops(&self) -> u64 {
+        self.broadcast_pdu_type_drops.load(Ordering::Relaxed)
     }
 
     /// Encode an APDU into an NPDU whose destination is `dest_network` /

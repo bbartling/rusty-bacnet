@@ -1594,6 +1594,19 @@ draws one. Each counts it in `global_broadcast_dadr_drops()`, apart from
 `address_length_drops()`: the lengths are fine, and the count points at the
 peer that sent it. A global broadcast with DLEN 0 is unaffected.
 
+Both also drop an NPDU addressed to a broadcast, global (DNET 0xFFFF) or
+remote (a DNET with DLEN 0), whose APDU isn't an Unconfirmed-Request (#1491).
+Only that PDU type may use a broadcast network address (Clause 6.3); a
+Confirmed-Request, an ACK, an Error, a Reject or an Abort belongs to one peer's
+transaction, so every device reached would get one that names no one.
+`BACnetRouter` passes such an NPDU on to no network, delivers it nowhere and
+sends no reject; `NetworkLayer` hands it to no receiver. Each counts it in
+`broadcast_pdu_type_drops()`. The PDU type is the high nibble of the first
+APDU octet, so nothing is decoded, and an empty APDU counts too. Network
+messages, an Unconfirmed-Request, and an APDU to one device (a DADR, or no
+DNET at all) are not affected; the server judges a confirmed request that
+arrives by link broadcast itself.
+
 `BACnetRouter` sends each Reject-Message-To-Network it originates to whoever
 first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
