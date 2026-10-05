@@ -20,8 +20,8 @@ section: Fixed
   Door_Alarm_State writes while out of service (#1131).
 ```
 
-- `section` is the heading the entry goes under: `Added`, `Changed`,
-  `Deprecated`, `Removed`, `Fixed`, `Security` or `Migration notes`.
+- `section` is the heading the entry goes under: `Migration notes`,
+  `Security`, `Added`, `Changed`, `Deprecated`, `Removed` or `Fixed`.
 - The body is one Markdown bullet starting with `- `, exactly as it will read
   in `CHANGELOG.md`. Indent continuation lines two spaces.
 - Keep it short (#1188): one or two high-level sentences saying what changed
@@ -50,7 +50,8 @@ section: Fixed
   `CHANGELOG.md` will see them.
 - No trailing whitespace, and the file ends with a single newline.
 
-A release section lists its headings in the order above, and the entries
+A release section lists its headings in the order above, migration notes
+first so that GitHub's cap on release notes cuts only the end of `Fixed`, and the entries
 under each by issue number, then slug; fragments without an issue come last.
 `assemble` ends each entry with a link to the GitHub commit that merged its
 fragment into dev, so don't add one yourself.
