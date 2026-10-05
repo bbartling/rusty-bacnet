@@ -1,7 +1,7 @@
 //! One row per `BACnetObject` method: a call with fixed arguments, and its
 //! answer rendered as text. Capabilities render as the address they borrow.
 
-use super::fixtures::{address, clock, day, monotonic, noon, oid, schedule_write};
+use super::fixtures::{address, clock, day, monotonic, noon, oid, schedule_write, waker};
 use super::probe::{CUSTOM, CUSTOM_LIST};
 use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::command::WriteFailure;
@@ -131,8 +131,8 @@ pub const QUERIES: &[(&str, Query)] = &[
                 .map(|snapshot| snapshot.object_name().to_owned())
         )
     }),
-    ("binary_lighting_blink_count_internal", |o| {
-        o.binary_lighting_blink_count_internal().to_string()
+    ("lighting_blink_count_internal", |o| {
+        o.lighting_blink_count_internal().to_string()
     }),
     ("is_writable_property", |o| {
         format!(
@@ -314,6 +314,9 @@ pub const COMMANDS: &[(&str, Command)] = &[
     }),
     ("bind_monotonic_clock_internal", |o| {
         format!("{:?}", o.bind_monotonic_clock_internal(Some(monotonic())))
+    }),
+    ("bind_deadline_waker_internal", |o| {
+        format!("{:?}", o.bind_deadline_waker_internal(Some(waker())))
     }),
     ("advance_monotonic_time_internal", |o| {
         o.advance_monotonic_time_internal(Duration::from_secs(33))

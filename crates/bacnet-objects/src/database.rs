@@ -9,7 +9,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::clock::{ClockFrame, ClockReader};
 use crate::event_enrollment::EventEnrollmentMonitoredSource;
-use crate::traits::{BACnetObject, MonotonicClock};
+use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 
 mod averaging_sampling;
 mod event_algorithm_inhibit;
@@ -36,6 +36,8 @@ pub struct ObjectDatabase {
     /// Shared Device clock reader. `None` is an explicit clockless database.
     clock: Option<Arc<dyn ClockReader>>,
     monotonic_clock: Option<Arc<MonotonicClock>>,
+    /// Bound into every object with the monotonic clock (#1384).
+    deadline_waker: Option<Arc<DeadlineWaker>>,
     /// Device-local EventNotification ordering source for clockless operation.
     event_sequence: Arc<EventSequence>,
     /// Reverse index: object name → ObjectIdentifier for uniqueness enforcement.
@@ -86,6 +88,7 @@ impl ObjectDatabase {
             trend_poll: TrendPollSchedule::default(),
             clock: None,
             monotonic_clock: None,
+            deadline_waker: None,
             event_sequence: Arc::default(),
             audit_owner: None,
             network_port: None,
@@ -116,6 +119,7 @@ impl ObjectDatabase {
         self.check_audit_membership(&object.object_identifier(), true)?;
         object.bind_clock_internal(self.clock.clone());
         object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
+        object.bind_deadline_waker_internal(self.deadline_waker.clone());
         let oid = object.object_identifier();
         let name = object.object_name().to_string();
 
@@ -379,6 +383,16 @@ impl ObjectDatabase {
         self.monotonic_clock = clock;
         for object in self.objects.values_mut() {
             object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
+        }
+    }
+
+    /// Bind the waker objects call when a write arms a monotonic deadline to
+    /// every contained object, and to each one added later.
+    #[doc(hidden)]
+    pub fn set_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
+        self.deadline_waker = waker;
+        for object in self.objects.values_mut() {
+            object.bind_deadline_waker_internal(self.deadline_waker.clone());
         }
     }
 

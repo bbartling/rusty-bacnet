@@ -374,7 +374,7 @@ impl BACnetObject for BinaryLightingOutputObject {
         Some(Box::new(self.clone()))
     }
 
-    fn binary_lighting_blink_count_internal(&self) -> u64 {
+    fn lighting_blink_count_internal(&self) -> u64 {
         self.blink_request_count
     }
 }

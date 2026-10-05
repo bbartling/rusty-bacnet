@@ -2600,8 +2600,11 @@ server.add_binary_lighting_output(instance=1, name="On/Off Light")
 A Lighting Output's Present_Value and Relinquish_Default take a REAL level
 from 0.0 to 100.0. A level above 0.0 and below 1.0, written locally or over the
 network, is stored and read back as 1.0, the dimmest on level (#1385); one
-outside 0.0 to 100.0 raises `BacnetProtocolError` with VALUE_OUT_OF_RANGE.
-Tracking_Value reads the same level as Present_Value.
+outside 0.0 to 100.0 raises `BacnetProtocolError` with VALUE_OUT_OF_RANGE,
+except Present_Value's warn values -1.0 (WARN), -2.0 (WARN_RELINQUISH) and
+-3.0 (WARN_OFF), which act as those lighting commands do (#1384).
+Tracking_Value reads the same level as Present_Value whenever no fade or ramp
+is running.
 
 A Lighting Output's `Lighting_Command` is a BACnetLightingCommand (#1263). It
 reads as `application_data` holding the command's context-tagged fields, and
@@ -2618,9 +2621,11 @@ The object checks each command against its operation as the Rust API notes
 describe: NONE, a reserved operation, FADE_TO or RAMP_TO without a target
 level, or a field out of range raises `BacnetProtocolError` with
 VALUE_OUT_OF_RANGE. An `octet_string`, or any other datatype, raises
-INVALID_DATA_TYPE. The object stores the command without carrying it out
-(#1384). A
-[Channel](#channels) with a `Lighting_Command` member passes on a lighting
+INVALID_DATA_TYPE. The object carries the command out (#1384): the FADE_TO
+above puts 50.0 in Present_Value at once and moves Tracking_Value there over
+the fade time, with In_Progress reading FADE_ACTIVE (1) until it arrives. The
+[Rust API notes](rust-api.md#lighting--color-5) list what each operation does.
+A [Channel](#channels) with a `Lighting_Command` member passes on a lighting
 command written to its Present_Value: the fields above between `b"\x0e"` and
 `b"\x0f"`, the opening and closing context tag 0.
 

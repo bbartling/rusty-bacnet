@@ -37,6 +37,8 @@ mod durable_write_wire_tests;
 #[cfg(test)]
 mod executed;
 #[cfg(test)]
+mod lighting_command_wire_tests;
+#[cfg(test)]
 mod mutation_boundary_tests;
 #[cfg(test)]
 mod mutation_entry_tests;

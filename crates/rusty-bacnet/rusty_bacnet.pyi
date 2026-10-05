@@ -3123,13 +3123,18 @@ class BACnetServer:
         the context-tagged BACnetLightingCommand, operation NONE
         (``b"\\x09\\x00"``) until written. An ``octet_string`` or any other
         datatype is refused with INVALID_DATA_TYPE, and a command its operation
-        can't take with VALUE_OUT_OF_RANGE. The object stores a command
-        without carrying it out.
+        can't take with VALUE_OUT_OF_RANGE. The object carries each command
+        out: a fade or ramp puts its level in Present_Value at once and moves
+        Tracking_Value there over time, with In_Progress showing FADE_ACTIVE
+        or RAMP_ACTIVE; a step changes the level at once; and with
+        Blink_Warn_Enable TRUE the warn commands hold the level for
+        Egress_Time seconds before relinquishing or turning it off.
 
         A Present_Value or Relinquish_Default level above 0.0 and below 1.0
         is stored as 1.0, and one outside 0.0 to 100.0 is refused with
-        VALUE_OUT_OF_RANGE. Tracking_Value reads the same level as
-        Present_Value.
+        VALUE_OUT_OF_RANGE, but for Present_Value's warn values -1.0 (WARN),
+        -2.0 (WARN_RELINQUISH) and -3.0 (WARN_OFF). Tracking_Value reads the
+        same level as Present_Value whenever no fade or ramp is running.
         """
         ...
     def add_binary_lighting_output(self, instance: int, name: str) -> None: ...

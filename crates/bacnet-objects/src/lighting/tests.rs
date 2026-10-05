@@ -86,10 +86,11 @@ fn lighting_output_pv_out_of_range() {
     );
     assert!(result.is_err());
 
+    // -1.0 is the WARN special value; -0.5 is just out of range.
     let result = obj.write_property(
         PropertyIdentifier::PRESENT_VALUE,
         None,
-        PropertyValue::Real(-1.0),
+        PropertyValue::Real(-0.5),
         Some(16),
     );
     assert!(result.is_err());
