@@ -234,3 +234,75 @@ fn ethernet_number_capability_delegates_without_configured_authority() {
     assert!(any.supports_local_nonrouter_number_controls());
     assert!(any.normal_bip_endpoint().is_none());
 }
+
+/// A raw frame to `destination` from `source` with LLC `control`, carrying
+/// `info` after the LLC header, unpadded.
+fn llc_frame(destination: [u8; 6], source: [u8; 6], control: u8, info: &[u8]) -> Vec<u8> {
+    let mut frame = destination.to_vec();
+    frame.extend_from_slice(&source);
+    frame.extend_from_slice(&((LLC_HEADER_LEN + info.len()) as u16).to_be_bytes());
+    frame.extend_from_slice(&[BACNET_LLC_DSAP, BACNET_LLC_SSAP, control]);
+    frame.extend_from_slice(info);
+    frame
+}
+
+/// An NPDU carrying Who-Is.
+const WHO_IS: [u8; 4] = [0x01, 0x00, 0x10, 0x08];
+
+/// #1492: a UI frame, an XID and a TEST from a group source MAC, sent to
+/// this station or to the broadcast, are dropped and counted before an LLC
+/// command is answered or a frame decoded, so the receive loop hands nothing
+/// up and sends nothing back. The same frames from a station are answered or
+/// decoded as before.
+#[test]
+fn a_frame_from_a_group_source_is_dropped_before_any_answer_or_decode() {
+    use super::ingress::{classify_frame, FrameIngress};
+    let local = [2, 0, 0, 0, 0, 1];
+    let commands = [LLC_CONTROL_UI, LLC_CONTROL_XID_CMD, LLC_CONTROL_TEST_CMD];
+    for source in GROUP_MACS {
+        for destination in [local, ETHERNET_BROADCAST] {
+            for control in commands {
+                let frame = llc_frame(destination, source, control, &WHO_IS);
+                assert_eq!(
+                    classify_frame(&frame, &local),
+                    FrameIngress::GroupSource { source },
+                    "{source:02x?} to {destination:02x?}, control {control:#04x}"
+                );
+            }
+        }
+    }
+
+    let station = INDIVIDUAL_MACS[0];
+    let from_station = |control| llc_frame(local, station, control, &WHO_IS);
+    assert_eq!(
+        classify_frame(&from_station(LLC_CONTROL_XID_CMD), &local),
+        FrameIngress::Xid { source: station }
+    );
+    assert_eq!(
+        classify_frame(&from_station(LLC_CONTROL_TEST_CMD), &local),
+        FrameIngress::Test {
+            source: station,
+            data: &WHO_IS
+        }
+    );
+    let ui = from_station(LLC_CONTROL_UI);
+    assert_eq!(classify_frame(&ui, &local), FrameIngress::Decode);
+    assert_eq!(decode_ethernet_frame(&ui).unwrap().payload, WHO_IS[..]);
+
+    // Destination admission still comes first, and this station's own
+    // frames, and frames too short to name a source, are ignored.
+    for control in commands {
+        let elsewhere = llc_frame([2, 0, 0, 0, 0, 2], GROUP_MACS[1], control, &WHO_IS);
+        assert_eq!(classify_frame(&elsewhere, &local), FrameIngress::Ignore);
+        let own = llc_frame(local, local, control, &WHO_IS);
+        assert_eq!(classify_frame(&own, &local), FrameIngress::Ignore);
+    }
+    let frame = llc_frame(local, GROUP_MACS[0], LLC_CONTROL_UI, &WHO_IS);
+    for length in 0..12 {
+        assert_eq!(
+            classify_frame(&frame[..length], &local),
+            FrameIngress::Ignore,
+            "{length} octets"
+        );
+    }
+}
