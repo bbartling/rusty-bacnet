@@ -149,11 +149,18 @@ fn property_reference_errors_follow_the_neighbouring_conversions() {
             );
         }
 
-        // A tuple index outside unsigned32 overflows, as `add_group`'s do.
+        // An index outside unsigned32 overflows, as `add_group`'s do, in a
+        // tuple or a mapping alike (#1360).
         for index in [-1, 1 << 32] {
-            let reference = tuple(py, vec![ao1(), pv(), int(py, index)]);
-            let error = parse(py, &[reference]).unwrap_err();
-            assert!(error.is_instance_of::<PyOverflowError>(py), "{error}");
+            let mapping = av1_mapping(py);
+            mapping.set_item("property_array_index", index).unwrap();
+            for reference in [
+                tuple(py, vec![ao1(), pv(), int(py, index)]),
+                mapping.into_any(),
+            ] {
+                let error = parse(py, &[reference]).unwrap_err();
+                assert!(error.is_instance_of::<PyOverflowError>(py), "{error}");
+            }
         }
 
         let value_errors: Vec<Bound<'_, PyAny>> = vec![
@@ -173,12 +180,6 @@ fn property_reference_errors_follow_the_neighbouring_conversions() {
             {
                 let reference = av1_mapping(py);
                 reference.set_item("device_identifier", ao1()).unwrap();
-                reference.into_any()
-            },
-            // A mapping's index outside unsigned32, as a `time_range`'s is.
-            {
-                let reference = av1_mapping(py);
-                reference.set_item("property_array_index", -1).unwrap();
                 reference.into_any()
             },
         ];
@@ -290,7 +291,14 @@ fn reference_mappings_refuse_bad_shapes_and_types() {
         value_error(listed(py, unknown).as_any(), "unknown key 'array_index'");
         let wide = minimal(py);
         wide.set_item("property_array_index", 1_u64 << 32).unwrap();
-        value_error(listed(py, wide).as_any(), "members[0].property_array_index");
+        let overflow = error(listed(py, wide).as_any());
+        assert!(overflow.is_instance_of::<PyOverflowError>(py), "{overflow}");
+        assert!(
+            overflow
+                .to_string()
+                .contains("members[0].property_array_index"),
+            "{overflow}"
+        );
         let not_a_device = minimal(py);
         not_a_device
             .set_item(

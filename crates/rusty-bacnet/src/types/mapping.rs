@@ -1,10 +1,19 @@
 //! Strict readers for the mapping-shaped arguments the binding takes: every
 //! key is checked against the allowed set, every value is type-checked, and
 //! each error names the field it came from.
+//!
+//! An integer is read as the fixed-width type of the field it fills, and one
+//! outside that type raises OverflowError, as pyo3 raises for a parameter of
+//! that type, so the same value fails the same way however it is passed
+//! (#1360). A narrower range BACnet sets for a value that fits is the
+//! binding's ValueError, or the object's BacnetProtocolError.
+
+use std::fmt::Display;
+use std::ops::RangeInclusive;
 
 use bacnet_types::constructed::BACnetScale;
 use bacnet_types::primitives::ObjectIdentifier;
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyBytes, PyFloat, PyInt, PyMapping, PyString};
 
@@ -83,23 +92,43 @@ pub(crate) fn integer(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i128> {
         return Err(PyTypeError::new_err(format!("{name} must be an integer")));
     }
     value.extract::<i128>().map_err(|_| {
-        PyValueError::new_err(format!("{name} is outside the supported integer range"))
+        PyOverflowError::new_err(format!("{name} is outside the supported integer range"))
     })
 }
 
-pub(crate) fn ranged_integer(
+/// An integer read as `T`, the fixed-width type of the field it fills: a
+/// value outside `T` (negative for an unsigned type, or too wide) raises
+/// OverflowError.
+pub(crate) fn fixed_integer<T: TryFrom<i128>>(value: &Bound<'_, PyAny>, name: &str) -> PyResult<T> {
+    let value = integer(value, name)?;
+    T::try_from(value).map_err(|_| {
+        PyOverflowError::new_err(format!(
+            "{name} is out of range for {}, got {value}",
+            std::any::type_name::<T>()
+        ))
+    })
+}
+
+/// An integer read as `T` and then held to `range`, the values BACnet allows
+/// in the field: outside `T` raises OverflowError, and a value that fits `T`
+/// but not `range` ValueError.
+pub(crate) fn ranged_integer<T>(
     value: &Bound<'_, PyAny>,
     name: &str,
-    minimum: u64,
-    maximum: u64,
-) -> PyResult<u64> {
-    let value = integer(value, name)?;
-    if value < i128::from(minimum) || value > i128::from(maximum) {
+    range: RangeInclusive<T>,
+) -> PyResult<T>
+where
+    T: TryFrom<i128> + PartialOrd + Display,
+{
+    let value = fixed_integer::<T>(value, name)?;
+    if !range.contains(&value) {
         return Err(PyValueError::new_err(format!(
-            "{name} must be {minimum}..={maximum}, got {value}"
+            "{name} must be {}..={}, got {value}",
+            range.start(),
+            range.end()
         )));
     }
-    Ok(value as u64)
+    Ok(value)
 }
 
 pub(crate) fn string(value: &Bound<'_, PyAny>, name: &str) -> PyResult<String> {

@@ -19,7 +19,7 @@ class DelayedTargetAuditTests(unittest.IsolatedAsyncioTestCase):
         for instance in (1, 2, 3):
             owner.add_audit_reporter(instance, f"reporter-{instance}")
         owner.configure_audit_reporters([config(1, 3600), config(2, 0), config(3)])
-        for invalid, exception in [(-1, ValueError), (3601, ValueError), (1 << 64, ValueError),
+        for invalid, exception in [(-1, OverflowError), (3601, ValueError), (1 << 64, OverflowError),
                                    (True, TypeError), (1.5, TypeError), ("1", TypeError)]:
             with self.subTest(invalid=invalid):
                 with self.assertRaises(exception):

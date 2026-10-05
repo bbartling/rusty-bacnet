@@ -358,14 +358,17 @@ class ChannelArgumentTests(unittest.IsolatedAsyncioTestCase):
             ("an unknown key", dict(mapping, priority=8)),
             ("a missing key", {"object_identifier": AV1}),
             ("a device that isn't a Device", dict(mapping, device_identifier=AO1)),
-            ("a mapping's negative index", dict(mapping, property_array_index=-1)),
         )
         for case, member in value_errors:
             with self.subTest(case=case):
                 refuse(ValueError, 11, [member])
 
+        # Outside its integer type, a tuple's or a mapping's alike (#1360).
         overflow_errors = (
             ("a negative channel number", (-1,), {}),
+            ("a channel number past 65535", (65_536,), {}),
+            ("a mapping's negative index", (11,),
+             {"members": [dict(mapping, property_array_index=-1)]}),
             ("a negative index", (11,), {"members": [(AO1, PV, -1)]}),
             ("an index past unsigned32", (11,), {"members": [(AO1, PV, 1 << 32)]}),
             ("a negative delay", (11,), {"members": [(AO1, PV)], "execution_delay": [-1]}),
@@ -376,7 +379,6 @@ class ChannelArgumentTests(unittest.IsolatedAsyncioTestCase):
                 refuse(OverflowError, *args, **kwargs)
 
         protocol_errors = (
-            ("a channel number past 65535", (65_536,), {}, ErrorCode.VALUE_OUT_OF_RANGE),
             (
                 "two delays for one member",
                 (11,),

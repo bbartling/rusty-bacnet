@@ -4,7 +4,7 @@ use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::BACnetObjectSelector;
 use bacnet_types::enums::{AuditLevel, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyOverflowError, PyTypeError, PyValueError};
 use pyo3::types::{PyBool, PyDict, PyInt, PyList};
 
 use crate::types::PyObjectType;
@@ -49,7 +49,7 @@ fn priority_filter(value: Option<&Bound<'_, PyAny>>) -> PyResult<BACnetPriorityF
     }
     let bits = value
         .extract::<u16>()
-        .map_err(|_| PyValueError::new_err("audit_priority_filter must be in 0..=65535"))?;
+        .map_err(|_| PyOverflowError::new_err("audit_priority_filter must be in 0..=65535"))?;
     Ok(BACnetPriorityFilter::from_bits(bits))
 }
 
@@ -66,7 +66,10 @@ fn instance_identifier(
     if instance.is_instance_of::<PyBool>() || !instance.is_instance_of::<PyInt>() {
         return Err(invalid());
     }
-    let instance = instance.extract::<u32>().map_err(|_| invalid())?;
+    // Outside unsigned32 overflows (#1360); past 4194303 is out of range.
+    let instance = instance
+        .extract::<u32>()
+        .map_err(|_| PyOverflowError::new_err(format!("{name} must be in 0..=4194303")))?;
     ObjectIdentifier::new(object_type, instance).map_err(|_| invalid())
 }
 
@@ -416,7 +419,7 @@ fn parse_reporters(value: &Bound<'_, PyAny>) -> PyResult<Vec<ReporterConfigurati
             ));
         }
         let bits = operations.extract::<u64>().map_err(|_| {
-            PyValueError::new_err("auditable_operations must be in 0..=18446744073709551615")
+            PyOverflowError::new_err("auditable_operations must be in 0..=18446744073709551615")
         })?;
         let operations = AuditOperationFlags::from_bits(bits)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
@@ -441,9 +444,10 @@ fn parse_reporters(value: &Bound<'_, PyAny>) -> PyResult<Vec<ReporterConfigurati
                         "maximum_send_delay must be an integer (not bool) or None",
                     ));
                 }
-                let seconds = v
-                    .extract::<u32>()
-                    .map_err(|_| PyValueError::new_err("maximum_send_delay must be in 0..=3600"))?;
+                // Outside unsigned32 overflows; past 3600 is out of range.
+                let seconds = v.extract::<u32>().map_err(|_| {
+                    PyOverflowError::new_err("maximum_send_delay must be in 0..=3600")
+                })?;
                 bacnet_objects::audit::AuditSendDelay::new(seconds)
                     .map_err(|_| PyValueError::new_err("maximum_send_delay must be in 0..=3600"))
             })

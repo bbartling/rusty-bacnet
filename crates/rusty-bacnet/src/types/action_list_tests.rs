@@ -139,9 +139,19 @@ fn action_command_mappings_refuse_bad_shapes_and_types() {
             lists(py, &[unknown]).as_any(),
             "unknown key 'quit_on_faliure'",
         );
+        // Outside its unsigned8, a priority overflows, as a parameter of that
+        // type does (#1360).
         let wide = minimal(py);
         wide.set_item("priority", 256).unwrap();
-        value_error(lists(py, &[wide]).as_any(), "action[0][0].priority");
+        let overflow = error(lists(py, &[wide]).as_any());
+        assert!(
+            overflow.is_instance_of::<pyo3::exceptions::PyOverflowError>(py),
+            "{overflow}"
+        );
+        assert!(
+            overflow.to_string().contains("action[0][0].priority"),
+            "{overflow}"
+        );
         // A device identifier names a Device or nothing (#1308), wherever the
         // command sits.
         let remote = minimal(py);

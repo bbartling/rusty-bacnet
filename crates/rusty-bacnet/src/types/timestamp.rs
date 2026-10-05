@@ -1,5 +1,6 @@
 use super::*;
 
+use pyo3::exceptions::PyOverflowError;
 use pyo3::types::{PyBool, PyInt, PyTuple};
 
 /// Python wrapper for the protocol's lossless `BACnetTimeStamp` CHOICE.
@@ -31,20 +32,31 @@ fn integer(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i128> {
     }
     value
         .extract::<i128>()
-        .map_err(|_| PyValueError::new_err(format!("{name} must be an integer")))
+        .map_err(|_| PyOverflowError::new_err(format!("{name} is out of range, got {value}")))
 }
 
+/// `value` as `T`, the width of the field it fills; outside `T` raises
+/// OverflowError, as a parameter of that type does (#1360).
+fn fixed<T: TryFrom<i128>>(value: i128, name: &str) -> PyResult<T> {
+    T::try_from(value).map_err(|_| {
+        PyOverflowError::new_err(format!(
+            "{name} is out of range for {}, got {value}",
+            std::any::type_name::<T>()
+        ))
+    })
+}
+
+/// An octet field: outside unsigned8 raises OverflowError, and an octet
+/// outside `minimum..=maximum` that isn't 255 (unspecified) ValueError.
 fn ranged_or_unspecified(
     value: &Bound<'_, PyAny>,
     name: &str,
     minimum: u8,
     maximum: u8,
 ) -> PyResult<u8> {
-    let value = integer(value, name)?;
-    if value == i128::from(primitives::Time::UNSPECIFIED)
-        || (i128::from(minimum)..=i128::from(maximum)).contains(&value)
-    {
-        return Ok(value as u8);
+    let value = fixed::<u8>(integer(value, name)?, name)?;
+    if value == primitives::Time::UNSPECIFIED || (minimum..=maximum).contains(&value) {
+        return Ok(value);
     }
     Err(PyValueError::new_err(format!(
         "{name} must be {minimum}..={maximum} or 255 (unspecified), got {value}"
@@ -52,7 +64,7 @@ fn ranged_or_unspecified(
 }
 
 fn full_year(value: &Bound<'_, PyAny>) -> PyResult<u8> {
-    let value = integer(value, "full_year")?;
+    let value = fixed::<u16>(integer(value, "full_year")?, "full_year")?;
     match value {
         255 => Ok(primitives::Date::UNSPECIFIED),
         1900..=2154 => Ok((value - 1900) as u8),
@@ -157,10 +169,7 @@ impl PyBACnetTimeStamp {
     /// Construct the Sequence Number CHOICE (0..=65535).
     #[staticmethod]
     fn sequence_number(value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let value = integer(value, "sequence number")?;
-        let value = u16::try_from(value).map_err(|_| {
-            PyValueError::new_err(format!("sequence number must be 0..=65535, got {value}"))
-        })?;
+        let value = fixed::<u16>(integer(value, "sequence number")?, "sequence number")?;
         Ok(Self {
             inner: primitives::BACnetTimeStamp::SequenceNumber(value),
         })

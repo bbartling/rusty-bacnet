@@ -10,7 +10,7 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool};
 
-use super::mapping::{mapping, object_identifier, optional_item, ranged_integer, required_item};
+use super::mapping::{fixed_integer, mapping, object_identifier, optional_item, required_item};
 use super::{PyPropertyIdentifier, PyPropertyValue};
 
 const REQUIRED: &[&str] = &["object_identifier", "property_identifier", "property_value"];
@@ -69,9 +69,14 @@ fn action_command(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAction
             ))
         })?
         .inner;
-    let optional_integer = |key: &str, maximum: u64| {
+    let optional_u8 = |key: &str| {
         optional_item(value, key)?
-            .map(|item| ranged_integer(&item, &field(key), 0, maximum))
+            .map(|item| fixed_integer::<u8>(&item, &field(key)))
+            .transpose()
+    };
+    let optional_u32 = |key: &str| {
+        optional_item(value, key)?
+            .map(|item| fixed_integer::<u32>(&item, &field(key)))
             .transpose()
     };
     let flag = |key: &str| match optional_item(value, key)? {
@@ -93,11 +98,10 @@ fn action_command(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAction
             &field("object_identifier"),
         )?,
         property_identifier,
-        property_array_index: optional_integer("property_array_index", u32::MAX.into())?
-            .map(|index| index as u32),
+        property_array_index: optional_u32("property_array_index")?,
         property_value,
-        priority: optional_integer("priority", u8::MAX.into())?.map(|priority| priority as u8),
-        post_delay: optional_integer("post_delay", u32::MAX.into())?.map(|delay| delay as u32),
+        priority: optional_u8("priority")?,
+        post_delay: optional_u32("post_delay")?,
         quit_on_failure: flag("quit_on_failure")?,
         // A read of Action carries this flag, so the key is taken (and
         // type-checked) for a read mapping to be given back, but its value is

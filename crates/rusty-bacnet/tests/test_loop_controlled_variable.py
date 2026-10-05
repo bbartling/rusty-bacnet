@@ -124,7 +124,6 @@ class LoopStubContractTests(unittest.TestCase):
             ("derivative_constant_units", 65_536),
             ("priority_for_writing", 0),
             ("priority_for_writing", 17),
-            ("priority_for_writing", 264),
         ):
             with self.subTest(keyword=keyword, value=value):
                 with self.assertRaises(BacnetProtocolError) as raised:

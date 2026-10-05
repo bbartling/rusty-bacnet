@@ -15,8 +15,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyList, PyMapping, PyTuple};
 
 use super::mapping::{
-    bytes, discriminator, mapping, object_identifier, optional_item, ranged_integer, required_item,
-    string, validate_keys,
+    bytes, discriminator, fixed_integer, mapping, object_identifier, optional_item, ranged_integer,
+    required_item, string, validate_keys,
 };
 use super::{PyAuditOperation, PyBACnetTimeStamp, PyErrorClass, PyErrorCode, PyPropertyIdentifier};
 
@@ -63,12 +63,10 @@ fn address_mapping(value: &Bound<'_, PyMapping>, name: &str) -> PyResult<BACnetA
             "{name}.kind must be 'address', got '{kind}'"
         )));
     }
-    let network_number = ranged_integer(
+    let network_number = fixed_integer::<u16>(
         &required_item(value, name, "network_number")?,
         &format!("{name}.network_number"),
-        0,
-        u16::MAX.into(),
-    )? as u16;
+    )?;
     let mac_address = bytes(
         &required_item(value, name, "mac_address")?,
         &format!("{name}.mac_address"),
@@ -108,7 +106,7 @@ fn property_reference(value: &Bound<'_, PyAny>, name: &str) -> PyResult<AuditPro
             ))
         })?;
     let property_array_index = optional_item(value, "property_array_index")?
-        .map(|value| ranged_integer(&value, &format!("{name}.property_array_index"), 0, u64::MAX))
+        .map(|value| fixed_integer(&value, &format!("{name}.property_array_index")))
         .transpose()?;
     Ok(AuditPropertyReference {
         property_identifier,
@@ -184,16 +182,15 @@ fn notification(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAuditNot
             .map(|item| string(&item, &format!("{name}.{key}")))
             .transpose()
     };
-    let optional_unsigned = |key: &str, maximum: u64| -> PyResult<Option<u64>> {
+    let optional_u8 = |key: &str| -> PyResult<Option<u8>> {
         optional_item(value, key)?
-            .map(|item| ranged_integer(&item, &format!("{name}.{key}"), 0, maximum))
+            .map(|item| fixed_integer(&item, &format!("{name}.{key}")))
             .transpose()
     };
 
     let target_priority = optional_item(value, "target_priority")?
-        .map(|item| ranged_integer(&item, &format!("{name}.target_priority"), 1, 16))
-        .transpose()?
-        .map(|value| value as u8);
+        .map(|item| ranged_integer::<u8>(&item, &format!("{name}.target_priority"), 1..=16))
+        .transpose()?;
 
     Ok(BACnetAuditNotification {
         source_timestamp: timestamp("source_timestamp")?,
@@ -209,11 +206,11 @@ fn notification(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAuditNot
         )?,
         source_comment: optional_string("source_comment")?,
         target_comment: optional_string("target_comment")?,
-        invoke_id: optional_unsigned("invoke_id", u8::MAX.into())?.map(|value| value as u8),
-        source_user_id: optional_unsigned("source_user_id", u16::MAX.into())?
-            .map(|value| value as u16),
-        source_user_role: optional_unsigned("source_user_role", u8::MAX.into())?
-            .map(|value| value as u8),
+        invoke_id: optional_u8("invoke_id")?,
+        source_user_id: optional_item(value, "source_user_id")?
+            .map(|item| fixed_integer::<u16>(&item, &format!("{name}.source_user_id")))
+            .transpose()?,
+        source_user_role: optional_u8("source_user_role")?,
         target_device: recipient(
             &required_item(value, name, "target_device")?,
             &format!("{name}.target_device"),
@@ -260,7 +257,7 @@ pub(crate) fn audit_notification_request_from_py(
 }
 
 fn operation_flags(value: &Bound<'_, PyAny>, name: &str) -> PyResult<AuditOperationFlags> {
-    let bits = ranged_integer(value, name, 0, u64::MAX)?;
+    let bits = fixed_integer::<u64>(value, name)?;
     AuditOperationFlags::from_bits(bits)
         .map_err(|error| PyValueError::new_err(format!("{name}: {error}")))
 }
@@ -281,7 +278,7 @@ fn success_filter(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetSucces
             "{name} must be 0 (all), 1 (successes-only), or 2 (failures-only) as an integer; the deprecated Boolean successful-actions-only field is not accepted (use 1 for True, 0 for False)"
         )));
     }
-    let raw = ranged_integer(value, name, 0, 2).map_err(|error| {
+    let raw = ranged_integer::<u8>(value, name, 0..=2).map_err(|error| {
         if error.is_instance_of::<PyValueError>(value.py()) {
             PyValueError::new_err(format!(
                 "{name} must be 0 (all), 1 (successes-only), or 2 (failures-only), got {}",
@@ -348,14 +345,13 @@ fn query_parameters(
                     .transpose()?,
                 target_property_identifier,
                 target_array_index: optional_item(value, "target_array_index")?
-                    .map(|item| {
-                        ranged_integer(&item, &format!("{name}.target_array_index"), 0, u64::MAX)
-                    })
+                    .map(|item| fixed_integer(&item, &format!("{name}.target_array_index")))
                     .transpose()?,
                 target_priority: optional_item(value, "target_priority")?
-                    .map(|item| ranged_integer(&item, &format!("{name}.target_priority"), 1, 16))
-                    .transpose()?
-                    .map(|value| value as u8),
+                    .map(|item| {
+                        ranged_integer::<u8>(&item, &format!("{name}.target_priority"), 1..=16)
+                    })
+                    .transpose()?,
                 operations: optional_item(value, "operations")?
                     .map(|item| operation_flags(&item, &format!("{name}.operations")))
                     .transpose()?,
@@ -430,14 +426,12 @@ pub(crate) fn audit_log_query_request_from_py(
             "request.query_parameters",
         )?,
         start_at_sequence_number: optional_item(value, "start_at_sequence_number")?
-            .map(|item| ranged_integer(&item, "request.start_at_sequence_number", 0, u64::MAX))
+            .map(|item| fixed_integer(&item, "request.start_at_sequence_number"))
             .transpose()?,
-        requested_count: ranged_integer(
+        requested_count: fixed_integer::<u16>(
             &required_item(value, "request", "requested_count")?,
             "request.requested_count",
-            0,
-            u16::MAX.into(),
-        )? as u16,
+        )?,
     })
 }
 

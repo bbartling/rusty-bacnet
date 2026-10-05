@@ -18,7 +18,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyMapping, PyTuple};
 
 use super::mapping::{
-    mapping, object_identifier, optional_item, ranged_integer, required_item, validate_keys,
+    fixed_integer, mapping, object_identifier, optional_item, required_item, validate_keys,
 };
 use super::PyPropertyIdentifier;
 
@@ -114,9 +114,8 @@ pub(crate) fn property_reference(
         )?,
         property_identifier,
         property_array_index: optional_item(value, "property_array_index")?
-            .map(|item| ranged_integer(&item, &field("property_array_index"), 0, u32::MAX.into()))
-            .transpose()?
-            .map(|index| index as u32),
+            .map(|item| fixed_integer::<u32>(&item, &field("property_array_index")))
+            .transpose()?,
         device_identifier,
     })
 }

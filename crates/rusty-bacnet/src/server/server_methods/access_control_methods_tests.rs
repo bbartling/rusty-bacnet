@@ -1,6 +1,6 @@
 use super::*;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::ErrorDetail;
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::PyValueError;
@@ -303,13 +303,13 @@ fn python_supported_formats_reach_both_arrays() {
 
     for formats in [
         // A CUSTOM format without its vendor members, or with one only, a
-        // vendor member on another format, a vendor member past Unsigned16,
-        // a type past the closed production.
+        // vendor member on another format, a type past the closed
+        // production. A vendor member past Unsigned16 is OverflowError
+        // before the object sees it (#1360).
         vec![(PyFactorFormat::Standard(2), 0)],
         vec![(PyFactorFormat::Vendor(2, Some(260), None), 0)],
         vec![(PyFactorFormat::Vendor(3, Some(4), None), 0)],
         vec![(PyFactorFormat::Vendor(8, Some(260), Some(7)), 0)],
-        vec![(PyFactorFormat::Vendor(2, Some(65_536), Some(7)), 0)],
         vec![(PyFactorFormat::Standard(25), 0)],
     ] {
         let refused = credential_data_input(2, "CDI-2", Some(formats))
@@ -402,7 +402,7 @@ fn python_point_settings_reach_the_access_point_rows() {
             ..PointSettings::default()
         },
         PointSettings {
-            priority_for_writing: Some(256 + 8),
+            priority_for_writing: Some(17),
             ..PointSettings::default()
         },
     ];

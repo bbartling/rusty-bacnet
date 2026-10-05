@@ -16,7 +16,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool};
 
 use super::audit::recipient;
-use super::mapping::{mapping, optional_item, ranged_integer, required_item, validate_keys};
+use super::mapping::{
+    fixed_integer, mapping, optional_item, ranged_integer, required_item, validate_keys,
+};
 use super::timestamp::time_tuple;
 
 const REQUIRED: &[&str] = &["recipient", "process_identifier"];
@@ -50,9 +52,7 @@ pub(crate) fn destination(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACn
     let field = |key: &str| format!("{name}.{key}");
     let bits = |key: &str, maximum: u8| {
         optional_item(value, key)?
-            .map(|item| {
-                ranged_integer(&item, &field(key), 0, maximum.into()).map(|bits| bits as u8)
-            })
+            .map(|item| ranged_integer::<u8>(&item, &field(key), 0..=maximum))
             .transpose()
     };
     let time = |key: &str| {
@@ -90,12 +90,10 @@ pub(crate) fn destination(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACn
             &required_item(value, name, "recipient")?,
             &field("recipient"),
         )?,
-        process_identifier: ranged_integer(
+        process_identifier: fixed_integer::<u32>(
             &required_item(value, name, "process_identifier")?,
             &field("process_identifier"),
-            0,
-            u32::MAX.into(),
-        )? as u32,
+        )?,
         issue_confirmed_notifications,
         transitions: bits("transitions", EventTransitionBits::all().bits())?.map_or(
             EventTransitionBits::all(),

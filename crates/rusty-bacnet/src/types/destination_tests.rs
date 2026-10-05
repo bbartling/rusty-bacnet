@@ -123,7 +123,11 @@ fn malformed_destinations_raise_value_or_type_errors() {
         ),
         (
             format!("{{{device}, 'process_identifier': 2**32}}"),
-            "ValueError: recipients[0].process_identifier must be 0..=4294967295",
+            "OverflowError: recipients[0].process_identifier is out of range for u32",
+        ),
+        (
+            format!("{{{device}, 'process_identifier': 1, 'valid_days': 256}}"),
+            "OverflowError: recipients[0].valid_days is out of range for u8",
         ),
         (
             format!("{{{device}, 'process_identifier': 1, 'valid_days': 128}}"),
@@ -159,6 +163,8 @@ fn malformed_destinations_raise_value_or_type_errors() {
         let message = Python::attach(|py| {
             let kind = if error.is_instance_of::<PyValueError>(py) {
                 "ValueError"
+            } else if error.is_instance_of::<pyo3::exceptions::PyOverflowError>(py) {
+                "OverflowError"
             } else if error.is_instance_of::<PyTypeError>(py) {
                 "TypeError"
             } else {

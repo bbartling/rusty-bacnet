@@ -1085,7 +1085,8 @@ class BACnetTimeStamp:
 
     @staticmethod
     def sequence_number(value: int) -> BACnetTimeStamp:
-        """Construct the Sequence Number CHOICE with a value in 0..65535."""
+        """Construct the Sequence Number CHOICE with a value in 0..65535;
+        another integer raises OverflowError."""
         ...
     @staticmethod
     def time(
@@ -1134,7 +1135,8 @@ class ActionCommand(TypedDict):
     property_identifier: PropertyIdentifier
     property_value: PropertyValue
     property_array_index: NotRequired[int | None]
-    # 1..=16; other values raise BacnetProtocolError (VALUE_OUT_OF_RANGE).
+    # 1..=16; other values raise BacnetProtocolError (VALUE_OUT_OF_RANGE), and
+    # values outside 0..=255 OverflowError.
     priority: NotRequired[int | None]
     # Seconds to wait after this write, before the next one or the end.
     post_delay: NotRequired[int | None]
@@ -1155,9 +1157,9 @@ class DeviceObjectPropertyReference(TypedDict):
     property in this device, and stores a member naming the server's own
     Device in its local form.
 
-    Unknown or missing keys, a ``device_identifier`` that isn't a Device and a
-    ``property_array_index`` outside unsigned32 raise ValueError; wrong types
-    raise TypeError. The server reads only its own objects, so a Trend Log
+    Unknown or missing keys and a ``device_identifier`` that isn't a Device
+    raise ValueError, a ``property_array_index`` outside unsigned32
+    OverflowError, and wrong types TypeError. The server reads only its own objects, so a Trend Log
     Multiple member naming another Device logs a failure instead of a value.
     A read of a Channel's, Schedule's or Trend Log Multiple's member list, or
     of a Global Group's Group_Members, gives each reference in this form,
@@ -1223,8 +1225,10 @@ class Destination(TypedDict):
     """One Recipient_List destination (``BACnetDestination``) for
     ``add_notification_forwarder(recipients=...)``.
 
-    Unknown keys, out-of-range values and malformed time tuples raise
-    ValueError; other wrong types raise TypeError. A key left out gives a
+    Unknown keys, values outside BACnet's range and malformed time tuples
+    raise ValueError, an integer outside its field's type (unsigned32 for
+    ``process_identifier``, unsigned8 for the bit masks and time fields)
+    OverflowError, and other wrong types TypeError. A key left out gives a
     destination active every day, all day, for every transition, with
     unconfirmed notifications. A read of Recipient_List gives each
     destination in this form, with every key present.
@@ -3008,7 +3012,11 @@ class BACnetServer:
         absent delay/control properties. maximum_send_delay accepts None or an
         integer 0..3600: zero exposes immediate Maximum_Send_Delay/Send_Now;
         positive values enable bounded ordinary target batching. Bool/non-integer
-        delay raises TypeError; an out-of-range integer raises ValueError.
+        delay raises TypeError; an integer outside unsigned32 raises
+        OverflowError and one past 3600 ValueError. An ``instance``,
+        ``auditable_operations`` or ``audit_priority_filter`` outside its
+        integer type (unsigned32, unsigned64, unsigned16) raises OverflowError
+        too.
         Enabled nominal overlaps expose CONFIGURATION_ERROR on every affected
         Reporter's RELIABILITY; the lowest instance emits, before operation filters.
         Empty/all-None selectors select no nominal targets. Mandatory Reporter
@@ -3037,7 +3045,8 @@ class BACnetServer:
         Controlled_Variable_Units and the three gain units rows (NO_UNITS when
         omitted) and Priority_For_Writing (16 when omitted). Units above 65535
         or a priority outside 1..=16 raise BacnetProtocolError with
-        VALUE_OUT_OF_RANGE. Peers can write Action (DIRECT until written).
+        VALUE_OUT_OF_RANGE; a priority outside 0..=255 raises OverflowError.
+        Peers can write Action (DIRECT until written).
 
         Controlled_Variable_Reference and Manipulated_Variable_Reference read
         as ``application_data`` holding the context-tagged reference; while
@@ -3118,12 +3127,11 @@ class BACnetServer:
         writable over the network too.
 
         A wrong shape or type raises TypeError. An unknown or missing mapping
-        key, a device that isn't a Device, or a mapping's
-        ``property_array_index`` outside unsigned32 raises ValueError; a
-        channel number, a tuple's index, a delay or a group outside
-        unsigned32 raises OverflowError. A channel number above 65535,
-        a delay count that differs from the member count or an empty group
-        list raises BacnetProtocolError with VALUE_OUT_OF_RANGE; more than
+        key or a device that isn't a Device raises ValueError. A channel
+        number outside unsigned16, or an index (a tuple's or a mapping's), a
+        delay or a group outside unsigned32, raises OverflowError. A delay
+        count that differs from the member count or an empty group list
+        raises BacnetProtocolError with VALUE_OUT_OF_RANGE; more than
         1024 members or 64 groups, NO_SPACE_TO_WRITE_PROPERTY. Nothing is
         registered after any of them.
         """
@@ -3210,9 +3218,9 @@ class BACnetServer:
         with VALUE_OUT_OF_RANGE; either way nothing is registered.
 
         ``number_of_authentication_policies`` (1 when omitted, never 0) and
-        ``priority_for_writing`` (16 when omitted, else 1 to 16) set
-        Number_Of_Authentication_Policies and Priority_For_Writing, which are
-        read-only over the network. ``supported_authorization_modes`` lists
+        ``priority_for_writing`` (16 when omitted, else 1 to 16; outside
+        0..=255 OverflowError) set Number_Of_Authentication_Policies and
+        Priority_For_Writing, which are read-only over the network. ``supported_authorization_modes`` lists
         the BACnetAuthorizationMode numbers the application carries out, the
         values a write of Authorization_Mode can take: AUTHORIZE (0) alone
         when omitted, and AUTHORIZE must be in any list given; proprietary
@@ -3358,9 +3366,9 @@ class BACnetServer:
         ``(format_type, vendor_id, vendor_format)`` triple whose vendor
         members may each be None (absent), as a read gives them; a CUSTOM
         format (2) needs both. A format outside the closed production, a CUSTOM
-        format without its vendor members, a nonzero vendor member on another
-        format or one above 65535 raises BacnetProtocolError with
-        VALUE_OUT_OF_RANGE. While Out_Of_Service is TRUE a client's simulated
+        format without its vendor members or a nonzero vendor member on
+        another format raises BacnetProtocolError with VALUE_OUT_OF_RANGE; a
+        vendor member above 65535 raises OverflowError. While Out_Of_Service is TRUE a client's simulated
         Present_Value must name one of these formats with its class, or be
         the UNDEFINED or ERROR factor with class 0.
         """

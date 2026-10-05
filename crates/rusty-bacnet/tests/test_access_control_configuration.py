@@ -543,12 +543,17 @@ class AccessControlConfigurationTests(unittest.TestCase):
         for formats in (
             [(2, 0)],  # CUSTOM without its vendor members
             [((8, 260, 7), 0)],  # vendor members on a standard format
-            [((2, 65_536, 7), 0)],  # a vendor id past Unsigned16
             [(25, 0)],  # past the closed production
         ):
             with self.assertRaises(BacnetProtocolError) as raised:
                 server.add_credential_data_input(2, "Refused", supported_formats=formats)
             self.assert_value_out_of_range(raised.exception)
+        # A vendor member past Unsigned16 overflows before the object sees it
+        # (#1360), and a triple of another length is a ValueError.
+        with self.assertRaises(OverflowError):
+            server.add_credential_data_input(2, "Refused", supported_formats=[((2, 65_536, 7), 0)])
+        with self.assertRaises(ValueError):
+            server.add_credential_data_input(2, "Refused", supported_formats=[((2, 260), 0)])
         await server.start()
         try:
             reader = ObjectIdentifier(ObjectType.CREDENTIAL_DATA_INPUT, 1)

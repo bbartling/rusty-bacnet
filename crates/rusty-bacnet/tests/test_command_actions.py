@@ -107,7 +107,7 @@ class CommandActionTests(unittest.IsolatedAsyncioTestCase):
         shapes = (
             ("unknown key", [[unknown]], ValueError),
             ("missing key", [[missing]], ValueError),
-            ("priority past an octet", [[write(AO1, 1.0, 256)]], ValueError),
+            ("priority past an octet", [[write(AO1, 1.0, 256)]], OverflowError),
             ("not a list", write(AO1, 1.0, 8), TypeError),
             ("a list of mappings", [write(AO1, 1.0, 8)], TypeError),
             ("value not a PropertyValue", [[dict(write(AO1, 1.0, 8), property_value=1.0)]], TypeError),

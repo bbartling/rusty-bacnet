@@ -372,8 +372,9 @@ fn query_mapping_preserves_both_choices_and_rejects_invalid_flags() {
                 audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
             );
         }
+        // Outside unsigned64 overflows (#1360).
         by_source.set_item("operations", -1).unwrap();
-        assert_error_type::<PyValueError>(
+        assert_error_type::<pyo3::exceptions::PyOverflowError>(
             py,
             audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
         );

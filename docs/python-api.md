@@ -229,6 +229,20 @@ v.value   # 72.5 (native Python float)
 | `"application_data"` | `bytes`: the encoded value, octet for octet |
 | `"destination"`, `"port_permission"` and the other element tags of [typed constructed values](#typed-constructed-values) | the element in its typed form |
 
+### Integer arguments
+
+An integer argument is read as the fixed-width type of the field it fills
+(unsigned8, unsigned16, unsigned32, unsigned64 or INTEGER). One outside
+that type, negative for an unsigned field or too wide, raises
+`OverflowError`, whether it is a parameter, a tuple member or a value in a
+mapping (#1360). A value that fits the type but that BACnet doesn't allow
+in the field raises `ValueError` when the binding checks it while reading
+the argument (an instance past 4194303, a month of 15, a `valid_days` of
+128), and `BacnetProtocolError` with `VALUE_OUT_OF_RANGE` when the object's
+own check refuses it (a priority of 17, units past 65535). So
+`add_access_point(..., priority_for_writing=256)` raises `OverflowError`,
+and `priority_for_writing=17` raises `BacnetProtocolError`.
+
 ### Read results
 
 Every read that returns a `PropertyValue` decodes the value's octets by one
@@ -1449,7 +1463,7 @@ optional corrected Unsigned64 cursor (0..=2**64-1). Query parameters use
 `successful_actions_only` as the corrected `BACnetSuccessFilter` integer:
 0 = all, 1 = successes-only, 2 = failures-only. The pre-RB-02 Boolean is
 rejected with `TypeError` (use 1 for the old `True`, 0 for the old `False`);
-an out-of-range integer raises `ValueError`. Optional fields follow the
+3 to 255 raises `ValueError`, and an integer outside unsigned8 `OverflowError`. Optional fields follow the
 installed `AuditLogQueryByTargetInput` and `AuditLogQueryBySourceInput`
 definitions. `operations` is an integer bit mask:
 bits 0..15 and 32..63 are permitted, while reserved bits 16..31, negative
@@ -1742,8 +1756,9 @@ the forwarders, and the server ignores a confirmed request sent by broadcast.
 services use for a recipient, and `process_identifier` is required. A key
 left out gives a destination that is active every day, all day, for every
 transition, with unconfirmed notifications. The binding checks shapes and
-Python types (unknown keys, out-of-range values and malformed time tuples
-raise `ValueError`, other wrong types `TypeError`), and the object's own
+Python types (unknown keys, values outside BACnet's range and malformed time
+tuples raise `ValueError`, an integer outside its field's type
+`OverflowError`, other wrong types `TypeError`), and the object's own
 `add_destination` decides what the list holds, as it does for a client's
 write: more than 32 destinations, or an address MAC longer than 18 octets,
 raises `BacnetProtocolError`. `port_filter` serves Port_Filter as
@@ -1932,7 +1947,8 @@ allowlists. The existing runtime, database locks, error mapping and joined shutd
 remain in use.
 
 Malformed policy or instance (including booleans, non-integers and values outside
-`0..=4194303`) raises `ValueError`. Missing/wrong-type registrations and duplicate
+`0..=4194303`) raises `ValueError`, except an instance outside unsigned32, which
+raises `OverflowError`. Missing/wrong-type registrations and duplicate
 registrations of the selected Audit Log instance also raise `ValueError`. An object
 of another type with the same instance number is not an Audit Log. Selection is
 revalidated at `start()` before transport preparation or registration transfer, so
@@ -2162,7 +2178,8 @@ child.add_device_binding(9, await parent.local_address())
 - `maximum_send_delay=None` (or omission) leaves Maximum_Send_Delay and Send_Now
   absent. A non-Boolean integer in `0..=3600` exposes the pair: zero sends
   immediately, while positive values enable bounded ordinary target batching.
-  Wrong types/bool raise `TypeError`; out-of-range integers raise `ValueError`.
+  Wrong types/bool raise `TypeError`; an integer past 3600 raises `ValueError`,
+  and one outside unsigned32 `OverflowError`.
   See [delayed target controls and limits](delayed-target-audit.md).
 - Every valid call replaces the complete selected set. Omitted options reset to
   catch-all selectors, all priorities, and absent delay/control properties.
@@ -2383,8 +2400,9 @@ value. The server doesn't follow Controlled_Variable_Reference itself.
 `proportional_constant_units`, `integral_constant_units`,
 `derivative_constant_units` (NO_UNITS when omitted) and `priority_for_writing`
 (16 when omitted) set rows that are read-only over the network; units above
-65535 or a priority outside 1 to 16 raise VALUE_OUT_OF_RANGE. Peers can write
-the Loop's Action (DIRECT until written).
+65535 or a priority outside 1 to 16 raise VALUE_OUT_OF_RANGE, and a priority
+outside 0 to 255 `OverflowError`. Peers can write the Loop's Action (DIRECT
+until written).
 
 The Loop's Controlled_Variable_Reference and Manipulated_Variable_Reference,
 and a Pulse Converter's Input_Reference, read as `application_data` holding
@@ -2563,11 +2581,11 @@ Present_Value write meanwhile is refused with BUSY. A
 writes the value the same way.
 
 A wrong shape or Python type raises `TypeError`. An unknown or missing mapping
-key, a device that isn't a Device, or a mapping's index outside unsigned32
-raises `ValueError`, and a channel number, a tuple's index, a delay or a group
-outside unsigned32 raises `OverflowError`. The Channel's own checks raise
-`BacnetProtocolError`: VALUE_OUT_OF_RANGE for a channel number above 65535, a
-delay count that differs from the member count or an empty group list, and
+key or a device that isn't a Device raises `ValueError`. A channel number
+outside unsigned16, or an index (a tuple's or a mapping's), a delay or a group
+outside unsigned32, raises `OverflowError` (#1360). The Channel's own checks
+raise `BacnetProtocolError`: VALUE_OUT_OF_RANGE for a delay count that differs
+from the member count or an empty group list, and
 NO_SPACE_TO_WRITE_PROPERTY for more than 1024 members or 64 groups. Nothing is
 registered after any of them.
 
@@ -2637,11 +2655,13 @@ while the list is empty. `supported_formats` takes
 `(format, format_class)` pairs, a format being a
 BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format
-needs; an ill-formed format raises VALUE_OUT_OF_RANGE.
+needs; an ill-formed format raises VALUE_OUT_OF_RANGE, and a vendor member
+outside unsigned16 `OverflowError`.
 
 `add_access_point` also takes `number_of_authentication_policies` (1 when
 omitted, never 0) and `priority_for_writing` (16 when omitted, else 1 to
-16), which set rows that are read-only over the network, and
+16; outside 0 to 255 `OverflowError`), which set rows that are read-only over
+the network, and
 `supported_authorization_modes`: the BACnetAuthorizationMode numbers the
 application carries out, AUTHORIZE (0) alone when omitted, AUTHORIZE always
 among them, proprietary ones from 64 to 65535. A value outside those raises
