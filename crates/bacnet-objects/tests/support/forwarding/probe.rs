@@ -369,6 +369,17 @@ impl BACnetObject for Probe {
         );
         true
     }
+    fn remember_member_datatype_internal(
+        &mut self,
+        slot: usize,
+        reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
+        datatype: Option<bacnet_objects::channel::MemberDatatype>,
+    ) {
+        self.called(
+            "remember_member_datatype_internal",
+            (slot, reference.clone(), datatype),
+        );
+    }
     fn complete_command_run_internal(
         &mut self,
         generation: u64,

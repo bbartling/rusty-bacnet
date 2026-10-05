@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_objects::analog::AnalogOutputObject;
+use bacnet_objects::binary::BinaryOutputObject;
 use bacnet_objects::channel::ChannelObject;
 use bacnet_server::server::DeviceBinding;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
@@ -180,6 +181,53 @@ async fn channel_writes_members_in_another_device_over_bip() {
         read(target.database(), ch5, number, None).await,
         PropertyValue::Unsigned(1)
     );
+
+    channels.stop().await.unwrap();
+    target.stop().await.unwrap();
+}
+
+// A Channel reads a remote member's property to learn its datatype, and
+// coerces its value to it (#1342, Table 12-63): Device 20's BO-1 takes a REAL
+// 1.0 as ACTIVE.
+#[tokio::test]
+async fn channel_coerces_its_value_for_a_member_in_another_device_over_bip() {
+    let bo = oid(ObjectType::BINARY_OUTPUT, 1);
+    let mut target_db = ObjectDatabase::new();
+    target_db.add(Box::new(device(20))).unwrap();
+    target_db
+        .add(Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()))
+        .unwrap();
+    let mut target = start(target_db, None).await;
+
+    let pv = PropertyIdentifier::PRESENT_VALUE;
+    let mut channels_db = ObjectDatabase::new();
+    channels_db.add(Box::new(device(10))).unwrap();
+    channels_db
+        .add(Box::new(channel(1, vec![remote(bo, pv)])))
+        .unwrap();
+    let binding = DeviceBinding::local(oid(ObjectType::DEVICE, 20), target.local_mac()).unwrap();
+    let mut channels = start(channels_db, Some(binding)).await;
+
+    let slot8 = || {
+        read(
+            target.database(),
+            bo,
+            PropertyIdentifier::PRIORITY_ARRAY,
+            Some(8),
+        )
+    };
+    let active = PropertyValue::Enumerated(1);
+    assert_eq!(
+        distribute(&channels, 1, PropertyValue::Real(1.0)).await,
+        (WriteStatus::SUCCESSFUL, Reliability::NO_FAULT_DETECTED)
+    );
+    assert_eq!(slot8().await, active);
+    // The datatype is kept, and Rule 5 takes 0.0 to INACTIVE.
+    assert_eq!(
+        distribute(&channels, 1, PropertyValue::Real(0.0)).await,
+        (WriteStatus::SUCCESSFUL, Reliability::NO_FAULT_DETECTED)
+    );
+    assert_eq!(slot8().await, PropertyValue::Enumerated(0));
 
     channels.stop().await.unwrap();
     target.stop().await.unwrap();

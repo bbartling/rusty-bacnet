@@ -7,13 +7,18 @@ an absent authorizer allows; an installed authorizer must approve. `DenyAll` den
 covered decisions even with an allow-all authorizer, without invoking it, using
 SERVICES / SERVICE_REQUEST_DENIED. Both modes accept any authorizer configuration.
 
-**Inbound WriteGroup is dropped under either restriction.** The authorization
-context only describes confirmed requests, so a callback can't decide a WriteGroup.
-The server executes WriteGroup only under `Permissive` with no authorizer installed:
-`DenyAll`, or any installed authorizer (even one that returns `true` for everything),
-drops every inbound WriteGroup without calling the callback. #1319 tracks letting the
-authorizer decide it. These drops are logged at debug only and aren't counted in
+**Inbound WriteGroup is decided per Channel write (#1319).** A WriteGroup can
+write several Channels, so policy judges each Channel write on its own, just before
+it is made: `DenyAll` denies it, and an installed authorizer can allow some Channels
+and not others. A denied write is skipped silently, since nothing answers an
+unconfirmed request, makes no Audit record, and is counted in the `write_group` row of
 `mutation_decision_counters()`.
+
+**Check an existing authorizer for WriteGroup.** Before #1319 an installed authorizer
+never saw a WriteGroup, which was dropped whatever it returned. A callback that allows
+what it doesn't recognize, through `matches!`, `if let` or a `_ => true` arm, now
+allows WriteGroup Channel writes. `MutationTarget` isn't `#[non_exhaustive]`, but
+such callbacks still compile, so handle `MutationTarget::WriteGroup` explicitly.
 
 **SC mTLS channel/peer authentication is not service authorization.** Identities at
 this layer are claimed link/routed addresses, never certificate principals.
@@ -39,8 +44,12 @@ Each decision receives a `mutation::MutationAuthorizationContext`:
   process-lifetime connection incarnation, when present. Same-leaf reconnects
   get new incarnations; queued complete work retains its original snapshot
   after replacement. Hub-relayed and unverified ingress have no direct identity.
-- `invoke_id`, `service_choice`, `target` — the confirmed identity and the
-  decoded mutation (current element for WPM).
+- `invoke_id`, `service_choice`, `target` — the request's identity and the
+  decoded mutation (current element for WPM). `service_choice` is a
+  `mutation::MutationService`: `Confirmed(choice)` with `Some` invoke ID for the ten
+  confirmed services, `Unconfirmed(WRITE_GROUP)` with no invoke ID for a WriteGroup,
+  whose `target` is `MutationTarget::WriteGroup` naming the Channel, the group, the
+  channel number, the priority used, the encoded value and the inhibit flag.
 
 `Debug` for the context is redacted by construction: address lengths, the
 provenance/trust labels, and the target kind only — never MAC bytes, property
@@ -77,10 +86,11 @@ fail-closed. Neither the allow nor the deny path generates an audit record for
 the decision itself; audit records arrive only as explicitly authorized
 AuditNotification service receptions.
 
-Coverage is the ten `mutation::MutationTarget` services. Reads, discovery, DCC,
+Coverage is the ten confirmed `mutation::MutationTarget` services and the Channel
+writes of an inbound WriteGroup, each decided after the change list is decoded and
+matched to the Channels, with no database guard held. Reads, discovery, DCC,
 TimeSync, LifeSafety/Audit, direct handler calls and trusted local writes retain
-their existing behavior. Inbound WriteGroup is the exception described above: it is
-dropped whenever the policy restricts anything. Admission, duplicate detection, decoding and WPM validation
+their existing behavior. Admission, duplicate detection, decoding and WPM validation
 retain precedence. WPM makes one decision per reached element; empty requests make
 none, and a denial stops the suffix without rolling back an allowed prefix.
 WPM denials keep the `first_failed` error shape; other denials use
@@ -110,8 +120,8 @@ No Python callback or separate authorization gate is installed.
 Other strings raise `ValueError`, and non-strings raise `TypeError` synchronously
 in the constructor, before startup drains registrations or performs transport
 I/O. Reads and trusted local `write_property_local` calls remain available under
-`"deny_all"`. It also drops inbound WriteGroup, though the Python `BACnetServer`
-holds no Channel for a WriteGroup to change. The option does not configure DCC, ReinitializeDevice, LifeSafety,
+`"deny_all"`. It also denies each Channel write of an inbound WriteGroup to a Channel
+added with `add_channel`. The option does not configure DCC, ReinitializeDevice, LifeSafety,
 Audit or endpoint authorization, and does not establish a certificate principal.
 
 
@@ -120,4 +130,4 @@ Audit or endpoint authorization, and does not establish a certificate principal.
 and `policy_deny_total` (the deny-all subset). Samples are independent, not atomic
 aggregates. They count decisions, not successful mutations or delivered responses;
 they never affect authorization and retain no per-source state or durable history.
-Inbound WriteGroups dropped under `DenyAll` or an installed authorizer aren't counted.
+Each Channel write of an inbound WriteGroup counts once in the `write_group` row.

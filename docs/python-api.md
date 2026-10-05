@@ -1298,12 +1298,18 @@ answers, so the call returns once the request is sent.
   address and a network together raise `ValueError`.
 - `group_number`: 1 to 4294967295; group 0 is reserved.
 - `write_priority`: 1 to 16, used for entries that do not override it.
-- `change_list`: a non-empty list of `(channel, override_priority, value_bytes)` tuples.
+- `change_list`: a non-empty list of `(channel, override_priority, value)` tuples.
   - `channel` is a channel number (`int`, 0 to 65535) matching a Channel object's
     `Channel_Number`.
   - `override_priority` is 1 to 16, or `None` to use `write_priority`.
-  - `value_bytes` is one encoded BACnetChannelValue with no wrapper tag: a single
-    application-tagged primitive, or a context-0 lighting command.
+  - `value` is a `PropertyValue`, which the binding encodes, or a `bytes` or
+    `bytearray` holding the encoded octets (#1359). Either way it must be one
+    BACnetChannelValue with no wrapper tag: a single application-tagged
+    primitive (`PropertyValue.real(72.0)`, `PropertyValue.null()`), or a
+    context-0 lighting command, given as `bytes` or as the same octets in
+    `PropertyValue.application_data(...)`. Anything else, such as a
+    `PropertyValue.list(...)`, raises `ValueError`, and a value of another
+    type, a list of ints included, raises `TypeError`.
 - `inhibit_delay`: optional Boolean. TRUE skips the execution delays of Channels whose
   `Allow_Group_Delay_Inhibit` is TRUE.
 
@@ -1320,15 +1326,16 @@ await client.write_group(
     group_number=1,
     write_priority=8,
     change_list=[
-        # Channel 5 gets REAL 72.0 (application tag 4); channel 6 gets NULL and
-        # writes at priority 10 (NULL relinquishes, as with WriteProperty).
-        (5, None, bytes([0x44, 0x42, 0x90, 0x00, 0x00])),
-        (6, 10, bytes([0x00])),
+        # Channel 5 gets REAL 72.0; channel 6 gets NULL and writes at
+        # priority 10 (NULL relinquishes, as with WriteProperty).
+        (5, None, PropertyValue.real(72.0)),
+        (6, 10, PropertyValue.null()),
     ],
     inhibit_delay=False,
 )
 
-# The same change list for every device on network 5.
+# The same REAL for every device on network 5, already encoded
+# (application tag 4).
 await client.write_group(
     None, 1, 8, [(5, None, bytes([0x44, 0x42, 0x90, 0x00, 0x00]))], network=5
 )
@@ -2226,8 +2233,10 @@ file-backed storage is a separate contract. Installed-extension loopback tests i
 `test_audit_api.py` prove queryable target WRITEs for both confirmation modes,
 strict atomic validation, replacement, selector/priority filtering and Reporter-write
 bypass, suppression, unresolved-recipient no growth and lifecycle freezing.
-Broader source/bounds evidence remains the existing Rust
-Reporter suites, not independent interoperability qualification.
+An inbound WriteGroup is audited as one WRITE per Channel it writes, from the
+requester's address and with no invoke ID (`WriteGroupAuditTests`). Broader
+source/bounds evidence remains the existing Rust Reporter suites, not
+independent interoperability qualification.
 
 Recipient changes through the active Device property also support local and
 network writes; both of the change's notifications (to the old and new recipients,
@@ -2237,7 +2246,7 @@ atomically. Rust's supported
 and physical Input sampling remain outside it. AV/BV policy rows are described
 below. No Python live configuration/callbacks, payload-origin verification, standalone
 source-side reporting, ordinary sample/event production,
-WriteGroup expansion, source batching, durability, full Reporter/Audit/BIBB/BTL/certification,
+source batching, durability, full Reporter/Audit/BIBB/BTL/certification,
 independent interop or #345 closure is claimed.
 
 #### Object-owned AV/BV Audit policy
@@ -2562,9 +2571,11 @@ peer writes the list. A member in another device keeps its Device and is
 written there with a confirmed WriteProperty when the server has a binding for
 it, from `add_device_binding` or an I-Am heard in the last ten minutes, or
 finds one with a Who-Is first, as for a Command's remote action (see
-[Building Control](#building-control)); the value goes as
-written, without the datatype conversion local members get (see the Channel
-paragraphs under [Lighting & Color](rust-api.md#lighting--color-5)).
+[Building Control](#building-control)). The server reads that member's
+property there first to learn its datatype and converts the value to it as for
+a local member. A read the device refuses leaves the value as written; one it
+doesn't answer fails the member with no write sent (see the Channel paragraphs
+under [Lighting & Color](rust-api.md#lighting--color-5)).
 `execution_delay` holds one delay in milliseconds per member (zeros when
 omitted), `control_groups` the groups whose WriteGroup the Channel takes, and
 `allow_group_delay_inhibit` whether a WriteGroup that asks for no delays skips
@@ -2572,10 +2583,11 @@ them. Peers can write all of these, and Channel_Number, over the network.
 
 Once the server runs, a value written to the Channel's Present_Value, over the
 network or with `write_property_local`, goes on to each member at the write's
-priority once that member's delay has passed, converted to a local member
-property's datatype, as the Rust server does. Write_Status reads IN_PROGRESS
+priority once that member's own delay has passed, converted to the member
+property's datatype, as the Rust server does; a member in another device that
+waits for its answer holds back no other member. Write_Status reads IN_PROGRESS
 until every member is done and then SUCCESSFUL or FAILED, and Reliability
-reports what kind of failure the first failed member had; another
+reports what kind of failure the first member to fail had; another
 Present_Value write meanwhile is refused with BUSY. A
 [WriteGroup](#write-group) naming one of the Channel's groups and its number
 writes the value the same way.
@@ -3085,7 +3097,9 @@ mutation authorization. The constructor's keyword-only
 valid inbound property writes (WP/WPM), object creation/deletion, list additions/
 removals, file writes, and the three COV subscription services through the same
 Rust gate. Denials return SERVICES / SERVICE_REQUEST_DENIED, preserving WPM's
-failed-reference error shape. Remote reads and trusted local writes still work.
+failed-reference error shape. It also denies each Channel write of an inbound
+WriteGroup, silently, since nothing answers one. Remote reads and trusted local
+writes still work.
 No Python callback or duplicate gate is involved.
 
 Invalid mode strings raise `ValueError`; non-strings raise `TypeError` during

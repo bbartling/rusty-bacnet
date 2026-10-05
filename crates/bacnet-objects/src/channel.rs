@@ -16,7 +16,10 @@
 //! [`BACnetObject::complete_command_run_internal`].
 //!
 //! A member may name another Device (Clause 12.53.11): the server writes it
-//! there as a confirmed WriteProperty, from its device bindings.
+//! there as a confirmed WriteProperty, from its device bindings, coerced to
+//! the datatype a ReadProperty there returned. The object keeps that datatype
+//! for each member ([`BACnetObject::remember_member_datatype_internal`]) until
+//! the member is written again, or the server forgets it (#1342).
 //!
 //! Reliability reports how the last distribution ended (Clause 12.53.9). A
 //! SUCCESSFUL one sets NO_FAULT_DETECTED; a FAILED one sets the kind of its
@@ -70,6 +73,11 @@ pub struct ChannelMember {
     /// Milliseconds after the distribution starts before this member is
     /// written: its Execution_Delay element.
     pub delay_ms: u32,
+    /// The member's zero-based slot in List_Of_Object_Property_References.
+    pub slot: usize,
+    /// For a member in another device, the datatype an earlier distribution
+    /// learned for it, if any (#1342).
+    pub learned: Option<MemberDatatype>,
 }
 
 /// A Channel's Present_Value write, for the server to pass on.
@@ -102,6 +110,10 @@ pub struct ChannelObject {
     simulated_reliability: Option<Reliability>,
     out_of_service: bool,
     members: Vec<BACnetDeviceObjectPropertyReference>,
+    /// The datatype the server learned for each member in another device,
+    /// slot by slot with `members`; a slot whose member is replaced forgets
+    /// it (#1342).
+    learned: Vec<Option<MemberDatatype>>,
     execution_delay: Vec<u32>,
     channel_number: u16,
     control_groups: Vec<u32>,
@@ -129,6 +141,7 @@ impl ChannelObject {
             simulated_reliability: None,
             out_of_service: false,
             members: Vec::new(),
+            learned: Vec::new(),
             execution_delay: Vec::new(),
             channel_number,
             control_groups: vec![0],
@@ -158,6 +171,7 @@ impl ChannelObject {
         }
         crate::device_reference::check_device_members(&members)?;
         self.execution_delay.resize(members.len(), 0);
+        self.learned = vec![None; members.len()];
         self.members = members;
         Ok(())
     }
@@ -225,10 +239,14 @@ impl ChannelObject {
             .members
             .iter()
             .zip(&self.execution_delay)
-            .filter(|(member, _)| !arrays::is_empty(member))
-            .map(|(member, delay)| ChannelMember {
+            .zip(&self.learned)
+            .enumerate()
+            .filter(|(_, ((member, _), _))| !arrays::is_empty(member))
+            .map(|(slot, ((member, delay), learned))| ChannelMember {
                 reference: member.clone(),
                 delay_ms: *delay,
+                slot,
+                learned: *learned,
             })
             .collect();
         if members.is_empty() {
@@ -438,6 +456,17 @@ impl BACnetObject for ChannelObject {
         Some(self.generation)
     }
 
+    fn remember_member_datatype_internal(
+        &mut self,
+        slot: usize,
+        reference: &BACnetDeviceObjectPropertyReference,
+        datatype: Option<MemberDatatype>,
+    ) {
+        if self.members.get(slot) == Some(reference) {
+            self.learned[slot] = datatype;
+        }
+    }
+
     fn complete_command_run_internal(
         &mut self,
         generation: u64,
@@ -465,3 +494,6 @@ mod coercion_tests;
 
 #[cfg(test)]
 mod reliability_tests;
+
+#[cfg(test)]
+mod learned_tests;

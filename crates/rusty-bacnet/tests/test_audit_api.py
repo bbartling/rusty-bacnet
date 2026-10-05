@@ -1842,5 +1842,77 @@ class AuditContractArtifactTests(unittest.TestCase):
                 await server.stop()
 
 
+
+class WriteGroupAuditTests(unittest.TestCase):
+    def test_a_write_group_is_audited_as_a_write_of_each_channel(self) -> None:
+        # Installed loopback evidence for #1318: Device 8's Channel takes a
+        # WriteGroup from an unbound client, and Device 9's Audit Log gets one
+        # WRITE record of its Present_Value at the entry's priority, from the
+        # client's address and with no invoke ID.
+        asyncio.run(bounded_reporter_test(self._exercise()))
+
+    async def _exercise(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = BACnetServer(device_instance=9, interface="127.0.0.1", port=0,
+                                  broadcast_address="127.0.0.1")
+            storage = str(Path(directory) / "parent")
+            parent.add_audit_log(7, "Receiver", storage, buffer_size=10)
+            parent.configure_audit_notification_sink(7, policy="allow_all")
+            child = BACnetServer(device_instance=8, interface="127.0.0.1", port=0,
+                                 broadcast_address="127.0.0.1")
+            child.add_audit_reporter(0, "Selected")
+            child.add_channel(1, "CH-1", 11, control_groups=[27])
+            await parent.start()
+            try:
+                child.add_device_binding(9, await parent.local_address())
+                child.configure_audit_recipient(cast(Any, device_recipient(9)))
+                child.configure_audit_reporters([{
+                    "instance": 0, "audit_level": "audit_all", "auditable_operations": 2,
+                    "issue_confirmed_notifications": True,
+                }])
+                await child.start()
+                try:
+                    query = cast("AuditLogQueryRequestInput", {
+                        "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, 7),
+                        "query_parameters": {"kind": "by_target", "target_device_identifier":
+                            ObjectIdentifier(ObjectType.DEVICE, 8), "successful_actions_only": 0},
+                        "requested_count": 10,
+                    })
+                    async with BACnetClient(interface="127.0.0.1", port=0,
+                                           broadcast_address="127.0.0.1",
+                                           apdu_timeout_ms=2_000) as client:
+                        await client.write_group(
+                            await child.local_address(), 27, 12,
+                            [(11, 9, PropertyValue.real(5.0))],
+                        )
+                        async with asyncio.timeout(5):
+                            while True:
+                                ack = await client.audit_log_query_typed(
+                                    await parent.local_address(), query)
+                                if ack["records"]:
+                                    break
+                                await asyncio.sleep(0.01)
+                    self.assertEqual(len(ack["records"]), 1)
+                    datum = ack["records"][0]["record"]["datum"]
+                    assert datum["kind"] == "audit_notification"
+                    notification = datum["audit_notification"]
+                    self.assertEqual(notification["operation"], AuditOperation.WRITE)
+                    self.assertEqual(notification["target_device"], device_recipient(8))
+                    self.assertEqual(notification["target_object"],
+                                     ObjectIdentifier(ObjectType.CHANNEL, 1))
+                    self.assertEqual(notification["target_property"], {
+                        "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+                        "property_array_index": None})
+                    self.assertEqual(notification["target_priority"], 9)
+                    self.assertEqual(notification["target_value"], bytes.fromhex("44 40a00000"))
+                    self.assertIsNone(notification["invoke_id"])
+                    self.assertEqual(notification["source_device"]["kind"], "address")
+                    self.assertIsNone(notification["result"])
+                finally:
+                    await child.stop()
+            finally:
+                await parent.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

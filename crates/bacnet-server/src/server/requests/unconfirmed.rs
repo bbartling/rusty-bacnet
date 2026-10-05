@@ -364,7 +364,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Err(error) => debug!(%error, "Ignoring UnconfirmedAuditNotification request"),
             }
         } else if req.service_choice == UnconfirmedServiceChoice::WRITE_GROUP {
-            Self::execute_write_group(services, &req.service_request).await;
+            Self::execute_write_group(services, &req.service_request, received).await;
         } else {
             debug!(
                 service = req.service_choice.to_raw(),

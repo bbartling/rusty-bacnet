@@ -12,12 +12,18 @@
 //! under a caller's timeout for one, ends the run instead of leaving its
 //! object busy (#1324).
 //!
-//! The writes are made one at a time, each through the same [`LocalWriter`]
-//! path as `write_local`: priorities, command-source tracking, audit, COV and
-//! the post-write event pass all apply as for any other local write. A
-//! command naming another device goes out as a confirmed WriteProperty
-//! through [`RemoteWriter`] (#1180). No database guard is held across a
-//! write's notifications, an outstanding remote write or a delay. The
+//! A Command's writes are made one at a time, and a Channel's local members
+//! in delay order beside its remote ones (`crate::command_lists`), each local
+//! write through the same [`LocalWriter`] path as `write_local`: priorities,
+//! command-source tracking, audit, COV and the post-write event pass all
+//! apply as for any other local write. A command or member naming another
+//! device goes out as a confirmed WriteProperty through [`RemoteWriter`]
+//! (#1180), which also makes the ReadProperty a Channel learns a remote
+//! member's datatype with (#1342). Every run on the server shares one set of
+//! queues for those requests, kept in [`NotificationTransactions`] beside the
+//! invoke IDs they lease: one at a time per device, a bounded number in all
+//! (`crate::command_lists::RemoteSlots`). No database guard is held across a write's
+//! notifications, an outstanding remote request or a delay. The
 //! object's generation guards every report back, so a run whose object was
 //! replaced or reconfigured stops.
 //!
@@ -34,7 +40,8 @@ use super::request_tasks::RequestTaskSpawner;
 use super::*;
 use crate::command_lists::{RunHost, TakenRuns, Unfinished};
 use bacnet_objects::command::{CommandRun, WriteFailure};
-use bacnet_types::constructed::BACnetActionCommand;
+use bacnet_services::read_property::ReadPropertyRequest;
+use bacnet_types::constructed::{BACnetActionCommand, BACnetDeviceObjectPropertyReference};
 
 /// The server handles a run owns while it waits out post delays.
 pub(super) struct CommandRunner<T: TransportPort + 'static> {
@@ -252,9 +259,28 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
         &self,
         device: ObjectIdentifier,
         command: &BACnetActionCommand,
-    ) -> Result<(), RemoteWriteError> {
+    ) -> Result<(), RemoteRequestError> {
         let write = RemoteWrite::for_command(device, command)?;
         self.remote_writer().write(&write).await
+    }
+
+    /// Read one property in another device as a confirmed ReadProperty.
+    async fn read_remote(
+        &self,
+        device: ObjectIdentifier,
+        reference: &BACnetDeviceObjectPropertyReference,
+    ) -> Result<PropertyValue, RemoteRequestError> {
+        let request = ReadPropertyRequest {
+            object_identifier: reference.object_identifier,
+            property_identifier: PropertyIdentifier::from_raw(reference.property_identifier),
+            property_array_index: reference.property_array_index,
+        };
+        self.remote_writer().read(device, &request).await
+    }
+
+    /// The server's queues, shared by every run on it.
+    fn remote_slots(&self) -> Option<&crate::command_lists::RemoteSlots> {
+        Some(self.notification_transactions.run_slots())
     }
 
     /// Timestamped references capture the change under its guard (#856).

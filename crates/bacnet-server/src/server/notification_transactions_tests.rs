@@ -455,7 +455,7 @@ async fn server_lifecycle_stop_and_drop_close_notification_transactions() {
 /// still ends the transaction: the withdrawal does not lose it (#1327).
 #[tokio::test(start_paused = true)]
 async fn an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction() {
-    use super::notification_transactions::{run_attempts, Attempt};
+    use super::notification_transactions::{run_attempts, Attempt, AttemptsEnd};
     let transactions = NotificationTransactions::new();
     let (operation, receiver) = transactions.reserve(direct_peer(10), COV_SERVICE).unwrap();
     let invoke_id = operation.invoke_id();
@@ -475,6 +475,45 @@ async fn an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction() {
         std::future::ready(next)
     })
     .await;
-    assert_eq!(result, Ok(NotificationWorkerResult::Ack));
+    assert_eq!(result, Ok(AttemptsEnd::Answered(CovAckResult::Ack)));
     assert_eq!(transactions.active_count(), 0);
+}
+
+/// A read's lease takes the ComplexAck that answers it, with its service
+/// data; a notification's lease never does (#1342).
+#[tokio::test(start_paused = true)]
+async fn only_a_read_lease_takes_a_complex_ack_and_its_data() {
+    use super::notification_transactions::{run_attempts, Attempt, AttemptsEnd};
+    const READ: ConfirmedServiceChoice = ConfirmedServiceChoice::READ_PROPERTY;
+    let complex_ack = |invoke_id, service_choice| {
+        Apdu::ComplexAck(ComplexAck {
+            segmented: false,
+            more_follows: false,
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice,
+            service_ack: Bytes::from_static(&[0x09, 0x01]),
+        })
+    };
+    let transactions = NotificationTransactions::new();
+    let (notification, _answer) = transactions.reserve(direct_peer(10), READ).unwrap();
+    let notified = complex_ack(notification.invoke_id(), READ);
+    assert!(!transactions.admit_terminal(&[10, 0x55], None, None, &notified));
+
+    let (operation, receiver) = transactions.reserve_read(direct_peer(10), READ).unwrap();
+    let invoke_id = operation.invoke_id();
+    // Another service's data doesn't answer it.
+    let other = complex_ack(invoke_id, COV_SERVICE);
+    assert!(!transactions.admit_terminal(&[10, 0x55], None, None, &other));
+    let answering = Arc::clone(&transactions);
+    let result = run_attempts(operation, receiver, Duration::from_secs(3), 3, |_| {
+        assert!(answering.admit_terminal(&[10, 0x55], None, None, &complex_ack(invoke_id, READ)));
+        std::future::ready(Attempt::<()>::Sent)
+    })
+    .await;
+    let data = Bytes::from_static(&[0x09, 0x01]);
+    assert_eq!(result, Ok(AttemptsEnd::Answered(CovAckResult::Data(data))));
+    // Only the notification's lease is left.
+    assert_eq!(transactions.active_count(), 1);
 }

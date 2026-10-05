@@ -4,7 +4,7 @@
 //!
 //! The harness is `command_remote_write_tests`' without the binding: CMD-1's
 //! list 1 writes AO-1 in Device 9, then the local AO-2. Writes are made as a
-//! run, or through the run host directly to see the [`RemoteWriteError`]
+//! run, or through the run host directly to see the [`RemoteRequestError`]
 //! they end with. Who-Is requests are taken from the test transport's send
 //! log, and I-Am answers are delivered by hand from the harness peer. The
 //! clock is paused, and the server's APDU timeout is the default 3 seconds.
@@ -148,7 +148,7 @@ async fn heard_long_ago(h: &Harness, routed: &NpduAddress) -> bool {
 }
 
 /// How a write ended, and when.
-type Ended = (Result<(), RemoteWriteError>, TokioInstant);
+type Ended = (Result<(), RemoteRequestError>, TokioInstant);
 
 /// Start writing AO-1 in Device `instance` through the run host.
 fn start_write(h: &Harness, instance: u32) -> JoinHandle<Ended> {
@@ -195,7 +195,7 @@ async fn silent_unbound_target_fails_after_the_apdu_timeout_with_one_who_is() {
     let h = start_unbound().await;
     let started = TokioInstant::now();
     let (result, ended) = start_write(&h, 9).await.unwrap();
-    assert_eq!(result, Err(RemoteWriteError::Undiscovered));
+    assert_eq!(result, Err(RemoteRequestError::Undiscovered));
     assert_eq!(ended - started, WAIT);
     assert_eq!(who_is_sent(&h), [(everywhere(), targeted(9))]);
     assert!(sent_writes(&h).is_empty());
@@ -214,7 +214,7 @@ async fn the_wait_for_an_i_am_counts_from_the_who_is_send() {
     tokio::time::advance(Duration::from_secs(1)).await;
     link.release_sends(1);
     let (result, ended) = write.await.unwrap();
-    assert_eq!(result, Err(RemoteWriteError::Undiscovered));
+    assert_eq!(result, Err(RemoteRequestError::Undiscovered));
     assert_eq!(ended - started, Duration::from_secs(1) + WAIT);
     assert_eq!(who_is_sent(&h).len(), 1);
 }
@@ -240,7 +240,7 @@ async fn no_who_is_while_dcc_restricts_initiation_or_for_the_wildcard_device() {
     disable_initiation(&h);
     let started = TokioInstant::now();
     let (result, ended) = start_write(&h, 9).await.unwrap();
-    assert_eq!(result, Err(RemoteWriteError::Disabled));
+    assert_eq!(result, Err(RemoteRequestError::Disabled));
     assert_eq!(ended, started);
     write_pv(&mut h, 1, 1).await.unwrap();
     idle(&h, 1).await;
@@ -254,7 +254,7 @@ async fn no_who_is_while_dcc_restricts_initiation_or_for_the_wildcard_device() {
     h.server.comm_state.set_for_test(DccState::Enable);
     let wildcard = ObjectIdentifier::WILDCARD_INSTANCE;
     let (result, _) = start_write(&h, wildcard).await.unwrap();
-    assert_eq!(result, Err(RemoteWriteError::Unbound));
+    assert_eq!(result, Err(RemoteRequestError::Unbound));
     assert!(who_is_sent(&h).is_empty());
     let write = start_write(&h, 9);
     assert_eq!(next_who_is(&h).await, (everywhere(), targeted(9)));
@@ -304,7 +304,7 @@ async fn absent_device_gets_one_who_is_per_hold_off() {
     let second = start_write(&h, 9);
     for write in [first, second] {
         let (result, ended) = write.await.unwrap();
-        assert_eq!(result, Err(RemoteWriteError::Undiscovered));
+        assert_eq!(result, Err(RemoteRequestError::Undiscovered));
         assert_eq!(ended - started, WAIT);
     }
     assert_eq!(who_is_sent(&h).len(), 1);
@@ -314,7 +314,7 @@ async fn absent_device_gets_one_who_is_per_hold_off() {
     tokio::time::advance(WHO_IS_HOLD_OFF - WAIT - Duration::from_millis(1)).await;
     let asked = TokioInstant::now();
     let (result, ended) = start_write(&h, 9).await.unwrap();
-    assert_eq!(result, Err(RemoteWriteError::Unbound));
+    assert_eq!(result, Err(RemoteRequestError::Unbound));
     assert_eq!(ended, asked);
     assert!(who_is_sent(&h).is_empty());
 
@@ -322,7 +322,7 @@ async fn absent_device_gets_one_who_is_per_hold_off() {
     tokio::time::advance(Duration::from_millis(1)).await;
     let asked = TokioInstant::now();
     let (result, ended) = start_write(&h, 9).await.unwrap();
-    assert_eq!(result, Err(RemoteWriteError::Undiscovered));
+    assert_eq!(result, Err(RemoteRequestError::Undiscovered));
     assert_eq!(ended - asked, WAIT);
     assert_eq!(who_is_sent(&h), [(everywhere(), targeted(9))]);
 }
@@ -354,7 +354,7 @@ async fn a_fruitless_who_is_on_the_last_network_drops_it_and_the_next_asks_every
     }
     let started = TokioInstant::now();
     let (result, ended) = start_write(&h, 9).await.unwrap();
-    assert_eq!(result, Err(RemoteWriteError::Undiscovered));
+    assert_eq!(result, Err(RemoteRequestError::Undiscovered));
     assert_eq!(ended - started, WAIT);
     assert_eq!(who_is_sent(&h), [(on_network(5), targeted(9))]);
     // The stale observation is gone, so network 5 isn't asked again.

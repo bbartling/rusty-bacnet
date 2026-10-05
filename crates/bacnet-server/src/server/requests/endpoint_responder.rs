@@ -168,8 +168,8 @@ impl EndpointResponder {
             source_network: received.source_network.clone(),
             provenance: received.provenance,
             trust: MutationTrust::from_provenance(received.provenance),
-            invoke_id: request.invoke_id,
-            service_choice: request.service_choice,
+            invoke_id: Some(request.invoke_id),
+            service_choice: request.service_choice.into(),
             target: MutationTarget::WriteProperty(write),
         };
         if !super::audit_notification::fail_closed_authorize(|| authorizer(&context)) {

@@ -3189,25 +3189,41 @@ Command), each attempt waiting `cov_retry_timeout_ms`, up to three
 retries for silence, nothing sent while DeviceCommunicationControl restricts
 initiation. A binding routed through the local network's own number is
 written as a local device, with no DNET (#1358), as a Command's is.
-The server can't read that property's datatype first, so the value goes as
-written (a lighting command only to `Lighting_Command`) and the device refuses
-a datatype it doesn't take (#1342). Members are written one at a time: while a
-remote write waits for its answer, Write_Status stays IN_PROGRESS (a
-Present_Value write, WriteGroup's included, is refused BUSY), and a member
-whose delay comes due meanwhile is written as soon as that write ends (#1343).
-A device that answers none of a write's attempts, or none of the Who-Is sent
-to find it, counts as offline for the rest of that distribution: its later
-members fail at once with nothing sent, while members in other devices and
-local ones are still written. A distribution therefore waits at most one
-Who-Is and one write's attempts (five times `cov_retry_timeout_ms`, 15
-seconds by default) per silent device. A run that
-`stop()` cuts short during a remote write ends FAILED and frees its invoke ID.
+Before the first write the server learns the property's datatype with a
+ReadProperty there, sent as the distribution starts so it overlaps the
+member's delay, and converts the value to it as for a local member (#1342):
+a REAL 1.0 reaches a remote Binary Output as ACTIVE. A primitive datatype is
+kept on the Channel until that member, or the whole member list, is written
+again, or a write made with it is refused as a configuration fault (an invalid
+datatype, an unknown property), so later distributions send no read until
+then. No read is sent for a NULL, a lighting command or a `Lighting_Command`
+member. A read that gets no answer after its retries, or whose Who-Is finds
+nothing, counts the device as silent, as a write would (every device executes
+ReadProperty): the member fails as COMMUNICATION_FAILURE with no write sent. A
+read that is refused, or returns NULL or a constructed value, keeps nothing,
+and the value goes as written; the device then refuses a datatype it doesn't
+take. Each member is written when its own delay is up (#1343): a remote
+request that waits for its answer holds back no other member, though
+Write_Status stays IN_PROGRESS (a Present_Value write, WriteGroup's included,
+is refused BUSY) until every member has finished. Members in this device go
+in delay order, list order among equal delays. The requests the server's runs
+make in other devices, a Command's included, wait in two queues: each device
+takes one at a time, as small and MS/TP devices often can only serve one, and
+the server keeps at most 32 outstanding, an eighth of its 256 invoke IDs,
+leaving the rest to confirmed notifications and Audit. A member due while its
+device answers another request is written once that one ends. A device that
+answers none of a request's attempts, or none of the Who-Is sent to find it,
+counts as silent for the rest of that distribution: its members whose turn
+comes after that fail at once with nothing sent, so a distribution waits out
+one request's retries per silent device, while members in other devices and
+local ones are still written. A run that `stop()` cuts short, or whose future
+is dropped, during a remote request ends FAILED and frees its invoke ID.
 Without a server, `tick_schedules` has no network, so a remote member fails
 there.
 
 Reliability reports how the last distribution ended (Clause 12.53.9):
 NO_FAULT_DETECTED after a SUCCESSFUL one, otherwise the kind of the first
-member that failed, in the order the members were written.
+member failure to finish.
 CONFIGURATION_ERROR means the value couldn't be converted to the member's
 datatype, by datatype or by a coercion rule's range, or the member answered
 UNKNOWN_OBJECT, UNKNOWN_PROPERTY, INVALID_ARRAY_INDEX,
@@ -3248,11 +3264,21 @@ runs: one that has left the group or changed its number by then is skipped,
 and one whose Allow_Group_Delay_Inhibit is FALSE by then keeps its delays.
 Nothing is answered and a malformed request is dropped. DCC's
 DISABLE_INITIATION leaves WriteGroup running, as it only stops what the device
-starts (the server refuses the deprecated DISABLE outright). Every WriteGroup is dropped while the server's
-`mutation_policy` is `DenyAll` or a `mutation_authorizer` is installed, because
-the authorizer only decides confirmed services (#1319); those drops aren't
-counted in `mutation_decision_counters()`. The Channel writes make no Audit
-records (#1318), and the endpoint responder ignores WriteGroup.
+starts (the server refuses the deprecated DISABLE outright). Local mutation
+policy decides each Channel write on its own (#1319): `MutationPolicy::DenyAll`
+denies it, and an installed `mutation_authorizer` is called once per Channel
+with a `MutationTarget::WriteGroup` (the Channel, group, channel number,
+priority, value and inhibit flag), no invoke ID and
+`MutationService::Unconfirmed(WRITE_GROUP)`, so it can allow some Channels and
+not others. A denied write is skipped with nothing answered and counted in
+`mutation_decision_counters().write_group`. Each Channel written makes one
+WRITE Audit record (Table 19-5) of its Present_Value at the priority used,
+naming the requester (its bound Device, when the audit profile knows one) and
+no invoke ID; a denied one makes none (#1318). A Channel's Present_Value is
+commandable (Clause 12.53.5), so its records, a WriteProperty's as well as a
+WriteGroup's, carry the priority, and Audit_Priority_Filter applies to them
+(Clause 19.6.3): one at a priority the filter disables is dropped. The
+endpoint responder ignores WriteGroup.
 
 Channel runs are owned as Command runs are (#1178). A `write_local` dropped
 after the Channel took its value ends the distribution FAILED without
@@ -4994,10 +5020,13 @@ malformed input; other covered services authorize once after service decoding.
 Callbacks must be fast, nonblocking, and side-effect-free. Context addresses and
 process IDs are claimed, not authenticated identities. DCC/Reinit, Audit/LifeSafety,
 reads, discovery, trusted local writes and unconfirmed services other than WriteGroup
-are unchanged. The callback can't decide an inbound WriteGroup, so an installed
-authorizer, even one that allows everything, drops every inbound WriteGroup without
-being called, and so does `MutationPolicy::DenyAll` (#1319 tracks letting the
-authorizer decide). Those drops aren't counted in `mutation_decision_counters()`.
+are unchanged. An inbound WriteGroup is decided once per Channel write it would make
+(#1319): the context's `target` is `MutationTarget::WriteGroup`, its `invoke_id` is
+`None` and its `service_choice` is `MutationService::Unconfirmed(WRITE_GROUP)`
+(a confirmed request's is `MutationService::Confirmed`, with `Some` invoke ID).
+`MutationPolicy::DenyAll` denies each one. A denied Channel write is skipped silently,
+since nothing answers an unconfirmed request, and counted in the `write_group` row of
+`mutation_decision_counters()`.
 
 Each decision context also carries the reassembled ingress snapshot
 (`provenance: TransportProvenance`) and the derived channel/relay scope

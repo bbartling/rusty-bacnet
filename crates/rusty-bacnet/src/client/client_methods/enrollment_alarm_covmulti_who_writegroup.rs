@@ -270,10 +270,11 @@ impl BACnetClient {
     /// is 65535. Give `network` only with `address=None`.
     ///
     /// `group_number` is 1..4294967295 (group 0 is reserved) and `write_priority` is 1..16.
-    /// `change_list` is a non-empty list of `(channel, override_priority_or_none, value_bytes)`
+    /// `change_list` is a non-empty list of `(channel, override_priority_or_none, value)`
     /// tuples: `channel` is a channel number 0..65535, `override_priority_or_none` is 1..16 or
-    /// `None`, and `value_bytes` is one encoded BACnetChannelValue (a single application-tagged
-    /// primitive, or a context-0 lighting command) with no extra wrapper tag. Raises
+    /// `None`, and `value` is a `PropertyValue`, which the binding encodes, or a `bytes` or
+    /// `bytearray` holding one encoded BACnetChannelValue (a single application-tagged
+    /// primitive, or a context-0 lighting command) with no extra wrapper tag (#1359). Raises
     /// `ValueError`, or `OverflowError` for integers that don't fit, for an argument outside
     /// those rules.
     #[pyo3(signature = (address, group_number, write_priority, change_list, inhibit_delay=None, *, network=None))]
@@ -283,7 +284,7 @@ impl BACnetClient {
         address: Option<String>,
         group_number: u32,
         write_priority: u8,
-        change_list: Vec<(u16, Option<u8>, Vec<u8>)>,
+        change_list: Vec<(u16, Option<u8>, ChannelValueArg)>,
         inhibit_delay: Option<bool>,
         network: Option<u16>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -295,14 +296,17 @@ impl BACnetClient {
             write_priority,
             change_list: change_list
                 .into_iter()
-                .map(|(channel, override_priority, value)| GroupChannelValue {
-                    channel,
-                    override_priority,
-                    value,
+                .map(|(channel, override_priority, value)| {
+                    Ok(GroupChannelValue {
+                        channel,
+                        override_priority,
+                        value: value.encoded()?,
+                    })
                 })
-                .collect(),
+                .collect::<PyResult<_>>()?,
             inhibit_delay,
         };
+        // The request's own check: each value is one BACnetChannelValue.
         req.encode(&mut BytesMut::new())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         let broadcast =
@@ -327,6 +331,32 @@ impl BACnetClient {
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
+    }
+}
+
+/// One `write_group` change-list value as Python gives it: a `PropertyValue`,
+/// encoded here, or the BACnetChannelValue already encoded in a `bytes` or
+/// `bytearray`, as a lighting command usually is. Either way the request's
+/// own check refuses anything that isn't one BACnetChannelValue. A list of
+/// ints is neither, and raises TypeError.
+#[derive(FromPyObject)]
+enum ChannelValueArg {
+    Value(PyPropertyValue),
+    Encoded(pyo3::pybacked::PyBackedBytes),
+}
+
+impl ChannelValueArg {
+    /// The value's octets, application-tagged as a WriteProperty carries them.
+    fn encoded(self) -> PyResult<Vec<u8>> {
+        match self {
+            Self::Value(value) => {
+                let mut octets = BytesMut::new();
+                encode_property_value(&mut octets, &value.inner)
+                    .map_err(|error| PyValueError::new_err(error.to_string()))?;
+                Ok(octets.to_vec())
+            }
+            Self::Encoded(octets) => Ok(octets.to_vec()),
+        }
     }
 }
 

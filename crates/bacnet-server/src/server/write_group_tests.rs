@@ -15,7 +15,7 @@
 //! database, so any frame the server sends would be an answer. The clock is
 //! paused: delays pass only when a test sleeps through them.
 use super::*;
-use crate::mutation::MutationPolicy;
+use crate::mutation::{MutationPolicy, MutationService, MutationTarget, WriteGroupTarget};
 use crate::server::channel_wire_tests::{ch, channel, member, slot};
 use crate::server::command_action_wire_tests::ao;
 use crate::server::cov_wire_test_support::{Harness, PEER, PV};
@@ -311,23 +311,112 @@ async fn write_group_runs_under_disable_initiation() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn write_group_is_dropped_when_local_policy_restricts_network_writes() {
-    let configs = [
-        ServerConfig {
-            mutation_policy: MutationPolicy::DenyAll,
-            ..ServerConfig::default()
-        },
-        ServerConfig {
-            mutation_authorizer: Some(Arc::new(|_| true)),
-            ..ServerConfig::default()
-        },
+async fn deny_all_denies_each_channel_write_of_a_write_group() {
+    // An authorizer that would allow everything isn't asked.
+    let h = start(ServerConfig {
+        mutation_policy: MutationPolicy::DenyAll,
+        mutation_authorizer: Some(Arc::new(|_| true)),
+        ..ServerConfig::default()
+    })
+    .await;
+    let writes = vec![entry(11, None, real(5.0)), entry(13, None, real(6.0))];
+    send(&h, &request(27, 8, writes)).await;
+    assert_untouched(&h).await;
+    assert_silent(&h);
+    // CH-1, CH-4 and CH-5 were each denied.
+    let counted = h.server.mutation_decision_counters().write_group;
+    assert_eq!(
+        (
+            counted.allow_total,
+            counted.deny_total,
+            counted.policy_deny_total
+        ),
+        (0, 3, 3)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_mutation_authorizer_decides_each_channel_write_of_a_write_group() {
+    // It allows CH-3 and CH-5, and keeps every context it is shown.
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shown = Arc::clone(&seen);
+    let h = start(ServerConfig {
+        mutation_authorizer: Some(Arc::new(move |context| {
+            shown.lock().unwrap().push(context.clone());
+            matches!(&context.target, MutationTarget::WriteGroup(target)
+                if [3, 5].contains(&target.channel.instance_number()))
+        })),
+        ..ServerConfig::default()
+    })
+    .await;
+    let writes = vec![
+        entry(12, None, real(5.0)),
+        entry(11, Some(4), real(6.0)),
+        entry(13, None, real(7.0)),
     ];
-    for config in configs {
-        let h = start(config).await;
-        send(&h, &request(27, 8, vec![entry(11, None, real(5.0))])).await;
-        assert_untouched(&h).await;
-        assert_silent(&h);
+    send(&h, &request(27, 8, writes)).await;
+    assert_eq!(present_value(&h, 3).await, PropertyValue::Real(5.0));
+    assert_eq!(slot(&h, ao(3), 8).await, PropertyValue::Real(5.0));
+    assert_eq!(present_value(&h, 5).await, PropertyValue::Real(7.0));
+    for denied in [1, 4] {
+        assert_eq!(present_value(&h, denied).await, PropertyValue::Null);
+        assert_eq!(status(&h, denied).await, WriteStatus::IDLE);
     }
+    assert_silent(&h);
+
+    // One decision per planned Channel write, in plan order, each for an
+    // unconfirmed request from the peer.
+    let contexts = seen.lock().unwrap();
+    let targets: Vec<WriteGroupTarget> = contexts
+        .iter()
+        .map(|context| {
+            assert_eq!(context.invoke_id, None);
+            let write_group = UnconfirmedServiceChoice::WRITE_GROUP;
+            assert_eq!(
+                context.service_choice,
+                MutationService::Unconfirmed(write_group)
+            );
+            assert_eq!(context.source_mac.as_slice(), PEER);
+            match &context.target {
+                MutationTarget::WriteGroup(target) => target.clone(),
+                other => panic!("a WriteGroup target, not {other:?}"),
+            }
+        })
+        .collect();
+    let target = |channel, number, priority, value| WriteGroupTarget {
+        channel: ch(channel),
+        group_number: 27,
+        channel_number: number,
+        priority,
+        value,
+        inhibit_delay: false,
+    };
+    assert_eq!(
+        targets,
+        [
+            target(3, 12, 8, real(5.0)),
+            target(1, 11, 4, real(6.0)),
+            target(4, 13, 8, real(7.0)),
+            target(5, 13, 8, real(7.0)),
+        ]
+    );
+    let counted = h.server.mutation_decision_counters().write_group;
+    assert_eq!((counted.allow_total, counted.deny_total), (2, 2));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_panicking_authorizer_denies_the_channel_write() {
+    let h = start(ServerConfig {
+        mutation_authorizer: Some(Arc::new(|_| panic!("authorizer bug"))),
+        ..ServerConfig::default()
+    })
+    .await;
+    send(&h, &request(27, 8, vec![entry(11, None, real(5.0))])).await;
+    assert_untouched(&h).await;
+    assert_eq!(
+        h.server.mutation_decision_counters().write_group.deny_total,
+        1
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -372,8 +461,24 @@ async fn plan_change_apply(
     let writes = plan(&*h.server.database().read().await, request);
     assert!(!writes.is_empty(), "nothing planned");
     change(&mut *h.server.database().write().await);
-    apply(&CommandRunner::for_server(&h.server), request, &writes).await;
+    let runner = CommandRunner::for_server(&h.server);
+    apply(&runner, &requester(h), request, &writes).await;
     h.settle().await;
+}
+
+/// A WriteGroup's sender, the harness peer, under `h`'s policy.
+fn requester(h: &Harness) -> Requester<'_> {
+    Requester {
+        config: &h.server.config,
+        decisions: &h.server.mutation_decisions,
+        source_mac: &PEER,
+        source_network: None,
+        provenance: TransportProvenance::unverified(),
+        audit_source: BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
+            network_number: 0,
+            mac_address: MacAddr::from_slice(&PEER),
+        }),
+    }
 }
 
 fn write_channel_property(
@@ -441,7 +546,8 @@ async fn write_group_dropped_after_a_channel_took_its_value_ends_that_distributi
     // committed and let go of the database; the request is dropped there
     // (#1324).
     let table = Arc::clone(&h.server.cov_table).read_owned().await;
-    let mut applying = Box::pin(apply(&runner, &write, &writes));
+    let requester = requester(&h);
+    let mut applying = Box::pin(apply(&runner, &requester, &write, &writes));
     let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
     assert!(std::future::Future::poll(applying.as_mut(), &mut cx).is_pending());
     assert_eq!(status(&h, 4).await, WriteStatus::IN_PROGRESS);

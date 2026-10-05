@@ -70,6 +70,8 @@ pub(super) struct UnconfirmedServices<T: TransportPort + 'static> {
     pub(super) cov_table: Arc<RwLock<CovSubscriptionTable>>,
     pub(super) cov_in_flight: Arc<Semaphore>,
     pub(super) tasks: request_tasks::RequestTaskSpawner,
+    /// Counts the WriteGroup Channel-write decisions (#1319).
+    pub(super) mutation_decisions: Arc<crate::mutation::MutationDecisions>,
 }
 
 /// Everything the dispatch loop hands to [`BACnetServer::dispatch`]: the
@@ -103,6 +105,7 @@ impl<T: TransportPort + 'static> DispatchContext<T> {
             cov_table: Arc::clone(&self.services.cov_table),
             cov_in_flight: Arc::clone(&self.services.cov_in_flight),
             tasks: self.request_tasks.spawner(),
+            mutation_decisions: Arc::clone(&self.services.mutation_decisions),
         }
     }
 }
@@ -210,6 +213,7 @@ impl<T: TransportPort + 'static> UnconfirmedServices<T> {
             device_bindings: Arc::new(RwLock::new(DeviceBindingTable::new())),
             discovery_limiter: Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
             time_sync_limiter: Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
+            mutation_decisions: Arc::default(),
             notification_transactions: NotificationTransactions::new(),
             learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
             event_suppressions: Arc::default(),
@@ -266,6 +270,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             cov_table: Arc::clone(&self.cov_table),
             cov_in_flight: Arc::clone(&self.cov_in_flight),
             tasks: self.request_tasks.spawner(),
+            mutation_decisions: Arc::clone(&self.mutation_decisions),
         }
     }
 
