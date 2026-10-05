@@ -7,8 +7,9 @@
 //! When the device has none, or only an I-Am older than the binding
 //! lifetime, the server asks for it ([`DeviceLookup`]): one Who-Is whose low
 //! and high limits are both the device's instance (Clause 16.10), then a
-//! bounded wait for the I-Am. The I-Am lands in the binding table like any
-//! other and wakes everything waiting on the probe; with none by the
+//! bounded wait for the I-Am, the APDU timeout held to [`MAX_PROBE_WAIT`]. The
+//! I-Am lands in the binding table like any other and wakes everything
+//! waiting on the probe; with none by the
 //! deadline, the writes fail and the notifications are not sent. Below, a
 //! "write" stands for either.
 //!
@@ -45,6 +46,11 @@ pub(super) const WHO_IS_HOLD_OFF: Duration = Duration::from_secs(60);
 
 /// The most devices with a probe out or held off at once.
 pub(super) const MAX_PROBES: usize = 256;
+
+/// The longest a probe waits for its I-Am, however long the APDU timeout it
+/// is given: a minute, the hold-off, so a probe never outlasts the minute
+/// that keeps its device from another Who-Is.
+pub(super) const MAX_PROBE_WAIT: Duration = WHO_IS_HOLD_OFF;
 
 /// Stands in for a wait too long to add to an instant: about 30 years.
 const FAR_FUTURE: Duration = Duration::from_secs(86_400 * 365 * 30);
@@ -295,11 +301,18 @@ pub(super) struct DeviceLookup<'a, T: TransportPort + 'static> {
     pub(super) network: &'a NetworkLayer<T>,
     pub(super) bindings: &'a RwLock<DeviceBindingTable>,
     pub(super) comm_state: &'a CommState,
-    /// How long the probe waits for the I-Am, from its Who-Is.
+    /// How long the probe waits for the I-Am, from its Who-Is: the APDU
+    /// timeout, held to [`MAX_PROBE_WAIT`].
     pub(super) wait: Duration,
 }
 
 impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
+    /// The probe's wait: the one given, but no longer than
+    /// [`MAX_PROBE_WAIT`].
+    fn wait(&self) -> Duration {
+        self.wait.min(MAX_PROBE_WAIT)
+    }
+
     /// `device`'s binding as the table holds it now.
     pub(super) async fn resolve(&self, device: ObjectIdentifier) -> DeviceResolution {
         let table = self.bindings.read().await;
@@ -319,7 +332,7 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
             if self.comm_state.initiation_restricted() {
                 return LookupStart::Disabled;
             }
-            let step = table.probes.begin(device, TokioInstant::now(), self.wait);
+            let step = table.probes.begin(device, TokioInstant::now(), self.wait());
             (step, table.who_is_scope(&device))
         };
         match step {
@@ -420,7 +433,7 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
         }
         let now = TokioInstant::now();
         let mut table = self.bindings.write().await;
-        table.probes.sent(&device, probe, now, self.wait);
+        table.probes.sent(&device, probe, now, self.wait());
         true
     }
 }

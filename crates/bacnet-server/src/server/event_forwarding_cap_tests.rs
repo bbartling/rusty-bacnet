@@ -1,12 +1,13 @@
 //! How the forwarding cap counts (#1259): only copies that would be sent
 //! take room, a local notification that names this device's Device object
 //! under several process identifiers has one cap, and the cap warning is
-//! throttled.
+//! throttled. A copy that waits for its Device destination's I-Am keeps to
+//! the cap and the loop rules once it goes (#1368).
 
 use super::event_forwarding::{Reception, WarnThrottle, CAP_WARNING_INTERVAL};
 use super::event_forwarding_bounds_tests::peer;
 use super::event_forwarding_tests::{
-    database, destination, notification, unconfirmed, Forwarding, To, LOCAL_DEVICE,
+    copies, database, destination, notification, unconfirmed, Forwarding, To, LOCAL_DEVICE,
 };
 use super::event_recipient_routing_tests::{address_recipient, distribute_counted};
 use super::*;
@@ -112,6 +113,91 @@ async fn a_local_notification_under_several_process_identifiers_has_one_cap() {
         counters,
         EventNotificationCounters {
             forwarding_cap_dropped: (73 - MAX_FORWARDED_DESTINATIONS) as u64,
+            ..Default::default()
+        }
+    );
+}
+
+/// Device 9, which the forwarding server has no binding for.
+fn device_9() -> BACnetRecipient {
+    BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap())
+}
+
+/// Whether `frame` is the Who-Is a look for Device 9 sends.
+fn who_is(frame: &crate::server::test_transport::SentFrame) -> bool {
+    super::event_recipient_routing_tests::is_who_is(frame)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_copy_that_waited_for_its_device_keeps_to_the_loop_rules() {
+    // Forwarder 1 sends to Device 9, which answers from this network, so its
+    // copy goes to one node here: one a received broadcast already reached.
+    for (group, sent) in [(true, false), (false, true)] {
+        let mut nf = NotificationForwarderObject::new(1, "NF-1").unwrap();
+        nf.add_destination(destination(device_9(), 40, false))
+            .unwrap();
+        let forwarding = Forwarding::new(database(vec![nf]));
+        let reception = Reception {
+            group,
+            global: false,
+        };
+        forwarding.deliver(&notification(5), reception).await;
+        assert!(forwarding.sent.frames().iter().all(who_is));
+        forwarding.sent.clear();
+        forwarding.hear_i_am(9, &peer(9)).await;
+        let expected = if sent {
+            vec![unconfirmed(To::Local(peer(9).to_vec()), 40)]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(copies(&forwarding.sent, &notification(5)), expected);
+        // A loop rule's refusal is configured behaviour: nothing counts it.
+        assert_eq!(forwarding.counters(), EventNotificationCounters::default());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_copy_that_waited_for_its_device_draws_on_the_cap_as_it_goes() {
+    // Forwarder 1 names Device 9 first, then nodes 0 to 20 on network 5;
+    // forwarders 2 and 3 name nodes 21 to 63 there. The 64 nodes take the
+    // whole cap while Device 9 is looked for, so its copy has no room left.
+    let forwarders = [(1, 0..21), (2, 21..42), (3, 42..64)]
+        .into_iter()
+        .map(|(instance, nodes)| {
+            let mut nf =
+                NotificationForwarderObject::new(instance, format!("NF-{instance}")).unwrap();
+            if instance == 1 {
+                nf.add_destination(destination(device_9(), 999, false))
+                    .unwrap();
+            }
+            for index in nodes {
+                nf.add_destination(destination(
+                    address_recipient(5, &remote(index)),
+                    index as u32,
+                    false,
+                ))
+                .unwrap();
+            }
+            nf
+        })
+        .collect();
+    let forwarding = Forwarding::new(database(forwarders));
+    let unicast = Reception {
+        group: false,
+        global: false,
+    };
+    forwarding.deliver(&notification(5), unicast).await;
+    let (who_is, sent): (Vec<_>, Vec<_>) = forwarding.sent.take().into_iter().partition(who_is);
+    assert_eq!((who_is.len(), sent.len()), (1, MAX_FORWARDED_DESTINATIONS));
+    forwarding.hear_i_am(9, &peer(9)).await;
+    assert!(
+        forwarding.sent.is_empty(),
+        "Device 9's copy is past the cap"
+    );
+    assert_eq!(
+        forwarding.counters(),
+        EventNotificationCounters {
+            forwarding_cap_dropped: 1,
             ..Default::default()
         }
     );

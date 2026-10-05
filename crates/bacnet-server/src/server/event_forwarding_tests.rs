@@ -233,6 +233,13 @@ impl Forwarding {
         request: &EventNotificationRequest,
         reception: Reception,
     ) -> Vec<Copy> {
+        self.deliver(request, reception).await;
+        copies(&self.sent, request)
+    }
+
+    /// [`Self::receive`], leaving what the server sent in `sent`: a Who-Is
+    /// for an unbound Device destination (#1368) is no copy.
+    pub(super) async fn deliver(&self, request: &EventNotificationRequest, reception: Reception) {
         BACnetServer::<TestTransport>::handle_unconfirmed_request(
             &self.services,
             UnconfirmedRequestPdu {
@@ -258,7 +265,22 @@ impl Forwarding {
         for _ in 0..16 {
             tokio::task::yield_now().await;
         }
-        copies(&self.sent, request)
+    }
+
+    /// Record Device `instance`'s I-Am from `mac` on this network, as the
+    /// I-Am handler does, and let what waited for it go out.
+    pub(super) async fn hear_i_am(&self, instance: u32, mac: &[u8]) {
+        let device = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
+        self.services.device_bindings.write().await.observe_i_am_at(
+            device,
+            mac,
+            None,
+            Instant::now(),
+            |_| false,
+        );
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
     }
 
     pub(super) fn counters(&self) -> EventNotificationCounters {

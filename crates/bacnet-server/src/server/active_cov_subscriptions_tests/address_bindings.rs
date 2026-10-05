@@ -3,7 +3,6 @@
 //! minutes old, read through the same request paths and sampling as the
 //! Device's COV lists.
 use super::*;
-use crate::server::device_bindings::OBSERVED_BINDING_TTL;
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
@@ -148,8 +147,20 @@ async fn an_i_am_heard_on_the_wire_is_listed_with_its_network() {
     wire.server.stop().await.unwrap();
 }
 
+/// The Device_Address_Binding row of a ReadPropertyMultiple-ACK's `results`.
+fn bindings_row(results: Vec<bacnet_services::rpm::ReadAccessResult>) -> Vec<u8> {
+    results
+        .into_iter()
+        .flat_map(|result| result.list_of_results)
+        .find(|row| row.property_identifier == BINDINGS)
+        .and_then(|row| row.property_value)
+        .expect("a Device_Address_Binding row")
+}
+
+// The age rule is `device_bindings_tests`' own: a stale observation can't be
+// made here without a monotonic clock older than the binding lifetime.
 #[tokio::test(start_paused = true)]
-async fn configured_bindings_are_listed_and_a_stale_observation_is_not() {
+async fn configured_bindings_are_listed_through_every_read_path() {
     let mut wire = Wire::start(ServerConfig::default()).await;
     let local_mac = [0x0A, 0, 0, 21, 0xBA, 0xC0];
     {
@@ -165,27 +176,31 @@ async fn configured_bindings_are_listed_and_a_stale_observation_is_not() {
                 |_| false,
             )
             .unwrap();
-        // Heard longer ago than an observation lasts. A host whose monotonic
-        // clock is younger than that has no such instant, and skips this
-        // part: `device_bindings_tests` covers the age rule itself.
-        if let Some(then) = Instant::now().checked_sub(OBSERVED_BINDING_TTL) {
-            table.observe_i_am_at(peer(30), &[0x1E], None, then, |_| false);
-        }
     }
     let configured = vec![(peer(20), 5, vec![0x14]), (peer(21), 0, local_mac.to_vec())];
     let read = wire.read(device(), BINDINGS, None).await.unwrap();
     assert_eq!(decode(&read), configured);
 
-    // ReadPropertyMultiple's ALL serves the same value as ReadProperty.
-    let ack = wire
-        .rpm(vec![(device(), vec![(PropertyIdentifier::ALL, None)])])
-        .await;
-    let row = ack.list_of_read_access_results[0]
-        .list_of_results
-        .iter()
-        .find(|row| row.property_identifier == BINDINGS)
-        .expect("ALL reads Device_Address_Binding");
-    assert_eq!(row.property_value.as_deref(), Some(read.as_slice()));
+    // ReadPropertyMultiple's ALL and REQUIRED serve the same value as
+    // ReadProperty: the property is required of every Device.
+    for selector in [PropertyIdentifier::ALL, PropertyIdentifier::REQUIRED] {
+        let ack = wire.rpm(vec![(device(), vec![(selector, None)])]).await;
+        assert_eq!(
+            bindings_row(ack.list_of_read_access_results),
+            read,
+            "{selector:?}"
+        );
+    }
+
+    // So does a Group member naming it, through the Group's Present_Value.
+    super::group_present_value::add_group(&wire, 1, &[(device(), &[BINDINGS])]).await;
+    let group = super::group_present_value::group(1);
+    let present_value = wire
+        .read(group, PropertyIdentifier::PRESENT_VALUE, None)
+        .await
+        .unwrap();
+    let members = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&present_value).unwrap();
+    assert_eq!(bindings_row(members.list_of_read_access_results), read);
 
     // ReadRange pages it one binding per item.
     let mut request = BytesMut::new();
@@ -209,5 +224,16 @@ async fn configured_bindings_are_listed_and_a_stale_observation_is_not() {
     let ack = ReadRangeAck::decode(&ack.service_ack).unwrap();
     assert_eq!(ack.item_count, 1);
     assert_eq!(decode(&ack.item_data), configured[1..].to_vec());
+
+    // The bindings outlast `stop()`, and the local read still lists them.
     wire.server.stop().await.unwrap();
+    let PropertyValue::List(items) = wire
+        .server
+        .read_local(&device(), BINDINGS, None)
+        .await
+        .unwrap()
+    else {
+        panic!("Device_Address_Binding is a list");
+    };
+    assert_eq!(items.len(), 2);
 }

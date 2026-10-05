@@ -172,3 +172,65 @@ async fn stop_aborts_the_work_a_committed_write_owes_and_ends_its_run() {
         PropertyValue::Unsigned(2)
     );
 }
+
+/// An object whose writes succeed and whose event evaluation, which the work
+/// after the commit runs, panics.
+struct PanicsAfterCommit;
+
+impl bacnet_objects::traits::BACnetObject for PanicsAfterCommit {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 99).unwrap()
+    }
+
+    fn object_name(&self) -> &str {
+        "AFTER-99"
+    }
+
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        _: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        Ok(match property {
+            PropertyIdentifier::OBJECT_IDENTIFIER => {
+                PropertyValue::ObjectIdentifier(self.object_identifier())
+            }
+            PropertyIdentifier::OBJECT_NAME => PropertyValue::CharacterString("AFTER-99".into()),
+            _ => PropertyValue::Real(0.0),
+        })
+    }
+
+    fn write_property(
+        &mut self,
+        _: PropertyIdentifier,
+        _: Option<u32>,
+        _: PropertyValue,
+        _: Option<u8>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        std::borrow::Cow::Borrowed(&[])
+    }
+
+    fn evaluate_intrinsic_reporting(&mut self) -> Option<bacnet_objects::event::TransitionOutcome> {
+        panic!("AFTER-99 panics in the work after its write");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_panic_in_the_work_after_the_commit_reaches_the_caller() {
+    use futures_util::FutureExt;
+    let h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(PanicsAfterCommit)).unwrap();
+    })
+    .await;
+    let target = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 99).unwrap();
+    let write = write_local(&h, &target, PropertyValue::Real(1.0), None);
+    let panicked = std::panic::AssertUnwindSafe(write).catch_unwind().await;
+    assert!(
+        panicked.is_err(),
+        "the caller sees the panic, as it would were the work done in place"
+    );
+}

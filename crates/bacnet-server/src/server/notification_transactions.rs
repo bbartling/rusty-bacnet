@@ -81,6 +81,9 @@ pub struct NotificationTransactions {
     /// Where the requests the server's runs make in other devices wait, so
     /// they take a bounded share of the invoke IDs leased here.
     run_slots: crate::command_lists::RemoteSlots,
+    /// Event notifications waiting for their Device recipient's I-Am, one
+    /// queue per device, each drained by a task in this set (#1368).
+    pub(super) awaiting_recipients: Mutex<super::event_send::AwaitingRecipients>,
 }
 
 type ReporterFailureQueue = (
@@ -197,6 +200,7 @@ impl NotificationTransactions {
             audit_association: std::sync::OnceLock::new(),
             audit_failures: std::sync::OnceLock::new(),
             run_slots: crate::command_lists::RemoteSlots::default(),
+            awaiting_recipients: Mutex::default(),
         })
     }
 

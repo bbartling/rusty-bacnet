@@ -25,7 +25,12 @@ const OTHER: [u8; 6] = [10, 0, 0, 7, 0xBA, 0xC0];
 /// A server whose AV-1 alarms to Device 9, confirmed or not, as process 9,
 /// and to [`OTHER`] as process 7.
 async fn start(confirmed: bool) -> Harness {
-    Harness::start_with(ServerConfig::default(), move |db| {
+    start_with(ServerConfig::default(), confirmed).await
+}
+
+/// [`start`] with `config`.
+async fn start_with(config: ServerConfig, confirmed: bool) -> Harness {
+    Harness::start_with(config, move |db| {
         let mut nc = bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap();
         let mut to_device = destination_for(BACnetRecipient::Device(device(9)), confirmed);
         to_device.process_identifier = 9;
@@ -94,6 +99,32 @@ fn notifications(h: &Harness) -> Vec<(Vec<u8>, u32, bool)> {
                 notification.process_identifier,
                 confirmed,
             ))
+        })
+        .collect()
+}
+
+/// The To_State of each unconfirmed event notification sent to `mac`, in
+/// the order they went out.
+fn to_states(h: &Harness, mac: &[u8]) -> Vec<bacnet_types::enums::EventState> {
+    h.server
+        .test_network()
+        .transport()
+        .sent()
+        .frames()
+        .into_iter()
+        .filter(|frame| frame.mac.as_slice() == mac)
+        .filter_map(|frame| match frame.apdu() {
+            Apdu::UnconfirmedRequest(request)
+                if request.service_choice
+                    == UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION =>
+            {
+                Some(
+                    decode_event_notification(&request.service_request)
+                        .unwrap()
+                        .to_state,
+                )
+            }
+            _ => None,
         })
         .collect()
 }
@@ -197,6 +228,88 @@ async fn nothing_is_sent_under_disable_initiation() {
     tokio::time::sleep(WAIT * 2).await;
     assert_eq!(notifications(&h), vec![(OTHER.to_vec(), 7, false)]);
     assert_eq!(counted(&h), (0, 0));
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn notifications_to_one_device_go_out_in_the_order_they_were_made() {
+    use bacnet_types::enums::EventState;
+    let mut h = start(false).await;
+    // Two transitions made while Device 9 is looked for wait in its queue.
+    h.write_local(85.0).await;
+    next_who_is(&h).await;
+    h.write_local(50.0).await;
+    // The first goes out after the I-Am and is held in the transport there,
+    // so the second still waits when a third transition is made.
+    let transport = h.server.test_network().transport().handle();
+    transport.block_next_send();
+    deliver(&h, &i_am(9), &DEVICE_9, None).await;
+    tokio::time::timeout(Duration::from_secs(1), transport.wait_blocked())
+        .await
+        .expect("the first waiting notification goes out");
+    h.write_local(85.0).await;
+    transport.release_sends(1);
+    h.settle().await;
+    let made = [
+        EventState::HIGH_LIMIT,
+        EventState::NORMAL,
+        EventState::HIGH_LIMIT,
+    ];
+    assert_eq!(to_states(&h, &DEVICE_9), made);
+    assert_eq!(to_states(&h, &OTHER), made);
+    assert!(next_who_is_none(&h));
+    assert_eq!(counted(&h), (0, 0));
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn past_the_cap_a_notification_is_skipped_and_counted_at_once() {
+    let mut h = start(false).await;
+    // Notifications for Device 50 take every place.
+    {
+        let mut awaiting = super::awaiting(&h.server.notification_transactions);
+        let filler = || {
+            Some(super::Pending {
+                process_id: 1,
+                confirmed: false,
+                request: Bytes::new(),
+                notification_class: 0,
+                priority: 255,
+                admits: Arc::new(
+                    |_: &super::super::super::event_recipient_route::RecipientRoute| true,
+                ),
+                budget: None,
+            })
+        };
+        for _ in 0..super::MAX_AWAITING_NOTIFICATIONS {
+            awaiting.enqueue(device(50), true, filler);
+        }
+        assert_eq!(awaiting.waiting(), super::MAX_AWAITING_NOTIFICATIONS);
+    }
+    h.write_local(85.0).await;
+    h.settle().await;
+    assert_eq!(counted(&h), (1, 0));
+    // The I-Am binds Device 9, but the skipped notification is gone.
+    deliver(&h, &i_am(9), &DEVICE_9, None).await;
+    h.settle().await;
+    assert_eq!(notifications(&h), vec![(OTHER.to_vec(), 7, false)]);
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_wait_for_the_i_am_lasts_at_most_a_minute() {
+    // An APDU timeout of ten hours still waits only a minute.
+    let config = ServerConfig {
+        cov_retry_timeout_ms: 10 * 60 * 60 * 1000,
+        ..ServerConfig::default()
+    };
+    let mut h = start_with(config, false).await;
+    h.write_local(85.0).await;
+    next_who_is(&h).await;
+    tokio::time::sleep(Duration::from_secs(60) - Duration::from_millis(1)).await;
+    assert_eq!(counted(&h), (0, 0));
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    assert_eq!(counted(&h), (1, 0));
     h.server.stop().await.unwrap();
 }
 

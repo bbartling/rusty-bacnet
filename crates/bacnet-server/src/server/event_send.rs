@@ -13,7 +13,8 @@ use bacnet_types::constructed::BACnetRecipient;
 
 #[path = "event_awaited_recipients.rs"]
 mod awaited;
-use awaited::{Awaited, DeviceRoute};
+pub(super) use awaited::AwaitingRecipients;
+use awaited::DeviceRoute;
 
 /// Why a confirmed notification ended at an attempt with nothing sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,8 +65,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// A Device recipient the server holds no fresh binding for is looked
     /// for with a targeted Who-Is (#1368), and its notification waits for the
-    /// I-Am in a task of its own, so the other recipients' notifications go
-    /// out at once ([`Self::send_when_found`]).
+    /// I-Am in its device's queue, which a task of its own drains, so the
+    /// other recipients' notifications go out at once. While the queue holds
+    /// anything, the device's next notifications join it, in order.
     pub(super) async fn send_event_notification(
         ctx: &EventDelivery<'_, T>,
         outbound: &OutboundNotification<'_>,
@@ -82,7 +84,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // address takes no binding and no confirmed request (#1493).
         let is_link_broadcast = |mac: &[u8]| network.transport().is_broadcast_mac(mac);
         let is_group = |mac: &[u8]| network.transport().is_group_destination(mac);
-        let mut awaited = Vec::new();
 
         for &(ref recipient, process_id, confirmed) in recipients {
             let route = match recipient {
@@ -90,22 +91,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     RecipientRoute::resolve_address(address, is_link_broadcast)
                 }
                 BACnetRecipient::Device(identifier) => {
-                    match Self::device_route(ctx, *identifier).await {
+                    match Self::device_route(ctx, outbound, *identifier, process_id, confirmed)
+                        .await
+                    {
                         DeviceRoute::Now(resolution) => {
                             RecipientRoute::from_device_resolution(resolution)
                         }
-                        DeviceRoute::Awaited(wait) => {
-                            awaited.push(Awaited {
-                                device: *identifier,
-                                process_id,
-                                confirmed,
-                                wait,
-                            });
-                            continue;
-                        }
-                        // DCC took effect meanwhile: nothing is sent or
-                        // counted, as for a notification it stops at once.
-                        DeviceRoute::Withheld => continue,
+                        DeviceRoute::Queued | DeviceRoute::Done => continue,
                     }
                 }
             }
@@ -113,9 +105,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // one (#1299).
             .localize(local_network, is_link_broadcast, is_group);
             Self::send_on_route(ctx, outbound, route, process_id, confirmed).await;
-        }
-        if !awaited.is_empty() {
-            Self::send_when_found(ctx, outbound, awaited);
         }
     }
 

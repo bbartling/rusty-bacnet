@@ -66,6 +66,27 @@ pub(super) fn is_who_is(frame: &crate::server::test_transport::SentFrame) -> boo
     )
 }
 
+/// Split broadcast NPDUs into the Who-Is requests among them, which looks
+/// for unbound Device recipients send (#1368), and the rest.
+pub(super) fn split_who_is(broadcasts: Vec<Bytes>) -> (Vec<WhoIsRequest>, Vec<Bytes>) {
+    let mut who_is = Vec::new();
+    let mut rest = Vec::new();
+    for npdu in broadcasts {
+        let payload = bacnet_encoding::npdu::decode_npdu(npdu.clone())
+            .unwrap()
+            .payload;
+        match bacnet_encoding::apdu::decode_apdu(payload).unwrap() {
+            Apdu::UnconfirmedRequest(request)
+                if request.service_choice == UnconfirmedServiceChoice::WHO_IS =>
+            {
+                who_is.push(WhoIsRequest::decode(&request.service_request).unwrap());
+            }
+            _ => rest.push(npdu),
+        }
+    }
+    (who_is, rest)
+}
+
 pub(super) fn address_recipient(network_number: u16, mac: &[u8]) -> BACnetRecipient {
     BACnetRecipient::Address(BACnetAddress {
         network_number,
@@ -225,12 +246,9 @@ pub(super) async fn distribute_counted_through(
         NotificationTransactions::observe(Some(result));
     }
 
-    // The notifications only: the Who-Is requests those lookups sent are
-    // left out (`who_is_sent` takes them).
     let broadcasts = sent
         .broadcasts()
         .into_iter()
-        .filter(|frame| !is_who_is(frame))
         .map(|frame| frame.npdu)
         .collect();
     let unicasts = sent
@@ -570,6 +588,13 @@ async fn device_recipient_is_skipped_not_broadcast() {
     )])
     .await;
 
+    // The device is looked for with a Who-Is limited to it (#1368), and its
+    // notification goes nowhere when it doesn't answer.
+    let (who_is, broadcasts) = split_who_is(broadcasts);
+    assert_eq!(
+        who_is,
+        [crate::server::remote_write_discovery_tests::targeted(99)]
+    );
     assert!(
         broadcasts.is_empty(),
         "a targeted device recipient must not be widened to a broadcast"
@@ -664,5 +689,8 @@ async fn one_unresolvable_recipient_does_not_suppress_the_others() {
         "the local unicast recipient still gets it"
     );
     assert_eq!(unicasts[0].0, mac);
+    // Device 99 is looked for with one Who-Is (#1368).
+    let (who_is, broadcasts) = split_who_is(broadcasts);
+    assert_eq!(who_is.len(), 1);
     assert_eq!(broadcasts.len(), 1, "the broadcast recipient still gets it");
 }

@@ -146,7 +146,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// as it does a request handler: what it hadn't sent by then is not
     /// sent, and a run it hadn't started ends as if none of its writes were
     /// made (#1324), In_Process FALSE with each command unsuccessful, or
-    /// Write_Status FAILED.
+    /// Write_Status FAILED. The call still returns `Ok(())` then: the write
+    /// was made. A panic in that work is raised again in the caller, as it
+    /// would be were the work done in place.
+    ///
+    /// The future must be awaited inside a Tokio runtime, which the task is
+    /// spawned onto.
     ///
     /// [`WriteProperty`]: bacnet_services::write_property::WritePropertyRequest
     pub async fn write_local(
@@ -348,20 +353,29 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         else {
             return Ok(());
         };
+        use futures_util::FutureExt;
         let runner = super::command_runs::CommandRunner::for_server(self);
         let (done, finished) = oneshot::channel();
         // A closed set (the server is stopping) drops the task, and with it
         // the guard and the runs, which then end unsuccessful (#1324).
         self.request_tasks.spawn(async move {
-            let runs = runner.writer().finish(committed).await;
-            if !runs.is_empty() {
-                runner.start(runs);
+            let work = std::panic::AssertUnwindSafe(async {
+                let runs = runner.writer().finish(committed).await;
+                if !runs.is_empty() {
+                    runner.start(runs);
+                }
+            });
+            // A panic goes back to the caller; with the caller gone, it
+            // stays this task's, for the request task set to log.
+            if let Err(Err(panic)) = done.send(work.catch_unwind().await) {
+                std::panic::resume_unwind(panic);
             }
-            let _ = done.send(());
         });
-        // The write has committed whatever becomes of the task.
-        let _ = finished.await;
-        Ok(())
+        match finished.await {
+            Ok(Err(panic)) => std::panic::resume_unwind(panic),
+            // Done, or aborted by `stop()`: either way the write was made.
+            Ok(Ok(())) | Err(_) => Ok(()),
+        }
     }
 
     /// Borrow the handles a local write uses, once the caller has checked

@@ -2874,7 +2874,8 @@ where that I-Am came from: the local network, or the remote network it was
 routed from, where a remote network numbered as this device's own counts as
 local. If that Who-Is draws nothing, the stale I-Am is dropped, so the
 device's next Who-Is goes global. The server then waits
-`ServerConfig::cov_retry_timeout_ms`, counted from the send, for the I-Am,
+`ServerConfig::cov_retry_timeout_ms`, but never more than a minute (#1368),
+counted from the send, for the I-Am,
 which binds the device as any I-Am does, and the write goes ahead; with no
 I-Am by then the command fails and no WriteProperty is sent. Writes that miss
 while that Who-Is is out share it and its wait. A device gets at most one
@@ -5526,11 +5527,16 @@ fixes them, and the warning logged with each skip gives the finer reason:
   skipping such a recipient the server looks for its device as it does for a
   Command's remote write (#1368): one Who-Is limited to its instance, at most
   one a minute per device, none under DCC, and the notification waits up to
-  `cov_retry_timeout_ms` from that Who-Is for the I-Am in a task of its own,
-  so the transition's other recipients aren't held up. A device that answers
-  gets the notification, which then counts as any other send does; one that
-  stays silent, or can't be looked for within the minute after a fruitless
-  Who-Is, counts here once. Observing the device's I-Am again, or configuring
+  `cov_retry_timeout_ms` (a minute at most) from that Who-Is for the I-Am.
+  It waits in a queue for its device, which a task of its own drains, so the
+  transition's other recipients aren't held up; while the queue holds
+  anything, the device's later notifications join it, so they reach it in
+  the order they were made, and each device drains on its own. A device that
+  answers gets the notification, which then counts as any other send does,
+  DCC checked again before each send; one that stays silent, or can't be
+  looked for within the minute after a fruitless Who-Is, counts here once.
+  At most 1,024 notifications wait at once across every device; one more is
+  skipped and counts here at once. Observing the device's I-Am again, or configuring
   a binding, clears it. A confirmed notification whose observed binding
   expires before a retry ends at that retry, its invoke ID freed, and counts
   here, not in `confirmed_unanswered` (#1371).
@@ -5553,6 +5559,11 @@ fixes them, and the warning logged with each skip gives the finer reason:
   a send or a wait
 - `seg_receivers` capped at 128 (DoS prevention)
 - `cov_in_flight` semaphore: max 255 concurrent confirmed COV notifications
+- Targeted Who-Is probes for unbound devices: at most 256 devices tracked,
+  one Who-Is a minute per device, and a wait for the I-Am of
+  `cov_retry_timeout_ms` held to a minute (#1322, #1368)
+- Event notifications waiting for their Device recipient's I-Am: at most
+  1,024 at once, across every device (#1368)
 - `comm_state`: `Arc<CommState>`, a lock-free DCC state that only the DCC
   timer (an accepted request and its expiry) changes
 

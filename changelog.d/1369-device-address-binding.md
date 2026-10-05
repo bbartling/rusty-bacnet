@@ -1,6 +1,6 @@
 ---
 section: Added
 ---
-- **Wire:** the Device's Device_Address_Binding lists the server's device bindings, configured ones and
-  I-Am observations under ten minutes old, through ReadProperty, ReadPropertyMultiple, ReadRange,
-  `read_local` and Python's `read_property`, in place of an empty list (#1369).
+- **Wire:** the Device's Device_Address_Binding lists the server's configured bindings and I-Am
+  observations under ten minutes old, on every read path; a value the application stored is replaced
+  by that list, and by an empty one on the endpoint (#1369).
