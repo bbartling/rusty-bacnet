@@ -1,6 +1,6 @@
 //! Member helpers the elevator codecs (landing calls, landing doors,
-//! assigned landing calls and car call lists) and the lighting command codec
-//! share.
+//! assigned landing calls and car call lists) and the lighting and colour
+//! command codecs share.
 //!
 //! Each decodes primitive Unsigned members and keeps two kinds of failure
 //! apart, so a property writer can answer with the matching Clause 15.9.1.3
@@ -10,6 +10,8 @@
 //! codecs read each member's contents with [`super::tagged`].
 
 use bacnet_types::error::Error;
+
+use super::tagged::decode_ctx_primitive;
 
 /// The value of an Unsigned member's content octets, or `None` when the
 /// encoding is well formed but the value needs more than 64 bits. Empty
@@ -45,4 +47,38 @@ pub(super) fn narrow<T: TryFrom<u64> + Default>(
             T::default()
         }
     }
+}
+
+/// The most contents octets an Unsigned or ENUMERATED field of a command
+/// may have when its first octet is zero. Every such field fits in 32 bits,
+/// so a longer one that opens with a zero octet isn't in its shortest form
+/// (Clause 20.2.4).
+const MAX_PADDED_OCTETS: usize = 4;
+
+/// Read the Unsigned or ENUMERATED under primitive context tag `tag` at
+/// `offset` and narrow it to `T`, for the command codecs (`what` names the
+/// production in errors). A value too wide for `T` is recorded as
+/// `oversized` and read as zero, so the rest of the structure still gets
+/// checked; more than four contents octets that open with zero are
+/// malformed.
+pub(super) fn unsigned_field<T: TryFrom<u64> + Default>(
+    data: &[u8],
+    offset: usize,
+    tag: u8,
+    what: &str,
+    too_wide: &'static str,
+    oversized: &mut Option<&'static str>,
+) -> Result<(T, usize), Error> {
+    let (content, end) = decode_ctx_primitive(data, offset, tag, what)?;
+    if content.len() > MAX_PADDED_OCTETS && content[0] == 0 {
+        return Err(Error::decoding(
+            offset,
+            format!(
+                "{what}: [{tag}] has {} contents octets and a leading zero",
+                content.len()
+            ),
+        ));
+    }
+    let value = unsigned_member(content, end - content.len())?;
+    Ok((narrow(value, too_wide, oversized), end))
 }

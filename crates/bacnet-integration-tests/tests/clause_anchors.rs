@@ -15,6 +15,7 @@ const ACCESS_ENUMS: &str = include_str!("../../../crates/bacnet-types/src/enums/
 const NOTIFICATION_CLASS: &str =
     include_str!("../../../crates/bacnet-objects/src/notification_class/mod.rs");
 const COLOR_OBJ: &str = include_str!("../../../crates/bacnet-objects/src/color/mod.rs");
+const PROPERTY_ID: &str = include_str!("../../../crates/bacnet-types/src/enums/property_id.rs");
 const LIFE_SAFETY_ENUMS: &str =
     include_str!("../../../crates/bacnet-types/src/enums/life_safety.rs");
 const TIMER_OBJ: &str = include_str!("../../../crates/bacnet-objects/src/timer.rs");
@@ -141,11 +142,19 @@ fn notification_class_priority_ack_clause() {
 
 #[test]
 fn color_addendum_claims_no_base_numbers() {
+    // The colour objects come from Addendum 135-2020ca; 135-2020 has no
+    // addendum bj (#887).
     assert_anchors(
         "crates/bacnet-objects/src/color/mod.rs",
         COLOR_OBJ,
-        &["12.55-12.56"],
+        &["12.55-12.56", "Addendum bj"],
+        &["Addendum 135-2020ca"],
+    );
+    assert_anchors(
+        "crates/bacnet-types/src/enums/property_id.rs",
+        PROPERTY_ID,
         &["Addendum bj"],
+        &["Addendum 135-2020ca", "Addendum 135-2020cc"],
     );
 }
 

@@ -26,6 +26,8 @@ pub use audit::{
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
     BACnetObjectSelector,
 };
+mod color;
+pub use color::{BACnetColorCommand, BACnetXyColor};
 mod event_notification;
 pub use event_notification::{
     ChangeOfValueChoice, EventNotificationRequest, NotificationParameters,

@@ -16,6 +16,7 @@ mod audit_notification;
 mod authentication_factor_format;
 mod calendar;
 mod channel_value;
+mod color_command;
 mod cov_subscription;
 mod event_log_record;
 mod event_notification;

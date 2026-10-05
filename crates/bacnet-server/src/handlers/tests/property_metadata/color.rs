@@ -10,11 +10,12 @@ fn color_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
     let mut color = ColorObject::new(7, "CLR-7").unwrap();
     let mut temperature = ColorTemperatureObject::new(7, "CT-7").unwrap();
     if configured {
+        // STOP.
         color
             .write_property(
                 P::COLOR_COMMAND,
                 None,
-                PropertyValue::OctetString(vec![0x01, 0x02]),
+                PropertyValue::ApplicationData(vec![0x09, 0x06]),
                 None,
             )
             .unwrap();
@@ -31,11 +32,12 @@ fn color_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
         temperature
             .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(5000), None)
             .unwrap();
+        // STEP_UP_CCT by 1 K.
         temperature
             .write_property(
                 P::COLOR_COMMAND,
                 None,
-                PropertyValue::OctetString(vec![0x04, 0x05]),
+                PropertyValue::ApplicationData(vec![0x09, 0x04, 0x59, 0x01]),
                 None,
             )
             .unwrap();

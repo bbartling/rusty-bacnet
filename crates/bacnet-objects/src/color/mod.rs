@@ -1,12 +1,17 @@
-//! Color (type 63) and Color Temperature (type 64) objects.
-//!
-//! Per ASHRAE 135-2020 Addendum bj (Color and Color Temperature objects).
+//! Color (type 63) and Color Temperature (type 64) objects, added by
+//! Addendum 135-2020ca.
 //!
 //! Color objects represent CIE 1931 xy color coordinates.
 //! Color Temperature objects represent correlated color temperature in Kelvin.
-//! Both support fade transitions via Color_Command.
+//! Both take a typed `BACnetColorCommand` as Color_Command, checked against
+//! the operations each allows (see `command`), and serve the last one taken.
+//! Neither carries a command out: Present_Value, Tracking_Value and
+//! In_Progress stay as they are.
 
-use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::constructed::{BACnetColorCommand, BACnetXyColor};
+use bacnet_types::enums::{
+    ColorOperation, EventState, ObjectType, PropertyIdentifier, Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -14,7 +19,23 @@ use std::borrow::Cow;
 use crate::common::{self, read_common_properties, read_property_list_property};
 use crate::traits::BACnetObject;
 
+mod command;
 mod metadata;
+
+#[cfg(test)]
+mod command_tests;
+
+/// D65 white, where a new Color object starts.
+const D65: BACnetXyColor = BACnetXyColor::new(0.3127, 0.3290);
+
+/// The value an xy colour reads as: its two REALs, which encode as the
+/// BACnetxyColor SEQUENCE.
+fn xy_value(color: BACnetXyColor) -> PropertyValue {
+    PropertyValue::List(vec![
+        PropertyValue::Real(color.x),
+        PropertyValue::Real(color.y),
+    ])
+}
 
 // ---------------------------------------------------------------------------
 // ColorObject (type 63) — CIE 1931 xy color
@@ -22,24 +43,24 @@ mod metadata;
 
 /// BACnet Color object (type 63).
 ///
-/// Represents a color as CIE 1931 xy coordinates. Supports FADE_TO_COLOR
-/// transitions via Color_Command. Non-commandable (no priority array).
+/// Represents a color as CIE 1931 xy coordinates. Non-commandable (no
+/// priority array).
+///
+/// Color_Command takes a [`BACnetColorCommand`] whose operation is
+/// FADE_TO_COLOR or STOP (see [`set_color_command`](Self::set_color_command))
+/// and serves the last one taken. The object doesn't carry commands out.
 pub struct ColorObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// Present_Value: BACnetxyColor encoded as (x: REAL, y: REAL).
-    /// Stored as two f32 values.
-    present_value_x: f32,
-    present_value_y: f32,
+    /// Present_Value: the target colour.
+    present_value: BACnetXyColor,
     /// Tracking_Value: current actual color (may differ during fade).
-    tracking_value_x: f32,
-    tracking_value_y: f32,
-    /// Color_Command: last written command (opaque bytes for now).
-    color_command: Vec<u8>,
-    /// Default_Color: startup color (x, y).
-    default_color_x: f32,
-    default_color_y: f32,
+    tracking_value: BACnetXyColor,
+    /// The last command written; operation NONE until then.
+    color_command: BACnetColorCommand,
+    /// Default_Color: startup color.
+    default_color: BACnetXyColor,
     /// Default_Fade_Time: milliseconds (100-86400000). 0 = use device default.
     default_fade_time: u32,
     /// Transition: 0=NONE, 1=FADE.
@@ -60,13 +81,10 @@ impl ColorObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value_x: 0.3127,
-            present_value_y: 0.3290,
-            tracking_value_x: 0.3127,
-            tracking_value_y: 0.3290,
-            color_command: Vec::new(),
-            default_color_x: 0.3127,
-            default_color_y: 0.3290,
+            present_value: D65,
+            tracking_value: D65,
+            color_command: BACnetColorCommand::new(ColorOperation::NONE),
+            default_color: D65,
             default_fade_time: 0,
             transition: 0,  // NONE
             in_progress: 0, // idle
@@ -79,10 +97,29 @@ impl ColorObject {
 
     /// Set the CIE 1931 xy Present_Value and make Tracking_Value follow it immediately.
     pub fn set_present_value(&mut self, x: f32, y: f32) {
-        self.present_value_x = x;
-        self.present_value_y = y;
-        self.tracking_value_x = x;
-        self.tracking_value_y = y;
+        self.present_value = BACnetXyColor::new(x, y);
+        self.tracking_value = self.present_value;
+    }
+
+    /// The last command written to Color_Command, or operation NONE with no
+    /// other field before any write.
+    pub fn color_command(&self) -> BACnetColorCommand {
+        self.color_command
+    }
+
+    /// Set Color_Command, as a WriteProperty of the encoded command would.
+    ///
+    /// The command is checked against the Color object's table of colour
+    /// commands (Addendum 135-2020ca): only FADE_TO_COLOR and STOP are taken.
+    /// FADE_TO_COLOR needs a target colour with both coordinates 0.0 to 1.0,
+    /// and a fade time, when it carries one, of 100 to 86,400,000 ms. Fields
+    /// the operation doesn't use are kept unchecked. A refusal is
+    /// VALUE_OUT_OF_RANGE and leaves the property unchanged. The object
+    /// stores the command without carrying it out.
+    pub fn set_color_command(&mut self, command: BACnetColorCommand) -> Result<(), Error> {
+        command::check_color(&command)?;
+        self.color_command = command;
+        Ok(())
     }
 }
 
@@ -107,24 +144,10 @@ impl BACnetObject for ColorObject {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::COLOR.to_raw()))
             }
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                // BACnetxyColor encoded as a list of two REALs
-                Ok(PropertyValue::List(vec![
-                    PropertyValue::Real(self.present_value_x),
-                    PropertyValue::Real(self.present_value_y),
-                ]))
-            }
-            p if p == PropertyIdentifier::TRACKING_VALUE => Ok(PropertyValue::List(vec![
-                PropertyValue::Real(self.tracking_value_x),
-                PropertyValue::Real(self.tracking_value_y),
-            ])),
-            p if p == PropertyIdentifier::COLOR_COMMAND => {
-                Ok(PropertyValue::OctetString(self.color_command.clone()))
-            }
-            p if p == PropertyIdentifier::DEFAULT_COLOR => Ok(PropertyValue::List(vec![
-                PropertyValue::Real(self.default_color_x),
-                PropertyValue::Real(self.default_color_y),
-            ])),
+            p if p == PropertyIdentifier::PRESENT_VALUE => Ok(xy_value(self.present_value)),
+            p if p == PropertyIdentifier::TRACKING_VALUE => Ok(xy_value(self.tracking_value)),
+            p if p == PropertyIdentifier::COLOR_COMMAND => Ok(command::encode(&self.color_command)),
+            p if p == PropertyIdentifier::DEFAULT_COLOR => Ok(xy_value(self.default_color)),
             p if p == PropertyIdentifier::DEFAULT_FADE_TIME => {
                 Ok(PropertyValue::Unsigned(self.default_fade_time as u64))
             }
@@ -161,12 +184,8 @@ impl BACnetObject for ColorObject {
         }
         match property {
             p if p == PropertyIdentifier::COLOR_COMMAND => {
-                if let PropertyValue::OctetString(data) = value {
-                    self.color_command = data;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
+                self.color_command = command::decode_write(value, command::check_color)?;
+                Ok(())
             }
             p if p == PropertyIdentifier::DEFAULT_FADE_TIME => {
                 if let PropertyValue::Unsigned(v) = value {
@@ -207,7 +226,11 @@ impl BACnetObject for ColorObject {
 /// BACnet Color Temperature object (type 64).
 ///
 /// Represents correlated color temperature in Kelvin (typically 1000-30000).
-/// Supports FADE, RAMP, and STEP transitions via Color_Command.
+///
+/// Color_Command takes a [`BACnetColorCommand`] whose operation is
+/// FADE_TO_CCT, RAMP_TO_CCT, STEP_UP_CCT, STEP_DOWN_CCT or STOP (see
+/// [`set_color_command`](Self::set_color_command)) and serves the last one
+/// taken. The object doesn't carry commands out.
 pub struct ColorTemperatureObject {
     oid: ObjectIdentifier,
     name: String,
@@ -216,8 +239,8 @@ pub struct ColorTemperatureObject {
     present_value: u32,
     /// Tracking_Value: current actual color temperature.
     tracking_value: u32,
-    /// Color_Command: last written command.
-    color_command: Vec<u8>,
+    /// The last command written; operation NONE until then.
+    color_command: BACnetColorCommand,
     /// Default_Color_Temperature: startup value.
     default_color_temperature: u32,
     /// Default_Fade_Time: milliseconds.
@@ -249,7 +272,7 @@ impl ColorTemperatureObject {
             description: String::new(),
             present_value: 4000,
             tracking_value: 4000,
-            color_command: Vec::new(),
+            color_command: BACnetColorCommand::new(ColorOperation::NONE),
             default_color_temperature: 4000,
             default_fade_time: 0,
             default_ramp_rate: 100,     // 100K/s
@@ -275,6 +298,30 @@ impl ColorTemperatureObject {
     pub fn set_min_max(&mut self, min: u32, max: u32) {
         self.min_pres_value = Some(min);
         self.max_pres_value = Some(max);
+    }
+
+    /// The last command written to Color_Command, or operation NONE with no
+    /// other field before any write.
+    pub fn color_command(&self) -> BACnetColorCommand {
+        self.color_command
+    }
+
+    /// Set Color_Command, as a WriteProperty of the encoded command would.
+    ///
+    /// The command is checked against the Color Temperature object's table
+    /// of colour commands (Addendum 135-2020ca): FADE_TO_CCT, RAMP_TO_CCT,
+    /// STEP_UP_CCT, STEP_DOWN_CCT and STOP are taken. FADE_TO_CCT and
+    /// RAMP_TO_CCT need a target colour temperature of 1000 to 30000 K. A
+    /// field the operation uses must be in range: fade time (FADE_TO_CCT) 100
+    /// to 86,400,000 ms, ramp rate (RAMP_TO_CCT) 1 to 30000 K/s, step
+    /// increment (the step operations) 1 to 30000 K. Fields the operation
+    /// doesn't use are kept unchecked. A refusal is VALUE_OUT_OF_RANGE and
+    /// leaves the property unchanged. The object stores the command without
+    /// carrying it out.
+    pub fn set_color_command(&mut self, command: BACnetColorCommand) -> Result<(), Error> {
+        command::check_color_temperature(&command)?;
+        self.color_command = command;
+        Ok(())
     }
 }
 
@@ -305,9 +352,7 @@ impl BACnetObject for ColorTemperatureObject {
             p if p == PropertyIdentifier::TRACKING_VALUE => {
                 Ok(PropertyValue::Unsigned(self.tracking_value as u64))
             }
-            p if p == PropertyIdentifier::COLOR_COMMAND => {
-                Ok(PropertyValue::OctetString(self.color_command.clone()))
-            }
+            p if p == PropertyIdentifier::COLOR_COMMAND => Ok(command::encode(&self.color_command)),
             p if p == PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE => Ok(PropertyValue::Unsigned(
                 self.default_color_temperature as u64,
             )),
@@ -382,12 +427,9 @@ impl BACnetObject for ColorTemperatureObject {
                 }
             }
             p if p == PropertyIdentifier::COLOR_COMMAND => {
-                if let PropertyValue::OctetString(data) = value {
-                    self.color_command = data;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
+                self.color_command =
+                    command::decode_write(value, command::check_color_temperature)?;
+                Ok(())
             }
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),

@@ -463,8 +463,8 @@ impl BACnetServer {
     ///
     /// `members` takes the `read_property_multiple` spec shape, checked as
     /// the endpoint owners' `add_group` checks it: a member listing no
-    /// properties, a property identifier past 22 bits, or a group's
-    /// Present_Value is a ValueError naming its position and the rule.
+    /// properties, or a group's Present_Value, is a ValueError naming its
+    /// position and the rule; any property identifier is taken.
     #[pyo3(signature = (instance, name, members=None))]
     fn add_group(
         &self,

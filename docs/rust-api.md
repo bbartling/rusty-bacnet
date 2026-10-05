@@ -1898,10 +1898,10 @@ framing, through the shared `bacnet-encoding` codecs.
   and the properties the group reports, encoded by
   `bacnet_encoding::constructed::encode_read_access_specification`.
   `GroupObject::add_member` refuses one
-  with no properties, one naming a property identifier above 4194303, and one
-  that would report a Group's or Global Group's Present_Value, returning a
-  `GroupMemberRefusal` that names the rule and converts to PROPERTY /
-  VALUE_OUT_OF_RANGE. The object stores no Present_Value: the server rebuilds it on
+  with no properties and one that would report a Group's or Global Group's
+  Present_Value, returning a `GroupMemberRefusal` that names the rule and
+  converts to PROPERTY / VALUE_OUT_OF_RANGE. Any property identifier is taken,
+  including those ASHRAE assigns above 4194303. The object stores no Present_Value: the server rebuilds it on
   every ReadProperty, ReadPropertyMultiple and ReadRange as one
   ReadAccessResult per member, reading each member as ReadPropertyMultiple
   would, so a failed read carries its error and an object that isn't in the
@@ -2934,6 +2934,40 @@ INVALID_DATA_ENCODING, even when a field is also too wide for its type. An
 Unsigned or ENUMERATED field may open with zero octets only up to four contents
 octets. The object stores the command without carrying it out: Present_Value,
 Tracking_Value, In_Progress and the priority array stay as they are (#1384).
+
+Color and Color Temperature (Addendum 135-2020ca) hold their `Color_Command`
+as a `BACnetColorCommand` (`bacnet_types::constructed`): a `ColorOperation`
+plus an optional target colour (a `BACnetXyColor`), target colour temperature,
+fade time, ramp rate and step increment (#1386). It reads operation NONE until
+written. Over the network it travels as the command's context-tagged fields,
+which `bacnet_encoding::constructed::encode_color_command` writes and
+`decode_color_command_value` reads (`decode_color_command` reads one at an
+offset); locally it reads as `PropertyValue::ApplicationData` holding those
+octets, and `set_color_command` and `color_command` take and return the typed
+value. `encode_xy_color` and `decode_xy_color` handle a Color object's xy
+values. Each object checks a command against its own table of colour commands:
+
+- A Color object takes FADE_TO_COLOR, which needs a target colour with both
+  coordinates 0.0 to 1.0, and STOP.
+- A Color Temperature object takes FADE_TO_CCT and RAMP_TO_CCT, which need a
+  target colour temperature of 1000 to 30000 K, STEP_UP_CCT, STEP_DOWN_CCT and
+  STOP.
+- A field the operation uses must be in range: fade time 100 to 86,400,000 ms,
+  ramp rate 1 to 30000 K/s, step increment 1 to 30000 K. A field it doesn't
+  use is kept as written without a check.
+
+Any other operation, NONE and those past STOP included, is refused with
+VALUE_OUT_OF_RANGE, as is a missing target. Any other datatype, an OCTET STRING
+included, is INVALID_DATA_TYPE, and octets that aren't exactly one command are
+INVALID_DATA_ENCODING. Neither object carries a command out: Present_Value,
+Tracking_Value and In_Progress stay as they are.
+
+The colour properties use their standard identifiers: `DEFAULT_COLOR` is
+4194330, `DEFAULT_COLOR_TEMPERATURE` 4194331 and `COLOR_COMMAND` 4194334
+(#887). Identifiers 508 to 511 are the Network Port properties
+`ADDITIONAL_REFERENCE_PORTS`, `CERTIFICATE_SIGNING_REQUEST_FILE`,
+`COMMAND_VALIDATION_RESULT` and `ISSUER_CERTIFICATE_FILES` (Addendum
+135-2020cc); no object serves them yet.
 
 A Channel passes each value written to its Present_Value on to its members
 (Clause 12.53, #1151). Give it the members with `ChannelObject::set_members`,

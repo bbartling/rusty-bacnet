@@ -19,8 +19,8 @@ pub(crate) fn members(members: Option<Vec<PyReadAccessSpec>>) -> Vec<ReadAccessS
 /// Build a Group with its List_Of_Group_Members in order.
 ///
 /// Each member goes through `GroupObject::add_member`. A refused member is a
-/// ValueError naming its position and the rule it breaks: no properties, a
-/// property identifier past 22 bits, or another group's Present_Value.
+/// ValueError naming its position and the rule it breaks: no properties, or
+/// another group's Present_Value.
 pub(crate) fn group(
     instance: u32,
     name: &str,

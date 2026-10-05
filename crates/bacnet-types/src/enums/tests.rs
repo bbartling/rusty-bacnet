@@ -61,6 +61,32 @@ fn property_identifier_vendor() {
 }
 
 #[test]
+fn property_identifiers_508_to_511_are_network_port_and_color_is_extended() {
+    // Addendum 135-2020cc gives 508 to 511 to Network Port properties;
+    // Addendum 135-2020ca puts the colour properties past 4194303 (#887).
+    let cases = [
+        (508, "ADDITIONAL_REFERENCE_PORTS"),
+        (509, "CERTIFICATE_SIGNING_REQUEST_FILE"),
+        (510, "COMMAND_VALIDATION_RESULT"),
+        (511, "ISSUER_CERTIFICATE_FILES"),
+        (4_194_330, "DEFAULT_COLOR"),
+        (4_194_331, "DEFAULT_COLOR_TEMPERATURE"),
+        (4_194_334, "COLOR_COMMAND"),
+    ];
+    for (raw, name) in cases {
+        let property = PropertyIdentifier::from_raw(raw);
+        assert_eq!(property.to_string(), name);
+        assert_eq!(name.parse::<PropertyIdentifier>(), Ok(property));
+    }
+    assert_eq!(PropertyIdentifier::DEFAULT_COLOR.to_raw(), 4_194_330);
+    assert_eq!(
+        PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE.to_raw(),
+        4_194_331
+    );
+    assert_eq!(PropertyIdentifier::COLOR_COMMAND.to_raw(), 4_194_334);
+}
+
+#[test]
 fn pdu_type_values() {
     assert_eq!(PduType::CONFIRMED_REQUEST.to_raw(), 0);
     assert_eq!(PduType::ABORT.to_raw(), 7);
