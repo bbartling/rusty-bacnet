@@ -1,6 +1,5 @@
 ---
 section: Changed
 ---
-- **Breaking (Rust and Python API):** the Audit recipient moves from
-  `AuditReporterConfig` into the built-in Device, and Python uses
-  `configure_audit_recipient` (#728).
+- **Rust and Python API:** the Audit recipient lives on the built-in Device,
+  and Python sets it with `configure_audit_recipient` (#728).
