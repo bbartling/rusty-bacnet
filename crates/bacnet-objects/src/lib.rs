@@ -27,6 +27,7 @@ pub mod lighting;
 pub mod load_control;
 pub mod log_buffer;
 pub(crate) mod log_lifecycle;
+pub mod log_reporting;
 pub(crate) mod log_window;
 pub mod loop_obj;
 pub mod multistate;

@@ -100,14 +100,17 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
 /// `triggered`: the trend logs' Logging_Type is TRIGGERED, which makes their
 /// Log_Interval read-only (Table 12-29 footnote 3, Table 12-35 footnote 2).
 fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
-    let multiple = kind == ObjectType::TREND_LOG_MULTIPLE;
+    // Every Trend Log samples a BACnet property, which makes its window,
+    // Log_Interval and Log_DeviceObjectProperty required (Table 12-29
+    // footnotes 1 and 8, #1481).
+    let trend = kind == ObjectType::TREND_LOG;
     let mut rows = vec![
         (P::OBJECT_IDENTIFIER, false, false),
         (P::OBJECT_NAME, false, false),
         (P::DESCRIPTION, true, true),
         (P::OBJECT_TYPE, false, false),
         (P::LOG_ENABLE, false, true),
-        (P::LOG_INTERVAL, !multiple, !triggered),
+        (P::LOG_INTERVAL, false, !triggered),
         (P::STOP_WHEN_FULL, false, true),
         (P::BUFFER_SIZE, false, false),
         (P::LOG_BUFFER, false, false),
@@ -127,25 +130,28 @@ fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
             // Both trend objects take POLLED or TRIGGERED (#1235, #1354).
             (P::LOGGING_TYPE, false, true),
             // Writable on both trend objects (#1234).
-            (
-                P::LOG_DEVICE_OBJECT_PROPERTY,
-                kind == ObjectType::TREND_LOG,
-                true,
-            ),
+            (P::LOG_DEVICE_OBJECT_PROPERTY, false, true),
         ]);
         // The window, clock alignment and Trigger, all writable (#1235,
         // #1353, #1354).
-        rows.extend(
-            [
-                P::START_TIME,
-                P::STOP_TIME,
-                P::ALIGN_INTERVALS,
-                P::INTERVAL_OFFSET,
-                P::TRIGGER,
-            ]
-            .map(|p| (p, true, true)),
-        );
+        rows.extend([P::START_TIME, P::STOP_TIME].map(|p| (p, !trend, true)));
+        rows.extend([P::ALIGN_INTERVALS, P::INTERVAL_OFFSET, P::TRIGGER].map(|p| (p, true, true)));
     }
+    // Every log's BUFFER_READY rows, optional (Table 12-29 and 12-35
+    // footnote 4, Table 12-31 footnote 3); the configuration ones writable
+    // (#1347).
+    rows.extend([
+        (P::NOTIFICATION_THRESHOLD, true, true),
+        (P::RECORDS_SINCE_NOTIFICATION, true, false),
+        (P::LAST_NOTIFY_RECORD, true, false),
+        (P::NOTIFICATION_CLASS, true, true),
+        (P::EVENT_ENABLE, true, true),
+        (P::ACKED_TRANSITIONS, true, false),
+        (P::NOTIFY_TYPE, true, true),
+        (P::EVENT_TIME_STAMPS, true, false),
+        (P::EVENT_MESSAGE_TEXTS, true, false),
+        (P::EVENT_DETECTION_ENABLE, true, true),
+    ]);
     rows.push((P::PROPERTY_LIST, false, false));
     rows
 }

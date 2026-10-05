@@ -1,4 +1,4 @@
-"""Installed-wheel event telemetry: BACnetServer.event_notification_counters() (#1142, #1160, #1196, #1225, #1259)."""
+"""Installed-wheel event telemetry: BACnetServer.event_notification_counters() (#1142, #1160, #1196, #1225, #1259, #1346)."""
 import ast
 import importlib.util
 from pathlib import Path
@@ -24,6 +24,7 @@ FIELDS = frozenset({
     "apdu_too_large",
     "received_not_forwarded",
     "forwarding_cap_dropped",
+    "received_not_logged",
 })
 
 

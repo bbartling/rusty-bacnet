@@ -5,7 +5,9 @@
 //! Split out of `requests.rs` to keep every file under the 700-LOC cap.
 
 use super::super::event_forwarding::{ForwardOrigin, Reception};
+use super::super::received_event_log::log_received_event_notification;
 use super::super::*;
+use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_objects::clock::ClockReader;
 use bacnet_services::alarm_event::ForwardedEventNotification;
 use bacnet_services::device_mgmt::TimeSynchronizationRequest;
@@ -321,6 +323,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         } else if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION {
             match ForwardedEventNotification::decode(&req.service_request) {
                 Ok(notification) => {
+                    let source = CanonicalPeer::from_source(
+                        &received.source_mac,
+                        received.source_network.as_ref(),
+                        network.local_network_number().get(),
+                    );
+                    log_received_event_notification(
+                        db,
+                        &services.received_event_log,
+                        &services.event_suppressions,
+                        source,
+                        &req.service_request,
+                    )
+                    .await;
                     Self::forward_event_notification(
                         &services.event_delivery(),
                         vec![notification],

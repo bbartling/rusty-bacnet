@@ -12,7 +12,9 @@ use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{ChangeOfValueChoice, NotificationParameters};
 use bacnet_services::common::BACnetPropertyValue;
-use bacnet_types::constructed::{BACnetEventParameter, BACnetPropertyStates};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
+};
 use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
@@ -101,11 +103,14 @@ enum OptionalProjectionValue {
     Malformed,
 }
 
-/// Project an intrinsic source after its transition commit.
+/// Project an intrinsic source after its transition commit. `device` is this
+/// device's identifier, which a log's BUFFER_READY report names its buffer
+/// with.
 pub(crate) fn project_intrinsic_payload(
     object: &dyn BACnetObject,
     change: &EventStateChange,
     event_type: EventType,
+    device: Option<ObjectIdentifier>,
 ) -> Option<CommittedNotificationPayload> {
     let object_type = object.object_identifier().object_type();
     let params = if change.from == EventState::FAULT || change.to == EventState::FAULT {
@@ -133,10 +138,34 @@ pub(crate) fn project_intrinsic_payload(
             {
                 project_builtin_command_failure(object, object_type)?
             }
+            ObjectType::TREND_LOG | ObjectType::EVENT_LOG | ObjectType::TREND_LOG_MULTIPLE
+                if event_type == EventType::BUFFER_READY =>
+            {
+                project_buffer_ready(object, device)?
+            }
             _ => return None,
         }
     };
     Some(CommittedNotificationPayload(params))
+}
+
+/// A log's BUFFER_READY report (Clause 13.3.7): its own Log_Buffer in this
+/// device, with the counts its committed transition reported.
+fn project_buffer_ready(
+    object: &dyn BACnetObject,
+    device: Option<ObjectIdentifier>,
+) -> Option<NotificationParameters> {
+    let report = object.buffer_ready_report_internal()?;
+    Some(NotificationParameters::BufferReady {
+        buffer_property: BACnetDeviceObjectPropertyReference {
+            object_identifier: object.object_identifier(),
+            property_identifier: PropertyIdentifier::LOG_BUFFER.to_raw(),
+            property_array_index: None,
+            device_identifier: device,
+        },
+        previous_notification: report.previous_notification,
+        current_notification: report.current_notification,
+    })
 }
 
 /// Project an Event Enrollment source after its transition commit.

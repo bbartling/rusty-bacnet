@@ -514,9 +514,10 @@ async fn receive(h: &Harness, notification: &EventNotificationRequest) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_received_notification_is_not_logged() {
+async fn a_log_without_the_opt_in_takes_no_received_notification() {
     // NF-1 forwards what this device receives to PEER as process 9, so its
-    // copy shows the received notification has been handled.
+    // copy shows the received notification has been handled. EL-1 hasn't
+    // opted in to received notifications (#1346), so it holds only its own.
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         alarm_and_logs(db, &[1], 8);
         let mut forwarder = NotificationForwarderObject::new(1, "NF-1").unwrap();
@@ -642,3 +643,6 @@ async fn enrollments_watching_each_others_logs_do_not_feed_each_other() {
     }
     h.server.stop().await.unwrap();
 }
+
+#[path = "received_event_log_wire_tests.rs"]
+mod received;

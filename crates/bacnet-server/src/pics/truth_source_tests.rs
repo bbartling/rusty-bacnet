@@ -638,9 +638,55 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
             .filter(|property| property.access.writable)
             .map(|property| property.property_id)
             .collect::<Vec<_>>();
-        assert_eq!(writable.len(), expected.len(), "{object_type:?}");
-        for property in expected {
+        // Each log's BUFFER_READY configuration is writable too (#1347).
+        let reporting = [
+            PropertyIdentifier::NOTIFICATION_THRESHOLD,
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        ];
+        assert_eq!(
+            writable.len(),
+            expected.len() + reporting.len(),
+            "{object_type:?}"
+        );
+        for property in expected.iter().chain(&reporting) {
             assert!(writable.contains(property), "{object_type:?} {property:?}");
+        }
+        // A Trend Log samples a BACnet property, so Table 12-29 footnotes 1
+        // and 8 require its window, Log_Interval and Log_DeviceObjectProperty
+        // (#1481). Table 12-35 requires the last two outright, and neither it
+        // nor Table 12-31 requires a window.
+        let optional = |property| {
+            support
+                .supported_properties
+                .iter()
+                .find(|row| row.property_id == property)
+                .map(|row| row.access.optional)
+        };
+        let trend = object_type == ObjectType::TREND_LOG;
+        for property in [
+            PropertyIdentifier::START_TIME,
+            PropertyIdentifier::STOP_TIME,
+        ] {
+            assert_eq!(
+                optional(property),
+                Some(!trend),
+                "{object_type:?} {property:?}"
+            );
+        }
+        if object_type != ObjectType::EVENT_LOG {
+            for property in [
+                PropertyIdentifier::LOG_INTERVAL,
+                PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
+            ] {
+                assert_eq!(
+                    optional(property),
+                    Some(false),
+                    "{object_type:?} {property:?}"
+                );
+            }
         }
     }
 }

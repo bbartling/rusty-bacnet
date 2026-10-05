@@ -5,6 +5,7 @@ use bacnet_types::enums::{LoggingType, PropertyIdentifier as P};
 
 use crate::log_buffer::{BUFFER_SIZE_METADATA, LOG_BUFFER_METADATA, TOTAL_RECORD_COUNT_METADATA};
 use crate::log_lifecycle::{LOG_ENABLE_METADATA, RECORD_COUNT_METADATA, STOP_WHEN_FULL_METADATA};
+use crate::log_reporting::BUFFER_READY_METADATA;
 use crate::log_window::{START_TIME_METADATA, STOP_TIME_METADATA};
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
@@ -20,8 +21,12 @@ use crate::property_metadata::{
 // (footnote 2). Start_Time and Stop_Time are writable as footnote 1 asks;
 // the device supports clock-aligned logging, so Align_Intervals and
 // Interval_Offset are present (footnote 3), writable like Log_Interval, and
-// Trigger is writable to ask for an acquisition.
-const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 22] {
+// Trigger is writable to ask for an acquisition. No footnote of Table 12-35
+// requires the window the way Table 12-29's does a Trend Log's (#1481). The
+// log reports BUFFER_READY (#1347), so the intrinsic reporting rows footnote
+// 4 asks for come last, each marked as present for that reason.
+const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 32] {
+    let r = BUFFER_READY_METADATA;
     [
         PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
         PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -44,12 +49,22 @@ const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 22] {
         PropertyMetadata::new(P::ALIGN_INTERVALS, Optional, None, Always),
         PropertyMetadata::new(P::INTERVAL_OFFSET, Optional, None, Always),
         PropertyMetadata::new(P::TRIGGER, Optional, None, Always),
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4],
+        r[5],
+        r[6],
+        r[7],
+        r[8],
+        r[9],
         PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
     ]
 }
 
-const POLLED: [PropertyMetadata; 22] = rows(Always);
-const TRIGGERED: [PropertyMetadata; 22] = rows(ReadOnly);
+const POLLED: [PropertyMetadata; 32] = rows(Always);
+const TRIGGERED: [PropertyMetadata; 32] = rows(ReadOnly);
 
 pub(super) fn for_object(object: &TrendLogMultipleObject) -> Cow<'_, [PropertyMetadata]> {
     Cow::Borrowed(if object.logging_type() == LoggingType::TRIGGERED {

@@ -8,7 +8,7 @@ use crate::event_enrollment::EventEnrollmentObject;
 use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;
 use bacnet_types::bitstring::LogStatus;
-use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, NotificationParameters};
 use bacnet_types::enums::{EventState, EventType, NotifyType, PropertyIdentifier};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
 use std::borrow::Cow;
@@ -128,12 +128,63 @@ fn every_event_log_records_the_notification_at_the_device_clock_time() {
     }
 }
 
+/// A BUFFER_READY report from `event_object` on the Log_Buffer of
+/// `buffer`, in `device` when given.
+fn buffer_ready(
+    event_object: ObjectIdentifier,
+    buffer: ObjectIdentifier,
+    device: Option<ObjectIdentifier>,
+) -> EventNotificationRequest {
+    EventNotificationRequest {
+        event_type: EventType::BUFFER_READY,
+        notify_type: NotifyType::EVENT,
+        to_state: EventState::NORMAL,
+        event_values: Some(NotificationParameters::BufferReady {
+            buffer_property: BACnetDeviceObjectPropertyReference {
+                object_identifier: buffer,
+                property_identifier: PropertyIdentifier::LOG_BUFFER.to_raw(),
+                property_array_index: None,
+                device_identifier: device,
+            },
+            previous_notification: 0,
+            current_notification: 4,
+        }),
+        ..alarm(event_object)
+    }
+}
+
+fn trend_log(instance: u32) -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::TREND_LOG, instance).unwrap()
+}
+
+/// An Event Log's BUFFER_READY report goes in no log; a Trend Log's goes in
+/// every one, and so does any other notification about an Event Log, such
+/// as the acknowledgment of a report (#1347).
 #[test]
-fn a_notification_about_an_event_log_goes_in_no_log() {
+fn only_a_report_on_an_event_log_buffer_goes_in_no_log() {
     let mut db = database(&[1, 2], 8);
-    db.log_event_notification(&alarm(log_oid(1)));
+    let own = buffer_ready(log_oid(1), log_oid(1), None);
+    db.log_event_notification(&own);
     for log in [log_oid(1), log_oid(2)] {
         assert!(records(&mut db, log).is_empty());
+    }
+    let trend = buffer_ready(trend_log(1), trend_log(1), None);
+    let acknowledged = EventNotificationRequest {
+        notify_type: NotifyType::ACK_NOTIFICATION,
+        event_values: None,
+        ..own
+    };
+    for notification in [trend.clone(), acknowledged.clone()] {
+        db.log_event_notification(&notification);
+    }
+    for log in [log_oid(1), log_oid(2)] {
+        assert_eq!(
+            records(&mut db, log),
+            [
+                notification_record(trend.clone()),
+                notification_record(acknowledged.clone())
+            ]
+        );
     }
 }
 
@@ -315,4 +366,101 @@ fn a_log_that_refuses_the_record_leaves_the_others_logging() {
     for log in [log_oid(1), log_oid(2)] {
         assert_eq!(records(&mut db, log), [notification_record(alarm(av1()))]);
     }
+}
+
+/// Event Log `instance`, taking received notifications when `collects`.
+fn received_log(db: &mut ObjectDatabase, instance: u32, collects: bool) {
+    let mut log = EventLogObject::new(instance, format!("EL-{instance}"), 8).unwrap();
+    log.set_log_received_notifications(collects);
+    db.add(Box::new(log)).unwrap();
+}
+
+/// Device 50's alarm about its Analog Input 3, as it arrived from there.
+fn received() -> EventNotificationRequest {
+    EventNotificationRequest {
+        process_identifier: 9,
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 50).unwrap(),
+        ..alarm(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap())
+    }
+}
+
+/// Only a log that opts in takes received notifications, each as it
+/// arrived, Process Identifier included (#1346); the opt-in starts off.
+#[test]
+fn only_a_log_that_opts_in_records_received_notifications() {
+    let mut db = database(&[], 8);
+    db.add(Box::new(EventLogObject::new(1, "EL-1", 8).unwrap()))
+        .unwrap();
+    assert!(!db.takes_received_event_notification(&received()));
+    db.log_received_event_notification(&received());
+    assert!(records(&mut db, log_oid(1)).is_empty());
+
+    received_log(&mut db, 2, true);
+    received_log(&mut db, 3, false);
+    assert!(db.takes_received_event_notification(&received()));
+    db.log_received_event_notification(&received());
+    assert!(records(&mut db, log_oid(1)).is_empty());
+    assert_eq!(
+        records(&mut db, log_oid(2)),
+        [notification_record(received())]
+    );
+    assert!(records(&mut db, log_oid(3)).is_empty());
+    // The device's own notifications still go in every log.
+    db.log_event_notification(&alarm(av1()));
+    assert_eq!(records(&mut db, log_oid(1)).len(), 1);
+}
+
+/// A received BUFFER_READY report on an Event Log's buffer, whatever object
+/// makes it, and a notification claiming this device as its source, go in
+/// no log; any other notification about a remote Event Log goes in.
+#[test]
+fn received_reports_on_event_log_buffers_and_this_devices_own_go_in_no_log() {
+    let mut db = database(&[], 8);
+    received_log(&mut db, 1, true);
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            instance: 7,
+            name: "Device-7".into(),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, 50).unwrap();
+    let device_50 = Some(device);
+    let remote = |notification: EventNotificationRequest| EventNotificationRequest {
+        initiating_device_identifier: device,
+        ..notification
+    };
+    // Another vendor's Event Enrollment running BUFFER_READY on its Event
+    // Log names the log only in Buffer_Property.
+    let enrollment_report = remote(buffer_ready(ee(4), log_oid(2), device_50));
+    let log_report = remote(buffer_ready(log_oid(2), log_oid(2), device_50));
+    let own = EventNotificationRequest {
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap(),
+        ..received()
+    };
+    for notification in [enrollment_report, log_report, own] {
+        assert!(!db.takes_received_event_notification(&notification));
+        db.log_received_event_notification(&notification);
+    }
+    assert!(records(&mut db, log_oid(1)).is_empty());
+    let unreliable = EventNotificationRequest {
+        event_object_identifier: log_oid(2),
+        event_type: EventType::CHANGE_OF_RELIABILITY,
+        to_state: EventState::FAULT,
+        ..received()
+    };
+    let trend_report = remote(buffer_ready(trend_log(2), trend_log(2), device_50));
+    for notification in [unreliable.clone(), trend_report.clone()] {
+        assert!(db.takes_received_event_notification(&notification));
+        db.log_received_event_notification(&notification);
+    }
+    assert_eq!(
+        records(&mut db, log_oid(1)),
+        [
+            notification_record(unreliable),
+            notification_record(trend_report)
+        ]
+    );
 }

@@ -32,6 +32,7 @@ use crate::event_enrollment::{
 };
 use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::{LogBufferRecords, LogRecordIdentity};
+use crate::log_reporting::BufferReadyReport;
 use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 /// Process-local monotonic time source used by internal object lifecycles.
@@ -1329,5 +1330,22 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     #[doc(hidden)]
     fn refresh_log_window_internal(&mut self) -> bool {
         false
+    }
+
+    /// Whether this Event Log takes the event notifications the device
+    /// receives, through
+    /// [`ObjectDatabase::log_received_event_notification`](crate::database::ObjectDatabase::log_received_event_notification).
+    /// The default, and an Event Log that hasn't opted in, says no.
+    #[doc(hidden)]
+    fn logs_received_event_notifications_internal(&self) -> bool {
+        false
+    }
+
+    /// The counts the last committed BUFFER_READY transition reported, for
+    /// the server to carry as its event values (Clause 13.3.7). `None` for an
+    /// object that hasn't reported one, or doesn't run that algorithm.
+    #[doc(hidden)]
+    fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
+        None
     }
 }

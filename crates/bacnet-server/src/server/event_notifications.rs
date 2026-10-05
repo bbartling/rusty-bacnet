@@ -167,9 +167,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         };
         let event_type = outcome.change.event_type(outcome.event_type);
+        let device = db.local_device().identifier();
         let event_values = db
             .get(oid)
-            .and_then(|object| project_intrinsic_payload(object, &outcome.change, event_type))
+            .and_then(|object| {
+                project_intrinsic_payload(object, &outcome.change, event_type, device)
+            })
             .or_else(|| {
                 debug!(
                     %oid,

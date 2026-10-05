@@ -1437,7 +1437,7 @@
      "Trend Log Multiple: the same poller samples every Log_DeviceObjectProperty member each interval into one record, values in member order, under the shared Enable, Buffer_Size and Stop_When_Full lifecycle (#1203).",
      "Each Trend Log Multiple member resolves through ObjectDatabase::local_device as a Trend Log reference does. A member naming another device, or whose read fails, logs its own failure value; one naming instance 4194303 logs PROPERTY / NO_PROPERTY_SPECIFIED.",
      "A reference with an array index reads that element behind the ReadProperty gate the Averaging sampler shares: an index on a non-array logs PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, one past the end logs INVALID_ARRAY_INDEX. An index that isn't Unsigned leaves the log unpolled (#1205).",
-     "Only POLLED logs with a nonzero Log_Interval and at least one member are polled, besides a TRIGGERED log's Trigger. Trend Log Multiple intrinsic reporting is not modeled.",
+     "Only POLLED logs with a nonzero Log_Interval and at least one member are polled, besides a TRIGGERED log's Trigger. Every log type reports BUFFER_READY (BACNET-12-EVENT-LOG-NOTIFICATIONS); a purge restarts its Records_Since_Notification.",
      "Both pollers log a value with no alternative of its own (CharacterString, Double, Date, ObjectIdentifier, OctetString, a whole array, a framed constructed value) as any-value holding the encoding a ReadProperty of it carries. A BitString logs as bitstring-value, and only a NULL value logs as null-value (#1236).",
      "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record.",
      "A client's change to Log_DeviceObjectProperty purges the log and records BUFFER_PURGED, as a zero Record_Count write does; the poller then samples the references written.",
@@ -1457,12 +1457,16 @@
   },
   {
    "id": "BACNET-12-EVENT-LOG-NOTIFICATIONS",
-   "standard_anchor": "Clauses 12.27, 12.27.8-11 and 12.27.13; Clause 13.2.5; Annex K.2.21 and K.2.22",
+   "standard_anchor": "Clauses 12.25, 12.27, 12.30, 13.2.5 and 13.3.7; Tables 12-29, 12-31, 12-35; Annex K.2.21-22",
    "priority": "P1",
-   "summary": "A running server records every event notification it generates in each Event Log, under that log's Enable, window, Buffer_Size and Stop_When_Full handling, for ReadRange to serve.",
+   "summary": "A server logs the event notifications it builds in each Event Log, and those it receives in the logs that opt in; Event Log, Trend Log and Trend Log Multiple report BUFFER_READY.",
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-objects/src/database/event_log.rs::ObjectDatabase::log_event_notification",
+    "crates/bacnet-objects/src/database/event_log.rs::ObjectDatabase::log_received_event_notification",
+    "crates/bacnet-objects/src/log_reporting.rs::BufferReadyReporting",
+    "crates/bacnet-server/src/server/received_event_log.rs::log_received_event_notification",
+    "crates/bacnet-server/src/server/event_notification_payload.rs::project_intrinsic_payload",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::add_event_log_record",
     "crates/bacnet-objects/src/event_log.rs::EventLogObject",
     "crates/bacnet-server/src/server/event_notifications.rs::build_and_send_event_notification_with_bindings",
@@ -1471,12 +1475,21 @@
    "positive_tests": [
     "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_local_alarm_and_its_return_to_normal_are_logged_and_read_back,an_acknowledgment_notification_is_logged,a_notification_no_recipient_takes_is_still_logged,stop_when_full_stops_logging_before_the_buffer_fills}",
     "crates/bacnet-objects/src/database/event_log_tests.rs::{every_event_log_records_the_notification_at_the_device_clock_time,stop_when_full_stops_the_log_before_it_fills}",
-    "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::each_pass_records_an_event_log_window_opening_and_closing"
+    "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::each_pass_records_an_event_log_window_opening_and_closing",
+    "crates/bacnet-server/src/server/received_event_log_wire_tests.rs::{a_collecting_log_records_what_arrives_and_reports_it,every_two_records_make_one_report_that_adds_no_record,trend_log_reports_follow_their_class_and_are_logged}",
+    "crates/bacnet-objects/src/log_reporting_tests.rs::{every_threshold_of_records_proposes_one_report_on_each_log,a_purge_restarts_records_since_notification_only,the_count_runs_on_across_the_wrap}",
+    "crates/bacnet-objects/src/database/event_log_tests.rs::only_a_log_that_opts_in_records_received_notifications"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_disabled_log_takes_no_notification,a_transition_whose_notification_class_is_missing_is_not_logged,a_transition_event_enable_suppresses_is_not_logged,a_transition_while_dcc_disables_initiation_is_not_logged,a_received_notification_is_not_logged}",
+    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_disabled_log_takes_no_notification,a_transition_whose_notification_class_is_missing_is_not_logged,a_transition_event_enable_suppresses_is_not_logged,a_transition_while_dcc_disables_initiation_is_not_logged,a_log_without_the_opt_in_takes_no_received_notification}",
+    "crates/bacnet-server/src/server/received_event_log_wire_tests.rs::a_flood_from_one_source_is_held_to_its_allowance",
+    "crates/bacnet-server/src/server/received_event_log_tests.rs::{each_source_gets_its_rate_in_each_window,a_flood_of_sources_shares_one_allowance_past_the_table,the_ceiling_holds_window_after_window}",
+    "crates/bacnet-objects/src/log_reporting_tests.rs::{no_threshold_or_detection_off_proposes_nothing,only_a_report_to_normal_commits}",
+    "crates/bacnet-objects/src/database/event_log_tests.rs::received_reports_on_event_log_buffers_and_this_devices_own_go_in_no_log",
+    "crates/bacnet-server/src/server/received_event_log_tests.rs::a_source_that_sent_late_in_its_window_keeps_its_place",
+    "crates/bacnet-server/src/server/received_event_log_wire_tests.rs::a_retransmitted_confirmed_notification_is_logged_once",
     "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_report_on_an_event_log_is_logged_nowhere,enrollments_watching_each_others_logs_do_not_feed_each_other}",
-    "crates/bacnet-objects/src/database/event_log_tests.rs::{a_notification_about_an_event_log_goes_in_no_log,an_enrollment_notification_about_any_local_event_log_goes_in_no_log,nothing_is_logged_without_a_valid_device_clock,a_disabled_log_ignores_the_notification,a_log_that_refuses_the_record_leaves_the_others_logging}"
+    "crates/bacnet-objects/src/database/event_log_tests.rs::{only_a_report_on_an_event_log_buffer_goes_in_no_log,an_enrollment_notification_about_any_local_event_log_goes_in_no_log,nothing_is_logged_without_a_valid_device_clock,a_disabled_log_ignores_the_notification,a_log_that_refuses_the_record_leaves_the_others_logging}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -1486,13 +1499,13 @@
    "notes": [
     "Each intrinsic, Event Enrollment or acknowledgment notification is logged with Process Identifier 0, also when the Notification Class selects nobody: the Recipient_List picks network recipients, not local objects.",
     "No record, as a local choice, for a transition that Event_Enable suppresses or that DCC stops, nor for one whose recipient lookup fails closed: a missing Notification Class, or an unreadable, invalid or over-cap Recipient_List.",
-    "Received notifications are not logged. The logs hold this device's own events, the narrower of the choices Clause 12.27 leaves to the device.",
-    "No log takes a notification about an Event Log: its event object is one, or it comes from an Event Enrollment here monitoring one. So reports can't prompt each other through a log, directly or crosswise.",
-    "The record goes in under the guard that built the notification, before the send. Without a valid Device clock nothing is logged."
+    "Local choices on received notifications: opt-in per log, off by default; 5 records per source address a second, 32 sources tracked and the rest sharing one allowance (at most 165 a window); none naming this device.",
+    "No Event Log takes a BUFFER_READY report whose Buffer_Property names an Event Log, in any device; so an Event Log's reports can't feed a log's next report, here or across devices. Other reports about a remote Event Log are logged.",
+    "Own reports from an Event Enrollment watching a local Event Log are kept out too, whatever the algorithm. BUFFER_READY runs on Total_Record_Count at each intrinsic pass and after a write. No valid Device clock: nothing is logged."
    ],
    "gaps": [
-    "#1346: logging received notifications, the AE-EL-E-B collection of Annex K.2.22, is not offered",
-    "#1347: Event Log intrinsic reporting (BUFFER_READY, Notification_Threshold) is not modeled"
+    "Event_Message_Texts_Config and Event_Algorithm_Inhibit(_Ref), optional on the three logs, are not served (no issue)",
+    "A received message text in a character set the stack can't read is logged without the text, and event values in a choice the codec doesn't know aren't logged at all (no issue)"
    ]
   },
   {
@@ -1727,7 +1740,8 @@
     "Conditional rows record why a present property exists, and conditional write capability contributes to the existing PICS writable flag. Date Value and every object type other than Time Value, Binary Input, Life Safety Point, and Life Safety Zone remain on the explicit legacy fallback.",
     "Life Safety POINT_BASE/ZONE_BASE rows mirror dispatch exactly: Mode carries table W and accepts only the modes in Accepted_Modes, which is network read-only like Silenced and Operation_Expected, and Tracking_Value (served on both objects since #1092) and Reliability are WhenOutOfService, writable only while Out_Of_Service is TRUE as footnote 1 of both tables asks (#1108, BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION).",
     "Audit Log metadata lists Log_Buffer as a required read-only row, so it is in Property_List, RPM ALL and REQUIRED and the PICS; a property read of it returns READ_ACCESS_DENIED and ReadRange serves it (#1092, BACNET-12-AUDIT-LOG-BUFFER).",
-    "Trend Log Multiple, Trend Log and Event Log keep Log_Buffer as a required read-only row the same way: present in Property_List, RPM ALL and REQUIRED and the PICS, refused by a property read and served by ReadRange (#1237)."
+    "Trend Log Multiple, Trend Log and Event Log keep Log_Buffer as a required read-only row the same way: present in Property_List, RPM ALL and REQUIRED and the PICS, refused by a property read and served by ReadRange (#1237).",
+    "Every Trend Log samples a BACnet property, so Table 12-29 footnotes 1 and 8 make its Start_Time and Stop_Time (writable, footnote 2), Log_Interval (writable while POLLED, footnote 3) and Log_DeviceObjectProperty required rows, in RPM REQUIRED and required in the PICS (#1481). Tables 12-31 and 12-35 put no such condition on a window; Table 12-35 already requires the other two."
    ]
   },
   {

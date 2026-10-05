@@ -711,10 +711,19 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add an Event Log object to the server (before starting).
-    #[pyo3(signature = (instance, name, buffer_size=100))]
-    fn add_event_log(&self, instance: u32, name: &str, buffer_size: u32) -> PyResult<()> {
-        let obj = EventLogObject::new(instance, name, buffer_size).map_err(to_py_err)?;
+    /// Add an Event Log object to the server (before starting). With
+    /// `log_received_notifications` it also records the event notifications
+    /// the server receives, a few per source each second.
+    #[pyo3(signature = (instance, name, buffer_size=100, log_received_notifications=false))]
+    fn add_event_log(
+        &self,
+        instance: u32,
+        name: &str,
+        buffer_size: u32,
+        log_received_notifications: bool,
+    ) -> PyResult<()> {
+        let mut obj = EventLogObject::new(instance, name, buffer_size).map_err(to_py_err)?;
+        obj.set_log_received_notifications(log_received_notifications);
         self.push_pending(Box::new(obj))
     }
 }

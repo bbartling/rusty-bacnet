@@ -28,6 +28,7 @@ use bacnet_objects::event_enrollment::{
 };
 use bacnet_objects::file::{FileConfiguration, FileObject, FileStorage};
 use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
+use bacnet_objects::log_reporting::BufferReadyReport;
 use bacnet_objects::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
@@ -657,6 +658,17 @@ impl BACnetObject for Probe {
     fn refresh_log_window_internal(&mut self) -> bool {
         self.called("refresh_log_window_internal", ());
         true
+    }
+    fn logs_received_event_notifications_internal(&self) -> bool {
+        self.called("logs_received_event_notifications_internal", ());
+        true
+    }
+    fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
+        self.called("buffer_ready_report_internal", ());
+        Some(BufferReadyReport {
+            previous_notification: 4,
+            current_notification: 9,
+        })
     }
 }
 

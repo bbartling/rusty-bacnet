@@ -2570,6 +2570,7 @@ class EventNotificationCounters(TypedDict):
     apdu_too_large: int
     received_not_forwarded: int
     forwarding_cap_dropped: int
+    received_not_logged: int
 
 class DccOutcomeCounters(TypedDict):
     """Independent u64 lifetime totals, saturating at 2**64-1; not an audit log."""
@@ -2810,7 +2811,28 @@ class BACnetServer:
         the record. Read the records with ``read_range``.
         """
         ...
-    def add_event_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
+    def add_event_log(
+        self,
+        instance: int,
+        name: str,
+        buffer_size: int = 100,
+        log_received_notifications: bool = False,
+    ) -> None:
+        """Register an Event Log of ``buffer_size`` records before start().
+
+        The log records each event notification the server builds. With
+        ``log_received_notifications`` it also records the Confirmed and
+        UnconfirmedEventNotifications the server receives, unicast or
+        broadcast, as they decoded; each source is held to a few records a
+        second, and the rest show in ``event_notification_counters()`` as
+        ``received_not_logged``.
+
+        The log reports BUFFER_READY to its Notification Class once its
+        Notification_Threshold is set (zero, the default, reports nothing);
+        write it and Notification_Class with ``write_property_local`` or
+        from a peer.
+        """
+        ...
     def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...
     def add_device_binding(self, device_instance: int, address: str) -> None:
         """Register a direct B/IP (IPv4) Device binding on a transport="bip" server.
