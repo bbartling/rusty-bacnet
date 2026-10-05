@@ -53,6 +53,7 @@ use bacnet_endpoint_core::endpoint_ingress::{
     ClassifierExit, EndpointIngress, PolicyOutcome, PolicyReason,
 };
 use bacnet_network::layer::ReceivedApdu;
+use bacnet_network::network_number::LocalNetworkNumber;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::port::TransportPort;
@@ -784,6 +785,9 @@ struct DispatchParts {
     notifications: Option<Arc<NotificationTransactions>>,
     coordinator: Arc<OutboundTransactionCoordinator>,
     shared: Arc<SessionShared>,
+    /// The layer's network number, which the session's Number owner
+    /// publishes; answers relayed with it as SNET match like direct ones.
+    local_network: LocalNetworkNumber,
 }
 
 #[path = "session_dispatch.rs"]
@@ -813,7 +817,7 @@ async fn handle_inbound(parts: &mut DispatchParts, received: ReceivedApdu) {
     // Preserve the full envelope structurally (raw + effective group,
     // attributes, ingress identity, provenance) — no new decisions here
     // beyond role presence + responder scope.
-    let _peer = inbound_canonical_peer(&received);
+    let _peer = inbound_canonical_peer(&received, parts.local_network.get());
     let _link_group = received.link_layer_group;
     let _is_group = received.is_group;
     let _attributes = received.data_attributes.clone();
@@ -883,7 +887,12 @@ async fn handle_terminal(parts: &mut DispatchParts, received: ReceivedApdu) {
     // Exactly one shared-coordinator admit per terminal APDU (exact-once
     // terminal claim). Equal numeric IDs are unambiguous: the admitted
     // lease owner selects requester vs notification.
-    let outcome = admit_once(&parts.coordinator, &received, &apdu);
+    let outcome = admit_once(
+        &parts.coordinator,
+        &received,
+        parts.local_network.get(),
+        &apdu,
+    );
     let admission = match outcome {
         Ok(AdmissionOutcome::Admitted(admission)) => admission,
         Ok(_) => {

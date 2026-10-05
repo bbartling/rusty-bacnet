@@ -24,6 +24,7 @@ use bytes::BytesMut;
 
 use crate::client::{
     check_routed_unicast, confirmed_response_result, new_coordinated_tsm, ClientConfig,
+    TransactionPeer,
 };
 #[path = "endpoint_operation.rs"]
 mod operation;
@@ -41,65 +42,26 @@ fn shutdown_error() -> Error {
     Error::Encoding("endpoint shutdown".into())
 }
 
-/// Derives the TSM key MAC for an outbound endpoint destination.
-///
-/// Direct destinations use the link MAC; routed destinations use the
-/// `FF 52` synthetic key (`network || len || address`) so a routed peer
-/// never collides with a direct peer that happens to share trailing bytes.
-/// Mirrors `transaction_peer` without importing client internals.
-fn outbound_tsm_peer(destination: &EndpointApduDestination) -> (MacAddr, CanonicalPeer) {
-    match destination {
-        EndpointApduDestination::Direct { destination_mac } => (
-            destination_mac.clone(),
-            CanonicalPeer::from_source(destination_mac.as_slice(), None),
-        ),
+/// The transaction peer an outbound endpoint destination is keyed to, the
+/// same way the standalone client keys its requests ([`TransactionPeer`]).
+fn outbound_tsm_peer(destination: &EndpointApduDestination) -> TransactionPeer {
+    TransactionPeer::of(match destination {
+        EndpointApduDestination::Direct { destination_mac } => {
+            CanonicalPeer::direct(destination_mac)
+        }
         EndpointApduDestination::Routed {
             destination_network,
             destination_mac,
             ..
-        } => (
-            routed_tsm_mac(*destination_network, destination_mac.as_slice()),
-            CanonicalPeer::routed(*destination_network, destination_mac.as_slice()),
-        ),
-        EndpointApduDestination::RoutedViaLocalBroadcast {
+        }
+        | EndpointApduDestination::RoutedViaLocalBroadcast {
             destination_network,
             destination_mac,
-        } => (
-            routed_tsm_mac(*destination_network, destination_mac.as_slice()),
-            CanonicalPeer::routed(*destination_network, destination_mac.as_slice()),
-        ),
+        } => CanonicalPeer::routed(*destination_network, destination_mac),
         EndpointApduDestination::LocalBroadcast
         | EndpointApduDestination::RemoteBroadcast { .. }
-        | EndpointApduDestination::GlobalBroadcast => {
-            (MacAddr::new(), CanonicalPeer::direct(&[] as &[u8]))
-        }
-    }
-}
-
-fn routed_tsm_mac(network: u16, mac: &[u8]) -> MacAddr {
-    let mut key = MacAddr::new();
-    key.extend_from_slice(&[0xFF, b'R']);
-    key.extend_from_slice(&network.to_be_bytes());
-    key.push(mac.len() as u8);
-    key.extend_from_slice(mac);
-    key
-}
-
-/// Derives the inbound TSM key + canonical peer for an admitted response.
-///
-/// Provenance is preserved structurally by the caller
-/// (threaded through `ReceivedApdu`) and never gates admission here.
-fn inbound_tsm_peer(received: &ReceivedApdu) -> (MacAddr, CanonicalPeer) {
-    match received.source_network.as_ref() {
-        Some(address) if !address.mac_address.is_empty() => (
-            routed_tsm_mac(address.network, address.mac_address.as_slice()),
-            CanonicalPeer::from_source(received.source_mac.as_slice(), Some(address)),
-        ),
-        _ => (
-            received.source_mac.clone(),
-            CanonicalPeer::from_source(received.source_mac.as_slice(), None),
-        ),
-    }
+        | EndpointApduDestination::GlobalBroadcast => CanonicalPeer::direct(&[]),
+    })
 }
 
 fn reply_destination_for(received: &ReceivedApdu) -> EndpointApduDestination {
@@ -330,15 +292,18 @@ impl EndpointRequester {
         }
         // Once those checks pass on the destination as named, one routed on
         // the endpoint's own network goes as the local destination it is
-        // (#1403). The transaction is keyed to the MAC it goes to, where its
-        // answer comes from with no SNET; one relayed back with this network
-        // as its SNET matches nothing.
+        // (#1403). The transaction is keyed to the MAC it goes to. Its answer
+        // comes from there with no SNET, or through a router with this
+        // network as its SNET, and either completes it (#1465).
         let destination = destination.localized(self.inner.egress.local_network_number().get());
 
         let service_data = self.encode_operation(&request)?;
         let service = request.service();
 
-        let (tsm_mac, peer) = outbound_tsm_peer(&destination);
+        let TransactionPeer {
+            tsm_mac,
+            canonical: peer,
+        } = outbound_tsm_peer(&destination);
         let (invoke_id, registration) = {
             let mut tsm = self
                 .inner
@@ -439,7 +404,9 @@ impl EndpointRequester {
     ///
     /// Direct and routed responses are both accepted: the TSM key and
     /// canonical peer are derived from the received envelope
-    /// (`source_mac` + `source_network`), so equal inbound/outbound numeric
+    /// (`source_mac` + `source_network`) and the endpoint's known network
+    /// number, as the session derived them for its admission
+    /// ([`TransactionPeer::of_answer`]), so equal inbound/outbound numeric
     /// invoke IDs stay unambiguous via the classifier + coordinator admission.
     /// Link-group, attributes, ingress-network and
     /// provenance are preserved structurally (threaded, never used for a new
@@ -459,7 +426,14 @@ impl EndpointRequester {
         // No new decisions are made from these values here.
         let (_link_group, _is_group, _attributes, _provenance, _source_network, _ingress) =
             preserve_inbound_context(&received);
-        let (tsm_mac, peer) = inbound_tsm_peer(&received);
+        let TransactionPeer {
+            tsm_mac,
+            canonical: peer,
+        } = TransactionPeer::of_answer(
+            &received.source_mac,
+            received.source_network.as_ref(),
+            self.inner.egress.local_network_number().get(),
+        );
         match admission.kind() {
             AdmissionKind::Terminal => {
                 let response = match &apdu {

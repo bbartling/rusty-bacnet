@@ -35,7 +35,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             is_group,
             reply_tx,
         } = inbound;
-        let transaction_peer = response_transaction_peer(source_mac, source_network);
+        let transaction_peer = TransactionPeer::of_answer(
+            source_mac,
+            source_network.as_ref(),
+            network.local_network_number().get(),
+        );
         let tsm_mac = transaction_peer.tsm_mac;
         let canonical_peer = transaction_peer.canonical;
         match apdu {

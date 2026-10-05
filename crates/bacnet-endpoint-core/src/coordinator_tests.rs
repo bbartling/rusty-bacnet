@@ -166,16 +166,55 @@ fn canonical_peer_uses_routed_source_instead_of_immediate_router() {
         network: 200,
         mac_address: MacAddr::from_slice(&[0xaa, 0xbb]),
     };
-    let through_first_router = CanonicalPeer::from_source(&[1], Some(&source));
-    let through_second_router = CanonicalPeer::from_source(&[2], Some(&source));
+    let through_first_router = CanonicalPeer::from_source(&[1], Some(&source), None);
+    let through_second_router = CanonicalPeer::from_source(&[2], Some(&source), Some(100));
 
     assert_eq!(through_first_router, through_second_router);
     assert_eq!(
         through_first_router,
         CanonicalPeer::routed(200, &[0xaa, 0xbb])
     );
-    assert_ne!(CanonicalPeer::from_source(&[1], None), peer(2));
-    assert_eq!(CanonicalPeer::from_source(&[1], None), peer(1));
+    assert_ne!(CanonicalPeer::from_source(&[1], None, None), peer(2));
+    assert_eq!(CanonicalPeer::from_source(&[1], None, Some(200)), peer(1));
+}
+
+/// Once this network's number is known, a source relayed with it as SNET is
+/// the station at SADR, whichever router relayed it (#1465). Nothing else
+/// changes: another SNET stays routed, and so does every SNET while the
+/// number is unknown.
+#[test]
+fn a_source_relayed_with_this_networks_snet_is_the_direct_station() {
+    let relayed = |network| NpduAddress {
+        network,
+        mac_address: MacAddr::from_slice(&[0xaa, 0xbb]),
+    };
+    let station = CanonicalPeer::direct(&[0xaa, 0xbb]);
+    for router in [&[1][..], &[2]] {
+        assert_eq!(
+            CanonicalPeer::from_source(router, Some(&relayed(200)), Some(200)),
+            station
+        );
+    }
+    assert_eq!(
+        CanonicalPeer::from_source(&[0xaa, 0xbb], None, Some(200)),
+        station
+    );
+    assert_eq!(
+        CanonicalPeer::from_source(&[1], Some(&relayed(201)), Some(200)),
+        CanonicalPeer::routed(201, &[0xaa, 0xbb])
+    );
+    assert_eq!(
+        CanonicalPeer::from_source(&[1], Some(&relayed(200)), None),
+        CanonicalPeer::routed(200, &[0xaa, 0xbb])
+    );
+    let no_sadr = NpduAddress {
+        network: 200,
+        mac_address: MacAddr::new(),
+    };
+    assert_eq!(
+        CanonicalPeer::from_source(&[1], Some(&no_sadr), Some(200)),
+        peer(1)
+    );
 }
 
 #[test]

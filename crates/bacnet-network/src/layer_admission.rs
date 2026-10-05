@@ -533,6 +533,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         let mut network_control_tx = self.network_control_tx.take();
         let network_control_ingress_sequence = Arc::clone(&self.network_control_ingress_sequence);
         let address_length_drops = Arc::clone(&self.address_length_drops);
+        let global_broadcast_dadr_drops = Arc::clone(&self.global_broadcast_dadr_drops);
         let (apdu_tx, apdu_rx) = AdmissionSender::channel(track_depth);
         let counters = apdu_tx.counters.clone();
 
@@ -543,6 +544,12 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                 }
                 match decode_npdu(received.npdu.clone()) {
                     Ok(npdu) => {
+                        if !destination_is_coherent(
+                            npdu.destination.as_ref(),
+                            &global_broadcast_dadr_drops,
+                        ) {
+                            continue;
+                        }
                         if npdu.is_network_message {
                             if let Some(tx) = network_control_tx.as_ref() {
                                 let ingress_sequence = next_ingress_sequence(
@@ -608,7 +615,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                     }
                     Err(e @ NpduDecodeError::AddressTooLong { .. }) => {
                         // A non-router has no reject to send (Clause 6.6.3.5).
-                        count_address_length_drop(&address_length_drops);
+                        count_drop(&address_length_drops);
                         warn!(error = %e, "Dropping NPDU with an over-long address");
                     }
                     Err(e) => {
@@ -634,11 +641,37 @@ pub(crate) fn link_source_fits(source_mac: &[u8], drops: &AtomicU64) -> bool {
     if source_mac.len() <= NpduAddress::MAX_MAC_LEN {
         return true;
     }
-    count_address_length_drop(drops);
+    count_drop(drops);
     warn!(
         octets = source_mac.len(),
         limit = NpduAddress::MAX_MAC_LEN,
         "Dropping a frame whose link-layer source MAC is over the limit"
+    );
+    false
+}
+
+/// Whether a decoded NPDU's destination can be acted on: anything but DNET
+/// 0xFFFF with a DADR (#1379). That DNET already names every device on every
+/// network (Clauses 6.2.2 and 6.3.2), so a DADR beside it names one device as
+/// well and the NPDU contradicts itself. [`NetworkLayer`] and the router both
+/// ask right after decoding, before they look at what the NPDU carries, so
+/// this one check covers APDUs and network messages on either. A
+/// contradictory NPDU is counted in `drops` and goes no further: it is not
+/// delivered, forwarded, answered, rejected or learned from.
+pub(crate) fn destination_is_coherent(
+    destination: Option<&NpduAddress>,
+    drops: &AtomicU64,
+) -> bool {
+    let Some(destination) = destination else {
+        return true;
+    };
+    if destination.network != 0xFFFF || destination.mac_address.is_empty() {
+        return true;
+    }
+    count_drop(drops);
+    warn!(
+        dlen = destination.mac_address.len(),
+        "Dropping a global broadcast NPDU that also names a DADR"
     );
     false
 }

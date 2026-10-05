@@ -87,6 +87,7 @@ fn ack(f: &Fixture, invoke: u8) {
     assert!(f.server.notification_transactions.admit_terminal(
         LOGGER,
         None,
+        None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id: invoke,
             service_choice: ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,

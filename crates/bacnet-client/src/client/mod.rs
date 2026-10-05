@@ -851,7 +851,7 @@ pub(crate) use routed_path_limits::check_routed_unicast;
 use routed_path_limits::{
     forwarded_npci_len, routed_path_quarantine_horizon, RoutedPathLease, RoutedPathLimits,
 };
-use transaction_peer::response_transaction_peer;
+pub(crate) use transaction_peer::TransactionPeer;
 
 pub use cov::CovPropertySubscription;
 pub use cov_notifications::{

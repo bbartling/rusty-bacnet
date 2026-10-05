@@ -1,10 +1,11 @@
 //! Once an endpoint session knows the number of its own network (#1403),
 //! traffic it starts for a station on that network goes as local traffic: to
 //! the station's MAC with no DNET. A routed read naming the number goes to its
-//! DADR, and the answer from there completes it; one relayed back with this
-//! network as its SNET does not. Another network keeps its DNET, every
-//! network does while the number is unknown, and answers keep the route their
-//! request arrived by. The source Audit cases are in `source`.
+//! DADR, and the answer from there completes it, as does one relayed back
+//! with this network as its SNET and the DADR as its SADR (#1465). Another
+//! network keeps its DNET, every network does while the number is unknown,
+//! and answers keep the route their request arrived by. The source Audit
+//! cases are in `source`.
 //!
 //! The capture link carries B/IP-shaped MACs: the session is `10.0.0.1`, the
 //! peer `10.0.0.3`, behind router `10.0.0.9` when routed. The number is
@@ -327,25 +328,93 @@ fn routed_by_broadcast(network: u16) -> EndpointApduDestination {
 }
 
 #[tokio::test]
-async fn routed_reads_naming_this_network_go_local_and_the_direct_answer_completes_them() {
+async fn routed_reads_naming_this_network_go_local_and_a_direct_or_relayed_answer_completes_them() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         let mut endpoint = Endpoint::started(role, true).await;
         for destination in [routed_read(THIS_NETWORK), routed_by_broadcast(THIS_NETWORK)] {
-            let read = endpoint.read(destination);
-            let (route, request) = endpoint.request().await;
-            assert_eq!(route, local(PEER), "{role:?}");
-            // An answer relayed with this network as its SNET is not from the
-            // MAC the request went to, so only the direct one completes it.
-            endpoint
-                .deliver_apdu(ack(&request, 1), mac(ROUTER), peer_on(THIS_NETWORK))
-                .await;
-            endpoint
-                .deliver_apdu(ack(&request, 2), mac(PEER), None)
-                .await;
-            let answer = bounded(read).await.unwrap().unwrap();
-            assert_eq!(answer.property_value, [0x21, 2], "{role:?}");
-            assert_eq!(endpoint.session.active_leases(), 0);
+            // Straight from the peer's MAC, or relayed back by a router with
+            // this network as its SNET and the peer's MAC as its SADR: both
+            // name the station the request went to (#1465).
+            for (link, source) in [(mac(PEER), None), (mac(ROUTER), peer_on(THIS_NETWORK))] {
+                let relayed = source.is_some();
+                let read = endpoint.read(destination.clone());
+                let (route, request) = endpoint.request().await;
+                assert_eq!(route, local(PEER), "{role:?}");
+                endpoint.deliver_apdu(ack(&request, 2), link, source).await;
+                let answer = bounded(read).await.unwrap().unwrap();
+                assert_eq!(
+                    answer.property_value,
+                    [0x21, 2],
+                    "{role:?}, relayed {relayed}"
+                );
+                assert_eq!(endpoint.session.active_leases(), 0);
+            }
         }
+        endpoint.stop().await;
+    }
+}
+
+/// A relayed answer completes a local read only when it names this network,
+/// the station the read went to and the read's invoke ID. Answers relayed
+/// from another network, from another station here or for another invoke ID
+/// complete nothing, so the station's own answer after them is the one the
+/// read returns.
+#[tokio::test]
+async fn a_relayed_answer_naming_another_network_station_or_invoke_id_completes_nothing() {
+    for role in [SessionRole::ClientOnly, SessionRole::Both] {
+        let mut endpoint = Endpoint::started(role, true).await;
+        let read = endpoint.read(routed_read(THIS_NETWORK));
+        let (route, request) = endpoint.request().await;
+        assert_eq!(route, local(PEER), "{role:?}");
+        let another_station = Some(NpduAddress {
+            network: THIS_NETWORK,
+            mac_address: mac(4),
+        });
+        for (value, source) in [(5, peer_on(REMOTE_NETWORK)), (6, another_station)] {
+            endpoint
+                .deliver_apdu(ack(&request, value), mac(ROUTER), source)
+                .await;
+        }
+        let mut another_invoke_id = request.clone();
+        another_invoke_id.invoke_id = request.invoke_id.wrapping_add(1);
+        endpoint
+            .deliver_apdu(
+                ack(&another_invoke_id, 7),
+                mac(ROUTER),
+                peer_on(THIS_NETWORK),
+            )
+            .await;
+        endpoint
+            .deliver_apdu(ack(&request, 8), mac(ROUTER), peer_on(THIS_NETWORK))
+            .await;
+        let answer = bounded(read).await.unwrap().unwrap();
+        assert_eq!(answer.property_value, [0x21, 8], "{role:?}");
+        assert_eq!(endpoint.session.active_leases(), 0);
+        endpoint.stop().await;
+    }
+}
+
+/// While the number is unknown nothing changes: an answer relayed with SNET
+/// 77 is not from the MAC a direct read went to, so only that MAC's own
+/// answer completes it.
+#[tokio::test]
+async fn with_the_number_unknown_a_relayed_answer_leaves_a_direct_read_open() {
+    for role in [SessionRole::ClientOnly, SessionRole::Both] {
+        let mut endpoint = Endpoint::started(role, false).await;
+        let read = endpoint.read(EndpointApduDestination::Direct {
+            destination_mac: mac(PEER),
+        });
+        let (route, request) = endpoint.request().await;
+        assert_eq!(route, local(PEER), "{role:?}");
+        endpoint
+            .deliver_apdu(ack(&request, 1), mac(ROUTER), peer_on(THIS_NETWORK))
+            .await;
+        endpoint
+            .deliver_apdu(ack(&request, 2), mac(PEER), None)
+            .await;
+        let answer = bounded(read).await.unwrap().unwrap();
+        assert_eq!(answer.property_value, [0x21, 2], "{role:?}");
+        assert_eq!(endpoint.session.active_leases(), 0);
         endpoint.stop().await;
     }
 }

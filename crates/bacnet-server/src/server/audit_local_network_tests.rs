@@ -79,6 +79,7 @@ fn acknowledge(fixture: &Fixture, index: usize) -> bool {
     fixture.server.notification_transactions.admit_terminal(
         &mac,
         source.as_ref(),
+        None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id: request.invoke_id,
             service_choice: request.service_choice,

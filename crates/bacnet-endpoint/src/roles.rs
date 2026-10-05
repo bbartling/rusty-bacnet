@@ -549,18 +549,20 @@ impl ServerRoleHandle {
     /// Standalone admit path (tries the shared coordinator once). Session
     /// dispatch prefers [`Self::complete_notification_pre_admitted`] after
     /// its single [`admit_once`] to avoid double-admit. Returns `false` after
-    /// shutdown or when no lease is available.
+    /// shutdown or when no lease is available. `local_network` is the
+    /// session's known network number, as [`admit_once`] takes it.
     pub fn admit_notification_terminal(
         &self,
         immediate_source: &[u8],
         routed_source: Option<&bacnet_encoding::npdu::NpduAddress>,
+        local_network: Option<u16>,
         apdu: &Apdu,
     ) -> bool {
         if self.check_open().is_err() {
             return false;
         }
         self.notifications
-            .admit_terminal(immediate_source, routed_source, apdu)
+            .admit_terminal(immediate_source, routed_source, local_network, apdu)
     }
 
     /// Completes one already-admitted notification lease (dispatch only).
@@ -597,14 +599,21 @@ const _: fn() = || {
     assert_send_sync::<ServerRoleHandle>();
 };
 
-/// Derives the canonical peer for one received envelope (direct vs routed).
+/// Derives the canonical peer for one received envelope (direct vs routed),
+/// given `local_network`, the session's known network number, if any: an
+/// envelope relayed with that number as its SNET is the direct station at
+/// its SADR ([`CanonicalPeer::from_source`], #1465).
 ///
 /// RB-07 compat: provenance is preserved by the caller and never gates here.
 #[doc(hidden)]
-pub fn inbound_canonical_peer(received: &ReceivedApdu) -> CanonicalPeer {
+pub fn inbound_canonical_peer(
+    received: &ReceivedApdu,
+    local_network: Option<u16>,
+) -> CanonicalPeer {
     CanonicalPeer::from_source(
         received.source_mac.as_slice(),
         received.source_network.as_ref(),
+        local_network,
     )
 }
 
@@ -628,13 +637,16 @@ pub fn is_requester_lease(admission: &bacnet_endpoint_core::coordinator::Admissi
 /// [`OutboundTransactionCoordinator::admit`] per received terminal APDU.
 ///
 /// Returns the coordinator outcome without releasing the lease; the selected
-/// role completes it exactly once via its pre-admitted path.
+/// role completes it exactly once via its pre-admitted path. `local_network`
+/// is the session's known network number, read as the requester reads it
+/// for its own completion.
 #[doc(hidden)]
 pub fn admit_once(
     coordinator: &OutboundTransactionCoordinator,
     received: &ReceivedApdu,
+    local_network: Option<u16>,
     apdu: &Apdu,
 ) -> Result<AdmissionOutcome, bacnet_endpoint_core::coordinator::CoordinatorError> {
-    let peer = inbound_canonical_peer(received);
+    let peer = inbound_canonical_peer(received, local_network);
     coordinator.admit(&peer, apdu)
 }

@@ -2,18 +2,30 @@ use super::request_admission::{Class, Rejection};
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Admit an answer to a confirmed request this server sent. With
+    /// `local_network`, this network's number, known, an answer relayed with
+    /// it as SNET answers a request sent to its SADR (#1465), and teaches no
+    /// next hop: sends to this network go out locally.
     async fn admit_notification_terminal(
         learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
+        local_network: Option<u16>,
         apdu: &Apdu,
     ) -> bool {
-        if !notification_transactions.admit_terminal(source_mac, source_network, apdu) {
+        if !notification_transactions.admit_terminal(
+            source_mac,
+            source_network,
+            local_network,
+            apdu,
+        ) {
             return false;
         }
 
-        if let Some(source) = source_network.filter(|source| !source.mac_address.is_empty()) {
+        if let Some(source) = source_network.filter(|source| {
+            !source.mac_address.is_empty() && Some(source.network) != local_network
+        }) {
             learned_routers
                 .lock()
                 .await
@@ -330,6 +342,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),
+                    network.local_network_number().get(),
                     &Apdu::SimpleAck(sa),
                 )
                 .await;
@@ -347,6 +360,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),
+                    network.local_network_number().get(),
                     &Apdu::Error(err),
                 )
                 .await;
@@ -365,6 +379,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),
+                    network.local_network_number().get(),
                     &Apdu::Reject(rej),
                 )
                 .await;
@@ -396,6 +411,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),
+                    network.local_network_number().get(),
                     &Apdu::Abort(abort),
                 )
                 .await;
@@ -443,6 +459,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     notification_transactions,
                     source_mac,
                     received.source_network.as_ref(),
+                    network.local_network_number().get(),
                     &Apdu::ComplexAck(ack),
                 )
                 .await;

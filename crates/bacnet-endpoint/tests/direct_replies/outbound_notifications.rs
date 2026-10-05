@@ -112,6 +112,7 @@ async fn standard_native_notification_owner_accepts_hub_direct_path_switches() {
                     owner.admit_terminal(
                         &envelope.source_mac,
                         envelope.source_network.as_ref(),
+                        None,
                         &apdu
                     ),
                     expected

@@ -1,8 +1,9 @@
 //! Outbound traffic the server starts toward this device's own network
 //! number (#1358). A write in another device whose binding is routed through
 //! that number goes there as a local request: a unicast to the device's MAC
-//! with no DNET, answered from that MAC with no SNET. Both the Command action
-//! and the Channel member take that route. A binding routed to another
+//! with no DNET. The answer from that MAC with no SNET completes it, and so
+//! does one a router relays back with this network as its SNET (#1465).
+//! Both the Command action and the Channel member take that route. A binding routed to another
 //! network, or any binding while the number is unknown, still goes through
 //! its router with the DNET it names. An answer to a request goes back by the
 //! route the request came in on, whatever its SNET names.
@@ -73,10 +74,26 @@ async fn start(writer: Writer) -> Harness {
     }
 }
 
+/// How the device's answer comes back.
+#[derive(Clone, Copy, Debug)]
+enum Answer {
+    /// The way the request went: from the device's own MAC for a local
+    /// request, through `ROUTER` with the device's SNET otherwise.
+    AsSent,
+    /// Through `ROUTER`, with this network as its SNET and the device's MAC
+    /// as its SADR, as a router here relays it.
+    Relayed,
+}
+
 /// Run `writer`'s write to Device 9, bound at the peer on `bound_on` behind
 /// `ROUTER`, with `this_network` published as the local network's number.
-/// The answer comes back the way the request went, and the write succeeds.
-async fn write_through(writer: Writer, this_network: Option<u16>, bound_on: u16) -> Sent {
+/// The answer comes back as `answer` says, and the write succeeds.
+async fn write_through(
+    writer: Writer,
+    this_network: Option<u16>,
+    bound_on: u16,
+    answer: Answer,
+) -> Sent {
     let mut h = start(writer).await;
     let binding = DeviceBinding::routed(device(9), bound_on, PEER, ROUTER).unwrap();
     h.server
@@ -115,13 +132,15 @@ async fn write_through(writer: Writer, this_network: Option<u16>, bound_on: u16)
     if let Some(to) = &destination {
         assert_eq!(to.mac_address.as_slice(), PEER, "{writer:?}: the DADR");
     }
-    // The device answers from where the request reached it: from its own MAC
-    // for a local request, through the router with its SNET otherwise.
-    let source = destination.map(|to| NpduAddress {
-        network: to.network,
+    let (link, network) = match answer {
+        Answer::AsSent => (frame.mac.clone(), destination.map(|to| to.network)),
+        Answer::Relayed => (MacAddr::from_slice(&ROUTER), this_network),
+    };
+    let source = network.map(|network| NpduAddress {
+        network,
         mac_address: MacAddr::from_slice(&PEER),
     });
-    deliver(&h, &ack(invoke_id), &frame.mac, source).await;
+    deliver(&h, &ack(invoke_id), &link, source).await;
     match writer {
         Writer::Command => {
             idle(&h, 1).await;
@@ -132,6 +151,11 @@ async fn write_through(writer: Writer, this_network: Option<u16>, bound_on: u16)
         }
     }
     assert_eq!(h.server.notification_transactions.active_count(), 0);
+    if let Some(number) = this_network {
+        // An answer relayed from this network teaches no route to it.
+        let learned = h.server.learned_routers.lock().await.cached_router(number);
+        assert_eq!(learned, None, "{writer:?}");
+    }
     sent
 }
 
@@ -139,16 +163,16 @@ async fn write_through(writer: Writer, this_network: Option<u16>, bound_on: u16)
 async fn command_write_bound_through_this_network_goes_without_a_dnet() {
     let writer = Writer::Command;
     assert_eq!(
-        write_through(writer, Some(THIS_NETWORK), THIS_NETWORK).await,
+        write_through(writer, Some(THIS_NETWORK), THIS_NETWORK, Answer::AsSent).await,
         local()
     );
     assert_eq!(
-        write_through(writer, Some(THIS_NETWORK), REMOTE_NETWORK).await,
+        write_through(writer, Some(THIS_NETWORK), REMOTE_NETWORK, Answer::AsSent).await,
         routed(REMOTE_NETWORK)
     );
     // While the number is unknown the binding is taken as written.
     assert_eq!(
-        write_through(writer, None, THIS_NETWORK).await,
+        write_through(writer, None, THIS_NETWORK, Answer::AsSent).await,
         routed(THIS_NETWORK)
     );
 }
@@ -157,17 +181,30 @@ async fn command_write_bound_through_this_network_goes_without_a_dnet() {
 async fn channel_member_bound_through_this_network_is_written_without_a_dnet() {
     let writer = Writer::Channel;
     assert_eq!(
-        write_through(writer, Some(THIS_NETWORK), THIS_NETWORK).await,
+        write_through(writer, Some(THIS_NETWORK), THIS_NETWORK, Answer::AsSent).await,
         local()
     );
     assert_eq!(
-        write_through(writer, Some(THIS_NETWORK), REMOTE_NETWORK).await,
+        write_through(writer, Some(THIS_NETWORK), REMOTE_NETWORK, Answer::AsSent).await,
         routed(REMOTE_NETWORK)
     );
     assert_eq!(
-        write_through(writer, None, THIS_NETWORK).await,
+        write_through(writer, None, THIS_NETWORK, Answer::AsSent).await,
         routed(THIS_NETWORK)
     );
+}
+
+/// Once the number is known, a write sent to the device's MAC is completed
+/// by its answer relayed back through a router with this network as its SNET
+/// and that MAC as its SADR, as by a direct one (#1465).
+#[tokio::test(start_paused = true)]
+async fn a_local_write_is_completed_by_its_answer_relayed_with_this_networks_snet() {
+    for writer in [Writer::Command, Writer::Channel] {
+        assert_eq!(
+            write_through(writer, Some(THIS_NETWORK), THIS_NETWORK, Answer::Relayed).await,
+            local()
+        );
+    }
 }
 
 /// A ReadProperty that a router delivers with this network's own number as

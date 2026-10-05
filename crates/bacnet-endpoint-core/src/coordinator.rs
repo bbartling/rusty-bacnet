@@ -36,9 +36,30 @@ impl CanonicalPeer {
         }
     }
 
-    /// Selects routed source identity when present, ignoring the immediate router.
-    pub fn from_source(immediate_mac: &[u8], routed_source: Option<&NpduAddress>) -> Self {
+    /// The peer an inbound APDU came from, which every role matches its
+    /// answers by: the SNET/SADR a router added when there is one, ignoring
+    /// the immediate router, otherwise the immediate link MAC.
+    ///
+    /// `local_network` is the number of the network the receiving link is
+    /// attached to, once known. A router attached to it that passes a
+    /// station's NPDU back onto it adds that number and the station's MAC as
+    /// SNET/SADR (Clause 6.5.4), and network numbers are unique, so the
+    /// source is that station: the same direct peer as an NPDU from its MAC
+    /// with no SNET (#1465), as the server already reads a request's source
+    /// (#1404). Only that exact pairing changes anything, and the invoke ID
+    /// and peer still have to match the transaction. Any other SNET, and
+    /// every SNET while the number is unknown, stays a routed peer. A routed
+    /// source with no SADR names no station, so the immediate MAC stands.
+    pub fn from_source(
+        immediate_mac: &[u8],
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+    ) -> Self {
         match routed_source {
+            Some(source) if source.mac_address.is_empty() => Self::direct(immediate_mac),
+            Some(source) if Some(source.network) == local_network => {
+                Self::direct(&source.mac_address)
+            }
             Some(source) => Self::routed(source.network, &source.mac_address),
             None => Self::direct(immediate_mac),
         }

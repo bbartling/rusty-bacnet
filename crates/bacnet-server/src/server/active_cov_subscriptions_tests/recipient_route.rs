@@ -41,6 +41,7 @@ fn acknowledge_confirmed(wire: &Wire) {
             wire.server.notification_transactions.admit_terminal(
                 &frame.mac,
                 npdu.destination.as_ref(),
+                None,
                 &Apdu::SimpleAck(SimpleAck {
                     invoke_id: request.invoke_id,
                     service_choice: request.service_choice,

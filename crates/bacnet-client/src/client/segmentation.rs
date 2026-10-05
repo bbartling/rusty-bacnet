@@ -58,7 +58,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             provenance,
         } = source;
         let seq = ack.sequence_number.unwrap_or(0);
-        let transaction_peer = response_transaction_peer(source_mac, source_network);
+        let transaction_peer = TransactionPeer::of_answer(
+            source_mac,
+            source_network.as_ref(),
+            network.local_network_number().get(),
+        );
         let tsm_mac = transaction_peer.tsm_mac;
         let canonical_peer = transaction_peer.canonical;
         let coordinator_apdu = Apdu::ComplexAck(ack.clone());

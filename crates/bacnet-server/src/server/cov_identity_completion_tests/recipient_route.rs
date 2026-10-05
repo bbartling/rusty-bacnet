@@ -182,6 +182,7 @@ async fn cov_recipient_route_admitted_confirmed_ack_cannot_overwrite_new_generat
         assert!(fixture.transactions.admit_terminal(
             &old.subscriber_mac,
             old.subscriber_network.as_ref(),
+            None,
             &Apdu::SimpleAck(SimpleAck {
                 invoke_id: request.invoke_id,
                 service_choice: request.service_choice
