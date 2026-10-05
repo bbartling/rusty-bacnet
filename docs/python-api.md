@@ -2,11 +2,11 @@
 
 `rusty_bacnet` provides Python bindings for the Rust BACnet protocol stack via PyO3. All I/O operations are async (`asyncio`-based).
 
-This reference describes current development-source APIs, including unreleased
-changes. The [published package](https://pypi.org/project/rusty-bacnet/0.11.0/)
-and the site’s release tutorials target **0.11.0**; see the [installation guidance](../README.md#install)
-for that release. To use the checkout APIs described here, follow
-[Build from source](../README.md#build-from-source).
+This reference follows the `dev` branch. At the `v0.12.0` tag it describes the
+[published 0.12.0 package](https://pypi.org/project/rusty-bacnet/0.12.0/), which
+the site's tutorials also target; see the [installation guidance](../README.md#install).
+Changes merged after the release wait in [`changelog.d/`](../changelog.d/); to
+use them, follow [Build from source](../README.md#build-from-source).
 
 **Requirements:** Python >= 3.11
 
@@ -34,11 +34,15 @@ that yields a notification or raises `StopAsyncIteration` when the channel close
 
 ## Installation
 
-Install the published 0.11.0 package with:
+Install the published 0.12.0 package with:
 
 ```bash
-pip install "rusty-bacnet==0.11.0"
+pip install "rusty-bacnet==0.12.0"
 ```
+
+Wheels cover CPython 3.11 to 3.14 on Linux (glibc 2.17 or newer; x86_64,
+aarch64), macOS (x86_64 on 10.12 or later, arm64 on 11.0 or later) and Windows
+(x64), each with BACnet/IPv6, BACnet/SC and MS/TP.
 
 The package includes a `.pyi` type stub file for IDE autocompletion and type checking. Most editors (VS Code, PyCharm) will pick it up automatically from the installed package.
 
@@ -591,7 +595,7 @@ value decoding. Served scalars and BACnetLIST properties retain
 rules. Absence-first is a local error-precedence policy. Custom objects with empty
 metadata keep their existing classifier and writer delegation. WPM retains its
 successful prefix and leaves the failing element and suffix unmodified. This
-describes the current source build, not the error policy of a remote server.
+describes this library, not the error policy of a remote server.
 
 
 All three single-property entrypoints (`write_property`, `write_property_to_device`,
@@ -1666,7 +1670,7 @@ await client.who_am_i(260, "Controller-X", "SN-0001")
 
 ## BACnetServer
 
-In the current development checkout, the full server constructs its owned
+The full server constructs its owned
 Device with the selected transport's stable local receive capacity: 1476 for
 B/IP, B/IPv6 and SC, or 480 for MS/TP. Device
 `Max_APDU_Length_Accepted` and I-Am therefore match the effective server
@@ -1675,7 +1679,7 @@ Python capacity argument and does not rewrite application-owned Rust Devices.
 The MS/TP constructor correction has a non-hardware binding test; it is not
 serial-hardware qualification. The [directional Rust contract](rust-api.md#local-receive-capacity-and-outgoing-limits)
 explains raw declarations and Confirmed-Request header flooring. These changes
-postdate published 0.11.0.
+are new in 0.12.0.
 
 Await `server.stop()` to join admitted work and release the transport. Cancelling
 its Future retains the server's shutdown owner; a later `stop()` joins it, and a
@@ -4090,12 +4094,12 @@ server = BACnetServer(
 
 ### BACnet/IPv6
 
-In current source, `ipv6_interface=None` and `"::"` select one unambiguous usable
+`ipv6_interface=None` and `"::"` select one unambiguous usable
 local link and address. A non-loopback multicast interface is preferred; a unique
 non-link-local address on it is preferred over a unique link-local address.
 Ambiguity fails async client entry or server startup; use a concrete local IPv6
-address to select its unique interface. This replaces published 0.11.0's wildcard
-fallback without changing constructor signatures. There is no silent `::1`
+address to select its unique interface. This replaced 0.11.0's wildcard
+fallback in 0.12.0 without changing constructor signatures. There is no silent `::1`
 fallback for failed physical selection. Explicit loopback remains node-local.
 
 The selected address and actual bound port are used for outgoing data and control
@@ -4198,7 +4202,7 @@ Generated-certificate installed-native tests cover both paths without changing
 Python signatures or exception mapping. This is local policy, not UUID-profile
 or lifetime-storage validation; post-handshake startup rollback is not expanded.
 
-**Current-dev zero-limit receive policy (Refs #519):** native `BACnetClient` async
+**Zero-limit receive policy (Refs #519):** native `BACnetClient` async
 entry and `BACnetServer.start()` also silently discard Connect-Accept advertising
 zero Max-BVLC or Max-NPDU. AB.2 forbids a response: no NAK, startup completion,
 peer-limit commit or original connect-deadline reset. A later valid Accept can
@@ -4282,29 +4286,29 @@ ms and require `sc_heartbeat_timeout_ms` to be greater than the interval.
 
 #### Accepted-direct identity and responses
 
-Current native source retains a verified direct leaf fingerprint
+Native code retains a verified direct leaf fingerprint
 and connection incarnation through queued server work, duplicate/replay admission,
 and partial request reassembly. Python does not expose a principal authorizer or
 the direct listener through this API; its mutation policy remains the existing
-static `permissive`/`deny_all` choice. The Rust identity APIs postdate published
-0.11.0. Hub admission's scope-only channel assertion and Hub-relayed application
+static `permissive`/`deny_all` choice. The Rust identity APIs are new in
+0.12.0. Hub admission's scope-only channel assertion and Hub-relayed application
 traffic never become downstream direct leaf identities. See the
 [Rust identity contract](rust-api.md#accepted-direct-tls-identity). Native
-`BACnetServer` now confines accepted-direct confirmed replies, LSO replay and
+`BACnetServer` confines accepted-direct confirmed replies, LSO replay and
 segmented-request controls to the original socket. Unconfirmed Who-Is/Who-Has
 discovery replies retain ordinary routing. Python still exposes neither
 direct-listener setup nor this response capability. This adds no Python direct-connection entry point
-or Python direct-connection support. Native source also confines the standalone
+or Python direct-connection support. Native code also confines the standalone
 client's inbound confirmed replies and the shared endpoint's narrow responder;
 that does not change outgoing client transaction/retry policy or expose a Python
 response capability. See the [server response scope](rust-api.md#accepted-direct-server-responses)
 and [native client/endpoint scope](rust-api.md#accepted-direct-client-and-endpoint-replies).
-Native `ScTransport::with_direct_tls` now admits bidirectional application traffic
+Native `ScTransport::with_direct_tls` admits bidirectional application traffic
 with matching verified identity and original reply authority; established accepted
 peers also serve ordinary unicast with discovery disabled. Arbitrary custom dialers
 remain send-only. Outgoing transactions retain standard address/Invoke-ID correlation
-and Hub/direct path switching, not a same-leaf continuity guarantee. These source
-APIs postdate 0.11.0 and add no Python direct-connection entry point. See the
+and Hub/direct path switching, not a same-leaf continuity guarantee. These APIs are new
+in 0.12.0 and add no Python direct-connection entry point. See the
 [native routing contract](rust-api.md#bidirectional-direct-traffic).
 
 ## Request admission limits
