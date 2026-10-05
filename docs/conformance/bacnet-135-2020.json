@@ -1315,6 +1315,8 @@
     "crates/bacnet-objects/src/log_window.rs::LogWindow",
     "crates/bacnet-objects/src/log_lifecycle.rs::LogLifecycle::refresh_window",
     "crates/bacnet-objects/src/trend/acquisition.rs::Acquisition",
+    "crates/bacnet-objects/src/trend/acquisition.rs::Rules",
+    "crates/bacnet-objects/src/log_lifecycle.rs::LogLifecycle::configure_window",
     "crates/bacnet-objects/src/database/trend_poll/alignment.rs::Alignment",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::refresh_log_window_internal",
     "crates/rusty-bacnet/src/server/server_methods/trend_log_methods.rs::trend_log_multiple",
@@ -1369,7 +1371,22 @@
     "crates/rusty-bacnet/src/types/property_reference_tests.rs::reference_mappings_fill_every_field_and_default_the_optional_ones",
     "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleLiveServerTests::test_polled_and_triggered_logs_configured_from_python",
     "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleMemberFormTests::test_tuple_and_mapping_members_and_the_own_device",
-    "crates/rusty-bacnet/src/types/property_reference_tests.rs::localize_drops_only_the_own_device"
+    "crates/rusty-bacnet/src/types/property_reference_tests.rs::localize_drops_only_the_own_device",
+    "crates/bacnet-objects/src/log_window_tests.rs::records_outside_the_window_are_ignored_and_each_change_is_logged",
+    "crates/bacnet-objects/src/log_window_tests.rs::while_enable_is_false_the_window_moves_without_a_record",
+    "crates/bacnet-objects/src/log_window_tests.rs::a_local_window_is_configuration_and_its_opening_is_logged",
+    "crates/bacnet-objects/src/trend/options_tests.rs::trigger_asks_a_triggered_log_for_one_record",
+    "crates/bacnet-objects/src/trend/options_tests.rs::alignment_rows_read_back_what_is_written",
+    "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::each_trigger_acquires_one_trend_log_record",
+    "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::a_trigger_on_a_trend_log_without_a_reference_logs_a_failure",
+    "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::an_aligned_trend_log_acquires_on_each_boundary",
+    "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::each_pass_records_a_trend_log_window_opening_and_closing",
+    "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::each_pass_records_an_event_log_window_opening_and_closing",
+    "crates/bacnet-objects/src/log_window_tests.rs::a_window_opened_at_both_ends_logs_its_opening_at_the_write",
+    "crates/bacnet-objects/src/log_window_tests.rs::a_window_opened_at_both_ends_without_a_clock_logs_it_at_the_next_pass",
+    "crates/bacnet-objects/src/log_window_tests.rs::a_client_write_after_a_local_setter_logs_the_change",
+    "crates/bacnet-objects/src/trend/options_tests.rs::a_record_the_log_ignores_still_serves_the_trigger",
+    "crates/bacnet-server/src/handlers/tests/trend_log_options.rs::trend_log_and_event_log_windows_take_a_date_and_time"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/trend_log_clock_tests.rs::unusable_acquisition_clock_preserves_records_and_schedule_then_retries",
@@ -1396,7 +1413,11 @@
     "crates/rusty-bacnet/src/server/server_methods/trend_log_methods_tests.rs::python_add_trend_log_multiple_settings_are_checked_like_the_rust_setters",
     "crates/rusty-bacnet/src/types/property_reference_tests.rs::reference_mappings_refuse_bad_shapes_and_types",
     "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleConfigurationTests::test_bad_settings_are_refused_before_start",
-    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleStubContractTests::test_runtime_and_stub_take_the_same_keyword_arguments"
+    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleStubContractTests::test_runtime_and_stub_take_the_same_keyword_arguments",
+    "crates/bacnet-objects/src/log_window_tests.rs::window_values_that_name_no_moment_are_value_out_of_range",
+    "crates/bacnet-objects/src/trend/options_tests.rs::logging_type_takes_polled_or_triggered_and_refuses_cov_for_now",
+    "crates/bacnet-objects/src/trend/options_tests.rs::a_polled_interval_written_to_zero_is_a_refused_switch_to_cov",
+    "crates/bacnet-server/src/handlers/tests/trend_log_options.rs::trend_log_logging_type_refuses_cov_and_steers_log_interval"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -1409,31 +1430,36 @@
      "Refs #748/#753: database-owned schedules compare the complete selection configuration, retire on structural access, and use exact hundredths under one exclusive selection/acquisition/append guard. The former external TrendLogState and mutable Box getter are removed.",
      "Successful next intervals start at actual completion without catch-up; configuration reconciliation and failed-attempt retries use a local 100 ms bound, and slow passes yield 1 ms when another entry is already due.",
      "Poller insertion failures preserve last success and retry after clock repair; SourceReporter forwards results. Constructors, records() and raw clear() retain their behavior. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER.",
-     "Start_Time/Stop_Time windows on Trend Log and Event Log (#1353), LOG_INTERRUPTED, persistence/restart, and complete log conformance remain deferred; Trend Log Multiple has its window.",
+     "LOG_INTERRUPTED, persistence/restart, and complete log conformance remain deferred.",
      "#1183: the poller reads only its own database. A Log_DeviceObjectProperty whose Device member names another device (ObjectDatabase::local_device, the rule the server's Event Enrollment evaluation shares) logs a failure record, PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, at the configured interval and is never read from a same-numbered local object; one naming this device reads locally, as one without a Device does.",
      "A failed local read now logs a failure record carrying its error (OBJECT / UNKNOWN_OBJECT for a missing object, the read's own class and code otherwise, SERVICES / OTHER for an error without one) instead of a null value, the failure choice of the Clause 12.25 Log_Buffer datum.",
      "A Device member that is not an object identifier leaves the log unpolled.",
      "Trend Log Multiple: the same poller samples every Log_DeviceObjectProperty member each interval into one record, values in member order, under the shared Enable, Buffer_Size and Stop_When_Full lifecycle (#1203).",
      "Each Trend Log Multiple member resolves through ObjectDatabase::local_device as a Trend Log reference does. A member naming another device, or whose read fails, logs its own failure value; one naming instance 4194303 logs PROPERTY / NO_PROPERTY_SPECIFIED.",
      "A reference with an array index reads that element behind the ReadProperty gate the Averaging sampler shares: an index on a non-array logs PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, one past the end logs INVALID_ARRAY_INDEX. An index that isn't Unsigned leaves the log unpolled (#1205).",
-     "Only POLLED logs with a nonzero Log_Interval and at least one member are polled, besides a Trend Log Multiple's Trigger. Trend Log Multiple intrinsic reporting is not modeled.",
+     "Only POLLED logs with a nonzero Log_Interval and at least one member are polled, besides a TRIGGERED log's Trigger. Trend Log Multiple intrinsic reporting is not modeled.",
      "Both pollers log a value with no alternative of its own (CharacterString, Double, Date, ObjectIdentifier, OctetString, a whole array, a framed constructed value) as any-value holding the encoding a ReadProperty of it carries. A BitString logs as bitstring-value, and only a NULL value logs as null-value (#1236).",
      "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record.",
      "A client's change to Log_DeviceObjectProperty purges the log and records BUFFER_PURGED, as a zero Record_Count write does; the poller then samples the references written.",
-     "Trend Log Multiple Logging_Type is writable, POLLED or TRIGGERED; COV or any other value is PROPERTY / VALUE_OUT_OF_RANGE, also through set_logging_type. TRIGGERED zeroes Log_Interval and makes it read-only; POLLED at zero takes 6000.",
-     "A TRUE Trigger write on a TRIGGERED Trend Log Multiple makes one poller acquisition; Trigger reads TRUE until the record is accepted. TRUE on a POLLED log is PROPERTY / NOT_CONFIGURED_FOR_TRIGGERED_LOGGING.",
-     "Trend Log Multiple Start_Time / Stop_Time gate records, each judged at its own timestamp; an opening or closing while Enable is TRUE is logged. Unspecified seconds or hundredths count as zero; other partial ends are VALUE_OUT_OF_RANGE.",
-     "An aligned POLLED Trend Log Multiple whose Log_Interval divides a day acquires when the Device clock's time of day is Interval_Offset, modulo the interval, past a multiple of it.",
+     "Trend Log and Trend Log Multiple Logging_Type is writable, POLLED or TRIGGERED, also through set_logging_type. Any other value, COV included, is PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED on a Trend Log (Clause 12.25.26) and PROPERTY / VALUE_OUT_OF_RANGE on a Trend Log Multiple (Clause 12.30.12). TRIGGERED zeroes Log_Interval and makes it read-only; POLLED at zero takes 6000.",
+     "A Trend Log refuses COV because this stack has no COV acquisition, so a log never reports a mode it doesn't carry out. A POLLED Trend Log's nonzero Log_Interval written to zero, the Clause 12.25.9 switch to COV, gets the same PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.",
+     "A local Start_Time or Stop_Time setter records nothing but notes where the window stands, so a client's write that then opens or shuts it is recorded. A successful add_record serves a pending Trigger even when the record is ignored.",
+     "A TRUE Trigger write on a TRIGGERED trend log makes one poller acquisition; Trigger reads TRUE until the record is accepted. TRUE on a POLLED log is PROPERTY / NOT_CONFIGURED_FOR_TRIGGERED_LOGGING. A Trend Log with no reference logs PROPERTY / NO_PROPERTY_SPECIFIED for it.",
+     "Start_Time / Stop_Time on all three log objects gate records, each judged at its own timestamp; an opening or closing while Enable is TRUE is logged at a write and on the poller's next pass, Event Logs included. Unspecified seconds or hundredths count as zero; other partial ends are VALUE_OUT_OF_RANGE.",
+     "An aligned POLLED trend log whose Log_Interval divides a day acquires when the Device clock's time of day is Interval_Offset, modulo the interval, past a multiple of it.",
      "An aligned log is checked against the Device clock on every pass, so after a clock change it waits for the next boundary the clock reaches; a skipped boundary is not logged off the grid.",
      "Python's add_trend_log_multiple takes the members, Log_Interval, Logging_Type, window and alignment as keyword arguments.",
      "A Python member is an (object, property[, array_index]) tuple or a mapping, as add_channel takes; one naming the server's own Device is stored without it."
-    ]
+    ],
+   "gaps": [
+    "#1480: Trend Log COV acquisition is not built; a COV Logging_Type, or a POLLED log's Log_Interval set from nonzero to zero, is refused with PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED"
+   ]
   },
   {
    "id": "BACNET-12-EVENT-LOG-NOTIFICATIONS",
-   "standard_anchor": "Clauses 12.27, 12.27.8, 12.27.11 and 12.27.13; Clause 13.2.5; Annex K.2.21 and K.2.22",
+   "standard_anchor": "Clauses 12.27, 12.27.8-11 and 12.27.13; Clause 13.2.5; Annex K.2.21 and K.2.22",
    "priority": "P1",
-   "summary": "A running server records every event notification it generates in each Event Log, under that log's Enable, Buffer_Size and Stop_When_Full handling, for ReadRange to serve.",
+   "summary": "A running server records every event notification it generates in each Event Log, under that log's Enable, window, Buffer_Size and Stop_When_Full handling, for ReadRange to serve.",
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-objects/src/database/event_log.rs::ObjectDatabase::log_event_notification",
@@ -1444,7 +1470,8 @@
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_local_alarm_and_its_return_to_normal_are_logged_and_read_back,an_acknowledgment_notification_is_logged,a_notification_no_recipient_takes_is_still_logged,stop_when_full_stops_logging_before_the_buffer_fills}",
-    "crates/bacnet-objects/src/database/event_log_tests.rs::{every_event_log_records_the_notification_at_the_device_clock_time,stop_when_full_stops_the_log_before_it_fills}"
+    "crates/bacnet-objects/src/database/event_log_tests.rs::{every_event_log_records_the_notification_at_the_device_clock_time,stop_when_full_stops_the_log_before_it_fills}",
+    "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::each_pass_records_an_event_log_window_opening_and_closing"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_disabled_log_takes_no_notification,a_transition_whose_notification_class_is_missing_is_not_logged,a_transition_event_enable_suppresses_is_not_logged,a_transition_while_dcc_disables_initiation_is_not_logged,a_received_notification_is_not_logged}",
@@ -1464,7 +1491,6 @@
     "The record goes in under the guard that built the notification, before the send. Without a valid Device clock nothing is logged."
    ],
    "gaps": [
-    "Start_Time and Stop_Time are not modeled on Event Log, so Enable alone switches logging (no issue)",
     "#1346: logging received notifications, the AE-EL-E-B collection of Annex K.2.22, is not offered",
     "#1347: Event Log intrinsic reporting (BUFFER_READY, Notification_Threshold) is not modeled"
    ]

@@ -17,6 +17,8 @@ mod any_value_tests;
 mod member_tests;
 #[path = "multiple_tests.rs"]
 mod multiple_tests;
+#[path = "trend_log_tests.rs"]
+mod trend_log_tests;
 
 struct WallClock(Mutex<Option<ClockFrame>>);
 impl ClockReader for WallClock {
@@ -154,9 +156,12 @@ fn lifecycle_and_configuration_changes_reset_owned_schedule() {
     write(&mut db, oid, P::LOG_INTERVAL, PropertyValue::Unsigned(50));
     db.poll_trend_logs();
     assert_eq!(count(&db, oid), 2);
-    write(&mut db, oid, P::LOG_INTERVAL, PropertyValue::Unsigned(0));
+    // A zero interval would ask a Trend Log for COV logging, which is
+    // refused (#1354); TRIGGERED without a Trigger leaves it unpolled.
+    write(&mut db, oid, P::LOGGING_TYPE, PropertyValue::Enumerated(2));
     db.poll_trend_logs();
     assert!(!db.trend_poll.0.contains_key(&oid));
+    write(&mut db, oid, P::LOGGING_TYPE, PropertyValue::Enumerated(0));
     write(&mut db, oid, P::LOG_INTERVAL, PropertyValue::Unsigned(50));
     db.poll_trend_logs();
     assert_eq!(count(&db, oid), 3);

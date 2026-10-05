@@ -1787,6 +1787,15 @@ await server.write_property_local(
 Peers can write each of these properties; writing Trigger TRUE to a polled
 log raises NOT_CONFIGURED_FOR_TRIGGERED_LOGGING.
 
+`add_trend_log` and `add_event_log` take no such keyword arguments, but their
+objects serve the same rows over the network and through
+`write_property_local`: a Trend Log has Logging_Type (POLLED or TRIGGERED),
+Log_Interval, Start_Time, Stop_Time, Align_Intervals, Interval_Offset and
+Trigger, and an Event Log has Start_Time and Stop_Time. The server can't log
+by COV yet (#1480), so a Trend Log refuses a COV Logging_Type, and a polled
+log's Log_Interval written from nonzero to zero (the older way to ask for
+COV), with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+
 Once the server runs with a valid Device clock, every event notification it
 generates (an intrinsic or Event Enrollment transition, or an acknowledgment)
 is recorded in each Event Log, stamped with that clock, even when no recipient

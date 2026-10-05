@@ -5,39 +5,61 @@ use bacnet_types::enums::PropertyIdentifier as P;
 
 use crate::log_buffer::{BUFFER_SIZE_METADATA, LOG_BUFFER_METADATA, TOTAL_RECORD_COUNT_METADATA};
 use crate::log_lifecycle::{LOG_ENABLE_METADATA, RECORD_COUNT_METADATA, STOP_WHEN_FULL_METADATA};
+use crate::log_window::{START_TIME_METADATA, STOP_TIME_METADATA};
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
-    PropertyMetadata,
+    PropertyMetadata, PropertyWriteCapability,
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
-// Preserve legacy order and the implemented surface. The monitored-reference
-// and interval rows retain their base optional classification; no new presence
-// or logging-mode write gates are introduced. Table 12-29 defines no
-// Out_Of_Service, so there is no such row (#985). Reliability stays read-only.
-// Log_DeviceObjectProperty is writable, held to this device (#1234).
-const BASE: &[PropertyMetadata] = &[
-    PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
-    PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    LOG_ENABLE_METADATA,
-    PropertyMetadata::new(P::LOG_INTERVAL, Optional, None, Always),
-    STOP_WHEN_FULL_METADATA,
-    BUFFER_SIZE_METADATA,
-    LOG_BUFFER_METADATA,
-    RECORD_COUNT_METADATA,
-    TOTAL_RECORD_COUNT_METADATA,
-    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::LOGGING_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::LOG_DEVICE_OBJECT_PROPERTY, Optional, None, Always),
-    PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
-];
+// The legacy rows keep their order, then the window, alignment and Trigger
+// rows follow as on a Trend Log Multiple. Each row keeps its base conformance
+// code: Table 12-29 footnotes 1 and 8 require Start_Time, Stop_Time and
+// Log_DeviceObjectProperty when the log samples a BACnet property, which
+// every log here does, but they stay Optional rather than gaining a presence
+// condition. There is no Out_Of_Service row (#985), and Reliability stays
+// read-only. Log_DeviceObjectProperty is writable, held to this device
+// (#1234). Logging_Type takes POLLED or TRIGGERED, and Log_Interval is
+// read-only while TRIGGERED (footnote 3). Start_Time and Stop_Time are
+// writable (footnote 2). The device supports clock-aligned logging, so
+// Align_Intervals and Interval_Offset are present (footnote 5) and
+// writable, as Trigger is, to ask for an acquisition.
+const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 22] {
+    [
+        PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
+        PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
+        PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
+        PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
+        LOG_ENABLE_METADATA,
+        PropertyMetadata::new(P::LOG_INTERVAL, Optional, None, log_interval),
+        STOP_WHEN_FULL_METADATA,
+        BUFFER_SIZE_METADATA,
+        LOG_BUFFER_METADATA,
+        RECORD_COUNT_METADATA,
+        TOTAL_RECORD_COUNT_METADATA,
+        PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
+        PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
+        PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
+        PropertyMetadata::new(P::LOGGING_TYPE, RequiredRead, None, Always),
+        PropertyMetadata::new(P::LOG_DEVICE_OBJECT_PROPERTY, Optional, None, Always),
+        START_TIME_METADATA,
+        STOP_TIME_METADATA,
+        PropertyMetadata::new(P::ALIGN_INTERVALS, Optional, None, Always),
+        PropertyMetadata::new(P::INTERVAL_OFFSET, Optional, None, Always),
+        PropertyMetadata::new(P::TRIGGER, Optional, None, Always),
+        PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
+    ]
+}
 
-pub(super) fn for_object(_object: &TrendLogObject) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(BASE)
+const WRITABLE_INTERVAL: [PropertyMetadata; 22] = rows(Always);
+const READ_ONLY_INTERVAL: [PropertyMetadata; 22] = rows(ReadOnly);
+
+pub(super) fn for_object(object: &TrendLogObject) -> Cow<'_, [PropertyMetadata]> {
+    Cow::Borrowed(if object.acquisition.log_interval_writable() {
+        &WRITABLE_INTERVAL
+    } else {
+        &READ_ONLY_INTERVAL
+    })
 }
 
 #[cfg(test)]
@@ -53,20 +75,14 @@ mod tests {
     use bacnet_types::primitives::{Date, PropertyValue, Time};
     use std::sync::Arc;
 
-    const LOGGING_TYPES: [LoggingType; 3] = [
-        LoggingType::POLLED,
-        LoggingType::COV,
-        LoggingType::TRIGGERED,
-    ];
+    /// Both trend objects refuse COV, so neither can be put in it.
+    const LOGGING_TYPES: [LoggingType; 2] = [LoggingType::POLLED, LoggingType::TRIGGERED];
 
-    /// The rows only a Trend Log Multiple serves (Table 12-35).
-    const MULTIPLE_ONLY: [P; 5] = [
-        P::START_TIME,
-        P::STOP_TIME,
-        P::ALIGN_INTERVALS,
-        P::INTERVAL_OFFSET,
-        P::TRIGGER,
-    ];
+    /// Every log's window (#1235, #1353).
+    const WINDOW: [P; 2] = [P::START_TIME, P::STOP_TIME];
+
+    /// The rows only the two trend objects serve (#1235, #1354).
+    const TREND_ONLY: [P; 3] = [P::ALIGN_INTERVALS, P::INTERVAL_OFFSET, P::TRIGGER];
 
     struct FixedClock;
 
@@ -95,11 +111,8 @@ mod tests {
         let mut trend = TrendLogObject::new(1, "TL-1", capacity).unwrap();
         let mut multiple = TrendLogMultipleObject::new(1, "TLM-1", capacity).unwrap();
         let event = EventLogObject::new(1, "EL-1", capacity).unwrap();
-        trend.set_logging_type(logging_type);
-        // A Trend Log Multiple refuses COV (Clause 12.30.12) and stays POLLED.
-        if logging_type != LoggingType::COV {
-            multiple.set_logging_type(logging_type).unwrap();
-        }
+        trend.set_logging_type(logging_type).unwrap();
+        multiple.set_logging_type(logging_type).unwrap();
         // None of the three has Out_Of_Service (Tables 12-29, 12-35, 12-31).
         [Box::new(trend), Box::new(multiple), Box::new(event)]
     }
@@ -153,13 +166,14 @@ mod tests {
                     if kind == ObjectType::EVENT_LOG {
                         // Table 12-31 has no Log_Interval (#1064).
                         all.retain(|&p| p != P::LOG_INTERVAL);
-                    }
-                    if kind != ObjectType::EVENT_LOG {
+                        all.extend(WINDOW);
+                    } else {
                         all.extend([P::LOGGING_TYPE, P::LOG_DEVICE_OBJECT_PROPERTY]);
+                        all.extend(WINDOW);
+                        all.extend(TREND_ONLY);
                         required.push(P::LOGGING_TYPE);
                     }
                     if kind == ObjectType::TREND_LOG_MULTIPLE {
-                        all.extend(MULTIPLE_ONLY);
                         required.insert(4, P::LOG_INTERVAL);
                         required.push(P::LOG_DEVICE_OBJECT_PROPERTY);
                     }
@@ -231,7 +245,6 @@ mod tests {
             for mut object in objects(8, logging_type) {
                 object.bind_clock_internal(Some(Arc::new(FixedClock)));
                 let kind = object.object_identifier().object_type();
-                let multiple = kind == ObjectType::TREND_LOG_MULTIPLE;
                 let metadata = object.property_metadata().into_owned();
                 for row in &metadata {
                     let p = row.property_identifier;
@@ -241,14 +254,11 @@ mod tests {
                         | P::RECORD_COUNT
                         | P::DESCRIPTION
                         | P::LOG_DEVICE_OBJECT_PROPERTY => Always,
-                        // Read-only while a Trend Log Multiple is TRIGGERED
-                        // (Table 12-35 footnote 2).
-                        P::LOG_INTERVAL if multiple && logging_type == LoggingType::TRIGGERED => {
-                            ReadOnly
-                        }
-                        P::LOG_INTERVAL => Always,
-                        P::LOGGING_TYPE if multiple => Always,
-                        p if MULTIPLE_ONLY.contains(&p) => Always,
+                        // Read-only while a trend log is TRIGGERED (Table
+                        // 12-29 footnote 3, Table 12-35 footnote 2).
+                        P::LOG_INTERVAL if logging_type == LoggingType::TRIGGERED => ReadOnly,
+                        P::LOG_INTERVAL | P::LOGGING_TYPE => Always,
+                        p if WINDOW.contains(&p) || TREND_ONLY.contains(&p) => Always,
                         _ => ReadOnly,
                     };
                     assert_eq!(row.write_capability, capability, "{kind:?} {p:?}");
@@ -324,8 +334,8 @@ mod tests {
                     ErrorClass::PROPERTY,
                     ErrorCode::INVALID_DATA_TYPE,
                 );
-                // No log object has Out_Of_Service (#985, #1064), and only a
-                // Trend Log Multiple serves the window, alignment and Trigger.
+                // No log object has Out_Of_Service (#985, #1064), and only the
+                // trend objects serve Logging_Type, alignment and Trigger.
                 let absent = [
                     P::PRESENT_VALUE,
                     P::PRIORITY_ARRAY,
@@ -333,7 +343,12 @@ mod tests {
                     P::OUT_OF_SERVICE,
                 ]
                 .into_iter()
-                .chain(MULTIPLE_ONLY.into_iter().filter(|_| !multiple));
+                .chain(
+                    [P::LOGGING_TYPE]
+                        .into_iter()
+                        .chain(TREND_ONLY)
+                        .filter(|_| kind == ObjectType::EVENT_LOG),
+                );
                 for p in absent {
                     assert!(!object.is_writable_property(p));
                     assert_error(

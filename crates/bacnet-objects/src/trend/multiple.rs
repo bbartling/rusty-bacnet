@@ -11,7 +11,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 
-use super::acquisition::Acquisition;
+use super::acquisition::{Acquisition, Rules};
 use super::multiple_metadata;
 use super::references::{self, MAX_LOG_DEVICE_OBJECT_PROPERTIES};
 use crate::clock::ClockReader;
@@ -62,7 +62,7 @@ impl TrendLogMultipleObject {
             buffer_size,
             log_buffer: LogRecordBuffer::new(buffer_size),
             log_device_object_property: Vec::new(),
-            acquisition: Acquisition::default(),
+            acquisition: Acquisition::new(Rules::TrendLogMultiple),
             window: LogWindow::default(),
             reliability: Reliability::NO_FAULT_DETECTED,
             clock: None,
@@ -75,8 +75,10 @@ impl TrendLogMultipleObject {
     /// and a record outside the Start_Time / Stop_Time window are ignored,
     /// zero-capacity logging may only count, and a stop-before-full
     /// transition records status instead. Missing/invalid status clocks fail
-    /// atomically with DEVICE / OPERATIONAL_PROBLEM. An accepted record
-    /// serves a pending Trigger, which reads FALSE again.
+    /// atomically with DEVICE / OPERATIONAL_PROBLEM. A successful call serves
+    /// a pending Trigger, which reads FALSE again, even when the record is
+    /// ignored (Enable FALSE, or outside the window): the acquisition was
+    /// made.
     pub fn add_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
         self.lifecycle().try_add_ordinary(record)?;
         self.acquisition.acquired();
@@ -193,31 +195,24 @@ impl TrendLogMultipleObject {
     }
 
     /// Set Start_Time, the local date and time from which records are kept,
-    /// as local configuration: nothing is recorded for the change itself.
-    /// Every field unspecified leaves the start open. Any other value has to
-    /// name an actual date and time, or it is PROPERTY / VALUE_OUT_OF_RANGE:
-    /// the weekday may stay unspecified, and unspecified seconds or
-    /// hundredths count as zero.
+    /// as local configuration: nothing is recorded for the change itself,
+    /// but the log notes at once where the window stands, so a client's
+    /// write that then opens or shuts it is recorded. Every field
+    /// unspecified leaves the start open. Any other value has to name an
+    /// actual date and time, or it is PROPERTY / VALUE_OUT_OF_RANGE: the
+    /// weekday may stay unspecified, and unspecified seconds or hundredths
+    /// count as zero.
     pub fn set_start_time(&mut self, date: Date, time: Time) -> Result<(), Error> {
-        self.set_window_end(PropertyIdentifier::START_TIME, date, time)
+        self.lifecycle()
+            .configure_window(PropertyIdentifier::START_TIME, (date, time))
     }
 
     /// Set Stop_Time, the local date and time from which records are no
     /// longer kept, under the same rules as
     /// [`set_start_time`](Self::set_start_time).
     pub fn set_stop_time(&mut self, date: Date, time: Time) -> Result<(), Error> {
-        self.set_window_end(PropertyIdentifier::STOP_TIME, date, time)
-    }
-
-    fn set_window_end(
-        &mut self,
-        property: PropertyIdentifier,
-        date: Date,
-        time: Time,
-    ) -> Result<(), Error> {
-        self.window.set(property, (date, time))?;
-        self.window.forget();
-        Ok(())
+        self.lifecycle()
+            .configure_window(PropertyIdentifier::STOP_TIME, (date, time))
     }
 
     /// Set Align_Intervals: whether a POLLED log acquires at clock-aligned
@@ -249,8 +244,8 @@ impl TrendLogMultipleObject {
             &mut self.log_enable,
             &mut self.stop_when_full,
             self.clock.as_ref(),
+            &mut self.window,
         )
-        .with_window(&mut self.window)
     }
 }
 
