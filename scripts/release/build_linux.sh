@@ -76,8 +76,8 @@ chmod +x /tmp/rustup-init
 export PATH=$HOME/.cargo/bin:$PATH
 rustup toolchain install "$channel" --profile minimal --component "$components"
 rustc -vV
-gcc --version | head -1
-ldd --version | head -1
+gcc --version | sed -n 1p
+ldd --version | sed -n 1p
 echo "::endgroup::"
 
 # flex and bison generate libpcap's filter parser; nothing else uses them.

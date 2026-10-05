@@ -34,7 +34,7 @@ if [ "${RELEASE_IN_IMAGE:-}" != 1 ]; then
     bash scripts/release/smoke_glibc217.sh "$arch" "$version" "$assets"
 fi
 
-ldd --version | head -1
+ldd --version | sed -n 1p
 python=/opt/python/cp312-cp312/bin/python
 wheels=("$assets"/rusty_bacnet-*-cp312-cp312-manylinux*_"$arch".whl)
 [ ${#wheels[@]} = 1 ] && [ -f "${wheels[0]}" ] || fail "expected one cp312 $arch wheel in $assets, found: ${wheels[*]}"

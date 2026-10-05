@@ -405,7 +405,7 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          llvm-objdump --version | head -2
+          llvm-objdump --version | sed -n 1,2p
           # shellcheck disable=SC2086 # PYTHONS is a list.
           python3 scripts/release/check_artifacts.py release --release-version "$VERSION" --glibc "$GLIBC" \
             --python $PYTHONS \
