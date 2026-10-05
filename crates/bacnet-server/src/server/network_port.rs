@@ -165,11 +165,14 @@ pub(super) async fn start<T: TransportPort + 'static>(
     }
 }
 
+/// Own the Number controls. When one changes the published number, target
+/// Audit re-evaluates its recipient's route (#1460).
 pub(super) fn spawn_number_worker<T: TransportPort + 'static>(
     network: &Arc<NetworkLayer<T>>,
     db: &Arc<RwLock<ObjectDatabase>>,
     selected: Option<ObjectIdentifier>,
     mut controls: mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>,
+    audit: Option<std::sync::Weak<super::audit_recipient::TargetAudit<T>>>,
 ) -> JoinHandle<()> {
     let network = Arc::clone(network);
     let mut owner =
@@ -177,7 +180,14 @@ pub(super) fn spawn_number_worker<T: TransportPort + 'static>(
             .publishing_to(network.local_network_number().clone());
     super::heap_futures::spawn_boxed(move || async move {
         while let Some(control) = controls.recv().await {
-            if let Some(npdu) = owner.handle(control).await {
+            let before = network.local_network_number().get();
+            let reply = owner.handle(control).await;
+            if network.local_network_number().get() != before {
+                if let Some(audit) = audit.as_ref().and_then(std::sync::Weak::upgrade) {
+                    audit.number_changed();
+                }
+            }
+            if let Some(npdu) = reply {
                 if let Err(error) = network.transport().send_broadcast(&npdu).await {
                     tracing::debug!(%error, "Network-Number-Is broadcast failed");
                 }

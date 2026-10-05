@@ -27,16 +27,46 @@ fn address(network: u16, station: u8) -> BACnetRecipient {
 /// unconfirmed, to Device 999 bound at `SINK`, and has learned
 /// `THIS_NETWORK` or no number at all.
 async fn source(role: SessionRole, learned: bool) -> Endpoint {
+    source_reporting_to(
+        role,
+        learned,
+        BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)),
+    )
+    .await
+}
+
+/// [`source`], with `recipient` provisioned as the one it starts with.
+async fn source_reporting_to(
+    role: SessionRole,
+    learned: bool,
+    recipient: BACnetRecipient,
+) -> Endpoint {
+    let mut endpoint = unstarted_source(role, recipient, None);
+    endpoint.start(learned).await;
+    endpoint
+}
+
+/// The source session [`source_reporting_to`] starts. With `port_number`,
+/// it registers a B/IP Network Port configured with that network number,
+/// which is the session's number from startup.
+fn unstarted_source(
+    role: SessionRole,
+    recipient: BACnetRecipient,
+    port_number: Option<u16>,
+) -> Endpoint {
     let device = oid(ObjectType::DEVICE, 123);
-    let mut db = crate::DeviceIdentity::new(123, 42)
-        .unwrap()
-        .build_database()
-        .unwrap();
+    let mut identity = crate::DeviceIdentity::new(123, 42).unwrap();
+    if let Some(number) = port_number {
+        identity = identity
+            .with_bip_port(2, number.into(), *host(SELF).ip(), PORT)
+            .unwrap();
+    }
+    let mut db = identity.build_database().unwrap();
     db.get_mut(&device)
         .unwrap()
         .device_authority_internal()
         .unwrap()
-        .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
+        .provision_audit_recipient(recipient)
         .unwrap();
     let mut reporter = AuditReporterObject::new(1, "Source").unwrap();
     reporter
@@ -58,11 +88,15 @@ async fn source(role: SessionRole, learned: bool) -> Endpoint {
     if role == SessionRole::Both {
         session = session.with_device_writes(Arc::new(|_| true));
     }
+    if port_number.is_some() {
+        session = session
+            .with_identity(identity)
+            .with_registered_network_port(oid(ObjectType::NETWORK_PORT, 2));
+    }
     session
         .source_audit_bindings
         .push((oid(ObjectType::DEVICE, 999), host(SINK)));
     endpoint.session = session;
-    endpoint.start(learned).await;
     endpoint
 }
 
@@ -158,3 +192,6 @@ async fn source_routes_refuse_another_network_and_an_unknown_number() {
         }
     }
 }
+
+#[path = "local_network_recipient_tests.rs"]
+mod recipient;

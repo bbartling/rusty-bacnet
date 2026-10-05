@@ -178,6 +178,24 @@ pub(super) fn admit_encoded(
     )
 }
 
+/// Queue one encoded UnconfirmedAuditNotification for global broadcast
+/// (DNET 0xFFFF): a recipient change whose old recipient has no route goes
+/// out this way too, so it reaches every listening logger (Clause 12.11.66).
+pub(super) fn admit_global_broadcast(
+    egress: &EndpointEgress,
+    encoded: Vec<u8>,
+    deadline: Instant,
+) -> Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, EndpointEgressAdmissionError> {
+    egress.admit_apdu(
+        encoded,
+        EndpointApduDestination::GlobalBroadcast,
+        false,
+        NetworkPriority::NORMAL,
+        Vec::new(),
+        Some(deadline),
+    )
+}
+
 type Reservation = (
     bacnet_server::server::__endpoint_NotificationOperation,
     oneshot::Receiver<bacnet_server::server::CovAckResult>,

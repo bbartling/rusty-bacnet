@@ -112,6 +112,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 &db,
                 config.registered_network_port,
                 controls,
+                target_audit.as_ref().map(Arc::downgrade),
             )
         });
         let network_dispatch = Arc::clone(&network);

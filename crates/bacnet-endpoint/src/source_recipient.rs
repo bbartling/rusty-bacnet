@@ -76,8 +76,29 @@ impl SourceRoutes {
         };
         self.valid_address(mac).then(|| mac.clone())
     }
+    /// Whether `recipient` is an Address on a network numbered 1 to 65534
+    /// that is not the session's number in force, with a MAC this source
+    /// could send to: no route now, but one whenever that number is the
+    /// session's (#1461). One provisioned so starts unresolved, reporting
+    /// CONFIGURATION_ERROR as a Device with no binding does; a session
+    /// without a registered port learns its number only after it starts.
+    /// One the number moved away from no longer holds up a recipient change:
+    /// it gets no copy of the change record, since nothing reaches it.
+    pub(crate) fn awaits_local_number(&self, recipient: &BACnetRecipient) -> bool {
+        let BACnetRecipient::Address(address) = recipient else {
+            return false;
+        };
+        (1..=0xFFFE).contains(&address.network_number)
+            && Some(address.network_number) != self.local_network.get()
+            && self.valid_address(&address.mac_address)
+    }
+    /// Refuse a provisioned Address recipient with no route, unless the
+    /// session's number may yet name its network (#1461).
     pub(crate) fn validate_initial(&self, recipient: &BACnetRecipient) -> Result<(), Error> {
-        if matches!(recipient, BACnetRecipient::Address(_)) && self.resolve(recipient).is_none() {
+        if matches!(recipient, BACnetRecipient::Address(_))
+            && self.resolve(recipient).is_none()
+            && !self.awaits_local_number(recipient)
+        {
             Err(denied())
         } else {
             Ok(())
@@ -130,6 +151,28 @@ impl SourceRecipient {
             .write_audit_recipient(None, value, None, None)
     }
 
+    /// The direct MAC the Device's current Audit_Notification_Recipient
+    /// resolves to now, if any.
+    pub(crate) fn recipient_route(&self, db: &ObjectDatabase) -> Option<MacAddr> {
+        let value = db
+            .get(&self.device)?
+            .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
+            .ok()?;
+        let PropertyValue::ApplicationData(bytes) = value else {
+            return None;
+        };
+        let (recipient, _) = bacnet_encoding::constructed::decode_recipient(&bytes, 0).ok()?;
+        self.routes.resolve(&recipient)
+    }
+
+    /// The session's number changed: whether the recipient resolves may
+    /// have changed with it, so the Reporter's CONFIGURATION_ERROR follows
+    /// the route in force now, not at the next audited operation (#1461).
+    pub(crate) fn number_changed(&self, db: &ObjectDatabase) {
+        self.status
+            .set_configured(self.recipient_route(db).is_some());
+    }
+
     pub(crate) fn seal(&self) {
         if let Some(notifications) = self.notifications.upgrade() {
             notifications.seal_audit_owner(&self.owner);
@@ -159,7 +202,15 @@ impl SourceRecipient {
             if !self.owner.is_active() {
                 return Err(denied());
             }
-            let old_route = self.routes.resolve(current).ok_or_else(denied)?;
+            // An old Address the session's number no longer, or not yet,
+            // names has no route, but does not refuse the change (#1461):
+            // the record goes by global broadcast in its place. Any other
+            // old recipient must resolve.
+            let old_route = match self.routes.resolve(current) {
+                Some(route) => Some(route),
+                None if self.routes.awaits_local_number(current) => None,
+                None => return Err(denied()),
+            };
             let new_route = self.routes.resolve(&new).ok_or_else(denied)?;
             let mut old_value = bytes::BytesMut::new();
             let mut new_value = bytes::BytesMut::new();
@@ -189,28 +240,36 @@ impl SourceRecipient {
                 current_value: Some(old_value.to_vec()),
                 result: None,
             };
+            // Clause 12.11.66: the change's record reaches both recipients,
+            // or goes by global broadcast. With no route to the old one, the
+            // new recipient gets its copy and an unconfirmed global
+            // broadcast (`None`) stands in for the old one's.
+            let targets = match old_route {
+                Some(old_route) => [Some(old_route), Some(new_route)],
+                None => [Some(new_route), None],
+            };
             self.status.commit_recipient_change(|confirmed, token| {
                 let mut attempts = Vec::with_capacity(2);
-                for route in [old_route, new_route] {
+                for target in targets {
                     let permit = notifications.try_admit_audit().map_err(|_| denied())?;
-                    let reservation = if confirmed {
-                        Some(
+                    let reservation = match &target {
+                        Some(route) if confirmed => Some(
                             notifications
                                 .reserve(
-                                    CanonicalPeer::direct(&route),
+                                    CanonicalPeer::direct(route),
                                     ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
                                 )
                                 .map_err(|_| denied())?,
-                        )
-                    } else {
-                        None
+                        ),
+                        _ => None,
                     };
                     let invoke = reservation
                         .as_ref()
                         .map_or(0, |(operation, _)| operation.invoke_id());
-                    let encoded = delivery::encode(&record, confirmed, self.max_apdu, invoke)
-                        .ok_or_else(denied)?;
-                    attempts.push((route, permit, reservation, encoded));
+                    let encoded =
+                        delivery::encode(&record, reservation.is_some(), self.max_apdu, invoke)
+                            .ok_or_else(denied)?;
+                    attempts.push((target, permit, reservation, encoded));
                 }
                 *current = new;
                 let egress = self.egress.clone();
@@ -221,13 +280,17 @@ impl SourceRecipient {
                 let first = attempts.next().unwrap();
                 let second = attempts.next().unwrap();
                 Ok(async move {
-                    let run = |(route, permit, reserved, bytes),
+                    let run = |(target, permit, reserved, bytes): (Option<MacAddr>, _, _, _),
                                completion: delivery::Completion| {
                         let egress = egress.clone();
                         async move {
                             let _permit: tokio::sync::OwnedSemaphorePermit = permit;
-                            let sent =
-                                delivery::admit_encoded(&egress, route, bytes, confirmed, deadline);
+                            let sent = match target {
+                                Some(route) => delivery::admit_encoded(
+                                    &egress, route, bytes, confirmed, deadline,
+                                ),
+                                None => delivery::admit_global_broadcast(&egress, bytes, deadline),
+                            };
                             completion
                                 .finish(delivery::finish_send(sent, reserved, deadline).await);
                         }

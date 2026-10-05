@@ -28,6 +28,16 @@ pub(super) const SOURCE: &[u8] = &[3];
 #[derive(Clone, Default)]
 pub(super) struct AuditCapture {
     pub(super) six_byte_mac: bool,
+    /// The link's B/IP broadcast endpoint, which makes it the B/IP link
+    /// Address recipients need; sends then may go to any six-octet MAC.
+    pub(super) bip_broadcast: Option<std::net::SocketAddrV4>,
+    /// Record broadcasts in [`Self::broadcasts`] instead of dropping them.
+    pub(super) record_broadcasts: bool,
+    pub(super) broadcasts: Arc<StdMutex<Vec<Bytes>>>,
+    /// Run the Network Number controls, fed through `incoming`.
+    pub(super) number_controls: bool,
+    /// The bound B/IP endpoint a registered Network Port publishes.
+    pub(super) normal_bip: Option<std::net::SocketAddrV4>,
     pub(super) learned_broadcast: Option<MacAddr>,
     pub(super) reject_route_callbacks: Arc<AtomicBool>,
     pub(super) route_callbacks: Arc<AtomicUsize>,
@@ -56,7 +66,7 @@ impl AuditCapture {
     /// The link's `bip_broadcast_endpoint` answer, counted as a route callback.
     pub(super) fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
         self.route_callback();
-        None
+        self.bip_broadcast
     }
 
     /// The link's `is_broadcast_mac` answer, counted as a route callback.
@@ -70,6 +80,10 @@ impl AuditCapture {
     }
 
     async fn send(self: Arc<Self>, frame: SentFrame) -> Result<(), Error> {
+        if frame.broadcast {
+            self.broadcasts.lock().unwrap().push(frame.npdu);
+            return Ok(());
+        }
         let (bytes, mac) = (frame.npdu, frame.mac);
         if mac.as_slice() == SOURCE {
             self.responses.lock().unwrap().push(bytes);
@@ -78,7 +92,11 @@ impl AuditCapture {
             }
             return Ok(());
         }
-        assert!(mac.as_slice() == LOGGER || mac.as_slice() == NEW_LOGGER);
+        assert!(
+            mac.as_slice() == LOGGER
+                || mac.as_slice() == NEW_LOGGER
+                || (self.bip_broadcast.is_some() && mac.len() == 6)
+        );
         self.destinations.lock().unwrap().push(mac.to_vec());
         self.sent.lock().unwrap().push(bytes);
         if self.block.load(Ordering::Acquire) {
@@ -91,8 +109,9 @@ impl AuditCapture {
     }
 
     /// Build a link that reports into this capture. Unicasts go to [`Self::send`],
-    /// broadcasts succeed unrecorded, and the capture rides along as the
-    /// transport's state so helpers holding only the server can reach it.
+    /// broadcasts succeed, recorded only when asked, and the capture rides
+    /// along as the transport's state so helpers holding only the server can
+    /// reach it.
     pub(super) fn port(&self) -> TestTransport {
         let start = match self.incoming.lock().unwrap().take() {
             Some(incoming) => StartMode::Inbound(Some(incoming)),
@@ -110,16 +129,25 @@ impl AuditCapture {
             Arc::clone(&capture),
             Arc::clone(&capture),
         );
-        TestTransport::builder()
+        let mut builder = TestTransport::builder()
             .local_mac(local_mac)
             .start(start)
-            .broadcast(SendMode::Ignore)
+            .broadcast(if self.record_broadcasts {
+                SendMode::Record
+            } else {
+                SendMode::Ignore
+            })
             .on_start(move || on_start.started.store(true, Ordering::Release))
             .on_is_broadcast_mac(move |mac| on_routes.is_broadcast_mac(mac))
             .on_bip_broadcast_endpoint(move || on_endpoint.bip_broadcast_endpoint())
-            .on_send(move |frame| Arc::clone(&on_send).send(frame))
-            .state(capture)
-            .build()
+            .on_send(move |frame| Arc::clone(&on_send).send(frame));
+        if self.number_controls {
+            builder = builder.number_controls();
+        }
+        if let Some(endpoint) = self.normal_bip {
+            builder = builder.normal_bip(endpoint);
+        }
+        builder.state(capture).build()
     }
 }
 

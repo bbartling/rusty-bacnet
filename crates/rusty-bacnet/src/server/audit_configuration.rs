@@ -327,8 +327,16 @@ impl BACnetServer {
             BACnetRecipient::Device(device) if device.object_type() == ObjectType::DEVICE
                 && device.instance_number() < ObjectIdentifier::MAX_INSTANCE
                 && device.instance_number() != self.device_instance => Ok(()),
+            // Network zero, or a network numbered 1 to 65534: the server
+            // takes an address on its own network's number as local once it
+            // knows that number, and one it does not name yet starts
+            // unresolved (#1460).
             BACnetRecipient::Address(address) if self.transport_type == "bip"
-                && server::valid_bip_audit_address(address)
+                && address.network_number != u16::MAX
+                && server::valid_bip_audit_address(&bacnet_types::constructed::BACnetAddress {
+                    network_number: 0,
+                    mac_address: address.mac_address.clone(),
+                })
                 && address.mac_address.as_slice()[..4] != self.broadcast_address.parse::<std::net::Ipv4Addr>()
                     .map_err(|_| PyValueError::new_err("invalid configured broadcast address"))?.octets() => Ok(()),
             _ => Err(PyValueError::new_err("recipient must be a concrete remote Device or a supported direct unicast B/IP address")),
