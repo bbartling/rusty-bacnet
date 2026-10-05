@@ -92,22 +92,24 @@ pub(super) fn planned_rows(
     })
 }
 
-/// The selected Device's COV lists that planned `rows` read: a row naming
-/// either list on that Device, or such a row among the planned members of a
-/// Group whose whole Present_Value is read (#1171). A plan holds exactly the
-/// rows the request will read, ALL, REQUIRED and OPTIONAL already expanded,
-/// so the request samples only the lists it serves (#1213).
+/// The selected Device's server-owned lists that planned `rows` read, its COV
+/// lists and its Device_Address_Binding (#1369): a row naming one on that
+/// Device, or such a row among the planned members of a Group whose whole
+/// Present_Value is read (#1171). A plan holds exactly the rows the request
+/// will read, ALL, REQUIRED and OPTIONAL already expanded, so the request
+/// samples only the lists it serves (#1213).
 pub(super) fn live_cov_selection<'a>(
     db: &ObjectDatabase,
     rows: impl IntoIterator<Item = (ObjectIdentifier, &'a PlannedRow)>,
 ) -> Option<LiveCovSelection> {
-    // Only a plan that names either list pays the Device lookup.
+    // Only a plan that names one of the lists pays the Device lookup.
     let mut device = None;
     let mut selection: Option<LiveCovSelection> = None;
     let mut select = |oid: ObjectIdentifier, row: &PlannedRow| {
-        let (active, multiple) = match row.reference.property_identifier {
-            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS => (true, false),
-            PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => (false, true),
+        let (active, multiple, address_bindings) = match row.reference.property_identifier {
+            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS => (true, false, false),
+            PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => (false, true, false),
+            PropertyIdentifier::DEVICE_ADDRESS_BINDING => (false, false, true),
             _ => return,
         };
         if *device.get_or_insert_with(|| db.selected_device()) != Some(oid) {
@@ -117,9 +119,11 @@ pub(super) fn live_cov_selection<'a>(
             device: oid,
             active: false,
             multiple: false,
+            address_bindings: false,
         });
         selection.active |= active;
         selection.multiple |= multiple;
+        selection.address_bindings |= address_bindings;
     };
     for (oid, row) in rows {
         select(oid, row);

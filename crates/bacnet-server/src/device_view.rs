@@ -117,9 +117,10 @@ fn owned(property: P) -> bool {
             | P::PROPERTY_LIST
             | P::ACTIVE_COV_SUBSCRIPTIONS
             | P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
+            | P::DEVICE_ADDRESS_BINDING
     )
 }
-/// The four served fields cannot be assigned through a custom Device writer.
+/// The five served fields cannot be assigned through a custom Device writer.
 /// Call only after the existing object/index/value and authorization preflight.
 pub(crate) fn check_executor_owned_write(oid: ObjectIdentifier, property: P) -> Result<(), Error> {
     if oid.object_type() == ObjectType::DEVICE && owned(property) {
@@ -201,6 +202,14 @@ impl BACnetObject for DeviceReadView<'_> {
                     data,
                 })
             }
+            // The server's bindings, as the request sampled them for the
+            // selected Device (#1369). Any other Device, and an endpoint,
+            // which keeps no bindings to serve, read an empty list.
+            P::DEVICE_ADDRESS_BINDING => Ok(self
+                .context
+                .live
+                .and_then(|live| live.resolve(self.object_identifier(), property))
+                .unwrap_or_else(|| PropertyValue::List(Vec::new()))),
             _ if self.cov_present() => Ok(self
                 .context
                 .live
@@ -250,7 +259,11 @@ impl BACnetObject for DeviceReadView<'_> {
             original.into_owned()
         };
         rows.retain(|row| !owned(row.property_identifier));
-        for property in [P::PROTOCOL_SERVICES_SUPPORTED, P::PROPERTY_LIST] {
+        for property in [
+            P::PROTOCOL_SERVICES_SUPPORTED,
+            P::PROPERTY_LIST,
+            P::DEVICE_ADDRESS_BINDING,
+        ] {
             rows.push(PropertyMetadata::new(
                 property,
                 PropertyConformance::RequiredRead,
@@ -301,13 +314,15 @@ impl BACnetObject for DeviceReadView<'_> {
         }
     }
     /// ReadRange asks this of the served object (#1046): the two COV lists
-    /// are BACnetLISTs, Property_List is an array and the services bit
-    /// string is a single value.
+    /// and Device_Address_Binding are BACnetLISTs, Property_List is an array
+    /// and the services bit string is a single value.
     fn is_list_property(&self, property: P) -> bool {
         if self.is_device() && owned(property) {
             matches!(
                 property,
-                P::ACTIVE_COV_SUBSCRIPTIONS | P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
+                P::ACTIVE_COV_SUBSCRIPTIONS
+                    | P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
+                    | P::DEVICE_ADDRESS_BINDING
             )
         } else {
             self.object.is_list_property(property)

@@ -154,7 +154,8 @@ impl ActiveCovSubscriptions {
     }
 }
 
-/// Which server-owned Device COV lists one request may select.
+/// Which server-owned Device lists one request may select: the two COV lists
+/// and Device_Address_Binding (#1369).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LiveCovSelection {
     /// The selected local Device.
@@ -163,6 +164,16 @@ pub(crate) struct LiveCovSelection {
     pub(crate) active: bool,
     /// `Active_COV_Multiple_Subscriptions` may be read.
     pub(crate) multiple: bool,
+    /// `Device_Address_Binding` may be read. It comes from the server's
+    /// binding table, not the COV table.
+    pub(crate) address_bindings: bool,
+}
+
+impl LiveCovSelection {
+    /// Whether either COV list is selected, so the COV table is sampled.
+    pub(crate) fn reads_cov(self) -> bool {
+        self.active || self.multiple
+    }
 }
 
 /// Selected entries copied under one table read guard at one sampled instant.
@@ -199,14 +210,18 @@ impl CovSubscriptionTable {
     }
 }
 
-/// Request-local values of the selected Device's server-owned COV lists.
+/// Request-local values of the selected Device's server-owned lists: the COV
+/// lists and, when the request reads it, Device_Address_Binding.
 ///
-/// Built once per request and reused by every reference to either property in
+/// Built once per request and reused by every reference to any of them in
 /// that request, including ReadPropertyMultiple `ALL`/`OPTIONAL` expansion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct LiveDeviceCov {
     active: Option<ActiveCovSubscriptions>,
     multiple: Option<ActiveCovMultipleSubscriptions>,
+    /// The selected Device's Device_Address_Binding, as the request sampled
+    /// it from the binding table.
+    address_bindings: Option<(ObjectIdentifier, PropertyValue)>,
 }
 
 impl LiveDeviceCov {
@@ -219,6 +234,7 @@ impl LiveDeviceCov {
             multiple: selection
                 .multiple
                 .then(|| ActiveCovMultipleSubscriptions::stopped(selection.device)),
+            address_bindings: None,
         }
     }
 
@@ -235,7 +251,19 @@ impl LiveDeviceCov {
             multiple: entries.multiple.map(|entries| {
                 ActiveCovMultipleSubscriptions::project(db, selection.device, entries)
             }),
+            address_bindings: None,
         }
+    }
+
+    /// These lists, with `bindings`, sampled from the binding table, as the
+    /// selected Device's Device_Address_Binding.
+    pub(crate) fn with_address_bindings(
+        mut self,
+        selection: LiveCovSelection,
+        bindings: Option<PropertyValue>,
+    ) -> Self {
+        self.address_bindings = bindings.map(|bindings| (selection.device, bindings));
+        self
     }
 
     /// The live value for exactly the selected Device and a selected list.
@@ -252,6 +280,14 @@ impl LiveDeviceCov {
                 self.multiple
                     .as_ref()
                     .and_then(|live| live.resolve(oid, property))
+            })
+            .or_else(|| match &self.address_bindings {
+                Some((device, bindings))
+                    if *device == oid && property == PropertyIdentifier::DEVICE_ADDRESS_BINDING =>
+                {
+                    Some(bindings.clone())
+                }
+                _ => None,
             })
     }
 }

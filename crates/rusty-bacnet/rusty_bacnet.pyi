@@ -3573,7 +3573,12 @@ class BACnetServer:
         The result equals what a network ``read_property`` of the same
         property returns: a Group's Present_Value is rebuilt from its
         members, Device instance 4194303 names this server's Device, and the
-        Device's COV subscription lists are live. An unknown object or
+        Device's COV subscription lists are live. Its Device_Address_Binding
+        is a list with one ``bytes`` item per device binding the server holds
+        (each ``add_device_binding``, and each device whose I-Am it heard in
+        the last ten minutes), each an encoded BACnetAddressBinding: the
+        Device identifier, network number (0 on this network) and MAC,
+        application tagged. An unknown object or
         property raises ``BacnetProtocolError`` with the network error, and a
         Group whose member rows exceed ``rpm_max_result_elements`` raises
         ``BacnetAbortError`` (reason 9, OUT_OF_RESOURCES).

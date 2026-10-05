@@ -3890,13 +3890,19 @@ The full server owns the served Device execution profile. Every Device's
 `Protocol_Services_Supported` reports the fixed `EXECUTED_SERVICES`, with the
 existing clock-dependent time-service filter. Both `Active_COV_Subscriptions`
 and `Active_COV_Multiple_Subscriptions` are present: the selected lowest Device
-gets live lists and other Devices get empty lists. Network RP, budgeted RPM,
+gets live lists and other Devices get empty lists. Its `Device_Address_Binding`
+lists the server's device bindings at the time of the read (#1369): each
+configured `DeviceBinding` and each device whose I-Am arrived in the last ten
+minutes (a targeted Who-Is's answer included), in instance order, with network
+number 0 for a device on this network and the device's own MAC, not its
+router's, for one elsewhere. Other Devices read an empty list. Network RP, budgeted RPM,
 `read_local` and `generate_pics` share effective Device definitions, including
 Property_List, ALL/OPTIONAL/REQUIRED classification and array-index behavior.
 Normal public Device profile mutation, same-OID replacement and custom object
 readers cannot change this served contract. Other properties retain their object
 behavior. WP, WPM and network-equivalent `write_local` reject writes to Device
-`Protocol_Services_Supported`, both COV lists and `Property_List` before calling
+`Protocol_Services_Supported`, both COV lists, `Device_Address_Binding` and
+`Property_List` before calling
 a custom writer. Existing object/index/value validation and authorization remain
 in force; WPM retains its successful prefix and first failed write coordinate.
 Direct object/database mutation remains the raw declaration boundary. Device

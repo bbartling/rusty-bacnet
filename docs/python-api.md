@@ -3055,7 +3055,11 @@ evaluator, the one network reads use, so the result equals what a network
 `read_property` of the same property returns. A Group's Present_Value is
 rebuilt from its members, Device instance `4194303` names this server's
 Device, and the Device's Active_COV_Subscriptions lists the live
-subscriptions. The value takes the [read result](#read-results) shape. An
+subscriptions. Its Device_Address_Binding lists the server's device bindings
+(#1369): each `add_device_binding` and each device whose I-Am arrived in the
+last ten minutes, one encoded BACnetAddressBinding (Device identifier, network
+number, 0 on this network, and MAC) per item. The value takes the
+[read result](#read-results) shape. An
 unknown object or property raises `BacnetProtocolError` with the error a
 network read gets (`UNKNOWN_OBJECT`, for example). A Group whose member rows
 exceed `rpm_max_result_elements` raises `BacnetAbortError` with
