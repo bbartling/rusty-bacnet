@@ -419,6 +419,47 @@ fn notification_accepts_simple_ack_but_never_complex_ack() {
 }
 
 #[test]
+fn server_read_accepts_only_an_unsegmented_complex_ack_for_its_service() {
+    let coordinator = OutboundTransactionCoordinator::new();
+    let expected_peer = peer(3);
+    let token = coordinator
+        .reserve(LeaseMetadata::server_read(expected_peer.clone(), SERVICE))
+        .unwrap();
+    let invoke_id = token.invoke_id();
+    // The server role has no reassembly, and a read answers with data.
+    for refused in [
+        (
+            complex_ack(invoke_id, SERVICE, true),
+            AdmissionOutcome::OwnerMismatch,
+        ),
+        (
+            simple_ack(invoke_id, SERVICE),
+            AdmissionOutcome::PolicyMismatch,
+        ),
+        (
+            complex_ack(invoke_id, OTHER_SERVICE, false),
+            AdmissionOutcome::ServiceMismatch {
+                expected: SERVICE,
+                observed: OTHER_SERVICE,
+            },
+        ),
+    ] {
+        assert_eq!(coordinator.admit(&expected_peer, &refused.0), Ok(refused.1));
+    }
+    assert_eq!(coordinator.active_count(), Ok(1));
+    let admission = match coordinator
+        .admit(&expected_peer, &complex_ack(invoke_id, SERVICE, false))
+        .unwrap()
+    {
+        AdmissionOutcome::Admitted(admission) => admission,
+        other => panic!("admitted, not {other:?}"),
+    };
+    assert_eq!(admission.kind(), AdmissionKind::Terminal);
+    assert_eq!(admission.metadata().owner(), LeaseOwner::Notification);
+    assert_eq!(coordinator.complete(token), Ok(ReleaseOutcome::Released));
+}
+
+#[test]
 fn error_requires_matching_service_for_requesters_and_notifications_and_claims_once() {
     for notification in [false, true] {
         let coordinator = OutboundTransactionCoordinator::new();

@@ -563,6 +563,20 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         false
     }
 
+    /// Keep `datatype`, learned for a Channel's member in another device, for
+    /// the distributions after this one, or forget the one kept with `None`:
+    /// the member at zero-based `slot` of List_Of_Object_Property_References,
+    /// if that slot still holds `reference`. Writing the member, or the whole
+    /// list, forgets it too.
+    #[doc(hidden)]
+    fn remember_member_datatype_internal(
+        &mut self,
+        _slot: usize,
+        _reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
+        _datatype: Option<crate::channel::MemberDatatype>,
+    ) {
+    }
+
     /// End the current run, setting a Command's All_Writes_Successful or a
     /// Channel's Write_Status and Reliability. `outcome` is `Ok` when every
     /// write was made and succeeded, otherwise the run's first failure.

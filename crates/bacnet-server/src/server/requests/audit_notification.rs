@@ -198,7 +198,7 @@ fn current_unix_millis() -> Result<u64, Error> {
         .map_err(|_| Error::OutOfRange("system time exceeds Unix millisecond range".into()))
 }
 
-pub(super) fn fail_closed_authorize(authorize: impl FnOnce() -> bool) -> bool {
+pub(in crate::server) fn fail_closed_authorize(authorize: impl FnOnce() -> bool) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(authorize)).unwrap_or(false)
 }
 

@@ -142,10 +142,10 @@ async fn endpoint_device_write_authorizes_exact_context_and_preserves_reply_tx()
         assert_eq!(context.source_network, expected_source);
         assert_eq!(context.provenance, TransportProvenance::unverified());
         assert_eq!(context.trust, MutationTrust::Unverified);
-        assert_eq!(context.invoke_id, 71);
+        assert_eq!(context.invoke_id, Some(71));
         assert_eq!(
             context.service_choice,
-            ConfirmedServiceChoice::WRITE_PROPERTY
+            ConfirmedServiceChoice::WRITE_PROPERTY.into()
         );
         assert_eq!(context.target, MutationTarget::WriteProperty(write));
     }

@@ -3,14 +3,18 @@
 //! Reliability (#1264, Clauses 12.53.7, 12.53.9 and 12.53.11).
 //!
 //! Devices 9 and 11 are bound to the harness peer; Device 10 has no binding,
-//! so a write there looks for it with a Who-Is first (#1322). CH-5 (channel
+//! so a request there looks for it with a Who-Is first (#1322). CH-5 (channel
 //! 21, group 27) writes AO-1 in Device 9 at once and the local AO-2 100 ms
 //! after the distribution starts. CH-6 writes AO-1 in Device 10. CH-7 writes,
 //! in this order and all at once, AO-1 and AO-3 in Device 9, AO-4 in Device
 //! 11 and the local AO-2. CH-8 writes, all at once, AO-1 and AO-3 in Device
-//! 10 and the local AO-2. Requests are taken from the frames the server
-//! sends and answered by hand, as are Who-Is requests with an I-Am. The clock
-//! is paused, and the server's APDU timeout is the default 3 seconds.
+//! 10 and the local AO-2. A REAL distributed to a member in another device is
+//! preceded by a ReadProperty that learns the member's datatype (#1342);
+//! these tests answer it with a REAL, so the value goes on as one. A device
+//! gets one request from the server's runs at a time (`remote_slots`).
+//! Requests are taken from the frames the server sends and answered by hand,
+//! as are Who-Is requests with an I-Am. The clock is paused, and the server's
+//! APDU timeout is the default 3 seconds.
 use super::channel_wire_tests::{ch, channel, member, settled, write_channel, write_status};
 use super::command_action_wire_tests::{ao, outputs, read_db, read_wire, slot8};
 use super::command_remote_write_tests::{
@@ -20,6 +24,7 @@ use super::cov_wire_test_support::*;
 use super::remote_write_discovery_tests::{everywhere, i_am, next_who_is, targeted, who_is_sent};
 use super::*;
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
+use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
@@ -32,7 +37,7 @@ fn remote_member(instance: u32) -> BACnetDeviceObjectPropertyReference {
 }
 
 /// AO-`output`'s Present_Value in Device `instance`.
-fn remote_output(instance: u32, output: u32) -> BACnetDeviceObjectPropertyReference {
+pub(super) fn remote_output(instance: u32, output: u32) -> BACnetDeviceObjectPropertyReference {
     BACnetDeviceObjectPropertyReference {
         device_identifier: Some(device(instance)),
         ..member(ao(output), PV)
@@ -40,6 +45,12 @@ fn remote_output(instance: u32, output: u32) -> BACnetDeviceObjectPropertyRefere
 }
 
 async fn start() -> Harness {
+    start_with(|_| {}).await
+}
+
+/// The harness with CH-5 to CH-8, the Channels `more` adds, and Devices 9
+/// and 11 bound to the peer.
+pub(super) async fn start_with(more: impl FnOnce(&mut ObjectDatabase)) -> Harness {
     let h = Harness::start_with(ServerConfig::default(), |db| {
         outputs(db);
         let mut five = channel(5, 21, vec![(remote_member(9), 0), (member(ao(2), PV), 100)]);
@@ -60,6 +71,7 @@ async fn start() -> Harness {
             (member(ao(2), PV), 0),
         ];
         db.add(Box::new(channel(8, 24, eight))).unwrap();
+        more(db);
     })
     .await;
     for instance in [9, 11] {
@@ -75,7 +87,7 @@ async fn start() -> Harness {
 }
 
 /// CH-`instance`'s Reliability, read over the wire.
-async fn reliability(h: &mut Harness, instance: u32) -> Reliability {
+pub(super) async fn reliability(h: &mut Harness, instance: u32) -> Reliability {
     match read_wire(h, ch(instance), PropertyIdentifier::RELIABILITY, None)
         .await
         .unwrap()[..]
@@ -95,7 +107,7 @@ async fn fault(h: &mut Harness, instance: u32) -> bool {
 
 /// Wait for the one WriteProperty sent next, check it writes `object`, and
 /// return its invoke ID and value.
-async fn next_request(h: &Harness, object: ObjectIdentifier) -> (u8, Vec<u8>) {
+pub(super) async fn next_request(h: &Harness, object: ObjectIdentifier) -> (u8, Vec<u8>) {
     let sent = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             let sent = sent_writes(h);
@@ -110,6 +122,86 @@ async fn next_request(h: &Harness, object: ObjectIdentifier) -> (u8, Vec<u8>) {
     let [(invoke_id, request)]: [(u8, WritePropertyRequest); 1] = sent.try_into().unwrap();
     assert_eq!(request.object_identifier, object);
     (invoke_id, request.property_value)
+}
+
+/// Take every ReadProperty request the server has sent.
+pub(super) fn sent_reads(h: &Harness) -> Vec<(u8, ReadPropertyRequest)> {
+    let mut frames = h.frames.lock().unwrap();
+    let mut taken = Vec::new();
+    frames.retain(|apdu| match apdu {
+        Apdu::ConfirmedRequest(request)
+            if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY =>
+        {
+            let decoded = ReadPropertyRequest::decode(&request.service_request).unwrap();
+            taken.push((request.invoke_id, decoded));
+            false
+        }
+        _ => true,
+    });
+    taken
+}
+
+/// Wait until `count` ReadProperty requests have gone out, and return them.
+pub(super) async fn next_reads(h: &Harness, count: usize) -> Vec<(u8, ReadPropertyRequest)> {
+    let mut reads = Vec::new();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while reads.len() < count {
+            reads.extend(sent_reads(h));
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the ReadProperty requests");
+    assert_eq!(reads.len(), count);
+    reads
+}
+
+/// The ComplexAck a device answers read `request`, invoke ID `invoke_id`,
+/// with: the property holds `value`.
+pub(super) fn read_ack(
+    invoke_id: u8,
+    request: &ReadPropertyRequest,
+    value: &PropertyValue,
+) -> Apdu {
+    let mut encoded = BytesMut::new();
+    encode_property_value(&mut encoded, value).unwrap();
+    let mut service_ack = BytesMut::new();
+    ReadPropertyACK {
+        object_identifier: request.object_identifier,
+        property_identifier: request.property_identifier,
+        property_array_index: request.property_array_index,
+        property_value: encoded.to_vec(),
+    }
+    .encode(&mut service_ack);
+    Apdu::ComplexAck(ComplexAck {
+        segmented: false,
+        more_follows: false,
+        invoke_id,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+        service_ack: service_ack.freeze(),
+    })
+}
+
+/// Answer each ReadProperty request as it goes out, until `count` have: the
+/// property holds `value`. A device gets one at a time, so the next one there
+/// waits for the answer to this one.
+pub(super) async fn answer_reads(h: &Harness, count: usize, value: &PropertyValue) {
+    let mut answered = 0;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while answered < count {
+            for (invoke_id, request) in sent_reads(h) {
+                assert_eq!(request.property_identifier, PV);
+                h.respond(read_ack(invoke_id, &request, value)).await;
+                answered += 1;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the ReadProperty requests");
+    assert_eq!(answered, count);
 }
 
 /// Hand the server a WriteGroup for group 27 at priority 8 giving channel
@@ -165,7 +257,7 @@ async fn write_group(h: &Harness, value: &PropertyValue) {
 /// A device's answer to the request with this invoke ID.
 type Answer = fn(u8) -> Apdu;
 
-fn error(invoke_id: u8, error_code: ErrorCode) -> Apdu {
+pub(super) fn error(invoke_id: u8, error_code: ErrorCode) -> Apdu {
     Apdu::Error(ErrorPdu {
         invoke_id,
         service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
@@ -188,20 +280,22 @@ async fn channel_writes_a_member_in_another_device_and_waits_for_its_answer() {
     write_channel(&mut h, 5, &PropertyValue::Real(80.0), Some(8))
         .await
         .unwrap();
-    // Device 9 gets the value as written, at the written priority.
+    // Device 9 gets the value as a REAL, the datatype its read returns, at
+    // the written priority.
+    answer_reads(&h, 1, &PropertyValue::Real(0.0)).await;
     let invoke_id = remote_write(&h).await;
     assert_eq!(write_status(&mut h, 5).await, WriteStatus::IN_PROGRESS);
     let busy = write_channel(&mut h, 5, &PropertyValue::Real(1.0), Some(8)).await;
     assert_eq!(busy.unwrap_err().error_code, ErrorCode::BUSY);
 
-    // AO-2's 100 ms pass while the write is outstanding: the member is
-    // written once the answer comes, not before.
+    // AO-2's 100 ms pass while the write is outstanding, and it is written
+    // on time (#1343); the distribution waits for the answer.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Null);
+    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+    assert_eq!(write_status(&mut h, 5).await, WriteStatus::IN_PROGRESS);
     assert_eq!(h.server.notification_transactions.active_count(), 1);
     h.respond(ack(invoke_id)).await;
     assert_eq!(settled(&mut h, 5).await, WriteStatus::SUCCESSFUL);
-    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
     assert_eq!(reliability(&mut h, 5).await, Reliability::NO_FAULT_DETECTED);
     assert_eq!(h.server.notification_transactions.active_count(), 0);
 }
@@ -235,10 +329,17 @@ async fn channel_member_in_another_device_that_refuses_fails_the_distribution() 
             Reliability::CONFIGURATION_ERROR,
         ),
     ];
+    // The first distribution reads; the datatype is kept until a refusal
+    // says the member's configuration is at fault.
+    let mut kept = false;
     for (answer, expected) in answers {
         write_channel(&mut h, 5, &PropertyValue::Real(80.0), Some(8))
             .await
             .unwrap();
+        if !kept {
+            answer_reads(&h, 1, &PropertyValue::Real(0.0)).await;
+        }
+        kept = expected != Reliability::CONFIGURATION_ERROR;
         let invoke_id = remote_write(&h).await;
         h.respond(answer(invoke_id)).await;
         // The refusal is final: no retry, and the local member still goes.
@@ -247,12 +348,14 @@ async fn channel_member_in_another_device_that_refuses_fails_the_distribution() 
         assert!(fault(&mut h, 5).await);
         assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
         assert!(sent_writes(&h).is_empty());
+        assert!(sent_reads(&h).is_empty());
     }
 
     // The next distribution that succeeds clears the fault.
     write_channel(&mut h, 5, &PropertyValue::Real(70.0), Some(8))
         .await
         .unwrap();
+    answer_reads(&h, 1, &PropertyValue::Real(0.0)).await;
     let (invoke_id, _) = next_request(&h, ao(1)).await;
     h.respond(ack(invoke_id)).await;
     assert_eq!(settled(&mut h, 5).await, WriteStatus::SUCCESSFUL);
@@ -279,6 +382,8 @@ async fn channel_null_a_member_in_another_device_refuses_as_the_wrong_datatype_s
         assert_eq!(settled(&mut h, 5).await, WriteStatus::SUCCESSFUL);
         assert_eq!(reliability(&mut h, 5).await, Reliability::NO_FAULT_DETECTED);
     }
+    // A NULL goes to every datatype, so nothing was read for it.
+    assert!(sent_reads(&h).is_empty());
 
     // Any other refusal of a NULL still fails.
     write_channel(&mut h, 5, &PropertyValue::Null, Some(8))
@@ -297,6 +402,7 @@ async fn channel_member_in_another_device_that_never_answers_is_a_communication_
     write_channel(&mut h, 5, &PropertyValue::Real(80.0), Some(8))
         .await
         .unwrap();
+    answer_reads(&h, 1, &PropertyValue::Real(0.0)).await;
     let invoke_id = remote_write(&h).await;
     // Each silent attempt waits 3 seconds; three retries follow the first,
     // all under the one invoke ID.
@@ -306,9 +412,10 @@ async fn channel_member_in_another_device_that_never_answers_is_a_communication_
     assert!(retries.iter().all(|(id, _)| *id == invoke_id));
     assert_eq!(write_status(&mut h, 5).await, WriteStatus::IN_PROGRESS);
 
-    // The local member still goes, and its success doesn't hide the failure.
-    assert_eq!(settled(&mut h, 5).await, WriteStatus::FAILED);
+    // The local member went on time, and its success doesn't hide the
+    // failure.
     assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+    assert_eq!(settled(&mut h, 5).await, WriteStatus::FAILED);
     assert_eq!(
         reliability(&mut h, 5).await,
         Reliability::COMMUNICATION_FAILURE
@@ -323,45 +430,65 @@ async fn channel_skips_the_rest_of_a_silent_device_for_the_distribution() {
     write_channel(&mut h, 7, &PropertyValue::Real(80.0), Some(8))
         .await
         .unwrap();
+    // AO-1, AO-3 and AO-4 are read; Device 9 takes its two reads in turn.
+    answer_reads(&h, 3, &PropertyValue::Real(0.0)).await;
     // AO-1's write to Device 9 goes four times under one invoke ID, with no
-    // answer.
+    // answer; Device 11 answers AO-4's at once, and the local AO-2 goes.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let first = sent_writes(&h);
+    let (silent, answered): (Vec<_>, Vec<_>) = first
+        .into_iter()
+        .partition(|(_, request)| request.object_identifier == ao(1));
+    let [(ao4, _)]: [(u8, WritePropertyRequest); 1] = answered.try_into().unwrap();
+    h.respond(ack(ao4)).await;
+    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
     tokio::time::sleep(Duration::from_millis(11_900)).await;
-    let attempts = sent_writes(&h);
+    let mut attempts = silent;
+    attempts.extend(sent_writes(&h));
     assert_eq!(attempts.len(), 4);
     assert!(attempts
         .iter()
         .all(|(id, request)| *id == attempts[0].0 && request.object_identifier == ao(1)));
 
-    // AO-3 shares the silent device, so it fails unsent; Device 11 still
-    // gets AO-4, and the local AO-2 is written.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let (invoke_id, _) = next_request(&h, ao(4)).await;
-    h.respond(ack(invoke_id)).await;
+    // AO-3's turn at Device 9 comes once it has gone silent, so it fails
+    // unsent: the distribution waits out one write's retries.
     assert_eq!(settled(&mut h, 7).await, WriteStatus::FAILED);
-    assert!(started.elapsed() < Duration::from_millis(12_500));
-    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+    let took = started.elapsed();
+    assert!(
+        (Duration::from_secs(12)..Duration::from_millis(12_100)).contains(&took),
+        "{took:?}"
+    );
     assert_eq!(
         reliability(&mut h, 7).await,
         Reliability::COMMUNICATION_FAILURE
     );
     assert!(sent_writes(&h).is_empty());
 
-    // The next distribution tries Device 9 again.
+    // The next distribution tries Device 9 again, with nothing to read: its
+    // two writes go one after the other.
     write_channel(&mut h, 7, &PropertyValue::Real(70.0), Some(8))
         .await
         .unwrap();
-    for output in [1, 3, 4] {
-        let (invoke_id, _) = next_request(&h, ao(output)).await;
-        h.respond(ack(invoke_id)).await;
+    let mut written = Vec::new();
+    while written.len() < 3 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        for (invoke_id, request) in sent_writes(&h) {
+            written.push(request.object_identifier.instance_number());
+            h.respond(ack(invoke_id)).await;
+        }
     }
+    written.sort_unstable();
+    assert_eq!(written, [1, 3, 4]);
     assert_eq!(settled(&mut h, 7).await, WriteStatus::SUCCESSFUL);
     assert_eq!(reliability(&mut h, 7).await, Reliability::NO_FAULT_DETECTED);
+    assert!(sent_reads(&h).is_empty());
 }
 
 #[tokio::test(start_paused = true)]
 async fn channel_member_in_another_device_sends_nothing_while_dcc_restricts_initiation() {
     let mut h = start().await;
-    // Bound Device 9 gets no WriteProperty, and unbound Device 10 no Who-Is.
+    // Bound Device 9 gets no ReadProperty or WriteProperty, and unbound
+    // Device 10 no Who-Is.
     disable_initiation(&h);
     for instance in [5, 6] {
         write_channel(&mut h, instance, &PropertyValue::Real(80.0), Some(8))
@@ -375,6 +502,7 @@ async fn channel_member_in_another_device_sends_nothing_while_dcc_restricts_init
     }
     assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
     assert!(sent_writes(&h).is_empty());
+    assert!(sent_reads(&h).is_empty());
     assert!(who_is_sent(&h).is_empty());
 }
 
@@ -386,8 +514,9 @@ async fn channel_member_in_an_unbound_device_is_written_once_its_who_is_is_answe
         .unwrap();
     assert_eq!(next_who_is(&h).await, (everywhere(), targeted(10)));
     assert_eq!(write_status(&mut h, 6).await, WriteStatus::IN_PROGRESS);
-    assert!(sent_writes(&h).is_empty());
+    assert!(sent_reads(&h).is_empty());
     deliver(&h, &i_am(10), &PEER, None).await;
+    answer_reads(&h, 1, &PropertyValue::Real(0.0)).await;
     let (invoke_id, _) = next_request(&h, ao(1)).await;
     h.respond(ack(invoke_id)).await;
     assert_eq!(settled(&mut h, 6).await, WriteStatus::SUCCESSFUL);
@@ -401,10 +530,11 @@ async fn channel_skips_the_rest_of_an_unbound_device_its_who_is_finds_silent() {
     write_channel(&mut h, 8, &PropertyValue::Real(80.0), Some(8))
         .await
         .unwrap();
+    // Both members' reads look for Device 10 with the one Who-Is.
     assert_eq!(next_who_is(&h).await, (everywhere(), targeted(10)));
-    // No I-Am comes. AO-3 shares the silent device, so it fails unsent with
-    // no second Who-Is, and the local AO-2 is still written: the
-    // distribution waits out one Who-Is in all.
+    // No I-Am comes. Neither member is sent, there is no second Who-Is, and
+    // the local AO-2 is still written: the distribution waits out one Who-Is
+    // in all.
     assert_eq!(settled(&mut h, 8).await, WriteStatus::FAILED);
     let took = started.elapsed();
     let wait = Duration::from_secs(3);
@@ -418,6 +548,7 @@ async fn channel_skips_the_rest_of_an_unbound_device_its_who_is_finds_silent() {
         Reliability::COMMUNICATION_FAILURE
     );
     assert!(sent_writes(&h).is_empty());
+    assert!(sent_reads(&h).is_empty());
     assert!(who_is_sent(&h).is_empty());
 }
 
@@ -427,6 +558,7 @@ async fn stop_during_an_outstanding_member_write_ends_the_distribution_failed() 
     write_channel(&mut h, 5, &PropertyValue::Real(80.0), Some(8))
         .await
         .unwrap();
+    answer_reads(&h, 1, &PropertyValue::Real(0.0)).await;
     remote_write(&h).await;
     assert_eq!(h.server.notification_transactions.active_count(), 1);
 
@@ -441,7 +573,7 @@ async fn stop_during_an_outstanding_member_write_ends_the_distribution_failed() 
         reliability,
         PropertyValue::Enumerated(Reliability::PROCESS_ERROR.to_raw())
     );
-    // The invoke ID is free, and the member after it was never written.
+    // The invoke ID is free, and the member not yet due was never written.
     assert_eq!(h.server.notification_transactions.active_count(), 0);
     assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Null);
 }
@@ -450,6 +582,7 @@ async fn stop_during_an_outstanding_member_write_ends_the_distribution_failed() 
 async fn write_group_distribution_writes_a_member_in_another_device() {
     let mut h = start().await;
     write_group(&h, &PropertyValue::Real(80.0)).await;
+    answer_reads(&h, 1, &PropertyValue::Real(0.0)).await;
     let invoke_id = remote_write(&h).await;
     h.respond(ack(invoke_id)).await;
     assert_eq!(settled(&mut h, 5).await, WriteStatus::SUCCESSFUL);

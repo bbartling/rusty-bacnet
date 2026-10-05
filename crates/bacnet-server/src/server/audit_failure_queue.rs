@@ -415,10 +415,10 @@ impl<R: PartialEq> AuditFailureWorker<R> {
                 } else {
                     let reserved = if batch.context.confirmed {
                         self.core
-                            .reserve(
+                            .reserve(LeaseMetadata::notification(
                                 batch.context.peer.clone(),
                                 ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
-                            )
+                            ))
                             .map(Some)
                     } else {
                         Ok(None)

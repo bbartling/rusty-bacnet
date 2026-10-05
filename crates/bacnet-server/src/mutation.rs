@@ -1,8 +1,10 @@
-//! Opt-in authorization for the server's ten covered confirmed mutation services.
+//! Opt-in authorization for the server's ten covered confirmed mutation
+//! services and the Channel writes an inbound WriteGroup makes (#1319).
 //!
 //! This is local application policy, not authentication. DCC/ReinitializeDevice,
-//! LifeSafety/Audit, unconfirmed services, reads, and queries retain their own
-//! behavior. Direct handler calls and trusted local writes are not gated here.
+//! LifeSafety/Audit, the other unconfirmed services, reads, and queries retain
+//! their own behavior. Direct handler calls and trusted local writes are not
+//! gated here.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -16,7 +18,8 @@ use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest};
 use bacnet_services::wpm::WritePropertyAttempt;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::TransportProvenance;
-use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 
 /// Channel/relay scope derived from ingress provenance, mirroring RB-09
@@ -55,17 +58,18 @@ impl MutationTrust {
     }
 }
 
-/// Local authorization mode for the ten services represented by [`MutationTarget`].
+/// Local authorization mode for the services represented by [`MutationTarget`]:
+/// ten confirmed services and inbound WriteGroup.
 ///
 /// SC mTLS channel/peer authentication is **not service authorization**. Identities
 /// include claimed link/routed addresses separately from the sealed direct-SC
 /// leaf/incarnation snapshot available to an installed authorizer.
 /// DCC, admission, decoding and WPM element validation retain their existing precedence.
 ///
-/// Inbound WriteGroup is not one of the ten, and no authorizer can decide it yet
-/// (#1319). The server runs it only under `Permissive` with no authorizer installed
-/// and drops every WriteGroup under `DenyAll` or with any authorizer, even an
-/// allow-all one. Those drops aren't counted in [`MutationDecisionCounters`].
+/// An inbound WriteGroup is decided once per Channel write it would make
+/// ([`MutationTarget::WriteGroup`]): `DenyAll` denies each one, and an
+/// authorizer may allow some Channels and not others (#1319). A denied write is
+/// skipped silently, since nothing answers an unconfirmed request, and counted.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum MutationPolicy {
     /// Preserve default-allow behavior: an absent authorizer allows; an installed
@@ -100,6 +104,43 @@ pub enum MutationTarget {
     SubscribeCovProperty(SubscribeCOVPropertyRequest),
     /// Entire decoded multi-property subscription request, authorized once.
     SubscribeCovPropertyMultiple(SubscribeCOVPropertyMultipleRequest),
+    /// One Channel Present_Value write an inbound WriteGroup would make,
+    /// decided per Channel.
+    WriteGroup(WriteGroupTarget),
+}
+
+/// One Channel write an inbound WriteGroup would make: the Channel, and the
+/// change-list entry and priority that reach it (Clause 15.11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteGroupTarget {
+    /// The Channel whose Present_Value would be written.
+    pub channel: ObjectIdentifier,
+    /// The request's control group, one the Channel's Control_Groups holds.
+    pub group_number: u32,
+    /// The change-list entry's channel number, the Channel's Channel_Number.
+    pub channel_number: u16,
+    /// The priority of the write: the entry's own, or else the request's.
+    pub priority: u8,
+    /// The entry's BACnetChannelValue, encoded as the request carried it.
+    pub value: Vec<u8>,
+    /// Whether the request asks for the Channel's execution delays to be
+    /// skipped.
+    pub inhibit_delay: bool,
+}
+
+/// The service a mutation decision is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MutationService {
+    /// A confirmed service, which the server answers.
+    Confirmed(ConfirmedServiceChoice),
+    /// An unconfirmed service: nothing goes back, a denial included.
+    Unconfirmed(UnconfirmedServiceChoice),
+}
+
+impl From<ConfirmedServiceChoice> for MutationService {
+    fn from(service: ConfirmedServiceChoice) -> Self {
+        Self::Confirmed(service)
+    }
 }
 
 impl MutationTarget {
@@ -116,6 +157,7 @@ impl MutationTarget {
             Self::SubscribeCov(_) => "subscribe-cov",
             Self::SubscribeCovProperty(_) => "subscribe-cov-property",
             Self::SubscribeCovPropertyMultiple(_) => "subscribe-cov-property-multiple",
+            Self::WriteGroup(_) => "write-group",
         }
     }
 }
@@ -146,11 +188,13 @@ pub struct MutationAuthorizationContext {
     pub provenance: TransportProvenance,
     /// Channel/relay scope derived from `provenance`; never leaf identity.
     pub trust: MutationTrust,
-    /// Confirmed-request invoke identifier.
-    pub invoke_id: u8,
-    /// Outer confirmed service identity.
-    pub service_choice: ConfirmedServiceChoice,
-    /// Decoded target and parameters; current element for WPM.
+    /// A confirmed request's invoke identifier; `None` for an unconfirmed
+    /// request, which carries none.
+    pub invoke_id: Option<u8>,
+    /// The service that asks for the mutation.
+    pub service_choice: MutationService,
+    /// Decoded target and parameters; current element for WPM, current
+    /// Channel for WriteGroup.
     pub target: MutationTarget,
 }
 
@@ -202,8 +246,11 @@ impl std::fmt::Debug for MutationAuthorizationContext {
 /// Callbacks can run concurrently and WPM holds the database write lock: do not
 /// block, reenter the server, or perform side effects from a callback.
 ///
-/// Inbound WriteGroup never reaches the callback: while one is installed, whatever
-/// it would return, the server drops every WriteGroup without counting it (#1319).
+/// An inbound WriteGroup reaches the callback once per Channel it would write,
+/// after the change list is decoded and matched to the Channels and before each
+/// write, with no database guard held. The context has no invoke ID and an
+/// unconfirmed service. Returning `false`, or panicking, skips that Channel
+/// silently, with no Audit record; the other Channels are decided on their own.
 pub type MutationAuthorizer = Arc<dyn Fn(&MutationAuthorizationContext) -> bool + Send + Sync>;
 
 /// Saturating lifetime decision totals for one covered service.
@@ -224,8 +271,7 @@ pub struct MutationServiceCounters {
 /// WPM counts each element reaching its gate, not requests or an unvisited suffix.
 /// Pre-gate failures and duplicates do not count. In permissive mode an
 /// absent authorizer allows without decoding, so a later handler failure still counts.
-/// An inbound WriteGroup dropped under `DenyAll` or an installed authorizer isn't a
-/// decision and doesn't count (#1319).
+/// An inbound WriteGroup counts once per Channel write it would make.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MutationDecisionCounters {
     /// WriteProperty decisions.
@@ -248,6 +294,8 @@ pub struct MutationDecisionCounters {
     pub subscribe_cov_property: MutationServiceCounters,
     /// SubscribeCOVPropertyMultiple whole-request decisions.
     pub subscribe_cov_property_multiple: MutationServiceCounters,
+    /// Decisions on the Channel writes inbound WriteGroups would make.
+    pub write_group: MutationServiceCounters,
 }
 
 #[derive(Clone, Copy)]
@@ -258,11 +306,11 @@ pub(crate) enum MutationDecision {
 }
 
 #[derive(Default)]
-pub(crate) struct MutationDecisions([[AtomicU64; 3]; 10]);
+pub(crate) struct MutationDecisions([[AtomicU64; 3]; 11]);
 
 impl MutationDecisions {
     pub(crate) fn snapshot(&self) -> MutationDecisionCounters {
-        let [write_property, write_property_multiple, create_object, delete_object, add_list_element, remove_list_element, atomic_write_file, subscribe_cov, subscribe_cov_property, subscribe_cov_property_multiple] =
+        let [write_property, write_property_multiple, create_object, delete_object, add_list_element, remove_list_element, atomic_write_file, subscribe_cov, subscribe_cov_property, subscribe_cov_property_multiple, write_group] =
             self.0.each_ref().map(|row| {
                 let [allow_total, deny_total, policy_deny_total] =
                     row.each_ref().map(|n| n.load(Ordering::Relaxed));
@@ -283,10 +331,18 @@ impl MutationDecisions {
             subscribe_cov,
             subscribe_cov_property,
             subscribe_cov_property_multiple,
+            write_group,
         }
     }
 
-    pub(crate) fn record(&self, service: ConfirmedServiceChoice, decision: MutationDecision) {
+    pub(crate) fn record(&self, service: impl Into<MutationService>, decision: MutationDecision) {
+        let service = match service.into() {
+            MutationService::Confirmed(service) => service,
+            MutationService::Unconfirmed(UnconfirmedServiceChoice::WRITE_GROUP) => {
+                return self.increment(10, decision);
+            }
+            MutationService::Unconfirmed(_) => return,
+        };
         let index = match service {
             ConfirmedServiceChoice::WRITE_PROPERTY => 0,
             ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => 1,
@@ -300,6 +356,10 @@ impl MutationDecisions {
             ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE => 9,
             _ => return,
         };
+        self.increment(index, decision);
+    }
+
+    fn increment(&self, index: usize, decision: MutationDecision) {
         let increment = |column: usize| {
             #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
             let _ = self.0[index][column].fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {

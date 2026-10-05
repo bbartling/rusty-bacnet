@@ -368,8 +368,8 @@ async fn denial_case(index: usize) {
             source_network: route(),
             provenance: bacnet_transport::port::TransportProvenance::unverified(),
             trust: crate::mutation::MutationTrust::Unverified,
-            invoke_id: 51,
-            service_choice: service,
+            invoke_id: Some(51),
+            service_choice: service.into(),
             target,
         }]
     );

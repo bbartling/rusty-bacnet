@@ -67,15 +67,13 @@ pub struct ServerConfig {
     /// snapshot and the derived channel/relay [`MutationTrust`](crate::mutation::MutationTrust)
     /// scope (never leaf identity); unknown origin never satisfies a
     /// baseline-only allow rule. Denials mutate nothing and write no audit log.
-    /// `DenyAll` also drops every inbound WriteGroup, which no authorizer can
-    /// decide yet (#1319); those drops aren't counted in
-    /// `BACnetServer::mutation_decision_counters`.
+    /// `DenyAll` also denies each Channel write of an inbound WriteGroup,
+    /// counted in `BACnetServer::mutation_decision_counters` (#1319).
     pub mutation_policy: MutationPolicy,
     /// Opt-in mutation authorizer; `None` allows only in permissive mode.
-    /// See [`MutationAuthorizer`]. Installing one, even a callback that allows
-    /// everything, drops every inbound WriteGroup without calling it: the
-    /// callback can't decide an unconfirmed request yet (#1319). Those drops
-    /// aren't counted in `BACnetServer::mutation_decision_counters`.
+    /// See [`MutationAuthorizer`]. It also decides each Channel write of an
+    /// inbound WriteGroup, with no invoke ID and the unconfirmed service in its
+    /// context, so it can allow some Channels and not others (#1319).
     pub mutation_authorizer: Option<MutationAuthorizer>,
     /// Optional LifeSafetyOperation authorization policy.
     ///
@@ -292,9 +290,8 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         self
     }
 
-    /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules.
-    /// Any installed authorizer, even one that allows everything, makes the
-    /// server drop every inbound WriteGroup, uncounted (#1319).
+    /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules,
+    /// the Channel writes of an inbound WriteGroup among them (#1319).
     pub fn mutation_authorizer<F>(mut self, authorizer: F) -> Self
     where
         F: Fn(&MutationAuthorizationContext) -> bool + Send + Sync + 'static,
@@ -318,9 +315,8 @@ impl BipServerBuilder {
         self
     }
 
-    /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules.
-    /// Any installed authorizer, even one that allows everything, makes the
-    /// server drop every inbound WriteGroup, uncounted (#1319).
+    /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules,
+    /// the Channel writes of an inbound WriteGroup among them (#1319).
     ///
     /// ```
     /// use bacnet_server::server::BACnetServer;
@@ -345,9 +341,8 @@ impl ScServerBuilder {
         self
     }
 
-    /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules.
-    /// Any installed authorizer, even one that allows everything, makes the
-    /// server drop every inbound WriteGroup, uncounted (#1319).
+    /// Set opt-in mutation policy. See [`MutationAuthorizer`] for callback rules,
+    /// the Channel writes of an inbound WriteGroup among them (#1319).
     pub fn mutation_authorizer<F>(mut self, authorizer: F) -> Self
     where
         F: Fn(&MutationAuthorizationContext) -> bool + Send + Sync + 'static,
