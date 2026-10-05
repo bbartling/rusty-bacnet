@@ -184,7 +184,10 @@ class AdmissionRuntimeTests(unittest.IsolatedAsyncioTestCase):
         idle = await self.counters_until(lambda c: c["confirmed_active"] == c["abort_active"] == 0)
         await self.send(bytes([0, 5, PROBE, 12]))
         response = await self.reply_until(lambda r: r[1] == PROBE)
-        self.assertEqual(response[0] >> 4, 5)  # Error proves normal handler execution.
+        # The empty ReadProperty reached its handler, which rejects it as
+        # MISSING_REQUIRED_PARAMETER (5); the admission layer would have sent
+        # an Abort instead.
+        self.assertEqual((response[0] >> 4, response[2]), (6, 5))
         counters = await self.counters_until(lambda c: c["confirmed_active"] == c["abort_active"] == 0)
         self.assertEqual(dispatched(counters), sent + 1)
         self.assertEqual(counters["confirmed_admitted_total"], idle["confirmed_admitted_total"] + 1)

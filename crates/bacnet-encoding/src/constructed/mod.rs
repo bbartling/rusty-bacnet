@@ -123,7 +123,8 @@ pub use lighting_command::{
 pub use log_multiple_record::{decode_log_multiple_record, encode_log_multiple_record};
 pub use log_record::{decode_log_record, encode_log_record};
 pub use object_property_reference::{
-    decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
+    decode_object_property_reference, decode_object_property_reference_at,
+    decode_setpoint_reference, decode_setpoint_reference_at, encode_object_property_reference,
     encode_setpoint_reference,
 };
 pub use port_permission::{decode_port_permission, encode_port_permission};
@@ -267,14 +268,17 @@ pub fn decode_property_state(
     use BACnetPropertyStates as S;
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if tag.class != TagClass::Context || tag.is_closing {
-        return Err(Error::decoding(
+        return Err(tagged::misplaced_tag(
+            data,
+            &tag,
+            None,
             offset,
             "BACnetPropertyStates: expected a context tag",
         ));
     }
     if tag.is_opening {
         if !(64..=254).contains(&tag.number) {
-            return Err(Error::decoding(
+            return Err(Error::invalid_tag(
                 offset,
                 "BACnetPropertyStates: constructed form requires a proprietary tag",
             ));
@@ -292,7 +296,7 @@ pub fn decode_property_state(
     let (content, end) = contents(data, pos, tag.length)?;
     let unsigned = || -> Result<u32, Error> {
         u32::try_from(primitives::decode_unsigned(content)?)
-            .map_err(|_| Error::decoding(pos, "BACnetPropertyStates: contents exceed u32"))
+            .map_err(|_| Error::out_of_range(pos, "BACnetPropertyStates: contents exceed u32"))
     };
     let state = match tag.number {
         0 => {
@@ -379,7 +383,7 @@ pub fn decode_property_state(
             content.to_vec(),
         )?),
         reserved => {
-            return Err(Error::decoding(
+            return Err(Error::invalid_tag(
                 offset,
                 format!("BACnetPropertyStates context tag {reserved} is reserved"),
             ));
@@ -461,7 +465,7 @@ pub fn validate_tlv_sequence(data: &[u8], what: &str) -> Result<(), Error> {
     let mut count = 0;
     while offset < data.len() {
         if count >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset,
                 format!("{what}: sequence exceeds item limit"),
             ));
@@ -491,7 +495,7 @@ pub(crate) fn validate_extended_parameters(data: &[u8], what: &str) -> Result<()
     let mut count = 0;
     while offset < data.len() {
         if count >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset,
                 format!("{what}: parameters exceed item limit"),
             ));
@@ -510,4 +514,4 @@ pub(crate) fn validate_extended_parameters(data: &[u8], what: &str) -> Result<()
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

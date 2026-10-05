@@ -1,7 +1,7 @@
 use super::*;
 
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned,
+    decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned, expect_end,
 };
 
 fn decode_acknowledgment_source(content: &[u8]) -> Result<String, Error> {
@@ -83,12 +83,7 @@ impl AcknowledgeAlarmRequest {
 
         // [5] timeOfAcknowledgment
         let (time_of_acknowledgment, new_offset) = primitives::decode_timestamp(data, offset, 5)?;
-        if new_offset != data.len() {
-            return Err(Error::decoding(
-                new_offset,
-                "AcknowledgeAlarm trailing data after request",
-            ));
-        }
+        expect_end(data, new_offset, new_offset, "AcknowledgeAlarm")?;
 
         Ok(Self {
             acknowledging_process_identifier,

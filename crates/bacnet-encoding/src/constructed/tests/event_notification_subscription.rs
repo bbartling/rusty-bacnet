@@ -143,3 +143,15 @@ fn event_notification_subscription_takes_the_longest_configured_mac() {
         (subscription, buf.len())
     );
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let mut framed = 0;
+    for wire in [DEVICE_SUBSCRIPTION, ADDRESS_SUBSCRIPTION] {
+        framed +=
+            super::assert_members_cut_short("BACnetEventNotificationSubscription", wire, |data| {
+                decode_event_notification_subscription(data, 0)
+            });
+    }
+    assert!(framed > 0);
+}

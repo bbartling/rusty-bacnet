@@ -362,9 +362,14 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
     assert!(matches!(response, Apdu::Error(_)));
     assert_eq!(count(&db, sink).await, (0, 0));
 
-    for malformed in [
-        Bytes::from_static(b"bad"),
-        Bytes::from(vec![0; MAX_AUDIT_NOTIFICATION_BYTES + 1]),
+    // A body that doesn't decode is rejected as a syntax fault (#1446); one
+    // past the size bound is refused with an Error.
+    for (malformed, rejected) in [
+        (Bytes::from_static(b"bad"), true),
+        (
+            Bytes::from(vec![0; MAX_AUDIT_NOTIFICATION_BYTES + 1]),
+            false,
+        ),
     ] {
         let response = dispatch(
             &db,
@@ -377,7 +382,11 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
         )
         .await
         .unwrap();
-        assert!(matches!(response, Apdu::Error(_)));
+        if rejected {
+            assert!(matches!(response, Apdu::Reject(_)), "{response:?}");
+        } else {
+            assert!(matches!(response, Apdu::Error(_)), "{response:?}");
+        }
         assert_eq!(count(&db, sink).await, (0, 0));
     }
 

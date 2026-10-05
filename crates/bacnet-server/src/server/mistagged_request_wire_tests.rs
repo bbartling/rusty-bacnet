@@ -4,12 +4,12 @@
 //! Every member of these requests outside the access-method frame's own
 //! `[0]` or `[1]` is application-tagged (Clause 21's productions for Clauses
 //! 14.1, 14.2 and 15.4). The decoders refuse one under any other tag, and the
-//! server answers that as it answers any request it can't decode: SERVICES /
-//! OTHER, with nothing read, written or deleted. A record write's count
-//! still draws its Rejects.
+//! server rejects that as INVALID_TAG (#1446), with nothing read, written or
+//! deleted. A record write's count draws the Rejects for a missing record
+//! and for one too many.
 use super::*;
 use crate::server::cov_wire_test_support::Harness;
-use crate::server::truncated_request_wire_tests::{answer_to, error_for};
+use crate::server::truncated_request_wire_tests::{answer_to, reject_case, reject_for};
 use bacnet_objects::file::FileObject;
 use bacnet_types::enums::FileAccessMethod;
 
@@ -59,7 +59,7 @@ pub(super) fn request(file: [u8; 5], body: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn mistagged_file_requests_draw_services_other() {
+async fn mistagged_file_requests_are_rejected() {
     let mut h = harness().await;
     // Each case breaks one of these, which the server serves.
     let served = [
@@ -142,8 +142,7 @@ async fn mistagged_file_requests_draw_services_other() {
         ),
     ];
     for (service, what, body) in &cases {
-        let error = error_for(&mut h, *service, body).await;
-        assert!(error.error_data.is_empty(), "{what}");
+        reject_case(&mut h, *service, what, body, RejectReason::INVALID_TAG).await;
     }
     assert_eq!(contents(&h).await, before);
     h.server.stop().await.unwrap();
@@ -181,7 +180,7 @@ async fn record_counts_still_draw_their_rejects() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn mistagged_delete_object_draws_services_other() {
+async fn mistagged_delete_object_is_rejected() {
     use crate::server::cov_wire_test_support::av1;
     let mut h = harness().await;
     let delete = ConfirmedServiceChoice::DELETE_OBJECT;
@@ -190,8 +189,7 @@ async fn mistagged_delete_object_draws_services_other() {
         [0x0C, 0x00, 0x80, 0x00, 0x01],
         [0x24, 0x00, 0x80, 0x00, 0x01],
     ] {
-        let error = error_for(&mut h, delete, &body).await;
-        assert!(error.error_data.is_empty(), "{body:02X?}");
+        reject_for(&mut h, delete, &body, RejectReason::INVALID_TAG).await;
         assert!(h.server.database().read().await.get(&av1()).is_some());
     }
     // As an application object identifier it is deleted.

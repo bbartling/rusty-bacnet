@@ -233,7 +233,9 @@ async fn audit_reporter_atomic_write_file_preserves_decoder_acceptance_boundary(
                 },
             ),
         ] {
-            let error = AtomicWriteFileRequest::decode(&rejected).unwrap_err();
+            let error = AtomicWriteFileRequest::decode(&rejected)
+                .unwrap_err()
+                .into_request_reject();
             let response = dispatch(&fixture.server, SERVICE, rejected).await;
             let invoke_id = match &response {
                 Apdu::Error(e) => e.invoke_id,

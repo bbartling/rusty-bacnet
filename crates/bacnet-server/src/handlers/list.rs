@@ -681,7 +681,7 @@ pub(crate) fn handle_list_element_observed(
     remove: bool,
     mut before: impl FnMut(&ObjectDatabase, &ListElementRequest, Option<&PropertyValue>),
 ) -> Result<ObjectIdentifier, Error> {
-    let request = ListElementRequest::decode(service_data)?;
+    let request = ListElementRequest::decode(service_data).map_err(Error::into_request_reject)?;
     let codec = ElementCodec::for_datatype(
         request.object_identifier.object_type(),
         request.property_identifier,

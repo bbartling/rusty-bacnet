@@ -7,7 +7,7 @@ pub(super) fn validate_authentication_factor(data: &[u8]) -> Result<(), Error> {
     primitives::decode_unsigned(format_class)?;
     let (_, pos) = decode_context(data, pos, 2, "AuthenticationFactor value")?;
     if pos != data.len() {
-        return Err(Error::decoding(
+        return Err(Error::trailing(
             pos,
             "AuthenticationFactor has unexpected fields",
         ));
@@ -24,7 +24,7 @@ pub(super) fn decode_complex_event_type(
     let mut pos = inner_start;
     while pos < variant_body_end {
         if property_values.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 pos,
                 format!("ComplexEventType exceeds {MAX_FRAMED_ITEMS} property values"),
             ));
@@ -64,7 +64,10 @@ fn decode_access_credential(
 ) -> Result<(BACnetDeviceObjectReference, usize), Error> {
     let (opening, mut pos) = tags::decode_tag(data, offset)?;
     if !opening.is_opening_tag(4) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &opening,
+            Some(4),
             offset,
             "AccessEvent expected opening [4] for access-credential",
         ));
@@ -84,7 +87,8 @@ fn decode_access_credential(
 
     let (closing, next) = tags::decode_tag(data, pos)?;
     if !closing.is_closing_tag(4) {
-        return Err(Error::decoding(
+        return Err(Error::decoding_kind(
+            unclosed_kind(&closing),
             pos,
             "AccessEvent credential has duplicate, out-of-order, or trailing fields",
         ));
@@ -116,8 +120,9 @@ pub(super) fn decode_access_event(
     let (timestamp, pos) = primitives::decode_timestamp(data, pos, 3)?;
     let access_event_time = match timestamp {
         BACnetTimeStamp::DateTime { date, time } => (date, time),
+        // Another alternative of the timestamp CHOICE doesn't fit here.
         _ => {
-            return Err(Error::decoding(
+            return Err(Error::invalid_tag(
                 pos,
                 "AccessEvent expected a DateTime timestamp",
             ));
@@ -128,7 +133,10 @@ pub(super) fn decode_access_event(
     let (authentication_factor, pos) = if pos < variant_body_end {
         let (opening, content_start) = tags::decode_tag(data, pos)?;
         if !opening.is_opening_tag(5) {
-            return Err(Error::decoding(
+            return Err(misplaced_tag(
+                data,
+                &opening,
+                Some(5),
                 pos,
                 "AccessEvent expected opening [5] for authentication-factor",
             ));

@@ -16,7 +16,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             0,
             "GetAlarmSummary",
         ) {
-            return Self::error_apdu_from_error(invoke_id, service_choice, &error);
+            return Self::error_apdu_from_error(
+                invoke_id,
+                service_choice,
+                &error.into_request_reject(),
+            );
         }
         let mut buf = BytesMut::new();
         match handlers::handle_get_alarm_summary_budgeted(db, &mut buf, budget) {

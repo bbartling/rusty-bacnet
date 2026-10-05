@@ -45,6 +45,7 @@ use crate::tags::{self, TagClass};
 
 use super::tagged::{
     contents, decode_app_bit_string, decode_app_unsigned, decode_ctx_object_id, expect_closing,
+    misplaced_tag,
 };
 use super::MAX_FRAMED_ITEMS;
 
@@ -65,7 +66,7 @@ fn mac_len_excess(what: &str, length: usize) -> Option<String> {
 /// You-Are device MAC (#1200). Decoders call it on the tag's length, before
 /// copying any octet.
 pub fn check_decoded_mac_len(length: usize, offset: usize, what: &str) -> Result<(), Error> {
-    mac_len_excess(what, length).map_or(Ok(()), |message| Err(Error::decoding(offset, message)))
+    mac_len_excess(what, length).map_or(Ok(()), |message| Err(Error::overflow(offset, message)))
 }
 
 /// Refuse to encode a MAC longer than [`BACnetAddress::MAX_MAC_LEN`] octets,
@@ -174,7 +175,7 @@ pub fn decode_recipient(data: &[u8], offset: usize) -> Result<(BACnetRecipient, 
         // network-number Unsigned16
         let (network_number, pos) = decode_app_unsigned::<u64>(data, pos, what)?;
         let network_number = u16::try_from(network_number).map_err(|_| {
-            Error::decoding(pos, format!("{what}: network-number exceeds Unsigned16"))
+            Error::out_of_range(pos, format!("{what}: network-number exceeds Unsigned16"))
         })?;
         // mac-address OCTET STRING (a zero-length string is a broadcast)
         let (mac_address, pos) = decode_app_mac_address(data, pos, what)?;
@@ -187,7 +188,10 @@ pub fn decode_recipient(data: &[u8], offset: usize) -> Result<(BACnetRecipient, 
             end,
         ));
     }
-    Err(Error::decoding(
+    Err(misplaced_tag(
+        data,
+        &tag,
+        None,
         offset,
         format!(
             "{what}: expected [0] (device) or [1] (address), got {}",
@@ -228,7 +232,7 @@ pub fn decode_destination(data: &[u8], offset: usize) -> Result<(BACnetDestinati
     // process-identifier Unsigned32.
     let (process_identifier, pos) = decode_app_unsigned::<u64>(data, pos, what)?;
     let process_identifier = u32::try_from(process_identifier).map_err(|_| {
-        Error::decoding(
+        Error::out_of_range(
             pos,
             format!("{what}: process-identifier exceeds Unsigned32"),
         )
@@ -237,7 +241,10 @@ pub fn decode_destination(data: &[u8], offset: usize) -> Result<(BACnetDestinati
     // rides in the tag's L/V/T bits with no contents octets).
     let (tag, pos) = tags::decode_tag(data, pos)?;
     if tag.class != TagClass::Application || tag.number != tags::app_tag::BOOLEAN {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &tag,
+            None,
             pos,
             format!("{what}: expected application-tagged BOOLEAN"),
         ));
@@ -274,7 +281,7 @@ pub fn decode_destination_list(data: &[u8]) -> Result<Vec<BACnetDestination>, Er
     let mut pos = 0;
     while pos < data.len() {
         if destinations.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 pos,
                 "Recipient_List: destination count exceeds limit",
             ));
@@ -300,7 +307,10 @@ pub(super) fn decode_app_mac_address(
 ) -> Result<(MacAddr, usize), Error> {
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if tag.class != TagClass::Application || tag.number != tags::app_tag::OCTET_STRING {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &tag,
+            None,
             offset,
             format!("{what}: expected application-tagged OCTET STRING"),
         ));
@@ -313,10 +323,22 @@ pub(super) fn decode_app_mac_address(
 /// Decode an application-tagged Time member (exactly 4 contents octets).
 fn decode_app_time(data: &[u8], offset: usize, what: &str) -> Result<(Time, usize), Error> {
     let (tag, pos) = tags::decode_tag(data, offset)?;
-    if tag.class != TagClass::Application || tag.number != tags::app_tag::TIME || tag.length != 4 {
+    if tag.class != TagClass::Application || tag.number != tags::app_tag::TIME {
+        return Err(misplaced_tag(
+            data,
+            &tag,
+            None,
+            offset,
+            format!("{what}: expected application-tagged Time"),
+        ));
+    }
+    if tag.length != 4 {
         return Err(Error::decoding(
             offset,
-            format!("{what}: expected application-tagged Time (4 octets)"),
+            format!(
+                "{what}: Time has {} contents octets, expected 4",
+                tag.length
+            ),
         ));
     }
     let (octets, end) = contents(data, pos, 4)?;

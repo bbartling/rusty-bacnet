@@ -190,7 +190,7 @@ pub fn decode_cov_multiple_subscription(
     let mut specifications = Vec::new();
     while !is_closing(data, pos, 4)? {
         if specifications.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 pos,
                 format!("{what}: specification count exceeds limit"),
             ));
@@ -224,7 +224,7 @@ fn decode_specification(
     let mut references = Vec::new();
     while !is_closing(data, pos, 1)? {
         if references.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 pos,
                 format!("{what}: COV reference count exceeds limit"),
             ));

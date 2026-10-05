@@ -3,7 +3,7 @@
 
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_character_string, decode_ctx_constructed, decode_ctx_object_id, decode_ctx_unsigned,
-    expect_end, next_is_context, next_is_opening,
+    expect_end, misplaced_kind, next_is_context, next_is_opening,
 };
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -86,7 +86,11 @@ impl TextMessageRequest {
                 let (text, end) = decode_ctx_character_string(content, 0, 1, what)?;
                 (MessageClass::Text(text), end)
             } else {
-                return Err(Error::decoding(
+                // Neither alternative: the frame is empty, or another tag
+                // stands there.
+                let (found, _) = tags::decode_tag(content, 0)?;
+                return Err(Error::decoding_kind(
+                    misplaced_kind(content, 0, &found, None),
                     offset,
                     "TextMessage messageClass expected context tag 0 or 1",
                 ));

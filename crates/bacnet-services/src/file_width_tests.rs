@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::enums::RejectReason;
 
 fn file_oid() -> ObjectIdentifier {
     ObjectIdentifier::new(bacnet_types::enums::ObjectType::FILE, 1).unwrap()
@@ -60,23 +61,23 @@ fn append_empty_records(mut buf: BytesMut) -> BytesMut {
 #[test]
 fn atomic_write_record_short_list_is_missing_required_parameter() {
     let wire = encode_write_record_request(2, &[&[0x01]]);
-    match AtomicWriteFileRequest::decode(&wire).unwrap_err() {
-        Error::Reject { reason } => {
-            assert_eq!(reason, RejectReason::MISSING_REQUIRED_PARAMETER.to_raw())
-        }
-        other => panic!("expected Reject/MISSING_REQUIRED_PARAMETER, got {other:?}"),
-    }
+    let error = AtomicWriteFileRequest::decode(&wire).unwrap_err();
+    assert_eq!(
+        error.reject_reason(),
+        Some(RejectReason::MISSING_REQUIRED_PARAMETER),
+        "{error:?}"
+    );
 }
 
 #[test]
 fn atomic_write_record_extra_element_is_too_many_arguments() {
     let wire = encode_write_record_request(1, &[&[0x01], &[0x02]]);
-    match AtomicWriteFileRequest::decode(&wire).unwrap_err() {
-        Error::Reject { reason } => {
-            assert_eq!(reason, RejectReason::TOO_MANY_ARGUMENTS.to_raw())
-        }
-        other => panic!("expected Reject/TOO_MANY_ARGUMENTS, got {other:?}"),
-    }
+    let error = AtomicWriteFileRequest::decode(&wire).unwrap_err();
+    assert_eq!(
+        error.reject_reason(),
+        Some(RejectReason::TOO_MANY_ARGUMENTS),
+        "{error:?}"
+    );
 }
 
 #[test]

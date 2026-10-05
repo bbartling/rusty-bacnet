@@ -666,7 +666,7 @@ pub(crate) fn handle_write_property_observed(
     source: Option<&bacnet_objects::device::AuditWriteSource>,
     command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Result<(ObjectIdentifier, Applied), Error> {
-    let request = WritePropertyRequest::decode(service_data)?;
+    let request = WritePropertyRequest::decode(service_data).map_err(Error::into_request_reject)?;
     let oid = request.object_identifier;
 
     let object = db

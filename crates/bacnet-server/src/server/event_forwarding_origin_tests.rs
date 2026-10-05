@@ -146,7 +146,9 @@ async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
     assert!(sent.is_empty());
     assert_eq!(suppressions.snapshot().device_recipient_unbound, 1);
 
-    // A request the forwarders cannot read is rejected, as the client does.
+    // A request the forwarders cannot read is rejected with the reason
+    // naming its fault, as the client does (#1446): cut short, a missing
+    // parameter.
     let (reply, answered) = oneshot::channel();
     dispatch(
         confirmed_services(database(Vec::new()), forwarding_transport()),
@@ -158,7 +160,7 @@ async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
         reply_apdu(answered.await.unwrap()),
         Apdu::Reject(RejectPdu {
             invoke_id: 7,
-            reject_reason: RejectReason::INVALID_PARAMETER_DATA_TYPE,
+            reject_reason: RejectReason::MISSING_REQUIRED_PARAMETER,
         })
     ));
 }

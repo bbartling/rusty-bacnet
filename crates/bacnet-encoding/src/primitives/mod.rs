@@ -3,10 +3,11 @@
 //! Provides both raw value codecs (no tag header) and application/context-tagged
 //! convenience functions for all BACnet primitive types.
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodingKind, Error};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
 use bytes::{BufMut, BytesMut};
 
+use crate::constructed::tagged::{misplaced_tag, unclosed_kind};
 use crate::tags::{self, app_tag, TagClass};
 
 // ===========================================================================
@@ -65,10 +66,10 @@ pub fn unsigned_len(value: u64) -> u32 {
 /// Decode an unsigned integer from big-endian bytes (1-8 bytes).
 pub fn decode_unsigned(data: &[u8]) -> Result<u64, Error> {
     if data.is_empty() || data.len() > 8 {
-        return Err(Error::Decoding {
-            offset: 0,
-            message: format!("unsigned requires 1-8 bytes, got {}", data.len()),
-        });
+        return Err(Error::decoding(
+            0,
+            format!("unsigned requires 1-8 bytes, got {}", data.len()),
+        ));
     }
     let mut value: u64 = 0;
     for &b in data {
@@ -82,7 +83,7 @@ pub fn decode_unsigned(data: &[u8]) -> Result<u64, Error> {
 pub fn decode_unsigned_u8(data: &[u8]) -> Result<u8, Error> {
     let value = decode_unsigned(data)?;
     u8::try_from(value)
-        .map_err(|_| Error::decoding(0, format!("unsigned value {value} exceeds u8")))
+        .map_err(|_| Error::out_of_range(0, format!("unsigned value {value} exceeds u8")))
 }
 
 /// Decode an unsigned integer that fits in a `u16` from 1-8 big-endian bytes.
@@ -90,7 +91,7 @@ pub fn decode_unsigned_u8(data: &[u8]) -> Result<u8, Error> {
 pub fn decode_unsigned_u16(data: &[u8]) -> Result<u16, Error> {
     let value = decode_unsigned(data)?;
     u16::try_from(value)
-        .map_err(|_| Error::decoding(0, format!("unsigned value {value} exceeds u16")))
+        .map_err(|_| Error::out_of_range(0, format!("unsigned value {value} exceeds u16")))
 }
 
 /// Decode an unsigned integer that fits in a `u32` from 1-8 big-endian bytes.
@@ -98,7 +99,7 @@ pub fn decode_unsigned_u16(data: &[u8]) -> Result<u16, Error> {
 pub fn decode_unsigned_u32(data: &[u8]) -> Result<u32, Error> {
     let value = decode_unsigned(data)?;
     u32::try_from(value)
-        .map_err(|_| Error::decoding(0, format!("unsigned value {value} exceeds u32")))
+        .map_err(|_| Error::out_of_range(0, format!("unsigned value {value} exceeds u32")))
 }
 
 // --- Signed Integer ---
@@ -126,10 +127,10 @@ pub fn signed_len(value: i32) -> u32 {
 /// Decode a signed integer from two's-complement big-endian bytes (1-4 bytes).
 pub fn decode_signed(data: &[u8]) -> Result<i32, Error> {
     if data.is_empty() || data.len() > 4 {
-        return Err(Error::Decoding {
-            offset: 0,
-            message: format!("signed requires 1-4 bytes, got {}", data.len()),
-        });
+        return Err(Error::decoding(
+            0,
+            format!("signed requires 1-4 bytes, got {}", data.len()),
+        ));
     }
     let sign_extend = if data[0] & 0x80 != 0 { 0xFF } else { 0x00 };
     let mut bytes = [sign_extend; 4];
@@ -227,24 +228,19 @@ pub fn character_string_len(value: &str) -> Result<u32, Error> {
 /// Other charsets return an error.
 pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
     if data.is_empty() {
-        return Err(Error::Decoding {
-            offset: 0,
-            message: "CharacterString requires at least 1 byte for charset".into(),
-        });
+        return Err(Error::decoding(
+            0,
+            "CharacterString requires at least 1 byte for charset",
+        ));
     }
     let charset_id = data[0];
     let payload = &data[1..];
     match charset_id {
-        charset::UTF8 => String::from_utf8(payload.to_vec()).map_err(|e| Error::Decoding {
-            offset: 1,
-            message: format!("invalid UTF-8: {e}"),
-        }),
+        charset::UTF8 => String::from_utf8(payload.to_vec())
+            .map_err(|e| Error::decoding(1, format!("invalid UTF-8: {e}"))),
         charset::UCS2 => {
             if !payload.len().is_multiple_of(2) {
-                return Err(Error::Decoding {
-                    offset: 1,
-                    message: "UCS-2 data must have even length".into(),
-                });
+                return Err(Error::decoding(1, "UCS-2 data must have even length"));
             }
             let mut s = String::new();
             for (i, chunk) in payload.as_chunks::<2>().0.iter().enumerate() {
@@ -252,23 +248,21 @@ pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
                 if let Some(c) = char::from_u32(code_point as u32) {
                     s.push(c);
                 } else {
-                    return Err(Error::Decoding {
-                        offset: 1 + i * 2,
-                        message: "invalid UCS-2 code point".into(),
-                    });
+                    return Err(Error::decoding(1 + i * 2, "invalid UCS-2 code point"));
                 }
             }
             Ok(s)
         }
         charset::ISO_8859_1 => Ok(payload.iter().map(|&b| b as char).collect()),
-        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 | charset::UCS4 => Err(Error::Decoding {
-            offset: 0,
-            message: format!("unsupported charset: {charset_id}"),
-        }),
-        other => Err(Error::Decoding {
-            offset: 0,
-            message: format!("unknown charset: {other}"),
-        }),
+        // Character sets the standard defines but this decoder doesn't convert.
+        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 | charset::UCS4 => {
+            Err(Error::decoding_kind(
+                DecodingKind::Unsupported,
+                0,
+                format!("unsupported charset: {charset_id}"),
+            ))
+        }
+        other => Err(Error::decoding(0, format!("unknown charset: {other}"))),
     }
 }
 
@@ -285,17 +279,17 @@ pub fn encode_bit_string(buf: &mut BytesMut, unused_bits: u8, data: &[u8]) {
 /// Returns `(unused_bits, data)`.
 pub fn decode_bit_string(data: &[u8]) -> Result<(u8, Vec<u8>), Error> {
     if data.is_empty() {
-        return Err(Error::Decoding {
-            offset: 0,
-            message: "BitString requires at least 1 byte for unused-bits count".into(),
-        });
+        return Err(Error::decoding(
+            0,
+            "BitString requires at least 1 byte for unused-bits count",
+        ));
     }
     let unused = data[0];
     if unused > 7 {
-        return Err(Error::Decoding {
-            offset: 0,
-            message: format!("BitString unused_bits must be 0-7, got {unused}"),
-        });
+        return Err(Error::decoding(
+            0,
+            format!("BitString unused_bits must be 0-7, got {unused}"),
+        ));
     }
     Ok((unused, data[1..].to_vec()))
 }
@@ -489,6 +483,12 @@ pub fn encode_ctx_bit_string(buf: &mut BytesMut, tag: u8, unused_bits: u8, data:
 /// interpret them. Application-tagged content is decoded into the typed
 /// variants as before.
 ///
+/// Errors follow the rule of
+/// [`constructed::tagged`](crate::constructed::tagged): a fixed-size value
+/// (REAL, Double, Date, Time, object identifier) whose header gives another
+/// length is [`Error::Decoding`], and contents that run past the end of
+/// `data` are [`Error::BufferTooShort`].
+///
 /// Returns the decoded `PropertyValue` and the new offset past the consumed bytes.
 pub fn decode_application_value(
     data: &[u8],
@@ -504,7 +504,7 @@ pub fn decode_application_value(
             ));
         }
         if tag.is_closing {
-            return Err(Error::decoding(offset, "unexpected closing tag"));
+            return Err(Error::invalid_tag(offset, "unexpected closing tag"));
         }
         let content_end = new_offset
             .checked_add(tag.length as usize)
@@ -518,7 +518,7 @@ pub fn decode_application_value(
         ));
     }
     if tag.is_opening || tag.is_closing {
-        return Err(Error::decoding(offset, "unexpected opening/closing tag"));
+        return Err(Error::invalid_tag(offset, "unexpected opening/closing tag"));
     }
 
     if tag.number == app_tag::NULL && tag.length != 0 {
@@ -542,6 +542,28 @@ pub fn decode_application_value(
 
     if tag.number == app_tag::BOOLEAN {
         return Ok((PropertyValue::Boolean(tag.length != 0), content_start));
+    }
+
+    // A fixed-size value's length is judged before its contents are read, so
+    // a wrong length is reported as such even when the data also stops early.
+    let fixed = match tag.number {
+        app_tag::REAL => Some(("REAL", 4)),
+        app_tag::DOUBLE => Some(("Double", 8)),
+        app_tag::DATE => Some(("Date", 4)),
+        app_tag::TIME => Some(("Time", 4)),
+        app_tag::OBJECT_IDENTIFIER => Some(("BACnetObjectIdentifier", 4)),
+        _ => None,
+    };
+    if let Some((kind, octets)) = fixed {
+        if tag.length != octets {
+            return Err(Error::decoding(
+                offset,
+                format!(
+                    "application {kind} has {} contents octets, expected {octets}",
+                    tag.length
+                ),
+            ));
+        }
     }
 
     if data.len() < content_end {
@@ -569,7 +591,7 @@ pub fn decode_application_value(
         }
         app_tag::ENUMERATED => {
             let value = u32::try_from(decode_unsigned(content)?)
-                .map_err(|_| Error::decoding(content_start, "ENUMERATED exceeds u32"))?;
+                .map_err(|_| Error::out_of_range(content_start, "ENUMERATED exceeds u32"))?;
             PropertyValue::Enumerated(value)
         }
         app_tag::DATE => PropertyValue::Date(Date::decode(content)?),
@@ -578,7 +600,7 @@ pub fn decode_application_value(
             PropertyValue::ObjectIdentifier(ObjectIdentifier::decode(content)?)
         }
         other => {
-            return Err(Error::decoding(
+            return Err(Error::invalid_tag(
                 offset,
                 format!("unknown application tag number {other}"),
             ));
@@ -598,7 +620,10 @@ pub fn decode_application_value(
 pub fn validate_application_value(data: &[u8], offset: usize) -> Result<usize, Error> {
     let (tag, content_start) = tags::decode_tag(data, offset)?;
     if tag.class != TagClass::Application || tag.is_opening || tag.is_closing {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &tag,
+            None,
             offset,
             "expected an application-tagged value",
         ));
@@ -746,104 +771,54 @@ pub fn encode_timestamp_choice(buf: &mut BytesMut, ts: &BACnetTimeStamp) -> Resu
 /// Returns the decoded timestamp and the new offset past its encoding. Only
 /// the Clause 20.2.1.5-conformant tag forms described on
 /// [`encode_timestamp_choice`] are accepted; `sequence-number` contents
-/// beyond `0..=65535` are rejected.
+/// beyond `0..=65535` are rejected. Errors follow the rule of
+/// [`constructed::tagged`](crate::constructed::tagged): a Time or Date with
+/// the wrong length is [`Error::Decoding`], contents that run past the end of
+/// `data` are [`Error::BufferTooShort`].
 pub fn decode_timestamp_choice(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetTimeStamp, usize), Error> {
-    let (inner_tag, inner_pos) = tags::decode_tag(data, offset)?;
+    use crate::constructed::tagged;
+    const WHAT: &str = "BACnetTimeStamp";
 
-    let (ts, after_inner) = if inner_tag.is_context(0) {
-        let end = inner_pos
-            .checked_add(inner_tag.length as usize)
-            .ok_or_else(|| Error::decoding(inner_pos, "BACnetTimeStamp Time length overflow"))?;
-        if end > data.len() {
-            return Err(Error::decoding(inner_pos, "BACnetTimeStamp Time truncated"));
-        }
-        let t = Time::decode(&data[inner_pos..end])?;
-        (BACnetTimeStamp::Time(t), end)
-    } else if inner_tag.is_context(1) {
-        let end = inner_pos
-            .checked_add(inner_tag.length as usize)
-            .ok_or_else(|| {
-                Error::decoding(inner_pos, "BACnetTimeStamp SequenceNumber length overflow")
-            })?;
-        if end > data.len() {
-            return Err(Error::decoding(
-                inner_pos,
-                "BACnetTimeStamp SequenceNumber truncated",
-            ));
-        }
-        let n = decode_unsigned(&data[inner_pos..end])?;
+    let (inner_tag, inner_pos) = tags::decode_tag(data, offset)?;
+    if inner_tag.is_context(0) {
+        let (octets, end) = tagged::decode_ctx_fixed(data, offset, 0, 4, "Time", WHAT)?;
+        return Ok((BACnetTimeStamp::Time(Time::decode(octets)?), end));
+    }
+    if inner_tag.is_context(1) {
+        let (octets, end) = tagged::decode_ctx_primitive(data, offset, 1, WHAT)?;
+        let n = decode_unsigned(octets)?;
         if n > MAX_TIMESTAMP_SEQUENCE_NUMBER {
-            return Err(Error::decoding(
+            return Err(Error::out_of_range(
                 inner_pos,
                 format!("BACnetTimeStamp sequence-number {n} exceeds 65535"),
             ));
         }
-        (
-            BACnetTimeStamp::SequenceNumber(
-                u16::try_from(n).expect("BACnetTimeStamp sequence range checked above"),
-            ),
-            end,
-        )
-    } else if inner_tag.is_opening_tag(2) {
-        let (date_tag, date_pos) = tags::decode_tag(data, inner_pos)?;
-        if date_tag.class != TagClass::Application || date_tag.number != app_tag::DATE {
-            return Err(Error::decoding(
-                inner_pos,
-                "BACnetTimeStamp DateTime expected Date",
-            ));
-        }
-        let date_end = date_pos
-            .checked_add(date_tag.length as usize)
-            .ok_or_else(|| {
-                Error::decoding(date_pos, "BACnetTimeStamp DateTime Date length overflow")
-            })?;
-        if date_end > data.len() {
-            return Err(Error::decoding(
-                date_pos,
-                "BACnetTimeStamp DateTime Date truncated",
-            ));
-        }
-        let date = Date::decode(&data[date_pos..date_end])?;
-
-        let (time_tag, time_pos) = tags::decode_tag(data, date_end)?;
-        if time_tag.class != TagClass::Application || time_tag.number != app_tag::TIME {
-            return Err(Error::decoding(
-                date_end,
-                "BACnetTimeStamp DateTime expected Time",
-            ));
-        }
-        let time_end = time_pos
-            .checked_add(time_tag.length as usize)
-            .ok_or_else(|| {
-                Error::decoding(time_pos, "BACnetTimeStamp DateTime Time length overflow")
-            })?;
-        if time_end > data.len() {
-            return Err(Error::decoding(
-                time_pos,
-                "BACnetTimeStamp DateTime Time truncated",
-            ));
-        }
-        let time = Time::decode(&data[time_pos..time_end])?;
-
-        let (close_tag, close_pos) = tags::decode_tag(data, time_end)?;
-        if !close_tag.is_closing_tag(2) {
-            return Err(Error::decoding(
-                time_end,
-                "BACnetTimeStamp DateTime missing closing tag 2",
-            ));
-        }
-        (BACnetTimeStamp::DateTime { date, time }, close_pos)
-    } else {
-        return Err(Error::decoding(
-            offset,
-            "BACnetTimeStamp: unexpected inner choice tag",
-        ));
-    };
-
-    Ok((ts, after_inner))
+        let n = u16::try_from(n).expect("BACnetTimeStamp sequence range checked above");
+        return Ok((BACnetTimeStamp::SequenceNumber(n), end));
+    }
+    if inner_tag.is_opening_tag(2) {
+        const DATE_TIME: &str = "BACnetTimeStamp DateTime";
+        let (date, date_end) =
+            tagged::decode_app_fixed(data, inner_pos, app_tag::DATE, 4, DATE_TIME)?;
+        let (time, time_end) =
+            tagged::decode_app_fixed(data, date_end, app_tag::TIME, 4, DATE_TIME)?;
+        let end = tagged::expect_closing(data, time_end, 2, DATE_TIME)?;
+        let date_time = BACnetTimeStamp::DateTime {
+            date: Date::decode(date)?,
+            time: Time::decode(time)?,
+        };
+        return Ok((date_time, end));
+    }
+    Err(misplaced_tag(
+        data,
+        &inner_tag,
+        None,
+        offset,
+        "BACnetTimeStamp: unexpected inner choice tag",
+    ))
 }
 
 /// Encode a BACnetTimeStamp wrapped in a context opening/closing tag pair.
@@ -873,7 +848,10 @@ pub fn decode_timestamp(
 ) -> Result<(BACnetTimeStamp, usize), Error> {
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if !tag.is_opening_tag(tag_number) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &tag,
+            Some(tag_number),
             offset,
             format!("expected opening tag {tag_number} for BACnetTimeStamp"),
         ));
@@ -883,7 +861,8 @@ pub fn decode_timestamp(
 
     let (close, final_pos) = tags::decode_tag(data, after_inner)?;
     if !close.is_closing_tag(tag_number) {
-        return Err(Error::decoding(
+        return Err(Error::decoding_kind(
+            unclosed_kind(&close),
             after_inner,
             format!("expected closing tag {tag_number} for BACnetTimeStamp"),
         ));
@@ -898,3 +877,6 @@ pub fn decode_timestamp(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod length_first_tests;

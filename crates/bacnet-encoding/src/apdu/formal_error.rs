@@ -137,7 +137,7 @@ fn vt_session_identifiers(data: &[u8], offset: usize, what: &str) -> Result<usiz
     while position < sessions.len() {
         let (session, next) = decode_app_unsigned::<u64>(sessions, position, what)?;
         if u8::try_from(session).is_err() {
-            return Err(Error::decoding(
+            return Err(Error::out_of_range(
                 position,
                 format!("{what}: session identifier {session} exceeds u8"),
             ));

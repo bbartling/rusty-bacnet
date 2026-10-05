@@ -278,3 +278,14 @@ fn calendar_entry_list_rejects_a_bad_element_anywhere() {
         assert!(decode_calendar_entry_list(&wire).is_err(), "{wire:02x?}");
     }
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let mut framed = 0;
+    for (_, wire) in one_of_each() {
+        framed += super::assert_members_cut_short("BACnetCalendarEntry", wire, |data| {
+            decode_calendar_entry(data, 0)
+        });
+    }
+    assert!(framed > 0);
+}

@@ -16,8 +16,9 @@ use bytes::BytesMut;
 
 /// Who-Is-Request service parameters.
 ///
-/// Both limits must be present or both absent. If only one is set,
-/// the request is treated as unbounded.
+/// The two limits travel together (Clauses 16.10.1.1.1 and 16.10.1.1.2):
+/// [`WhoIsRequest::decode`] refuses a request carrying only one, and
+/// [`WhoIsRequest::encode`] writes them only when both are set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoIsRequest {
     /// Lowest device instance number that should answer; `None` for an unbounded request.
@@ -52,9 +53,12 @@ impl WhoIsRequest {
         }
     }
 
-    /// Decode the request from service-request octets; fails on malformed or truncated input
-    /// and on any octet that isn't a `[0]` or `[1]` limit in its place, so a limit under another
-    /// tag or anything after the limits refuses the request rather than reading as no limits.
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// on any octet that isn't a `[0]` or `[1]` limit in its place, so a limit under another
+    /// tag or anything after the limits refuses the request rather than reading as no limits,
+    /// and on one limit without the other (#1447). A receiver drops such a request rather than
+    /// reading it as one for every device, which would make every device answer a request that
+    /// probably meant a range.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         // [0] low-limit and [1] high-limit
         let (low_limit, offset) =
@@ -68,22 +72,21 @@ impl WhoIsRequest {
         )?;
         expect_end(data, end, end, "WhoIs")?;
 
-        // Both present or both absent
-        if low_limit.is_some() != high_limit.is_some() {
-            tracing::warn!("WhoIs: only one of low/high limit present — treating as unbounded per lenient decode policy");
-            return Ok(Self::all());
-        }
-
-        if let (Some(low), Some(high)) = (low_limit, high_limit) {
-            if low > high {
-                return Err(Error::decoding(0, "WhoIs low_limit exceeds high_limit"));
+        match (low_limit, high_limit) {
+            (None, None) => Ok(Self::all()),
+            (Some(low), Some(high)) if low > high => {
+                Err(Error::out_of_range(0, "WhoIs low_limit exceeds high_limit"))
             }
+            (Some(low), Some(high)) => Ok(Self::range(low, high)),
+            (Some(_), None) => Err(Error::missing(
+                end,
+                "WhoIs low-limit needs the high-limit [1] with it",
+            )),
+            (None, Some(_)) => Err(Error::missing(
+                0,
+                "WhoIs high-limit needs the low-limit [0] before it",
+            )),
         }
-
-        Ok(Self {
-            low_limit,
-            high_limit,
-        })
     }
 }
 
@@ -196,14 +199,23 @@ mod tests {
 
     #[test]
     fn test_decode_who_is_truncated() {
-        // WhoIs with range: encode valid, then truncate to only first tag byte
+        // A range cut anywhere fails: inside the low limit, or after it,
+        // which leaves one limit alone.
         let req = WhoIsRequest::range(1000, 2000);
         let mut buf = BytesMut::new();
         req.encode(&mut buf);
-        // Truncate to just the first tag + partial value (missing high-limit)
-        // This should still decode as "all" because only one limit is present
-        // Actually truncating at 1 byte should cause tag decode error
-        assert!(WhoIsRequest::decode(&buf[..1]).is_err());
+        for cut in 1..buf.len() {
+            assert!(WhoIsRequest::decode(&buf[..cut]).is_err(), "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn who_is_with_one_limit_is_refused() {
+        // [0] low limit 1 alone, then [1] high limit 10 alone (#1447).
+        for data in [&[0x09, 0x01][..], &[0x19, 0x0A]] {
+            let error = WhoIsRequest::decode(data).unwrap_err();
+            assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+        }
     }
 
     #[test]

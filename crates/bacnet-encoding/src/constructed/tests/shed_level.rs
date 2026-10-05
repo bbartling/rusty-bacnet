@@ -94,3 +94,12 @@ fn shed_level_rejects_other_tags_and_malformed_contents() {
         Err(Error::BufferTooShort { .. })
     ));
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    for (_, wire) in golden_vectors() {
+        super::assert_members_cut_short("BACnetShedLevel", &wire, |data| {
+            decode_shed_level(data, 0)
+        });
+    }
+}

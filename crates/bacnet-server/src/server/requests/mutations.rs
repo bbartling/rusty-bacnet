@@ -61,7 +61,7 @@ impl Request<'_> {
                 .record(self.req.service_choice, MutationDecision::Allow);
             return Ok(());
         }
-        let target = decode()?;
+        let target = decode().map_err(Error::into_request_reject)?;
         if self.config.mutation_policy == MutationPolicy::DenyAll {
             self.decisions
                 .record(self.req.service_choice, MutationDecision::PolicyDeny);
@@ -612,7 +612,8 @@ impl Request<'_> {
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         initial_cov_notifications: &mut Vec<InitialCovNotification>,
     ) -> Apdu {
-        let decoded = SubscribeCOVPropertyMultipleRequest::decode(&self.req.service_request);
+        let decoded = SubscribeCOVPropertyMultipleRequest::decode(&self.req.service_request)
+            .map_err(Error::into_request_reject);
         match decoded {
             Err(e) => self.error::<T>(&e),
             Ok(request) => {

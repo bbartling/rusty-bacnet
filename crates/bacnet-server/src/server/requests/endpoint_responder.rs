@@ -129,7 +129,8 @@ impl EndpointResponder {
         received: &ReceivedApdu,
     ) -> Result<(), Error> {
         let (device, authorizer) = self.device_writes.as_ref().expect("enabled Device writes");
-        let write = WritePropertyRequest::decode(&request.service_request)?;
+        let write = WritePropertyRequest::decode(&request.service_request)
+            .map_err(Error::into_request_reject)?;
         {
             let mut db = self.db.write().await;
             if !self.open.load(Ordering::Acquire) {

@@ -62,7 +62,7 @@ pub fn decode_value_source(
     if tag.is_opening_tag(2) {
         let (network, pos) = decode_app_unsigned::<u64>(data, pos, WHAT)?;
         let network_number = u16::try_from(network).map_err(|_| {
-            Error::decoding(pos, format!("{WHAT}: network number exceeds Unsigned16"))
+            Error::out_of_range(pos, format!("{WHAT}: network number exceeds Unsigned16"))
         })?;
         let (mac_address, pos) = decode_app_mac_address(data, pos, WHAT)?;
         let end = expect_closing(data, pos, 2, WHAT)?;

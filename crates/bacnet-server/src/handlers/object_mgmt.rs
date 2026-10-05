@@ -106,8 +106,8 @@ pub(crate) fn handle_create_object_observed(
     command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Result<(), CreateObjectRefusal> {
     *target = None;
-    let request =
-        CreateObjectRequest::decode(service_data).map_err(CreateObjectRefusal::Malformed)?;
+    let request = CreateObjectRequest::decode(service_data)
+        .map_err(|error| CreateObjectRefusal::Malformed(error.into_request_reject()))?;
     if let ObjectSpecifier::Identifier(oid) = request.object_specifier {
         *target = Some(oid);
     }
@@ -392,7 +392,7 @@ pub fn handle_delete_object(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<Box<dyn bacnet_objects::traits::BACnetObject>, Error> {
-    let request = DeleteObjectRequest::decode(service_data)?;
+    let request = DeleteObjectRequest::decode(service_data).map_err(Error::into_request_reject)?;
 
     match request.object_identifier.object_type() {
         ObjectType::DEVICE | ObjectType::NETWORK_PORT => {

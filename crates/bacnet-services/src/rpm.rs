@@ -55,7 +55,7 @@ impl ReadPropertyMultipleRequest {
 
         while offset < data.len() {
             if specs.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::decoding(
+                return Err(Error::overflow(
                     offset,
                     "RPM request exceeds max decoded items",
                 ));
@@ -165,7 +165,7 @@ impl ReadPropertyMultipleACK {
 
         while offset < data.len() {
             if results.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::decoding(offset, "RPM ACK exceeds max decoded items"));
+                return Err(Error::overflow(offset, "RPM ACK exceeds max decoded items"));
             }
 
             // [0] object-identifier
@@ -181,7 +181,7 @@ impl ReadPropertyMultipleACK {
                     return Err(Error::decoding(offset, "RPM ACK missing closing tag 1"));
                 }
                 if elements.len() >= MAX_DECODED_ITEMS {
-                    return Err(Error::decoding(offset, "RPM ACK results exceeds max"));
+                    return Err(Error::overflow(offset, "RPM ACK results exceeds max"));
                 }
                 let (tag, tag_end) = tags::decode_tag(data, offset)?;
                 if tag.is_closing_tag(1) {

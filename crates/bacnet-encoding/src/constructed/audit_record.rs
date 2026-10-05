@@ -1,6 +1,7 @@
 use super::log_fields::{decode_log_status, encode_log_status};
 use super::tagged::{
-    decode_ctx_canonical_unsigned, decode_ctx_constructed, decode_ctx_primitive, expect_end,
+    decode_app_fixed, decode_ctx_canonical_unsigned, decode_ctx_constructed, decode_ctx_primitive,
+    expect_end,
 };
 use super::{decode_audit_notification_at, encode_audit_notification};
 use crate::{primitives, tags};
@@ -98,46 +99,12 @@ pub fn decode_audit_log_record_at(
 }
 
 fn decode_date_time(data: &[u8]) -> Result<(Date, Time), Error> {
-    let (date_tag, date_start) = tags::decode_tag(data, 0)?;
-    if date_tag.class != tags::TagClass::Application
-        || date_tag.number != tags::app_tag::DATE
-        || date_tag.is_opening
-        || date_tag.is_closing
-        || date_tag.length != 4
-    {
-        return Err(Error::decoding(
-            0,
-            "BACnetAuditLogRecord timestamp expected four-octet application Date",
-        ));
-    }
-    let date_end = date_start
-        .checked_add(4)
-        .ok_or_else(|| Error::decoding(date_start, "timestamp Date length overflow"))?;
-    if date_end > data.len() {
-        return Err(Error::decoding(date_start, "timestamp Date is truncated"));
-    }
-    let date = Date::decode(&data[date_start..date_end])?;
-
-    let (time_tag, time_start) = tags::decode_tag(data, date_end)?;
-    if time_tag.class != tags::TagClass::Application
-        || time_tag.number != tags::app_tag::TIME
-        || time_tag.is_opening
-        || time_tag.is_closing
-        || time_tag.length != 4
-    {
-        return Err(Error::decoding(
-            date_end,
-            "BACnetAuditLogRecord timestamp expected four-octet application Time",
-        ));
-    }
-    let time_end = time_start
-        .checked_add(4)
-        .ok_or_else(|| Error::decoding(time_start, "timestamp Time length overflow"))?;
-    if time_end > data.len() {
-        return Err(Error::decoding(time_start, "timestamp Time is truncated"));
-    }
-    expect_end(data, time_end, time_end, "BACnetAuditLogRecord timestamp")?;
-    let time = Time::decode(&data[time_start..time_end])?;
+    const WHAT: &str = "BACnetAuditLogRecord timestamp";
+    let (date, date_end) = decode_app_fixed(data, 0, tags::app_tag::DATE, 4, WHAT)?;
+    let (time, time_end) = decode_app_fixed(data, date_end, tags::app_tag::TIME, 4, WHAT)?;
+    expect_end(data, time_end, time_end, WHAT)?;
+    let date = Date::decode(date)?;
+    let time = Time::decode(time)?;
     validate_date_time(&date, &time).map_err(|error| {
         Error::decoding(
             0,

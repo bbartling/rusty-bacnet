@@ -97,6 +97,27 @@ Error PDU, and each body has its own type for encoding and decoding:
 `cov_multiple::SubscribeCOVPropertyMultipleError`,
 `private_transfer::PrivateTransferError` and `virtual_terminal::VTCloseError`.
 
+`Error::Decoding { offset, kind, message }` carries the `DecodingKind` of the
+fault a decoder found, and `Error::reject_reason()` names the Reject reason
+it draws when it refuses a confirmed request (#1446):
+
+| Fault | Reported as | Reject reason |
+|---|---|---|
+| Encoding not valid for its datatype (wrong length, empty Unsigned, unknown character set) | `Decoding`, `InvalidEncoding` | INVALID_DATA_ENCODING |
+| Value too large for its field, or outside its range | `Decoding`, `OutOfRange` | PARAMETER_OUT_OF_RANGE |
+| More items than the decoder takes, or a tag length past its bound | `Decoding`, `Overflow` | BUFFER_OVERFLOW |
+| A tag that doesn't fit, a closing tag closing nothing, nesting too deep | `Decoding`, `InvalidTag` | INVALID_TAG |
+| The data or the frame ends where a member is due | `Decoding`, `Missing` | MISSING_REQUIRED_PARAMETER |
+| A member's contents cut short | `BufferTooShort` | MISSING_REQUIRED_PARAMETER |
+| Octets after the last member | `Decoding`, `Trailing` | TOO_MANY_ARGUMENTS |
+| A character set the decoder doesn't convert | `Decoding`, `Unsupported` | OTHER |
+
+`Error::into_request_reject()` turns a request's decode error into that
+`Error::Reject`. The bundled server answers every confirmed request it can't
+decode that way. A decoder that names a fault the table doesn't, such as
+GetEnrollmentSummary's undefined enumerations, returns its `Error::Reject`
+itself. A decoding error met once a service runs keeps its Error PDU.
+
 `Error::UnsupportedTransport { required, actual }` reports an operation the
 endpoint's data link cannot carry, such as a BBMD request through an
 `AnyTransport` that is not B/IP. Both fields are a
@@ -5225,7 +5246,8 @@ The server executes ConfirmedEventNotification, so it acknowledges every
 well-formed one once it decodes, before any copy is sent and whatever
 forwarding then finds, including one no forwarder takes. A received
 notification that no forwarder takes counts in `received_not_forwarded`. One
-that does not decode is rejected with INVALID_PARAMETER_DATA_TYPE.
+that does not decode is rejected with the reason naming its fault, as the
+client rejects one (#1446).
 
 The server remembers each ConfirmedEventNotification that decodes for 60
 seconds, at most 256 at once with the oldest dropped first, keyed by source

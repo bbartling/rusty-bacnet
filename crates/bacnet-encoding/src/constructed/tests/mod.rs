@@ -41,6 +41,50 @@ mod staging;
 mod tagged;
 mod value_source;
 
+/// Cut `wire`, a complete encoding `decode` accepts, inside the contents of
+/// each primitive member in turn, members inside constructed frames
+/// included, and require [`Error::BufferTooShort`] naming the end of that
+/// member's contents and the length of the cut data (#1333). Returns how
+/// many of the members cut stand inside a frame.
+pub(crate) fn assert_members_cut_short<T: std::fmt::Debug>(
+    what: &str,
+    wire: &[u8],
+    decode: impl Fn(&[u8]) -> Result<T, Error>,
+) -> usize {
+    if let Err(error) = decode(wire) {
+        panic!("{what}: the whole value fails: {error}");
+    }
+    let mut pos = 0;
+    let mut framed = 0;
+    let mut depth = 0usize;
+    while pos < wire.len() {
+        let (tag, start) = tags::decode_tag(wire, pos).unwrap();
+        if tag.is_opening || tag.is_closing {
+            depth = if tag.is_opening { depth + 1 } else { depth - 1 };
+            pos = start;
+            continue;
+        }
+        if tag.class == TagClass::Application && tag.number == tags::app_tag::BOOLEAN {
+            pos = start;
+            continue;
+        }
+        let end = start + tag.length as usize;
+        for cut in start..end {
+            match decode(&wire[..cut]) {
+                Err(Error::BufferTooShort { need, have }) => {
+                    assert_eq!((need, have), (end, cut), "{what} cut at {cut}");
+                }
+                other => panic!("{what} cut at {cut}, in the member at {pos}: {other:?}"),
+            }
+        }
+        if depth > 0 && end > start {
+            framed += 1;
+        }
+        pos = end;
+    }
+    framed
+}
+
 /// A local BACnetDeviceObjectPropertyReference for tests.
 pub(crate) fn dopr_ai(instance: u32, property: u32) -> BACnetDeviceObjectPropertyReference {
     BACnetDeviceObjectPropertyReference {

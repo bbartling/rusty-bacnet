@@ -286,11 +286,13 @@ fn request_rejects_undefined_acknowledgment_filter_and_inverted_priority() {
     primitives::encode_ctx_unsigned(&mut encoded, 0, 10);
     primitives::encode_ctx_unsigned(&mut encoded, 1, 9);
     tags::encode_closing_tag(&mut encoded, 4);
-    assert!(matches!(
-        GetEnrollmentSummaryRequest::decode(&encoded),
-        Err(Error::Reject { reason })
-            if reason == bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw()
-    ));
+    // A minimum above the maximum is out of range (#1446).
+    assert_eq!(
+        GetEnrollmentSummaryRequest::decode(&encoded)
+            .unwrap_err()
+            .reject_reason(),
+        Some(bacnet_types::enums::RejectReason::PARAMETER_OUT_OF_RANGE)
+    );
 }
 
 #[test]
@@ -466,11 +468,12 @@ fn request_rejects_undefined_event_state_filter() {
         } else {
             &noncanonical[..]
         };
-        assert!(matches!(
-            GetEnrollmentSummaryRequest::decode(encoded),
-            Err(Error::Reject { reason })
-                if reason == bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw()
-        ));
+        assert_eq!(
+            GetEnrollmentSummaryRequest::decode(encoded)
+                .unwrap_err()
+                .reject_reason(),
+            Some(bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING)
+        );
     }
 
     let request = GetEnrollmentSummaryRequest {

@@ -365,7 +365,7 @@ fn zero_array_index_is_rejected_by_request_decoder() {
     bacnet_encoding::primitives::encode_ctx_object_id(&mut service_data, 0, &oid);
     service_data.extend_from_slice(&[0x19, 131, 0x29, 0]);
     let error = handle_read_range(&db, &service_data, &mut BytesMut::new()).unwrap_err();
-    assert!(matches!(error, Error::Decoding { .. }));
+    assert!(matches!(error, Error::Reject { .. }), "{error:?}");
 }
 
 #[tokio::test]

@@ -186,7 +186,7 @@ async fn dcc_disable_rate_earlier_failures_do_not_charge() {
     for _ in 0..10 {
         assert!(matches!(
             fixture.raw(Bytes::from_static(&[0x19]), 1, false).await,
-            Apdu::Error(_)
+            Apdu::Reject(_)
         ));
         assert!(
             matches!(fixture.send(EnableDisable::DISABLE_INITIATION, None, Some("wrong"), 1, false).await,

@@ -269,3 +269,14 @@ fn log_record_decoder_rejects_malformed_records() {
         assert!(decode_log_record(&bytes, 0).is_err(), "{bytes:02X?}");
     }
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    for (log_datum, status_flags, _) in kinds() {
+        let octets = encoded(&record(log_datum, status_flags));
+        let framed = assert_members_cut_short("BACnetLogRecord", &octets, |data| {
+            decode_log_record(data, 0)
+        });
+        assert!(framed > 0);
+    }
+}

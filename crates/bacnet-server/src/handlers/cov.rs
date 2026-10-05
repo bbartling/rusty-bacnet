@@ -76,7 +76,7 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
     source_network: Option<&NpduAddress>,
     service_data: &[u8],
 ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
-    let request = SubscribeCOVRequest::decode(service_data)?;
+    let request = SubscribeCOVRequest::decode(service_data).map_err(Error::into_request_reject)?;
 
     // Service consistency is distinct from structural parsing. Validate before
     // lookup, expiry purge or subscription replacement/initial notification.
@@ -166,7 +166,8 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
 ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
     use bacnet_services::cov::SubscribeCOVPropertyRequest;
 
-    let request = SubscribeCOVPropertyRequest::decode(service_data)?;
+    let request =
+        SubscribeCOVPropertyRequest::decode(service_data).map_err(Error::into_request_reject)?;
 
     // Keep service validity separate from structural decoding so malformed
     // pairing and zero lifetime retain their distinct formal responses.
@@ -278,7 +279,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
 ) -> Result<Vec<CovSubscriptionSnapshot>, MultipleRefusal> {
     use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
 
-    let request = SubscribeCOVPropertyMultipleRequest::decode(service_data)?;
+    let request = SubscribeCOVPropertyMultipleRequest::decode(service_data)
+        .map_err(Error::into_request_reject)?;
     handle_subscribe_cov_property_multiple_request_endpoint(
         table,
         db,

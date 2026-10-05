@@ -11,7 +11,9 @@ const W: &str = "Thing";
 /// The offset and message of a decode error, failing on any other result.
 fn decoding<T: std::fmt::Debug>(result: Result<T, Error>) -> (usize, String) {
     match result {
-        Err(Error::Decoding { offset, message }) => (offset, message),
+        Err(Error::Decoding {
+            offset, message, ..
+        }) => (offset, message),
         other => panic!("expected a decoding error, got {other:?}"),
     }
 }

@@ -195,3 +195,28 @@ fn log_multiple_record_decoder_rejects_malformed_records() {
         );
     }
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    for log_data in [
+        LogData::LogStatus(LogStatus::LOG_DISABLED),
+        LogData::TimeChange(-1.5),
+        LogData::Values(vec![
+            LogValue::RealValue(72.5),
+            LogValue::Failure {
+                error_class: 2,
+                error_code: 32,
+            },
+            LogValue::UnsignedValue(7),
+            LogValue::AnyValue(vec![
+                0x2E, 0xA4, 0x7E, 0x08, 0x1F, 0x01, 0xB4, 0, 0, 0, 0, 0x2F,
+            ]),
+        ]),
+    ] {
+        let octets = encoded(&record(log_data));
+        let framed = assert_members_cut_short("BACnetLogMultipleRecord", &octets, |data| {
+            decode_log_multiple_record(data, 0)
+        });
+        assert!(framed > 0);
+    }
+}

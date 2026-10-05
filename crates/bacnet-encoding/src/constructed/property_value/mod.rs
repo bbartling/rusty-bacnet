@@ -116,7 +116,7 @@ pub fn extract_property_value<'a>(
                     .any(|boundary| matches_property_boundary(data, end, *boundary))
             {
                 if candidate.is_some() {
-                    return Err(Error::decoding(
+                    return Err(Error::invalid_tag(
                         offset,
                         "legacy EventParameters value has ambiguous closing tags",
                     ));
@@ -127,7 +127,7 @@ pub fn extract_property_value<'a>(
         if let Some((pos, end)) = candidate {
             return Ok((&data[offset..pos], end));
         }
-        return Err(Error::decoding(
+        return Err(Error::missing(
             offset,
             "legacy EventParameters value is missing its closing tags",
         ));

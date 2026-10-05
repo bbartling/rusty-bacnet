@@ -56,7 +56,7 @@ pub fn decode_lift_car_call_list(
             return Ok((BACnetLiftCarCallList { floor_numbers }, content));
         }
         if floor_numbers.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset,
                 "lift car call list exceeds the decoded item limit",
             ));

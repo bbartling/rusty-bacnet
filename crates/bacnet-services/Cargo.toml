@@ -13,7 +13,6 @@ categories = ["network-programming"]
 bacnet-types = { workspace = true }
 bacnet-encoding = { workspace = true }
 bytes = { workspace = true }
-tracing = { workspace = true }
 
 [lints]
 workspace = true

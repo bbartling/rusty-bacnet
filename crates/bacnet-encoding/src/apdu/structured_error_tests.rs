@@ -354,3 +354,28 @@ fn formal_members_cut_short_are_a_short_buffer() {
         }
     }
 }
+
+#[test]
+fn formal_members_cut_short_inside_their_frames_are_a_short_buffer() {
+    use crate::constructed::tests::assert_members_cut_short;
+
+    // Every body here opens with a frame, the `[0]` error or SCPM's `[1]`
+    // subscription, so each member cut sits inside one or follows one.
+    let not_found = [0x0E, 0x91, 5, 0x91, 81, 0x0F, 0x19, 2];
+    let wpm = [
+        0x0E, 0x91, 2, 0x91, 40, 0x0F, 0x1E, 0x0C, 0x00, 0x40, 0x00, 0x04, 0x19, 85, 0x29, 8, 0x1F,
+    ];
+    let mut bodies: Vec<(ConfirmedServiceChoice, &[u8])> = GOLDEN
+        .iter()
+        .map(|(service, _, _, body)| (*service, *body))
+        .collect();
+    bodies.push((ConfirmedServiceChoice::REMOVE_LIST_ELEMENT, &not_found));
+    bodies.push((ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE, &wpm));
+    let mut framed = 0;
+    for (service, body) in bodies {
+        framed += assert_members_cut_short(&format!("{service:?}"), body, |data| {
+            super::formal_error::decode_formal_body(service, data)
+        });
+    }
+    assert!(framed > 0);
+}

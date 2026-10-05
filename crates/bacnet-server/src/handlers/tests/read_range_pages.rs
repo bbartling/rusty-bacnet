@@ -198,7 +198,7 @@ fn missing_references_empty_lists_and_validation_precede_tiny_budget() {
                     max_service_ack_bytes: 1
                 }
             ),
-            Err(ReadRangeFailure::Service(Error::Decoding { .. }))
+            Err(ReadRangeFailure::Service(Error::Reject { .. }))
         ));
     }
     assert!(matches!(

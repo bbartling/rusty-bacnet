@@ -454,11 +454,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         }
                         simple_ack()
                     }
-                    // As the client rejects one it cannot read.
-                    Err(_) => Apdu::Reject(RejectPdu {
+                    // A syntax fault draws the Reject naming it, as the
+                    // client's does (#1446).
+                    Err(error) => Self::error_apdu_from_error(
                         invoke_id,
-                        reject_reason: RejectReason::INVALID_PARAMETER_DATA_TYPE,
-                    }),
+                        service_choice,
+                        &error.into_request_reject(),
+                    ),
                 }
             }
             s if s == ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE => {
@@ -470,7 +472,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION => {
                 let request = bacnet_services::life_safety::LifeSafetyOperationRequest::decode(
                     &req.service_request,
-                );
+                )
+                .map_err(Error::into_request_reject);
                 match request {
                     Err(e) => Self::error_apdu_from_error(invoke_id, service_choice, &e),
                     Ok(request) => {

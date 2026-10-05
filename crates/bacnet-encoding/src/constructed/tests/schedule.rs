@@ -410,3 +410,14 @@ fn exception_schedule_is_the_concatenation_of_its_events() {
     // A truncated last event fails the whole property.
     assert!(decode_exception_schedule(&wire[..wire.len() - 1]).is_err());
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let mut framed = 0;
+    for (_, wire) in special_event_vectors() {
+        framed += super::assert_members_cut_short("BACnetSpecialEvent", &wire, |data| {
+            decode_special_event(data, 0)
+        });
+    }
+    assert!(framed > 0);
+}

@@ -614,6 +614,6 @@ fn invalid_source_text_is_sanitized_but_malformed_source_framing_is_rejected() {
 
     let before = snapshot(&db, oid);
     let error = handle_acknowledge_alarm(&mut db, &encode_request_with_raw_source(oid, &[]));
-    assert!(matches!(error, Err(Error::Decoding { .. })));
+    assert!(matches!(error, Err(Error::Reject { .. })), "{error:?}");
     assert_eq!(snapshot(&db, oid), before);
 }

@@ -14,7 +14,8 @@ use super::helpers::{
 };
 use crate::common::MAX_DECODED_ITEMS;
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_fixed, decode_ctx_object_id, decode_ctx_unsigned, next_is_context,
+    decode_ctx_fixed, decode_ctx_object_id, decode_ctx_unsigned, expect_end, misplaced_tag,
+    next_is_context,
 };
 
 // ---------------------------------------------------------------------------
@@ -190,7 +191,10 @@ impl COVNotificationMultipleRequest {
         // [4] listOfCovNotifications — opening tag 4
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if !tag.is_opening_tag(4) {
-            return Err(Error::decoding(
+            return Err(misplaced_tag(
+                data,
+                &tag,
+                Some(4),
                 offset,
                 "COVNotificationMultiple expected opening tag 4",
             ));
@@ -202,7 +206,7 @@ impl COVNotificationMultipleRequest {
         let mut has_time_of_change = false;
         loop {
             if offset >= data.len() {
-                return Err(Error::decoding(
+                return Err(Error::missing(
                     offset,
                     "COVNotificationMultiple missing closing tag 4",
                 ));
@@ -233,7 +237,10 @@ impl COVNotificationMultipleRequest {
             // [1] listOfValues — opening tag 1
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(1) {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &tag,
+                    Some(1),
                     offset,
                     "COVNotificationMultiple expected opening tag 1",
                 ));
@@ -243,7 +250,7 @@ impl COVNotificationMultipleRequest {
             let mut values = Vec::new();
             loop {
                 if offset >= data.len() {
-                    return Err(Error::decoding(
+                    return Err(Error::missing(
                         offset,
                         "COVNotificationMultiple missing closing tag 1",
                     ));
@@ -296,7 +303,10 @@ impl COVNotificationMultipleRequest {
                 // [2] value (opening/closing)
                 let (tag, tag_end) = tags::decode_tag(data, offset)?;
                 if !tag.is_opening_tag(2) {
-                    return Err(Error::decoding(
+                    return Err(misplaced_tag(
+                        data,
+                        &tag,
+                        Some(2),
                         offset,
                         "COVNotificationMultiple expected opening tag 2",
                     ));
@@ -361,12 +371,7 @@ impl COVNotificationMultipleRequest {
                 list_of_values: values,
             });
         }
-        if offset != data.len() {
-            return Err(Error::decoding(
-                offset,
-                "COVNotificationMultiple has trailing data",
-            ));
-        }
+        expect_end(data, offset, offset, "COVNotificationMultiple")?;
         if timestamp.is_some() != has_time_of_change {
             return Err(reject(
                 RejectReason::PARAMETER_OUT_OF_RANGE,

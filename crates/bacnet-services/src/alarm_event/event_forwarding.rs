@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_boolean, decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned,
-    next_is_context,
+    expect_end, misplaced_tag, next_is_context,
 };
 use bacnet_encoding::constructed::{encode_event_notification, validate_tlv_sequence};
 use bytes::Bytes;
@@ -82,7 +82,17 @@ impl ForwardedEventNotification {
             (_, offset) =
                 decode_ctx_unsigned::<u32>(data, offset, 10, "EventNotification fromState")?;
         } else if notify_type != NotifyType::ACK_NOTIFICATION {
-            return Err(Error::decoding(
+            if offset < data.len() {
+                let (found, _) = tags::decode_tag(data, offset)?;
+                return Err(misplaced_tag(
+                    data,
+                    &found,
+                    Some(10),
+                    offset,
+                    "EventNotification expected fromState",
+                ));
+            }
+            return Err(Error::missing(
                 offset,
                 "EventNotification missing fromState",
             ));
@@ -95,18 +105,23 @@ impl ForwardedEventNotification {
             // the request ends at the closing tag that matches its opening one.
             let (opening, inner) = tags::decode_tag(data, offset)?;
             if !opening.is_opening_tag(12) {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &opening,
+                    Some(12),
                     offset,
                     "EventNotification expected eventValues after toState",
                 ));
             }
             let (values, end) = tags::extract_context_value(data, inner, 12)?;
-            if values.is_empty() || end != data.len() {
-                return Err(Error::decoding(
+            if values.is_empty() {
+                // The frame holds none of the CHOICE's alternatives.
+                return Err(Error::missing(
                     offset,
-                    "EventNotification expected eventValues to close the request",
+                    "EventNotification eventValues are empty",
                 ));
             }
+            expect_end(data, end, end, "EventNotification")?;
         }
         Ok(Self {
             process_identifier,

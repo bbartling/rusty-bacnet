@@ -13,7 +13,10 @@ pub(super) fn decode_context<'a>(
 ) -> Result<(&'a [u8], usize), Error> {
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if !tag.is_context(expected_tag) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &tag,
+            Some(expected_tag),
             offset,
             format!("{field} expected context tag {expected_tag}"),
         ));
@@ -22,7 +25,7 @@ pub(super) fn decode_context<'a>(
         .checked_add(tag.length as usize)
         .ok_or_else(|| Error::decoding(pos, format!("{field} length overflow")))?;
     if end > data.len() {
-        return Err(Error::decoding(pos, format!("{field} truncated")));
+        return Err(Error::buffer_too_short(end, data.len()));
     }
     Ok((&data[pos..end], end))
 }
@@ -37,7 +40,7 @@ pub(super) fn decode_context_u32(
     let (content, end) = decode_context(data, offset, expected_tag, field)?;
     let value = primitives::decode_unsigned(content)?;
     let value = u32::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{field} exceeds u32")))?;
+        .map_err(|_| Error::out_of_range(offset, format!("{field} exceeds u32")))?;
     Ok((value, end))
 }
 
@@ -82,7 +85,7 @@ pub(super) fn finish_variant(
     variant_tag: u8,
 ) -> Result<NotificationParameters, Error> {
     if consumed != body_end {
-        return Err(Error::decoding(
+        return Err(Error::trailing(
             consumed,
             format!("NotificationParameters variant {variant_tag} has unexpected fields"),
         ));
@@ -99,10 +102,10 @@ pub(super) fn closing_tag_start(
     let width = if tag_number > 14 { 2 } else { 1 };
     let start = end
         .checked_sub(width)
-        .ok_or_else(|| Error::decoding(end, format!("{field} missing closing tag")))?;
+        .ok_or_else(|| Error::missing(end, format!("{field} missing closing tag")))?;
     let (tag, next) = tags::decode_tag(data, start)?;
     if !tag.is_closing_tag(tag_number) || next != end {
-        return Err(Error::decoding(
+        return Err(Error::invalid_tag(
             start,
             format!("{field} expected closing tag {tag_number}"),
         ));
@@ -130,7 +133,7 @@ pub(super) fn decode_context_u16(
     let (content, end) = decode_context(data, offset, expected_tag, field)?;
     let value = primitives::decode_unsigned(content)?;
     let value = u16::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{field} exceeds u16")))?;
+        .map_err(|_| Error::out_of_range(offset, format!("{field} exceeds u16")))?;
     Ok((value, end))
 }
 

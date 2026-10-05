@@ -176,3 +176,19 @@ fn action_command_rejects_missing_members_and_bad_forms() {
     wide_delay.extend_from_slice(&bytes[16..]);
     assert!(decode_action_command(&wide_delay, 0).is_err());
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let (_, local) = local_command();
+    let (_, remote) = remote_command();
+    for bytes in [local, remote] {
+        assert_members_cut_short("BACnetActionCommand", bytes, |data| {
+            decode_action_command(data, 0)
+        });
+    }
+    let list = [&[0x0E][..], local, remote, &[0x0F]].concat();
+    let framed = assert_members_cut_short("BACnetActionList", &list, |data| {
+        decode_action_list(data, 0)
+    });
+    assert!(framed > 0);
+}

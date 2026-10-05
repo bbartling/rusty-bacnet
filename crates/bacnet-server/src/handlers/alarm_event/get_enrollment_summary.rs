@@ -20,7 +20,8 @@ pub fn handle_get_enrollment_summary(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    let request = GetEnrollmentSummaryRequest::decode(service_data)?;
+    let request =
+        GetEnrollmentSummaryRequest::decode(service_data).map_err(Error::into_request_reject)?;
     let mut entries = Vec::new();
     visit_entries::<Error>(db, &request, |entry| {
         entries.push(entry);
@@ -51,7 +52,8 @@ pub(crate) fn handle_get_enrollment_summary_budgeted(
     budget: crate::server::GetEnrollmentSummaryBudget,
 ) -> Result<(), EnrollmentSummaryFailure> {
     // Preserve decoder errors even when the database cannot be admitted.
-    let request = GetEnrollmentSummaryRequest::decode(service_data)?;
+    let request =
+        GetEnrollmentSummaryRequest::decode(service_data).map_err(Error::into_request_reject)?;
     if db.len() > budget.max_objects {
         return Err(EnrollmentSummaryFailure::Work);
     }

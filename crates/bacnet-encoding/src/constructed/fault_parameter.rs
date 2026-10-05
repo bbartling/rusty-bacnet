@@ -217,7 +217,7 @@ pub fn decode_fault_parameters(
             let mut fault_values = Vec::new();
             while !next_is_closing(data, pos, 0)? {
                 if fault_values.len() >= MAX_FRAMED_ITEMS {
-                    return Err(Error::decoding(
+                    return Err(Error::overflow(
                         pos,
                         "fault-characterstring: list-of-fault-values exceeds limit",
                     ));
@@ -251,7 +251,7 @@ pub fn decode_fault_parameters(
             let mut fault_values = Vec::new();
             while !next_is_closing(data, pos, 0)? {
                 if fault_values.len() >= MAX_FRAMED_ITEMS {
-                    return Err(Error::decoding(
+                    return Err(Error::overflow(
                         pos,
                         "fault-life-safety: list-of-fault-values exceeds limit",
                     ));
@@ -279,7 +279,7 @@ pub fn decode_fault_parameters(
             let mut fault_values = Vec::new();
             while !next_is_closing(data, pos, 0)? {
                 if fault_values.len() >= MAX_FRAMED_ITEMS {
-                    return Err(Error::decoding(
+                    return Err(Error::overflow(
                         pos,
                         "fault-state: list-of-fault-values exceeds limit",
                     ));
