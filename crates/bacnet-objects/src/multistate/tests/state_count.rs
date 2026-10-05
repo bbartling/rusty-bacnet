@@ -213,3 +213,79 @@ fn feedback_and_already_stranded_states_do_not_block_a_count() {
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
     );
 }
+
+fn resize(object: &mut dyn BACnetObject, count: u64) -> Result<(), Error> {
+    object.write_property(P::STATE_TEXT, Some(0), PropertyValue::Unsigned(count), None)
+}
+
+#[test]
+fn a_count_at_index_0_resizes_state_text_and_the_count() {
+    for mut object in all_three(3) {
+        let kind = object.object_identifier().object_type();
+        object
+            .write_property(P::STATE_TEXT, None, labels(3), None)
+            .unwrap();
+        // A grow keeps the labels and appends a new object's defaults.
+        resize(&mut *object, 5).unwrap();
+        let mut grown = match labels(3) {
+            PropertyValue::List(labels) => labels,
+            _ => unreachable!(),
+        };
+        grown.extend(
+            ["State 4", "State 5"].map(|label| PropertyValue::CharacterString(label.into())),
+        );
+        assert_eq!(
+            snapshot(&*object),
+            (PropertyValue::Unsigned(5), PropertyValue::List(grown)),
+            "{kind:?}"
+        );
+        // A shrink drops the last labels.
+        resize(&mut *object, 2).unwrap();
+        assert_eq!(
+            snapshot(&*object),
+            (PropertyValue::Unsigned(2), labels(2)),
+            "{kind:?}"
+        );
+        // Zero states, past the maximum, or another datatype change nothing.
+        let before = snapshot(&*object);
+        for (count, expected) in [
+            (0, ErrorCode::VALUE_OUT_OF_RANGE),
+            (
+                u64::from(MAX_NUMBER_OF_STATES) + 1,
+                ErrorCode::VALUE_OUT_OF_RANGE,
+            ),
+        ] {
+            assert_eq!(
+                code(resize(&mut *object, count)),
+                expected,
+                "{kind:?} {count}"
+            );
+            assert_eq!(snapshot(&*object), before, "{kind:?}");
+        }
+        assert_eq!(
+            code(object.write_property(
+                P::STATE_TEXT,
+                Some(0),
+                PropertyValue::CharacterString("3".into()),
+                None
+            )),
+            ErrorCode::INVALID_DATA_TYPE
+        );
+        resize(&mut *object, u64::from(MAX_NUMBER_OF_STATES)).unwrap();
+    }
+}
+
+#[test]
+fn a_count_at_index_0_that_would_strand_a_held_state_is_refused() {
+    for (what, mut object) in holders() {
+        let before = snapshot(&*object);
+        assert_eq!(
+            code(resize(&mut *object, 2)),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            "{what}"
+        );
+        assert_eq!(snapshot(&*object), before, "{what}");
+        resize(&mut *object, 3).unwrap();
+        assert_eq!(count(&*object), PropertyValue::Unsigned(3), "{what}");
+    }
+}

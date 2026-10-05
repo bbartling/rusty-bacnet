@@ -901,7 +901,8 @@ Alarm_Values entry past the count is refused. State_Text written whole, at
 creation or by a later write, sets Number_Of_States to its number of labels;
 with a Number_Of_States in the same request it has to match it, and a write
 that would leave a state the object holds past the new count is refused
-with VALUE_OUT_OF_RANGE.
+with VALUE_OUT_OF_RANGE. Writing a count to State_Text at `array_index=0`
+resizes it the same way, adding `State n` labels when it grows.
 
 #### `delete_object(address, object_id)`
 

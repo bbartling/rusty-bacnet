@@ -165,8 +165,10 @@ impl ReportingOptions {
     ///
     /// Event_Message_Texts_Config takes three CharacterStrings whole
     /// (VALUE_OUT_OF_RANGE for another count) or one by index 1 to 3; its
-    /// size, index 0, is fixed (WRITE_ACCESS_DENIED, the answer State_Text
-    /// gives there too). The reference takes the encodings
+    /// size, index 0, is WRITE_ACCESS_DENIED: the tables fix it at three, and
+    /// Clause 12.1.5.1 keeps such an array from being resized, while
+    /// State_Text, which a whole write can resize, takes a count there. The
+    /// reference takes the encodings
     /// Loop's references take ([`crate::reference`]); clearing it puts the
     /// inhibit back to FALSE.
     pub(crate) fn write(
@@ -230,6 +232,7 @@ impl ReportingOptions {
                     .map_err(|_| common::value_out_of_range_error())?;
                 Ok(())
             }
+            // Always three entries (Clause 12.1.5.1): the size isn't written.
             Some(0) => Err(common::write_access_denied_error()),
             Some(index @ 1..=3) => {
                 self.message_texts_config[index as usize - 1] = label(value)?;

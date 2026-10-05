@@ -1807,13 +1807,16 @@ CreateObject initial value, sets Number_Of_States to its number of labels
 leave Present_Value, Relinquish_Default, a Priority_Array command or an
 Alarm_Values entry past the new count is `PROPERTY/VALUE_OUT_OF_RANGE` and
 changes nothing. A Multi-state Output's Feedback_Value doesn't block a
-shrink; past the count it shows as CONFIGURATION_ERROR. A WriteProperty
-naming Number_Of_States is still refused, and so is a write of State_Text's
-size alone, at index 0 (`PROPERTY/WRITE_ACCESS_DENIED`). The metadata gives
-Number_Of_States `PropertyWriteCapability::Through(STATE_TEXT)`, which
-doesn't count as writable, and the PICS keeps its row read-only, marks it
-"resized by writing STATE_TEXT whole", and leaves it off the creation-only
-line.
+shrink; past the count it shows as CONFIGURATION_ERROR. Since a whole
+write can resize State_Text, its size at index 0 takes a write as well
+(Clause 12.1.5.1): an Unsigned count with the same checks, which truncates
+State_Text on a shrink and, on a grow, appends the `State {n}` labels a new
+object starts with. A WriteProperty naming Number_Of_States is still
+refused. The metadata gives Number_Of_States
+`PropertyWriteCapability::Through(STATE_TEXT)`, which doesn't count as
+writable, and the PICS keeps its row read-only, marks it "resized through
+STATE_TEXT: a whole write or its size at index 0", and leaves it off the
+creation-only line.
 
 On these objects the order of the initial values follows one rule: the
 values that give the state count are applied before every other initial
@@ -2741,8 +2744,9 @@ serves Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair
   Reliability that reads as Enumerated 1 included, nor does a missing
   property. Unset, it reads as Binary Value 4194303's Present_Value, and
   writing that clears it and puts the inhibit back to FALSE.
-- Event_Message_Texts_Config is always three entries: a write of its size,
-  index 0, is `PROPERTY/WRITE_ACCESS_DENIED`, as on State_Text.
+- Event_Message_Texts_Config is always three entries: the tables fix its
+  size, so a write at index 0 is `PROPERTY/WRITE_ACCESS_DENIED` (Clause
+  12.1.5.1).
 
 Every Trend Log samples a BACnet property, so its Start_Time, Stop_Time,
 Log_Interval and Log_DeviceObjectProperty are classed required (Table 12-29

@@ -74,7 +74,7 @@ fn each_createable_type_lists_what_only_creation_sets() {
          Whole value set only by CreateObject: UNITS\n"
     ));
     // The count's row is read-only and says how it changes, in both forms.
-    let note = "R (resized by writing STATE_TEXT whole)";
+    let note = "R (resized through STATE_TEXT: a whole write or its size at index 0)";
     assert!(text.contains(&format!("    {:<40} {note}\n", "NUMBER_OF_STATES")));
     let markdown = pics.generate_markdown();
     assert!(markdown.contains(&format!("| NUMBER_OF_STATES | {note} |\n")));

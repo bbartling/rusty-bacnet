@@ -198,11 +198,16 @@ fn write_whole_state_text(
     Ok(())
 }
 
-/// Write one State_Text element, or the whole array
-/// ([`write_whole_state_text`]); an index past the states is
-/// INVALID_ARRAY_INDEX. The size, index 0, changes only with a whole write:
-/// written alone it is WRITE_ACCESS_DENIED, as Event_Message_Texts_Config
-/// answers.
+/// Write one State_Text element, the whole array
+/// ([`write_whole_state_text`]), or its size at index 0; an index past the
+/// states is INVALID_ARRAY_INDEX.
+///
+/// A whole write can change the array's size, so Clause 12.1.5.1 has index
+/// 0 take a write too (#1443). The Unsigned written there is a new state
+/// count, checked as [`check_state_count`] says, and it resizes State_Text
+/// and Number_Of_States together as [`resize_state_text`] does: a shrink
+/// drops the last labels, and a grow, whose new labels the clause leaves to
+/// the device, appends the `State {n}` labels a new object starts with.
 fn write_state_text(
     number_of_states: &mut u32,
     state_text: &mut Vec<String>,
@@ -212,7 +217,13 @@ fn write_state_text(
 ) -> Result<(), Error> {
     match array_index {
         None => write_whole_state_text(number_of_states, state_text, held, value),
-        Some(0) => Err(common::write_access_denied_error()),
+        Some(0) => {
+            let PropertyValue::Unsigned(count) = value else {
+                return Err(common::invalid_data_type_error());
+            };
+            let count = check_state_count(*number_of_states, count, held)?;
+            resize_state_text(number_of_states, state_text, count)
+        }
         Some(index) if (index as usize) <= state_text.len() => {
             let PropertyValue::CharacterString(label) = value else {
                 return Err(common::invalid_data_type_error());

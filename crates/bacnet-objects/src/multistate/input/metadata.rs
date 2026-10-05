@@ -80,7 +80,7 @@ const BASE: &[PropertyMetadata] = &[
     REPORTING_OPTION_METADATA[1],
     REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    // No write of its own: a whole State_Text write sets it (#1443).
+    // No write of its own: State_Text written whole or at index 0 sets it (#1443).
     PropertyMetadata::new(
         P::NUMBER_OF_STATES,
         RequiredRead,
@@ -89,7 +89,7 @@ const BASE: &[PropertyMetadata] = &[
     ),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::RELIABILITY_EVALUATION_INHIBIT, Optional, None, Always),
-    // Element writes, and whole writes that also set Number_Of_States.
+    // Element writes, and whole or index-0 writes that set Number_Of_States.
     PropertyMetadata::new(P::STATE_TEXT, Optional, None, Always),
     PropertyMetadata::new(
         P::ALARM_VALUES,
@@ -442,11 +442,11 @@ mod tests {
                     PropertyValue::List(vec![]),
                     ErrorCode::VALUE_OUT_OF_RANGE,
                 ),
-                // The size changes only with a whole write.
+                // The size takes a count (#1443), not a label.
                 (
                     Some(0),
-                    PropertyValue::Unsigned(2),
-                    ErrorCode::WRITE_ACCESS_DENIED,
+                    PropertyValue::CharacterString("x".into()),
+                    ErrorCode::INVALID_DATA_TYPE,
                 ),
                 (
                     Some(4),

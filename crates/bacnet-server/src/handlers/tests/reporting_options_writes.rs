@@ -1,13 +1,12 @@
 //! Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair written as
 //! a WriteProperty arrives (#1329): the reference's context-tagged members
 //! through the generic decoder, the inhibit refused while a reference is
-//! set, and the message texts by array index, whose size, like State_Text's,
-//! takes no write at index 0.
+//! set, and the message texts by array index, whose size, fixed by the
+//! tables, takes no write at index 0.
 
 use super::*;
 use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_objects::binary::BinaryValueObject;
-use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use PropertyIdentifier as P;
 
@@ -90,8 +89,6 @@ fn db() -> ObjectDatabase {
         )
         .unwrap();
     db.add(Box::new(active)).unwrap();
-    db.add(Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()))
-        .unwrap();
     db
 }
 
@@ -165,20 +162,15 @@ fn message_texts_config_is_written_by_index_and_no_size_is_written() {
         ),
         ErrorCode::INVALID_ARRAY_INDEX,
     );
-    // Neither array's size takes a write at index 0: the message texts are
-    // always three, and State_Text resizes only when written whole (#1443).
-    let msv = ObjectIdentifier::new(ObjectType::MULTI_STATE_VALUE, 1).unwrap();
-    for (oid, property) in [(ai(), P::EVENT_MESSAGE_TEXTS_CONFIG), (msv, P::STATE_TEXT)] {
-        let size = application(&PropertyValue::Unsigned(2));
-        refused(
-            wp(&mut db, oid, property, Some(0), size),
-            ErrorCode::WRITE_ACCESS_DENIED,
-        );
-        // Both hold three elements, still.
-        assert_eq!(
-            read(&db, oid, property, Some(0)),
-            PropertyValue::Unsigned(3),
-            "{property:?}"
-        );
-    }
+    // The message texts are always three, so their size takes no write
+    // (Clause 12.1.5.1); State_Text's does (state_text_count.rs).
+    let size = application(&PropertyValue::Unsigned(2));
+    refused(
+        wp(&mut db, ai(), P::EVENT_MESSAGE_TEXTS_CONFIG, Some(0), size),
+        ErrorCode::WRITE_ACCESS_DENIED,
+    );
+    assert_eq!(
+        read(&db, ai(), P::EVENT_MESSAGE_TEXTS_CONFIG, Some(0)),
+        PropertyValue::Unsigned(3)
+    );
 }

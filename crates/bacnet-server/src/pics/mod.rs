@@ -22,12 +22,15 @@ const PROPERTY_CAPABILITIES_EXPLANATION: &str = "Property rows aggregate configu
 const CREATION_ONLY_LABEL: &str = "Whole value set only by CreateObject";
 
 /// A row's access as the text and Markdown PICS print it: the flags, and for
-/// a row a whole write of another property changes
+/// a row writes of another property change
 /// ([`PropertySupport::written_through`]) a note saying so, since no write
 /// naming the row itself is taken (#1443).
 fn access_text(row: &PropertySupport) -> String {
     match row.written_through {
-        Some(through) => format!("{} (resized by writing {through} whole)", row.access),
+        Some(through) => format!(
+            "{} (resized through {through}: a whole write or its size at index 0)",
+            row.access
+        ),
         None => row.access.to_string(),
     }
 }
@@ -153,9 +156,9 @@ pub struct PropertySupport {
     pub property_id: PropertyIdentifier,
     /// Aggregated access flags for the property.
     pub access: PropertyAccess,
-    /// The property whose whole write changes this one on some instance,
-    /// although a write naming this one is refused: State_Text for a
-    /// multi-state object's Number_Of_States (#1443).
+    /// The property whose writes change this one on some instance, although
+    /// a write naming this one is refused: State_Text, written whole or at
+    /// index 0, for a multi-state object's Number_Of_States (#1443).
     pub written_through: Option<PropertyIdentifier>,
 }
 
@@ -168,9 +171,9 @@ pub struct ObjectTypeSupport {
     pub createable: bool,
     /// The properties a CreateObject initial value may set whole on a type
     /// that is createable, although WriteProperty can't change them later
-    /// (#1429). Empty when the type isn't createable. A property a whole
-    /// write of another one changes, such as Number_Of_States, isn't listed:
-    /// its row says so instead ([`PropertySupport::written_through`]).
+    /// (#1429). Empty when the type isn't createable. A property writes of
+    /// another one change, such as Number_Of_States, isn't listed: its row
+    /// says so instead ([`PropertySupport::written_through`]).
     pub creation_only_properties: Vec<PropertyIdentifier>,
     /// Whether the type can be deleted remotely with DeleteObject.
     pub deleteable: bool,
