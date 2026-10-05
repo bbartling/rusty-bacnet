@@ -11,12 +11,12 @@
 //! heard in the last ten minutes. A device with neither is looked for first
 //! (#1322): one Who-Is limited to its instance, then a wait of the APDU
 //! timeout, a minute at most, from the send, for its I-Am. The Who-Is goes to
-//! every network for a device never heard from, or to the network the device's stale
-//! observation names, which a Who-Is that draws nothing drops. A write that
-//! misses while that Who-Is is out waits on it instead of sending another,
-//! and a device gets at most one Who-Is a minute (`binding_probes`), so a
-//! write that misses within a minute of a Who-Is that drew nothing fails at
-//! once. A write that ends with no binding sends no WriteProperty. A binding
+//! every network for a device never heard from, or to the network the
+//! device's stale observation names, which a Who-Is that draws nothing
+//! drops. A write that misses while that Who-Is is out waits on it instead
+//! of sending another, and a device gets at most one Who-Is a minute
+//! (`binding_probes`), so a write that misses within a minute of a Who-Is
+//! that drew nothing fails at once. A write that ends with no binding sends no WriteProperty. A binding
 //! routed through the network numbered as this device's own, once that number
 //! is known, names a device on this network: the write goes to its MAC with
 //! no DNET, not through the router (#1358), since a non-routing device drops

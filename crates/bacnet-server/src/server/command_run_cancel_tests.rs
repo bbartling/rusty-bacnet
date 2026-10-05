@@ -22,7 +22,7 @@ use super::*;
 use bacnet_types::enums::WriteStatus;
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Waker};
+use std::task::{Context, Poll, Waker};
 
 type Write<'a> = Pin<Box<dyn Future<Output = Result<(), Error>> + 'a>>;
 
@@ -233,4 +233,69 @@ async fn a_panic_in_the_work_after_the_commit_reaches_the_caller() {
         panicked.is_err(),
         "the caller sees the panic, as it would were the work done in place"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_write_whose_work_is_aborted_returns_ok_and_stays_made() {
+    let h = Harness::start(ServerConfig::default()).await;
+    let table = Arc::clone(&h.server.cov_table).write_owned().await;
+    let target = av1();
+    let mut write = write_local(&h, &target, PropertyValue::Real(70.0), None);
+    assert!(write
+        .as_mut()
+        .poll(&mut Context::from_waker(Waker::noop()))
+        .is_pending());
+    // What `stop()` does first, while the caller still waits: the request
+    // task set closes, aborting the work the committed write owes. (`stop()`
+    // itself takes the server mutably, so it can't run beside the caller's
+    // borrow here.)
+    h.server.request_tasks.close();
+    drop(table);
+    assert!(matches!(write.await, Ok(())), "the write was made");
+    assert_eq!(
+        read_db(&h, av1(), PV, None).await,
+        PropertyValue::Real(70.0)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_panic_after_the_caller_went_away_leaves_the_server_working() {
+    let h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(PanicsAfterCommit)).unwrap();
+    })
+    .await;
+    let target = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 99).unwrap();
+    commit_and_drop(&h, write_local(&h, &target, PropertyValue::Real(1.0), None));
+    // The work panics with nobody to raise it to: it is logged as this
+    // write's, and goes no further.
+    h.settle().await;
+    let next = av1();
+    write_local(&h, &next, PropertyValue::Real(42.0), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_db(&h, av1(), PV, None).await,
+        PropertyValue::Real(42.0)
+    );
+}
+
+#[test]
+fn a_local_write_outside_a_tokio_runtime_fails_and_writes_nothing() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut h = runtime.block_on(Harness::start(ServerConfig::default()));
+    let target = av1();
+    let before = runtime.block_on(read_db(&h, target, PV, None));
+    // Polled with no runtime entered, as another executor would poll it.
+    let mut write = write_local(&h, &target, PropertyValue::Real(70.0), None);
+    let polled = write.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+    assert!(
+        matches!(polled, Poll::Ready(Err(Error::Encoding(_)))),
+        "{polled:?}"
+    );
+    drop(write);
+    assert_eq!(runtime.block_on(read_db(&h, target, PV, None)), before);
+    runtime.block_on(h.server.stop()).unwrap();
 }

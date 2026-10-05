@@ -23,8 +23,14 @@
 //! recipients, and the caller, never wait, and `stop()` aborts the tasks
 //! with the other notification workers.
 //!
+//! The order kept is the order the server makes one device's notifications
+//! in, one after another, a probe's wait included. Notifications made at
+//! once from different tasks have no order between them, and a confirmed
+//! notification's attempts run in a transaction task of its own, so the
+//! first attempts of two confirmed ones may go out in either order.
+//!
 //! At most [`MAX_AWAITING_NOTIFICATIONS`] notifications wait at once, across
-//! every device; one more is skipped and counted at once.
+//! every device; one more is skipped and counted at once, with no Who-Is.
 //!
 //! The counters stay as they were for one destination: a recipient whose
 //! device stays silent counts once in `device_recipient_unbound`, as does
@@ -112,29 +118,29 @@ enum Enqueued {
     NoQueue,
     /// Not queued: [`MAX_AWAITING_NOTIFICATIONS`] are waiting.
     Full,
-    /// Not queued: the request didn't encode.
-    Unencodable,
 }
 
 impl AwaitingRecipients {
-    /// Queue the notification `pending` makes behind `device`'s waiting
-    /// ones, or, with `open`, first in a new queue when it has none.
-    fn enqueue(
-        &mut self,
-        device: ObjectIdentifier,
-        open: bool,
-        pending: impl FnOnce() -> Option<Pending>,
-    ) -> Enqueued {
-        let opened = !self.queues.contains_key(&device);
+    /// Whether notifications wait for `device`.
+    fn has_queue(&self, device: &ObjectIdentifier) -> bool {
+        self.queues.contains_key(device)
+    }
+
+    /// Whether [`MAX_AWAITING_NOTIFICATIONS`] are waiting.
+    fn is_full(&self) -> bool {
+        self.waiting >= MAX_AWAITING_NOTIFICATIONS
+    }
+
+    /// Queue `pending` behind `device`'s waiting notifications, or, with
+    /// `open`, first in a new queue when it has none.
+    fn enqueue(&mut self, device: ObjectIdentifier, open: bool, pending: Pending) -> Enqueued {
+        let opened = !self.has_queue(&device);
         if opened && !open {
             return Enqueued::NoQueue;
         }
-        if self.waiting >= MAX_AWAITING_NOTIFICATIONS {
+        if self.is_full() {
             return Enqueued::Full;
         }
-        let Some(pending) = pending() else {
-            return Enqueued::Unencodable;
-        };
         self.queues.entry(device).or_default().push_back(pending);
         self.waiting += 1;
         if opened {
@@ -273,25 +279,45 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         process_id: u32,
         confirmed: bool,
     ) -> DeviceRoute {
+        // The request is encoded only for a notification that waits, and
+        // before the lock, which is held for nothing but the queue itself.
         let pending = || Pending::of(outbound, process_id, confirmed);
-        let queue = |open| awaiting(ctx.notification_transactions).enqueue(device, open, pending);
-        match queue(false) {
-            Enqueued::NoQueue => {}
-            enqueued => return Self::queued(ctx, enqueued, device, None),
+        let awaiting = || awaiting(ctx.notification_transactions);
+        // A device with notifications waiting takes this one after them.
+        if awaiting().has_queue(&device) {
+            let Some(pending) = pending() else {
+                return DeviceRoute::Done;
+            };
+            let enqueued = awaiting().enqueue(device, false, pending);
+            // A queue that closed meanwhile leaves the device to the path
+            // below, as one with none.
+            if !matches!(enqueued, Enqueued::NoQueue) {
+                return Self::queued(ctx, enqueued, device, None);
+            }
         }
         let lookup = lookup(ctx);
         let resolution = lookup.resolve(device).await;
         if !can_look_for(device, &resolution) {
             return DeviceRoute::Now(resolution);
         }
-        match lookup.start(device).await {
-            LookupStart::Resolved(resolution) => DeviceRoute::Now(resolution),
-            LookupStart::NotLooking => DeviceRoute::Now(resolution),
-            LookupStart::Disabled => DeviceRoute::Done,
-            // Another notification may have opened the device's queue while
-            // the Who-Is went out; this one then joins it.
-            LookupStart::Waiting(wait) => Self::queued(ctx, queue(true), device, Some(wait)),
+        // With every place taken, the notification can only be skipped, so
+        // no Who-Is goes out for it.
+        if awaiting().is_full() {
+            return Self::queued(ctx, Enqueued::Full, device, None);
         }
+        let wait = match lookup.start(device).await {
+            LookupStart::Resolved(resolution) => return DeviceRoute::Now(resolution),
+            LookupStart::NotLooking => return DeviceRoute::Now(resolution),
+            LookupStart::Disabled => return DeviceRoute::Done,
+            LookupStart::Waiting(wait) => wait,
+        };
+        let Some(pending) = pending() else {
+            return DeviceRoute::Done;
+        };
+        // Another notification may have opened the device's queue while the
+        // Who-Is went out; this one then joins it.
+        let enqueued = awaiting().enqueue(device, true, pending);
+        Self::queued(ctx, enqueued, device, Some(wait))
     }
 
     /// The route of a notification [`AwaitingRecipients::enqueue`] took, and
@@ -320,9 +346,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             // Opening takes a probe to wait on, and a queue never opens
             // without one.
-            (Enqueued::Opened | Enqueued::NoQueue, _) | (Enqueued::Unencodable, _) => {
-                DeviceRoute::Done
-            }
+            (Enqueued::Opened | Enqueued::NoQueue, _) => DeviceRoute::Done,
         }
     }
 

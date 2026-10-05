@@ -10,7 +10,9 @@
 use crate::server::command_remote_write_tests::{deliver, device, disable_initiation};
 use crate::server::cov_wire_test_support::*;
 use crate::server::event_recipient_routing_tests::{address_recipient, destination_for};
-use crate::server::remote_write_discovery_tests::{everywhere, i_am, next_who_is, targeted};
+use crate::server::remote_write_discovery_tests::{
+    everywhere, i_am, next_who_is, targeted, who_is_sent,
+};
 use crate::server::*;
 use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_types::constructed::BACnetRecipient;
@@ -30,13 +32,24 @@ async fn start(confirmed: bool) -> Harness {
 
 /// [`start`] with `config`.
 async fn start_with(config: ServerConfig, confirmed: bool) -> Harness {
+    start_for(config, &[(9, confirmed)]).await
+}
+
+/// A server whose AV-1 alarms to each of `devices`, an instance and whether
+/// it is sent confirmed, as the process numbered as the instance, then to
+/// [`OTHER`] as process 7.
+async fn start_for(config: ServerConfig, devices: &[(u32, bool)]) -> Harness {
+    let devices = devices.to_vec();
     Harness::start_with(config, move |db| {
         let mut nc = bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap();
-        let mut to_device = destination_for(BACnetRecipient::Device(device(9)), confirmed);
-        to_device.process_identifier = 9;
+        for (instance, confirmed) in devices {
+            let mut to_device =
+                destination_for(BACnetRecipient::Device(device(instance)), confirmed);
+            to_device.process_identifier = instance;
+            nc.add_destination(to_device).unwrap();
+        }
         let mut to_other = destination_for(address_recipient(0, &OTHER), false);
         to_other.process_identifier = 7;
-        nc.add_destination(to_device).unwrap();
         nc.add_destination(to_other).unwrap();
         db.add(Box::new(nc)).unwrap();
         let object = db.get_mut(&av1()).unwrap();
@@ -146,6 +159,7 @@ async fn an_unbound_recipient_that_answers_gets_the_notification_and_the_others_
     // looked for everywhere, since the server has never heard from it.
     assert_eq!(notifications(&h), vec![(OTHER.to_vec(), 7, false)]);
     assert_eq!(next_who_is(&h).await, (everywhere(), targeted(9)));
+    assert_eq!(waiting(&h), 1);
 
     tokio::time::advance(WAIT / 2).await;
     deliver(&h, &i_am(9), &DEVICE_9, None).await;
@@ -155,6 +169,8 @@ async fn an_unbound_recipient_that_answers_gets_the_notification_and_the_others_
         vec![(OTHER.to_vec(), 7, false), (DEVICE_9.to_vec(), 9, false)]
     );
     assert_eq!(counted(&h), (0, 0));
+    // Drained: the queue gives its place back.
+    assert_eq!(waiting(&h), 0);
 
     // The binding the I-Am made serves the next notification directly.
     h.write_local(50.0).await;
@@ -257,6 +273,7 @@ async fn notifications_to_one_device_go_out_in_the_order_they_were_made() {
     ];
     assert_eq!(to_states(&h, &DEVICE_9), made);
     assert_eq!(to_states(&h, &OTHER), made);
+    assert_eq!(waiting(&h), 0);
     assert!(next_who_is_none(&h));
     assert_eq!(counted(&h), (0, 0));
     h.server.stop().await.unwrap();
@@ -268,27 +285,25 @@ async fn past_the_cap_a_notification_is_skipped_and_counted_at_once() {
     // Notifications for Device 50 take every place.
     {
         let mut awaiting = super::awaiting(&h.server.notification_transactions);
-        let filler = || {
-            Some(super::Pending {
-                process_id: 1,
-                confirmed: false,
-                request: Bytes::new(),
-                notification_class: 0,
-                priority: 255,
-                admits: Arc::new(
-                    |_: &super::super::super::event_recipient_route::RecipientRoute| true,
-                ),
-                budget: None,
-            })
+        let filler = || super::Pending {
+            process_id: 1,
+            confirmed: false,
+            request: Bytes::new(),
+            notification_class: 0,
+            priority: 255,
+            admits: Arc::new(|_: &super::super::super::event_recipient_route::RecipientRoute| true),
+            budget: None,
         };
         for _ in 0..super::MAX_AWAITING_NOTIFICATIONS {
-            awaiting.enqueue(device(50), true, filler);
+            awaiting.enqueue(device(50), true, filler());
         }
         assert_eq!(awaiting.waiting(), super::MAX_AWAITING_NOTIFICATIONS);
     }
     h.write_local(85.0).await;
     h.settle().await;
     assert_eq!(counted(&h), (1, 0));
+    // A notification that can only be skipped sends no Who-Is.
+    assert!(next_who_is_none(&h));
     // The I-Am binds Device 9, but the skipped notification is gone.
     deliver(&h, &i_am(9), &DEVICE_9, None).await;
     h.settle().await;
@@ -316,4 +331,58 @@ async fn the_wait_for_the_i_am_lasts_at_most_a_minute() {
 /// Whether no Who-Is has been sent since the last one taken.
 fn next_who_is_none(h: &Harness) -> bool {
     crate::server::remote_write_discovery_tests::who_is_sent(h).is_empty()
+}
+
+/// How many notifications wait for their devices, across every device.
+fn waiting(h: &Harness) -> usize {
+    super::awaiting(&h.server.notification_transactions).waiting()
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_while_a_device_is_looked_for_closes_its_queue() {
+    let mut h = start(false).await;
+    let log = h.server.test_network().transport().sent();
+    h.write_local(85.0).await;
+    next_who_is(&h).await;
+    assert_eq!(waiting(&h), 1);
+    h.server.stop().await.unwrap();
+    h.settle().await;
+    // `stop()` aborts the queue's task, and the queue closes with it.
+    assert_eq!(waiting(&h), 0);
+    let sent = log.len();
+    tokio::time::sleep(WAIT * 2).await;
+    assert_eq!(log.len(), sent, "nothing is sent after stop()");
+    assert!(log
+        .frames()
+        .iter()
+        .all(|frame| frame.mac.as_slice() != DEVICE_9));
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_device_drains_on_its_own() {
+    let mut h = start_for(ServerConfig::default(), &[(9, false), (10, false)]).await;
+    h.write_local(85.0).await;
+    let looked_for: Vec<_> = who_is_sent(&h)
+        .into_iter()
+        .map(|(_, who_is)| who_is)
+        .collect();
+    assert_eq!(looked_for, [targeted(9), targeted(10)]);
+    assert_eq!(waiting(&h), 2);
+    // Device 9 answers halfway through the wait and has its notification at
+    // once; Device 10, still looked for, holds nothing up.
+    tokio::time::advance(WAIT / 2).await;
+    deliver(&h, &i_am(9), &DEVICE_9, None).await;
+    h.settle().await;
+    assert_eq!(
+        notifications(&h),
+        vec![(OTHER.to_vec(), 7, false), (DEVICE_9.to_vec(), 9, false)]
+    );
+    assert_eq!((counted(&h), waiting(&h)), ((0, 0), 1));
+    // Device 10 stays silent and counts once.
+    tokio::time::sleep(WAIT).await;
+    assert_eq!((counted(&h), waiting(&h)), ((1, 0), 0));
+    tokio::time::sleep(WAIT * 2).await;
+    assert_eq!(counted(&h), (1, 0));
+    assert_eq!(notifications(&h).len(), 2);
+    h.server.stop().await.unwrap();
 }

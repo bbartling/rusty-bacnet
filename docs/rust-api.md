@@ -2931,9 +2931,9 @@ routed from, where a remote network numbered as this device's own counts as
 local. If that Who-Is draws nothing, the stale I-Am is dropped, so the
 device's next Who-Is goes global. The server then waits
 `ServerConfig::cov_retry_timeout_ms`, but never more than a minute (#1368),
-counted from the send, for the I-Am,
-which binds the device as any I-Am does, and the write goes ahead; with no
-I-Am by then the command fails and no WriteProperty is sent. Writes that miss
+counted from the send, for the I-Am, which binds the device as any I-Am does,
+and the write goes ahead; with no I-Am by then the command fails and no
+WriteProperty is sent. Writes that miss
 while that Who-Is is out share it and its wait. A device gets at most one
 Who-Is a minute, counted from when it went out, so a command naming it within
 a minute of one that drew nothing fails at once. At most 256 devices with a
@@ -2972,7 +2972,11 @@ set, which the call only waits for. The run the write started goes ahead and
 reports its end. `stop()` aborts that task with the other request tasks, and
 a run it hadn't started then ends as if none of its writes were made (#1324):
 In_Process FALSE with every command unsuccessful, or a Channel's Write_Status
-FAILED with Reliability PROCESS_ERROR.
+FAILED with Reliability PROCESS_ERROR. The call still returns `Ok(())` then,
+since the write was made. Every local write (`write_local`,
+`write_local_encoded`, `set_present_value_local` and the other `*_local`
+setters) must therefore be awaited inside a Tokio runtime: outside one it
+fails with `Error::Encoding` before anything is written.
 
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,
@@ -3994,8 +3998,9 @@ lists the server's device bindings at the time of the read (#1369): each
 configured `DeviceBinding` and each device whose I-Am arrived in the last ten
 minutes (a targeted Who-Is's answer included), in instance order, with network
 number 0 for a device on this network and the device's own MAC, not its
-router's, for one elsewhere. Other Devices read an empty list. Network RP, budgeted RPM,
-`read_local` and `generate_pics` share effective Device definitions, including
+router's, for one elsewhere. Other Devices read an empty list. Network RP,
+budgeted RPM, `read_local` and `generate_pics` share effective Device
+definitions, including
 Property_List, ALL/OPTIONAL/REQUIRED classification and array-index behavior.
 Normal public Device profile mutation, same-OID replacement and custom object
 readers cannot change this served contract. Other properties retain their object
@@ -5647,16 +5652,20 @@ fixes them, and the warning logged with each skip gives the finer reason:
   `cov_retry_timeout_ms` (a minute at most) from that Who-Is for the I-Am.
   It waits in a queue for its device, which a task of its own drains, so the
   transition's other recipients aren't held up; while the queue holds
-  anything, the device's later notifications join it, so they reach it in
-  the order they were made, and each device drains on its own. A device that
-  answers gets the notification, which then counts as any other send does,
-  DCC checked again before each send; one that stays silent, or can't be
-  looked for within the minute after a fruitless Who-Is, counts here once.
-  At most 1,024 notifications wait at once across every device; one more is
-  skipped and counts here at once. Observing the device's I-Am again, or configuring
-  a binding, clears it. A confirmed notification whose observed binding
-  expires before a retry ends at that retry, its invoke ID freed, and counts
-  here, not in `confirmed_unanswered` (#1371).
+  anything, the device's later notifications join it, and each device drains
+  on its own. Notifications the server makes for one device one after
+  another reach it in that order, across the wait too. Notifications made at
+  once from different tasks have no order between them, and a confirmed
+  notification's attempts run in a transaction task of their own, so two
+  confirmed ones may start in either order. A device that answers gets the
+  notification, which then counts as any other send does, DCC checked again
+  before each send; one that stays silent, or can't be looked for within the
+  minute after a fruitless Who-Is, counts here once. At most 1,024
+  notifications wait at once across every device; one more is skipped and
+  counts here at once, with no Who-Is. Observing the device's I-Am again, or
+  configuring a binding, clears it. A confirmed notification whose observed
+  binding expires before a retry ends at that retry, its invoke ID freed, and
+  counts here, not in `confirmed_unanswered` (#1371).
 - `recipient_unroutable`: the entry can't be routed as written. Its Device
   identifier names an object that isn't a Device (or its binding is unusable on
   this link), or its address puts a MAC on network 65535.

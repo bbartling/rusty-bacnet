@@ -1,6 +1,6 @@
 ---
 section: Fixed
 ---
-- **Breaking (Rust API):** once `write_local` (or another local write) has
-  committed, the COV, event, Schedule and Staging work it owes, and the runs it started, finish in a
-  request task, so a dropped or cancelled caller no longer skips them; `stop()` aborts that task (#1367).
+- **Breaking (Rust API):** local writes (`write_local`, `set_present_value_local` and the like) must
+  run inside a Tokio runtime, failing and writing nothing outside one; once committed, their COV, event,
+  Schedule and Staging work finishes even if the caller is dropped (#1367).

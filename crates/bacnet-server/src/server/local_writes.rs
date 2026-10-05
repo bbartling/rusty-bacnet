@@ -4,6 +4,8 @@ use crate::command_lists::TakenRuns;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_types::constructed::BACnetRecipient;
+use futures_util::FutureExt;
+use tracing::error;
 
 #[path = "local_write_finish.rs"]
 mod finish;
@@ -151,7 +153,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// would be were the work done in place.
     ///
     /// The future must be awaited inside a Tokio runtime, which the task is
-    /// spawned onto.
+    /// spawned onto: outside one it fails with [`Error::Encoding`] before
+    /// anything is written.
     ///
     /// [`WriteProperty`]: bacnet_services::write_property::WritePropertyRequest
     pub async fn write_local(
@@ -204,6 +207,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Safety COV path. The built-in objects run no intrinsic reporting, so
     /// the post-write event pass raises nothing for them.
     ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
+    ///
     /// [`BACnetObject::set_present_value_internal`]: bacnet_objects::traits::BACnetObject::set_present_value_internal
     pub async fn set_present_value_local(
         &self,
@@ -232,6 +240,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// change; a SubscribeCOV on the Loop is not, since the Loop's COV report
     /// carries this value without being triggered by it, so its next report
     /// carries the new value. The property stays read-only over the network.
+    ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
     pub async fn set_controlled_variable_value_local(
         &self,
         oid: &ObjectIdentifier,
@@ -279,6 +292,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// and staying at it never is. The report has no Status_Flags because the
     /// object has none. The Python binding exposes this as
     /// `BACnetServer.add_averaging_sample_local`.
+    ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
     pub async fn add_averaging_sample_local(
         &self,
         oid: &ObjectIdentifier,
@@ -323,6 +341,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// database lock is released; whole-object SubscribeCOV reports don't
     /// carry it. The property stays read-only over the network in service.
     /// The Python binding exposes this as `BACnetServer.set_tracking_value_local`.
+    ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
     pub async fn set_tracking_value_local(
         &self,
         oid: &ObjectIdentifier,
@@ -337,7 +360,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// database guard to the hand-off with no wait in between, so a caller
     /// dropped once the write has committed leaves the task running: its
     /// event pass, COV fanout, Schedule fanout, Staging plan and runs all go
-    /// ahead. `stop()` aborts the task with the other request tasks.
+    /// ahead. `stop()` aborts the task with the other request tasks. With
+    /// no Tokio runtime to run that task on, nothing is written.
     async fn write_local_as(
         &self,
         oid: &ObjectIdentifier,
@@ -345,6 +369,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         value: PropertyValue,
         source: Option<crate::LocalCommandSource>,
     ) -> Result<(), Error> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| Error::Encoding("Local writes require a Tokio runtime".into()))?;
         self.active_network()?;
         let Some(committed) = self
             .local_writer()
@@ -353,24 +379,34 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         else {
             return Ok(());
         };
-        use futures_util::FutureExt;
         let runner = super::command_runs::CommandRunner::for_server(self);
         let (done, finished) = oneshot::channel();
         // A closed set (the server is stopping) drops the task, and with it
         // the guard and the runs, which then end unsuccessful (#1324).
-        self.request_tasks.spawn(async move {
-            let work = std::panic::AssertUnwindSafe(async {
-                let runs = runner.writer().finish(committed).await;
-                if !runs.is_empty() {
-                    runner.start(runs);
+        self.request_tasks.spawn_on(
+            async move {
+                let work = std::panic::AssertUnwindSafe(async {
+                    let runs = runner.writer().finish(committed).await;
+                    if !runs.is_empty() {
+                        runner.start(runs);
+                    }
+                });
+                // A panic goes back to the caller. With the caller gone, it
+                // is logged here, as this write's, and goes no further.
+                if let Err(Err(panic)) = done.send(work.catch_unwind().await) {
+                    let message = panic
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                        .unwrap_or("a non-text payload");
+                    error!(
+                        panic = message,
+                        "A local write's post-commit work panicked after its caller went away"
+                    );
                 }
-            });
-            // A panic goes back to the caller; with the caller gone, it
-            // stays this task's, for the request task set to log.
-            if let Err(Err(panic)) = done.send(work.catch_unwind().await) {
-                std::panic::resume_unwind(panic);
-            }
-        });
+            },
+            &runtime,
+        );
         match finished.await {
             Ok(Err(panic)) => std::panic::resume_unwind(panic),
             // Done, or aborted by `stop()`: either way the write was made.

@@ -113,6 +113,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// path, with its COV, event and audit work. A value read with
     /// [`read_local`](Self::read_local) and encoded therefore writes back, and
     /// any value a network client could write is accepted here.
+    ///
+    /// Like `write_local`, it must be awaited inside a Tokio runtime, failing
+    /// before anything is written outside one, and a caller dropped once the
+    /// write has committed skips none of the work the write owes (#1367).
     pub async fn write_local_encoded(
         &self,
         oid: &ObjectIdentifier,
