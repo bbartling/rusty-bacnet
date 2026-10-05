@@ -28,6 +28,9 @@ pub(super) const SOURCE: &[u8] = &[3];
 #[derive(Clone, Default)]
 pub(super) struct AuditCapture {
     pub(super) six_byte_mac: bool,
+    /// The link's B/IP broadcast endpoint, which makes it the B/IP link
+    /// Address recipients need; sends then may go to any six-octet MAC.
+    pub(super) bip_broadcast: Option<std::net::SocketAddrV4>,
     pub(super) learned_broadcast: Option<MacAddr>,
     pub(super) reject_route_callbacks: Arc<AtomicBool>,
     pub(super) route_callbacks: Arc<AtomicUsize>,
@@ -56,7 +59,7 @@ impl AuditCapture {
     /// The link's `bip_broadcast_endpoint` answer, counted as a route callback.
     pub(super) fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
         self.route_callback();
-        None
+        self.bip_broadcast
     }
 
     /// The link's `is_broadcast_mac` answer, counted as a route callback.
@@ -78,7 +81,11 @@ impl AuditCapture {
             }
             return Ok(());
         }
-        assert!(mac.as_slice() == LOGGER || mac.as_slice() == NEW_LOGGER);
+        assert!(
+            mac.as_slice() == LOGGER
+                || mac.as_slice() == NEW_LOGGER
+                || (self.bip_broadcast.is_some() && mac.len() == 6)
+        );
         self.destinations.lock().unwrap().push(mac.to_vec());
         self.sent.lock().unwrap().push(bytes);
         if self.block.load(Ordering::Acquire) {

@@ -64,6 +64,13 @@ nonempty password. Other policies reject configuration before transport startup
 or SC dialing (Python constructor, Rust build/start), never silently ignoring it.
 Direct entries only match requests without a routed source. Routed entries match
 the exact network and full source address, not the immediate router's MAC.
+Once the server knows its own network's number, a routed entry naming that number
+also matches the station's direct requests from that address, with no routed
+source (#1458). Network numbers are unique, so both forms name the same node: the
+rule a Device binding follows (#1404). While the number is unknown, such an entry
+matches only the routed form it spells out. The widening goes one way: a direct
+entry still matches no routed source, because any node on the link can claim this
+network's number and the station's MAC as SNET and SADR.
 Malformed routed identities fail closed rather than falling back to direct matching.
 All address bytes participate, independently of the 32-byte DEBUG truncation.
 Claimed addresses are spoofable and unauthenticated, **including SC VMACs**.
@@ -180,6 +187,26 @@ nonempty startup requirement, deny-all default and optional rate limits are oper
 normative claims. This does not expand authenticated-SC, physical-transport,
 full-conformance, Audit/#125, EventLog integration, additional #181 fault-family
 or GATE0007 qualification.
+
+## Audit records
+
+With target Audit configured (see [target Audit Reporters](target-audit-reporters.md)),
+each DeviceCommunicationControl change the server carries out is reported, as
+Clause 19.6 and Table 19-5 map the service (#1387). An accepted DISABLE_INITIATION
+writes one DEVICE_DISABLE_COMM record, and an accepted ENABLE one DEVICE_ENABLE_COMM
+record, both naming the requester as source with its invoke ID. A timed disable
+that runs out writes one DEVICE_ENABLE_COMM record with this device as its source
+and no invoke ID; an ENABLE's own duration changes nothing when it ends, so it
+writes none. Each record names this Device as its target, with no target object,
+property or value, and no Result. A refused request (password, DISABLE, policy,
+source or rate denial) writes nothing.
+
+The record goes through the Reporter that monitors the local Device object, and
+needs its DEVICE_DISABLE_COMM or DEVICE_ENABLE_COMM operation bit. It honours
+`Maximum_Send_Delay`, and a record dropped for want of a send slot is summarized
+as AUDITING_FAILURE. The record is admitted with the change, under the timer
+owner, so records follow the order changes take effect in. The disable's record
+goes out under DISABLE_INITIATION, which exempts audit notifications.
 
 ## Completed-handler observability
 

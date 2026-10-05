@@ -2125,7 +2125,9 @@ child.add_device_binding(9, await parent.local_address())
 By default `Monitored_Objects` remains absent (catch-all) and `Audit_Priority_Filter`
 selects all priorities; `Audit_Source_Reporter` remains false. The Rust producer covers inbound WP/WPM elements, AddListElement/RemoveListElement,
 AtomicWriteFile and CREATE/DELETE successes and authorized execution errors at
-their existing operation boundaries. Normal operations require their operation
+their existing operation boundaries, and each DeviceCommunicationControl change
+the server carries out as DEVICE_DISABLE_COMM or DEVICE_ENABLE_COMM (see
+[Audit records](dcc-policy.md#audit-records)). Normal operations require their operation
 bit; enabled external Reporter property writes retain the core filter bypass.
 Success omits Result; known execution errors include the response-mapped Error.
 Each selected Reporter has its own optional bounded, memory-only AUDITING_FAILURE

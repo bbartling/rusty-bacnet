@@ -335,8 +335,83 @@ fn time_sync_callback_unwind_is_contained_without_poisoning_limiter() {
             encoded(local_hour + if is_utc { 4 } else { 0 }),
             is_utc,
             &received(2),
+            None,
         )
         .unwrap();
         assert_eq!(clock.read_clock().unwrap().local_time.hour, local_hour);
     }
+}
+
+/// Time synchronization at 10:00 from link MAC `mac`, relayed with `source`
+/// as SNET/SADR when one is given, to a server that knows `number` as its
+/// network's and lists only `entry`. Whether the clock took it.
+async fn synced_from(
+    entry: TimeSyncSource,
+    number: Option<u16>,
+    mac: &[u8],
+    source: Option<NpduAddress>,
+) -> bool {
+    use bacnet_types::network_number::NetworkNumber;
+    let policy = TimeSyncPolicy {
+        source_restriction: Some(TimeSyncSourceRestriction::new(vec![entry]).unwrap()),
+        ..Default::default()
+    };
+    let network = Arc::new(NetworkLayer::new(silent(None)));
+    if let Some(number) = number {
+        network
+            .local_network_number()
+            .publish(NetworkNumber::configured(number).unwrap());
+    }
+    let clock = clock();
+    let mut received = received(0);
+    received.source_mac = MacAddr::from_slice(mac);
+    received.source_network = source;
+    BACnetServer::<TestTransport>::handle_unconfirmed_request(
+        &UnconfirmedServices {
+            time_sync_limiter: Arc::new(TimeSyncLimiter::new(policy.clone())),
+            clock: Some(Arc::clone(&clock)),
+            ..UnconfirmedServices::for_test(network, config(policy, &Arc::new(AtomicUsize::new(0))))
+        },
+        UnconfirmedRequestPdu {
+            service_choice: UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
+            service_request: encoded(10),
+        },
+        &received,
+    )
+    .await;
+    match clock.read_clock().unwrap().local_time.hour {
+        10 => true,
+        9 => false,
+        hour => panic!("the clock moved to {hour}:00"),
+    }
+}
+
+/// A routed allowlist entry on the server's own network number also names
+/// the station's direct requests once that number is known (#1458); only
+/// the routed entry widens.
+#[tokio::test]
+async fn time_sync_routed_entry_on_this_network_names_the_stations_direct_request() {
+    const THIS_NETWORK: u16 = 7;
+    let (station, other_station, router) = ([10, 0, 0, 3], [10, 0, 0, 4], [10, 0, 0, 9]);
+    let routed_entry = || TimeSyncSource::Routed {
+        network: THIS_NETWORK,
+        address: station.to_vec(),
+    };
+    let relayed = |network| {
+        Some(NpduAddress {
+            network,
+            mac_address: MacAddr::from_slice(&station),
+        })
+    };
+    let known = Some(THIS_NETWORK);
+    assert!(synced_from(routed_entry(), known, &station, None).await);
+    assert!(synced_from(routed_entry(), known, &router, relayed(THIS_NETWORK)).await);
+    // Unknown number, another number, another station: no direct match.
+    assert!(!synced_from(routed_entry(), None, &station, None).await);
+    assert!(!synced_from(routed_entry(), Some(THIS_NETWORK + 1), &station, None).await);
+    assert!(!synced_from(routed_entry(), known, &other_station, None).await);
+    // A direct entry still names no routed claim of the same station.
+    let direct = || TimeSyncSource::Direct(station.to_vec());
+    assert!(synced_from(direct(), known, &station, None).await);
+    assert!(!synced_from(direct(), known, &router, relayed(THIS_NETWORK)).await);
 }

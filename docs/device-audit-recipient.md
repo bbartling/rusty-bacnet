@@ -35,13 +35,25 @@ may start with CONFIGURATION_ERROR; it emits no ordinary records. A live change
 must resolve both old and new destinations, so an unavailable old binding requires
 restart with corrected configuration. Address recipients require an explicit
 IPv4 B/IP transport and network zero, a six-octet unicast IPv4/port address, and a
-nonzero port. The endpoint source also takes an Address naming its session's
-own network number, once the session knows it: that address is on this link, so
-it resolves as network zero would and its records go to that MAC with no DNET
-(#1403). Such a recipient resolves against the number in force at each send:
-if the session's number later changes, it no longer resolves, so ordinary
-records stop and a later recipient write is refused until a restart with
-corrected configuration (#1461). Broadcast, multicast, unspecified, routed Address, IPv6, SC and
+nonzero port. Both the standalone target and the endpoint source also take an
+Address naming the device's own network number, once that number is known: the
+address is on this link, so it resolves as network zero would and its records go
+to that MAC with no DNET (#1403, #1460), as a Notification Class recipient's do
+(#1358).
+
+Such a recipient resolves against the number in force at each record. While the
+number is unknown, or names another network, the address names a routed station,
+and neither runtime routes an Address off its link, so it has no route. A
+provisioned one then starts unresolved, like a Device with no binding: its
+Reporter shows CONFIGURATION_ERROR and emits no ordinary records until the number
+names its network, and the first record after that finds the route (#1460,
+#1461). A session or server without a registered Network Port learns its number
+only after it starts, so this is how such a recipient starts there. When a
+learned number is later replaced, the recipient no longer resolves, and ordinary
+records stop again. A recipient change is not held up by such an old Address: the
+change goes ahead, and only the new recipient gets its record, since nothing
+reaches the old one. Any other old recipient without a route still refuses the
+change, and the new recipient must always resolve. Broadcast, multicast, unspecified, routed Address, IPv6, SC and
 MS/TP Address choices are outside this runtime subset. The generic BACnetRecipient
 codec continues to represent the wider protocol grammar.
 

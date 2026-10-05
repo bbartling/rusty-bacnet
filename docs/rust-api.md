@@ -5168,6 +5168,12 @@ the notification:
   `Send_Now`, and an object's mandatory audit policy, are accepted under
   DISABLE_INITIATION and report like any other.
 
+With target Audit configured, each DCC change the server carries out is itself
+audited (Table 19-5, #1387): DEVICE_DISABLE_COMM for an accepted
+DISABLE_INITIATION, sent under the state it reports, and DEVICE_ENABLE_COMM for
+an accepted ENABLE or a timed disable that runs out. A refused request writes no
+record. See [Audit records](dcc-policy.md#audit-records).
+
 A write a Command or Channel makes in another device follows the same rule
 (see [Building Control](#building-control-7)).
 
@@ -5884,7 +5890,10 @@ resolve through immutable `BipEndpointBuilder::source_audit_device_binding` entr
 a direct Address choice needs no binding. Once the session knows its network's
 number, an Address choice naming that number is direct too, and its records go
 to that MAC with no DNET (#1403). An audited read routed to that number is
-audited as the direct read it then is. The local database must have a
+audited as the direct read it then is. A provisioned Address naming a network
+the session's number does not name, or not yet, starts unresolved with
+CONFIGURATION_ERROR and resolves once the number names it (#1461); see
+[Device Audit recipient](device-audit-recipient.md). The local database must have a
 concrete built-in local Device (the lowest when it holds several; see
 [Databases with several Devices](#databases-with-several-devices)) and the
 selected Audit Reporter. Configure the Reporter's READ bit

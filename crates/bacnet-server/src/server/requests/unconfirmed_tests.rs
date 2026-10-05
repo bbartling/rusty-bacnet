@@ -71,6 +71,7 @@ fn accepted_local_and_utc_requests_update_then_notify() {
         encoded(date(2024, 7, 4, 4), time(9, 15)),
         false,
         &received(),
+        None,
     )
     .unwrap();
     let frame = clock.read_clock().unwrap();
@@ -84,6 +85,7 @@ fn accepted_local_and_utc_requests_update_then_notify() {
         encoded(date(2024, 7, 4, 4), time(13, 15)),
         true,
         &received(),
+        None,
     )
     .unwrap();
     let frame = clock.read_clock().unwrap();
@@ -103,7 +105,8 @@ fn invalid_and_clockless_requests_do_not_notify() {
         &TimeSyncLimiter::new(TimeSyncPolicy::default()),
         Bytes::from_static(&[0xff]),
         false,
-        &received()
+        &received(),
+        None,
     )
     .is_err());
     assert!(apply_time_sync_request(
@@ -121,6 +124,7 @@ fn invalid_and_clockless_requests_do_not_notify() {
         ),
         false,
         &received(),
+        None,
     )
     .is_err());
     assert!(apply_time_sync_request(
@@ -130,6 +134,7 @@ fn invalid_and_clockless_requests_do_not_notify() {
         encoded(date(2024, 7, 4, 4), time(9, 15)),
         false,
         &received(),
+        None,
     )
     .is_err());
     assert_eq!(callbacks.load(Ordering::SeqCst), 0);

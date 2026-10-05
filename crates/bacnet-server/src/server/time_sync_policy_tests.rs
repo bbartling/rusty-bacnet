@@ -62,12 +62,14 @@ fn exact_sources_and_configured_empty_do_not_fall_back_to_router() {
     ] {
         let context = received(mac, route);
         assert_eq!(
-            restriction.allows(mac, context.source_network.as_ref()),
+            restriction.allows(mac, context.source_network.as_ref(), None),
             expected
         );
-        assert!(!TimeSyncSourceRestriction::new(vec![])
-            .unwrap()
-            .allows(mac, context.source_network.as_ref()));
+        assert!(!TimeSyncSourceRestriction::new(vec![]).unwrap().allows(
+            mac,
+            context.source_network.as_ref(),
+            None
+        ));
     }
     assert_eq!(
         format!("{restriction:?}"),
@@ -128,8 +130,8 @@ fn time_sync_source_entries_hold_to_the_bacnet_address_bound() {
         network: 65534,
         mac_address: MacAddr::from_slice(&[7; 18]),
     };
-    assert!(restriction.allows(&[7; 18], None));
-    assert!(restriction.allows(&[1], Some(&route)));
+    assert!(restriction.allows(&[7; 18], None, None));
+    assert!(restriction.allows(&[1], Some(&route), None));
     for source in entries(longest + 1) {
         assert!(
             matches!(TimeSyncSourceRestriction::new(vec![source.clone()]),

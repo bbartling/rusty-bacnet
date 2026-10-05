@@ -16,6 +16,9 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 #[path = "audit_reporter_read.rs"]
 mod read;
 
+#[path = "audit_reporter_dcc.rs"]
+mod dcc;
+
 #[path = "audit_reporter_write.rs"]
 mod write;
 use write::WriteSelection;
@@ -37,11 +40,14 @@ mod policy_precommit;
 /// That Device names this device in every record and owns the recipient; any
 /// other Device in the database takes no part. Unresolved
 /// configured Device routes permit startup with CONFIGURATION_ERROR. Address
-/// choices require direct unicast IPv4 B/IP. The active Device recipient is
+/// choices require direct unicast IPv4 B/IP, on network zero or on this
+/// network's number once it is known (#1460); one naming a network the number
+/// in force does not name starts unresolved the same way. The active Device recipient is
 /// required/writable; actual local or authorized WP/WPM changes atomically reserve
 /// old/new attempts before commit, independently of ordinary reporting filters.
 /// Both routes must be usable; an unavailable old route requires reconfiguration
-/// and restart. Active Device/Reporter membership is protected until quiescence.
+/// and restart, except an old Address the number does not name, which gets no
+/// attempt. Active Device/Reporter membership is protected until quiescence.
 /// At most 64 deliveries are active per server. Optional object-owned
 /// Maximum_Send_Delay/Send_Now retains ordinary records in a bounded target queue:
 /// 256 records/256 KiB globally and 64 records/64 KiB per Reporter. Mandatory

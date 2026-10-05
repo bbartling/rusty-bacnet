@@ -1,6 +1,6 @@
 //! Local opt-in inbound clock policy, independent of DCC and mutation policy.
 
-use super::dcc_policy::address_length_fits;
+use super::dcc_policy::{address_length_fits, routed_entry_names_direct_source};
 use super::{BipServerBuilder, ServerBuilder, TransportPort};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::ReceivedApdu;
@@ -22,6 +22,9 @@ pub enum TimeSyncSource {
     /// octets), only when no routed source is present.
     Direct(Vec<u8>),
     /// Complete claimed routed source, independent of the immediate router.
+    /// Once the server knows its own network's number, an entry on that
+    /// network also matches the station's direct requests from `address`
+    /// with no routed source (#1458).
     Routed {
         /// Source network (1..=65534).
         network: u16,
@@ -92,14 +95,28 @@ impl TimeSyncSourceRestriction {
         Ok(Self(sources))
     }
 
-    pub(super) fn allows(&self, mac: &[u8], routed: Option<&NpduAddress>) -> bool {
+    /// Whether a request from link MAC `mac`, with `routed` as its SNET and
+    /// SADR when a router relayed it, comes from a listed source. Once
+    /// `local_network`, this network's own number, is known, a routed entry
+    /// on it also lists the station's direct requests, as the DCC
+    /// restriction's does (#1458).
+    pub(super) fn allows(
+        &self,
+        mac: &[u8],
+        routed: Option<&NpduAddress>,
+        local_network: Option<u16>,
+    ) -> bool {
         // Do not use admission's malformed-routed fallback for authorization.
         match routed {
             Some(source) => self.0.iter().any(|entry| matches!(entry,
                 TimeSyncSource::Routed { network, address }
                 if *network == source.network && address.as_slice() == source.mac_address.as_slice())),
-            None => self.0.iter().any(|entry|
-                matches!(entry, TimeSyncSource::Direct(address) if address.as_slice() == mac)),
+            None => self.0.iter().any(|entry| match entry {
+                TimeSyncSource::Direct(address) => address.as_slice() == mac,
+                TimeSyncSource::Routed { network, address } => {
+                    routed_entry_names_direct_source(*network, address, mac, local_network)
+                }
+            }),
         }
     }
 }

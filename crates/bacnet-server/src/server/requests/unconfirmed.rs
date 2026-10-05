@@ -303,6 +303,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 req.service_request.clone(),
                 is_utc,
                 received,
+                network.local_network_number().get(),
             ) {
                 debug!(%error, is_utc, "Ignoring time synchronization request");
             }
@@ -383,6 +384,7 @@ pub(super) fn apply_time_sync_request(
     raw_service_data: Bytes,
     is_utc: bool,
     received: &bacnet_network::layer::ReceivedApdu,
+    local_network: Option<u16>,
 ) -> Result<(), Error> {
     let request = TimeSynchronizationRequest::decode(&raw_service_data)?;
     let supplied = clock::date_time_to_hundredths(request.date, request.time)?;
@@ -394,7 +396,11 @@ pub(super) fn apply_time_sync_request(
         .source_restriction
         .as_ref()
         .is_some_and(|restriction| {
-            !restriction.allows(&received.source_mac, received.source_network.as_ref())
+            !restriction.allows(
+                &received.source_mac,
+                received.source_network.as_ref(),
+                local_network,
+            )
         })
     {
         return Err(time_sync_policy::denied("source not allowed"));

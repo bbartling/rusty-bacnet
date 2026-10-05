@@ -509,3 +509,6 @@ async fn a_resource_drop_under_disable_initiation_is_summarized() {
     );
     f.server.stop().await.unwrap();
 }
+
+#[path = "audit_dcc_record_tests.rs"]
+mod records;

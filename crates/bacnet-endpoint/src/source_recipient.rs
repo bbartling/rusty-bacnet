@@ -76,8 +76,29 @@ impl SourceRoutes {
         };
         self.valid_address(mac).then(|| mac.clone())
     }
+    /// Whether `recipient` is an Address on a network numbered 1 to 65534
+    /// that is not the session's number in force, with a MAC this source
+    /// could send to: no route now, but one whenever that number is the
+    /// session's (#1461). One provisioned so starts unresolved, reporting
+    /// CONFIGURATION_ERROR as a Device with no binding does; a session
+    /// without a registered port learns its number only after it starts.
+    /// One the number moved away from no longer holds up a recipient change:
+    /// it gets no copy of the change record, since nothing reaches it.
+    pub(crate) fn awaits_local_number(&self, recipient: &BACnetRecipient) -> bool {
+        let BACnetRecipient::Address(address) = recipient else {
+            return false;
+        };
+        (1..=0xFFFE).contains(&address.network_number)
+            && Some(address.network_number) != self.local_network.get()
+            && self.valid_address(&address.mac_address)
+    }
+    /// Refuse a provisioned Address recipient with no route, unless the
+    /// session's number may yet name its network (#1461).
     pub(crate) fn validate_initial(&self, recipient: &BACnetRecipient) -> Result<(), Error> {
-        if matches!(recipient, BACnetRecipient::Address(_)) && self.resolve(recipient).is_none() {
+        if matches!(recipient, BACnetRecipient::Address(_))
+            && self.resolve(recipient).is_none()
+            && !self.awaits_local_number(recipient)
+        {
             Err(denied())
         } else {
             Ok(())
@@ -159,7 +180,14 @@ impl SourceRecipient {
             if !self.owner.is_active() {
                 return Err(denied());
             }
-            let old_route = self.routes.resolve(current).ok_or_else(denied)?;
+            // An old Address the session's number no longer, or not yet,
+            // names has no route: it gets no copy of the change, which goes
+            // ahead (#1461). Any other old recipient must resolve.
+            let old_route = match self.routes.resolve(current) {
+                Some(route) => Some(route),
+                None if self.routes.awaits_local_number(current) => None,
+                None => return Err(denied()),
+            };
             let new_route = self.routes.resolve(&new).ok_or_else(denied)?;
             let mut old_value = bytes::BytesMut::new();
             let mut new_value = bytes::BytesMut::new();
@@ -191,7 +219,7 @@ impl SourceRecipient {
             };
             self.status.commit_recipient_change(|confirmed, token| {
                 let mut attempts = Vec::with_capacity(2);
-                for route in [old_route, new_route] {
+                for route in old_route.into_iter().chain([new_route]) {
                     let permit = notifications.try_admit_audit().map_err(|_| denied())?;
                     let reservation = if confirmed {
                         Some(
@@ -215,14 +243,22 @@ impl SourceRecipient {
                 *current = new;
                 let egress = self.egress.clone();
                 let deadline = tokio::time::Instant::now() + delivery::DEADLINE;
-                let first_completion = delivery::Completion::new(Arc::clone(&self.status), token);
-                let second_completion = delivery::Completion::new(Arc::clone(&self.status), token);
-                let mut attempts = attempts.into_iter();
-                let first = attempts.next().unwrap();
-                let second = attempts.next().unwrap();
+                // The new recipient's attempt is last; an old one, when it
+                // has a route, comes first. Each owns its completion.
+                let mut attempts: Vec<_> = attempts
+                    .into_iter()
+                    .map(|attempt| {
+                        let completion = delivery::Completion::new(Arc::clone(&self.status), token);
+                        (attempt, completion)
+                    })
+                    .collect();
+                let new_attempt = attempts.pop().expect("the new recipient's attempt");
+                let old_attempt = attempts.pop();
                 Ok(async move {
-                    let run = |(route, permit, reserved, bytes),
-                               completion: delivery::Completion| {
+                    let run = |((route, permit, reserved, bytes), completion): (
+                        _,
+                        delivery::Completion,
+                    )| {
                         let egress = egress.clone();
                         async move {
                             let _permit: tokio::sync::OwnedSemaphorePermit = permit;
@@ -232,7 +268,12 @@ impl SourceRecipient {
                                 .finish(delivery::finish_send(sent, reserved, deadline).await);
                         }
                     };
-                    tokio::join!(run(first, first_completion), run(second, second_completion));
+                    let old = async {
+                        if let Some(attempt) = old_attempt {
+                            run(attempt).await;
+                        }
+                    };
+                    tokio::join!(old, run(new_attempt));
                 })
             })
         })?;
