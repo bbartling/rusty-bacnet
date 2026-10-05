@@ -68,6 +68,18 @@ pub(crate) use rpm_wpm::{
 pub(crate) use timestamp::date_time_tuple;
 pub use timestamp::PyBACnetTimeStamp;
 
+/// What `__reduce__` raises for a class with no constructor that doesn't
+/// copy or pickle, because it holds live or receive-time state (#1500).
+/// Without it, pickle protocols 0 and 1 would dump such an object, naming
+/// its `rusty_bacnet` class, and fail only when the pickle is loaded.
+pub(crate) fn not_picklable(object: &Bound<'_, PyAny>) -> PyErr {
+    let name = object
+        .get_type()
+        .qualname()
+        .map_or_else(|_| "object".to_owned(), |name| name.to_string());
+    pyo3::exceptions::PyTypeError::new_err(format!("cannot pickle 'rusty_bacnet.{name}' object"))
+}
+
 // Module registration
 // ---------------------------------------------------------------------------
 

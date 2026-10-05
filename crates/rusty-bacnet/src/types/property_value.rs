@@ -1,3 +1,5 @@
+use pyo3::types::PyTuple;
+
 use super::constructed_read::Element;
 use super::date::{date_from_value, date_value};
 use super::timestamp::time_value;
@@ -19,7 +21,15 @@ use super::*;
 /// ```
 ///
 /// Read results with `.value` (native Python type) and `.tag` (type name).
-#[pyclass(name = "PropertyValue", frozen, from_py_object)]
+///
+/// `copy` and `pickle` rebuild a value through the constructor its `tag`
+/// names (#1500); see `__reduce__`.
+#[pyclass(
+    name = "PropertyValue",
+    module = "rusty_bacnet",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PyPropertyValue {
     /// The value as it travels: what a write of this value encodes.
@@ -283,6 +293,81 @@ impl PyPropertyValue {
         format!("{:?}", self.inner).hash(&mut h);
         self.element.hash(&mut h);
         h.finish()
+    }
+
+    /// What `copy` and `pickle` call (#1500): the constructor `tag` names
+    /// and its arguments, taken from the value as stored, so the copy is
+    /// equal. A list passes its items as PropertyValues, keeping each one's
+    /// tag, where `.value` would give `real` and `double` alike as a float.
+    /// A typed constructed element (#1310) rebuilds from its octets as read
+    /// through `_typed_element`: `.value` is decoded from those octets and
+    /// needn't encode back to them.
+    fn __reduce__<'py>(
+        slf: &Bound<'py, Self>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> {
+        use primitives::PropertyValue as V;
+        let py = slf.py();
+        let this = slf.get();
+        let constructor = match (&this.inner, this.element) {
+            (V::ApplicationData(_), Some(_)) => "_typed_element",
+            (inner, _) => tag(inner),
+        };
+        let arguments = match (&this.inner, this.element) {
+            (V::ApplicationData(octets), Some(element)) => {
+                (element.tag(), PyBytes::new(py, octets)).into_pyobject(py)?
+            }
+            (V::List(items), element) => {
+                // A typed collection's items are all typed elements.
+                let items: Vec<Self> = items
+                    .iter()
+                    .map(|item| match (item, element) {
+                        (V::ApplicationData(_), Some(element)) => {
+                            Self::constructed(item.clone(), element)
+                        }
+                        _ => Self::from_rust(item.clone()),
+                    })
+                    .collect();
+                (items,).into_pyobject(py)?
+            }
+            (V::Null, _) => PyTuple::empty(py),
+            (V::Boolean(value), _) => (*value,).into_pyobject(py)?,
+            (V::Unsigned(value), _) => (*value,).into_pyobject(py)?,
+            (V::Signed(value), _) => (*value,).into_pyobject(py)?,
+            (V::Real(value), _) => (f64::from(*value),).into_pyobject(py)?,
+            (V::Double(value), _) => (*value,).into_pyobject(py)?,
+            (V::CharacterString(value), _) => (value.as_str(),).into_pyobject(py)?,
+            (V::Enumerated(value), _) => (*value,).into_pyobject(py)?,
+            (V::OctetString(octets) | V::ApplicationData(octets), _) => {
+                (PyBytes::new(py, octets),).into_pyobject(py)?
+            }
+            (V::BitString { unused_bits, data }, _) => {
+                (*unused_bits, PyBytes::new(py, data)).into_pyobject(py)?
+            }
+            (V::Date(date), _) => date_value(date).into_pyobject(py)?,
+            (V::Time(time), _) => time_value(time).into_pyobject(py)?,
+            (V::ObjectIdentifier(oid), _) => {
+                (PyObjectIdentifier::from_rust(*oid),).into_pyobject(py)?
+            }
+        };
+        Ok((slf.get_type().getattr(constructor)?, arguments))
+    }
+
+    /// One typed constructed element, tagged `tag`, from the octets a read
+    /// gave it: what the pickles `__reduce__` makes call. Octets that aren't
+    /// exactly one element of that production raise ValueError.
+    #[staticmethod]
+    fn _typed_element(tag: &str, octets: Vec<u8>) -> PyResult<Self> {
+        let element = Element::from_tag(tag)
+            .ok_or_else(|| PyValueError::new_err(format!("no typed element is tagged {tag:?}")))?;
+        if !element.is_one(&octets) {
+            return Err(PyValueError::new_err(format!(
+                "octets are not exactly one {tag} element"
+            )));
+        }
+        Ok(Self::constructed(
+            primitives::PropertyValue::ApplicationData(octets),
+            element,
+        ))
     }
 }
 

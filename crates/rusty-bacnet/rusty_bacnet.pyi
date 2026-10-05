@@ -1059,6 +1059,9 @@ class ObjectIdentifier:
     For u32-representable values, types above 1023 or instances above 4,194,303
     raise ValueError. Integers outside u32 raise OverflowError.
     Valid proprietary types and the wire wildcard instance are accepted.
+
+    ``copy.copy``, ``copy.deepcopy`` and ``pickle`` (every protocol) rebuild
+    an equal identifier through this constructor.
     """
 
     def __init__(self, object_type: ObjectType, instance: int) -> None: ...
@@ -1081,6 +1084,10 @@ class BACnetTimeStamp:
     Date accepts full years 1900..2154 or 255 for unspecified, months 1..14,
     days 1..34, and days-of-week 1..7; each non-year date field also accepts
     255 for unspecified. Supplied values are never normalized.
+
+    ``copy.copy``, ``copy.deepcopy`` and ``pickle`` (every protocol) rebuild
+    an equal timestamp from its encoded CHOICE, so one read from a peer with
+    a field outside those ranges copies too.
     """
 
     @staticmethod
@@ -1445,6 +1452,11 @@ class PropertyValue:
 
     Two values are equal when they carry the same octets and, for a typed
     read, the same element production.
+
+    ``copy.copy``, ``copy.deepcopy`` and ``pickle`` (every protocol) rebuild
+    an equal value through the constructor its ``tag`` names, a list from
+    its items as PropertyValues, and a typed constructed element from the
+    octets it was read from.
     """
 
     @staticmethod

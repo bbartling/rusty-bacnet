@@ -24,7 +24,12 @@ use crate::types::{
 /// Cloned out of a running endpoint via `await endpoint.client()`. No
 /// lifecycle methods; survives the owner as a value but fails closed after
 /// close.
-#[pyclass(name = "EndpointClient", frozen, skip_from_py_object)]
+#[pyclass(
+    name = "EndpointClient",
+    module = "rusty_bacnet",
+    frozen,
+    skip_from_py_object
+)]
 #[derive(Clone)]
 pub struct PyEndpointClient {
     inner: bacnet_endpoint::roles::ClientRoleHandle,
@@ -222,6 +227,12 @@ impl PyEndpointClient {
         "EndpointClient(shared-transport read_property read_range read_property_multiple write_property)"
             .to_string()
     }
+
+    /// Refuses `copy` and `pickle`: a handle on a live endpoint. See
+    /// [`crate::types::not_picklable`].
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Err(crate::types::not_picklable(slf.as_any()))
+    }
 }
 
 /// Server role: the owner's responder liveness + deferred-reply seam.
@@ -229,7 +240,12 @@ impl PyEndpointClient {
 /// The responder executes ReadProperty automatically; this handle exposes
 /// no request callback (poll via `is_session_alive`, never Rust-calls-Python).
 /// `suspend_next_reply` arms the one-shot MS/TP deferred-reply path.
-#[pyclass(name = "EndpointServer", frozen, skip_from_py_object)]
+#[pyclass(
+    name = "EndpointServer",
+    module = "rusty_bacnet",
+    frozen,
+    skip_from_py_object
+)]
 #[derive(Clone)]
 pub struct PyEndpointServer {
     inner: bacnet_endpoint::roles::ServerRoleHandle,
@@ -270,5 +286,11 @@ impl PyEndpointServer {
 
     fn __repr__(&self) -> String {
         "EndpointServer(read_property responder)".to_string()
+    }
+
+    /// Refuses `copy` and `pickle`: a handle on a live endpoint. See
+    /// [`crate::types::not_picklable`].
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Err(crate::types::not_picklable(slf.as_any()))
     }
 }

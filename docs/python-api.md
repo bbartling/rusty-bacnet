@@ -177,6 +177,9 @@ oid.object_type   # ObjectType.ANALOG_INPUT
 oid.instance       # 1
 ```
 
+It copies and pickles like the other value classes; see
+[Copying and pickling](#copying-and-pickling).
+
 ---
 
 ## PropertyValue
@@ -378,6 +381,36 @@ so its array reads as `application_data`.
 A Group's Present_Value results, and an `ActionCommand`'s `property_value`,
 are themselves read results: each value is shaped as a read of the property it
 names would be.
+
+---
+
+## Copying and pickling
+
+`ObjectIdentifier`, `PropertyValue` and `BACnetTimeStamp`, like the
+[enums](#enums), support `copy.copy`, `copy.deepcopy` and `pickle` at every
+protocol, and the copy equals the original (#1500). Every class the module
+exports reports `rusty_bacnet` as its `__module__`.
+
+- An `ObjectIdentifier` rebuilds through its constructor.
+- A `PropertyValue` rebuilds through the constructor its `tag` names, with
+  the value as stored: `PropertyValue.date(2026, 3, 21, 6)` pickles as that
+  call. A list rebuilds from its items as `PropertyValue`s, so a `real` item
+  stays a `real` where `.value` would give a plain `float`. A typed
+  constructed read rebuilds from the octets it was read from, with its
+  element tag, so it still writes back exactly what was read.
+- A `BACnetTimeStamp` rebuilds from its encoded CHOICE, so a timestamp a peer
+  sent with a field outside the ranges `date_time` checks (a month of 0, say)
+  copies too.
+
+```python
+import pickle
+value = await client.read_property(address, schedule, PropertyIdentifier.EXCEPTION_SCHEDULE)
+assert pickle.loads(pickle.dumps(value)) == value
+```
+
+The other classes (`DiscoveredDevice`, `CovNotification`,
+`ScHubCertificateBinding`, and the client, server, endpoint and hub classes)
+raise `TypeError` when pickled; copy the values you need out of them.
 
 ---
 
