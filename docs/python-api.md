@@ -3303,7 +3303,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `recipient_list_unavailable` | Transitions sent nowhere because reading the class's Recipient_List failed |
 | `recipient_list_invalid` | Transitions sent nowhere because the Recipient_List did not decode as a whole (no decodable prefix is used) |
 | `recipient_list_too_long` | Transitions sent nowhere because a custom class served more than 32 destinations |
-| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired |
+| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired; also a confirmed notification ended at a retry because the observed binding had expired by then |
 | `recipient_unroutable` | Matched recipients skipped because they can't be routed as written: a Device identifier that isn't a Device (or a binding unusable on this link), or a MAC on network 65535 |
 | `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, or another group address such as a multicast one, which only unconfirmed requests may use (Clause 6.3) |
 | `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |

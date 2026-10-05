@@ -5516,7 +5516,9 @@ fixes them, and the warning logged with each skip gives the finer reason:
 
 - `device_recipient_unbound`: no Device binding was configured or observed, or
   the observed one expired. Observing the device's I-Am again, or configuring a
-  binding, clears it.
+  binding, clears it. A confirmed notification whose observed binding expires
+  before a retry ends at that retry, its invoke ID freed, and counts here, not
+  in `confirmed_unanswered` (#1371).
 - `recipient_unroutable`: the entry can't be routed as written. Its Device
   identifier names an object that isn't a Device (or its binding is unusable on
   this link), or its address puts a MAC on network 65535.

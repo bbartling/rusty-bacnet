@@ -7,9 +7,19 @@ use super::event_recipient_route::{
     network_priority_for_event, ConfirmedRecipientRoute, ConfirmedRouteRefusal, RecipientRoute,
 };
 use super::event_suppression::EventSuppression;
-use super::notification_transactions::NotificationReserveError;
+use super::notification_transactions::{run_attempts, Attempt, NotificationReserveError};
 use super::*;
 use bacnet_types::constructed::BACnetRecipient;
+
+/// Why a confirmed notification ended at an attempt with nothing sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Withdrawal {
+    /// DeviceCommunicationControl restricts initiation (#1327): not counted.
+    InitiationRestricted,
+    /// The Device recipient's observed binding expired before this attempt
+    /// (#1371): counted in `device_recipient_unbound`.
+    BindingLapsed,
+}
 
 /// APDU header octets before the service request of an unsegmented
 /// Confirmed-Request (type, segmentation limits, invoke ID, service choice)
@@ -226,28 +236,29 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let timeout = Duration::from_millis(retry_timeout_ms);
                 let apdu_retries = DEFAULT_APDU_RETRIES;
                 notification_transactions.spawn(async move {
-                    let result = run_notification_under_dcc(
-                        operation,
-                        result_rx,
-                        timeout,
-                        apdu_retries,
-                        &comm_state,
-                        |attempt| {
+                    let result =
+                        run_attempts(operation, result_rx, timeout, apdu_retries, |attempt| {
+                            // DCC and the binding's lifetime are checked
+                            // before every attempt, the first and each retry,
+                            // and either ends the notification there, its
+                            // invoke ID freed (#1327, #1371).
+                            let withdrawn = if comm_state.initiation_restricted() {
+                                Some(Withdrawal::InitiationRestricted)
+                            } else if freshness.is_some_and(|freshness| {
+                                !freshness.permits_attempt_at(tokio::time::Instant::now())
+                            }) {
+                                Some(Withdrawal::BindingLapsed)
+                            } else {
+                                None
+                            };
                             let network = Arc::clone(&network);
                             let learned_routers = Arc::clone(&learned_routers);
                             let buf = buf.clone();
                             let local_target = local_target.clone();
                             let remote = remote.clone();
                             async move {
-                                if freshness.is_some_and(|freshness| {
-                                    !freshness.permits_attempt_at(tokio::time::Instant::now())
-                                }) {
-                                    debug!(
-                                        invoke_id = id,
-                                        attempt,
-                                        "Observed Device binding expired before notification attempt"
-                                    );
-                                    return Err(());
+                                if let Some(withdrawal) = withdrawn {
+                                    return Attempt::Withdrawn(withdrawal);
                                 }
                                 let send_result = match (local_target, remote) {
                                     (Some(target), None) => {
@@ -304,12 +315,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         attempt, "Confirmed EventNotification send failed"
                                     ),
                                 }
-                                send_result.map_err(|_| ())
+                                match send_result {
+                                    Ok(()) => Attempt::Sent,
+                                    Err(_) => Attempt::NotSent,
+                                }
                             }
-                        },
-                    )
-                    .await;
-                    match result {
+                        })
+                        .await;
+                    match result.map(NotificationWorkerResult::from) {
                         Ok(NotificationWorkerResult::Ack) => {
                             debug!(invoke_id = id, "EventNotification acknowledged");
                         }
@@ -328,10 +341,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         // Held back by DCC, as a notification it stops before
                         // the first send is: not counted, and not sent again
                         // once initiation is enabled.
-                        Err(InitiationRestricted) => debug!(
+                        Err(Withdrawal::InitiationRestricted) => debug!(
                             invoke_id = id,
                             "EventNotification withdrawn: DCC restricts initiation"
                         ),
+                        // The device's observed binding ran out before a
+                        // retry: the server no longer holds an address for
+                        // it, as when the first send finds none, so it counts
+                        // where that skip does.
+                        Err(Withdrawal::BindingLapsed) => {
+                            suppressions.record(EventSuppression::DeviceRecipientUnbound);
+                            warn!(
+                                invoke_id = id,
+                                "EventNotification withdrawn: the recipient's observed \
+                                 binding expired before a retry"
+                            );
+                        }
                     }
                 });
             } else {

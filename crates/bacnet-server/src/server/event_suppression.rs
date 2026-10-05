@@ -59,7 +59,9 @@ pub struct EventNotificationCounters {
     /// Device recipients skipped because the server has no current binding
     /// for them: none was configured or observed, or the observed one has
     /// expired. Both clear once the device's I-Am is observed again or a
-    /// binding is configured.
+    /// binding is configured. A confirmed notification whose observed
+    /// binding expires before a retry ends at that retry, its invoke ID
+    /// freed, and counts here rather than in `confirmed_unanswered` (#1371).
     pub device_recipient_unbound: u64,
     /// Recipients that cannot be routed as configured, so no binding or
     /// retry delivers them: a Device recipient whose identifier is not a
