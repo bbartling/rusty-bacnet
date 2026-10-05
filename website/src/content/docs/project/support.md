@@ -7,13 +7,13 @@ Rusty BACnet is pre-1.0, with changing APIs and partial conformance coverage. Ne
 
 ## Choose the version and owner first
 
-The [installation and local tutorials](/rusty-bacnet/start/installation/) describe **v0.11.0**. The [development section](/rusty-bacnet/development/overview/) describes **unreleased source**, including shared endpoints, current SC requirements and local Network Number controls. A checkout may still report version 0.11.0; use its commit to identify behavior.
+The [installation and local tutorials](/rusty-bacnet/start/installation/) describe **v0.12.0**; the operating guides still describe **v0.11.0**. The [development section](/rusty-bacnet/development/overview/) describes **unreleased source**, including shared endpoints, current SC requirements and local Network Number controls. A checkout may still report the latest release's version; use its commit to identify behavior.
 
 Standalone client, full server, shared endpoint and language binding are different surfaces. The shared endpoint's bounded responder does not acquire the full server's service set. Use the [current transport matrix](/rusty-bacnet/development/transports/) to choose a starting point, then follow its evidence links.
 
 ## What's supported
 
-This summary describes the current development source, which may be ahead of the latest release; for what v0.11.0 shipped, see its [release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.11.0). It lists what the code implements, not what has been certified or tried against other vendors' devices.
+This summary describes the current development source, which may be ahead of the latest release; for what v0.12.0 shipped, see its [release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.12.0). It lists what the code implements, not what has been certified or tried against other vendors' devices.
 
 **Objects.** `bacnet-objects` implements 64 of the 65 standard object types; Network Security is the one it leaves out. That covers the analog, binary and multi-state inputs, outputs and values; the integer, positive integer, large analog, character string, octet string, bit string, date, time, date-time and pattern values; Device, Network Port, File, Program, Loop, Accumulator, Pulse Converter, Averaging, Calendar, Schedule, Timer, Command, Channel, Group, Global Group, Structured View and Staging; Trend Log, Trend Log Multiple, Event Log, Audit Log and Audit Reporter; Notification Class, Notification Forwarder, and Event and Alert Enrollment; Load Control and the lighting and color objects; and the life safety, access control, elevator group, escalator and lift objects. A server keeps them in an `ObjectDatabase`, which also holds your own `BACnetObject` implementations.
 

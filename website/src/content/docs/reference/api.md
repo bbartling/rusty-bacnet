@@ -3,7 +3,7 @@ title: "API and example library"
 description: "Find exact signatures for the release or current source without mixing their contracts."
 ---
 
-Use the website for tasks and the canonical references for exact methods, parameters, types and feature gates. Choose the revision first; development APIs may differ even while their package version still reads 0.11.0.
+Use the website for tasks and the canonical references for exact methods, parameters, types and feature gates. Choose the revision first; development APIs may differ even while their package version still reads the latest release's number.
 
 ## Current development
 

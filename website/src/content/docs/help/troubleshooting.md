@@ -11,7 +11,7 @@ These guides describe **v0.11.0**, not current `dev`. In particular, current-dev
 
 ## The executable or module does not start
 
-Check installation before the network. The reviewed Linux CLI release dynamically links libpcap; a missing `libpcap.so.0.8` can prevent even `--version` from starting. Install the platform's libpcap runtime through its package manager, or use the basic Cargo build without `pcap`. A Python wheel/import problem is a different path: use the correct interpreter and run the [native import check](/rusty-bacnet/start/installation/#install-the-python-package).
+Check installation before the network. The v0.11.0 Linux CLI release dynamically links libpcap; a missing `libpcap.so.0.8` can prevent even `--version` from starting. Install the platform's libpcap runtime through its package manager, or use the basic Cargo build without `pcap`. Later Linux release executables link libpcap in and need glibc 2.17 or newer; check that the file matches the machine's operating system and processor. A Python wheel/import problem is a different path: use the correct interpreter and run the [native import check](/rusty-bacnet/start/installation/#install-the-python-package).
 
 A local fixture can separate installation and protocol basics from network configuration. [Try the bounded loopback lab](/rusty-bacnet/start/local-lab/).
 
