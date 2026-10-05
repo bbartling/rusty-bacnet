@@ -82,27 +82,6 @@ fn default_broadcast(interface: Ipv4Addr) -> Ipv4Addr {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
-        assert_eq!(
-            default_broadcast(Ipv4Addr::UNSPECIFIED),
-            Ipv4Addr::BROADCAST
-        );
-    }
-
-    #[test]
-    fn default_broadcast_uses_slash_24_for_bound_interface() {
-        assert_eq!(
-            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
-            Ipv4Addr::new(192, 168, 204, 255)
-        );
-    }
-}
-
 fn resolve_interface(args: &Args) -> Ipv4Addr {
     if let Some(ip) = args.interface {
         return ip;
@@ -372,4 +351,25 @@ async fn main() {
 
     let _ = client.stop().await;
     println!("\nDone.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::UNSPECIFIED),
+            Ipv4Addr::BROADCAST
+        );
+    }
+
+    #[test]
+    fn default_broadcast_uses_slash_24_for_bound_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
+            Ipv4Addr::new(192, 168, 204, 255)
+        );
+    }
 }

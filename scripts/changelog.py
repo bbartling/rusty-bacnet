@@ -68,7 +68,7 @@ SECTIONS = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security", "M
 ENTRY_CAP = 300
 MIGRATION_CAP = 500
 
-# The public mirror, which has the same commits; readers can't reach Forgejo.
+# Where an entry's commit link points: the repository on GitHub.
 COMMIT_URL = "https://github.com/jscott3201/rusty-bacnet/commit/"
 # A commit that adds more fragments than this moved existing entries (#1145
 # split [Unreleased] into 209 of them) rather than making the changes, so its

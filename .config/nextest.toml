@@ -37,12 +37,15 @@ test-group = 'bip-broadcast-observers'
 # threads. Custom profiles such as `ci` apply these default-profile overrides
 # too.
 #
-# The list names every test that took 3.5 s or more in recent Forgejo Test jobs,
-# exactly, so no new test joins it by accident. A slow test missing from it, or
-# one renamed, costs wall time only. To refresh it, take the slow PASS lines
-# from a Test job log and update the names below:
+# The list names every test that took 3.5 s or more in recent runs of CI's
+# Linux test job, "Test (Linux, full features)", exactly, so no new test joins
+# it by accident. A slow test missing from it, or one renamed, costs wall time
+# only. To refresh it, take the slow PASS lines from that job's log and update
+# the names below. The job ID ends the job's URL; gh prints the log's colour
+# codes as text, which the sed removes:
 #
-#   grep -E 'PASS \[ +([0-9]{2,}\.|[4-9]\.|3\.[5-9])' test-job.log
+#   gh run view -R jscott3201/rusty-bacnet --job <job id> --log \
+#     | sed 's/\^\[\[[0-9;]*m//g' | grep -E 'PASS \[ +([0-9]{2,}\.|[4-9]\.|3\.[5-9])'
 [[profile.default.overrides]]
 filter = '''
     (binary_id(bacnet-client) & (

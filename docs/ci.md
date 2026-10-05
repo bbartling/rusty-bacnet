@@ -23,7 +23,7 @@ only when every job under it did (see [Merge evidence](#merge-evidence)).
 | Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
 | --- | --- | --- | --- | --- |
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, changelog fragments, the [tool pins](#tool-pins) | ✓ | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs include private items. Then `cargo check --locked` of each [standalone sample](#standalone-samples) | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples) | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin at its [pinned](#tool-pins) version), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV (`RUST_MSRV` in [`.github/ci-pins.env`](../.github/ci-pins.env)), Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
@@ -56,10 +56,9 @@ too.
 
 Rust caches are keyed per job on the toolchain, `Cargo.lock`, the manifests,
 and, for Clippy and Test, `LINUX_FEATURES` (Clippy also on
-`DEFAULT_FEATURES_TARGETS` and the [standalone samples'](#standalone-samples)
-`Cargo.lock` files). Only a job that succeeded on `dev` saves its cache, so a
-failed or cancelled run can't leave a partial cache that later runs restore
-by exact key. The MSRV job's cache comes from the weekly run, the Heavy run on
+`DEFAULT_FEATURES_TARGETS`). Only a job that succeeded on `dev` saves its
+cache, so a failed or cancelled run can't leave a partial cache that later runs
+restore by exact key. The MSRV job's cache comes from the weekly run, the Heavy run on
 `dev`. A new push to a PR cancels its superseded run.
 
 The workflow sets `CARGO_INCREMENTAL=0` and drops native debug info from dev and
@@ -110,42 +109,20 @@ Use cargo-nextest 0.9.145 or later locally. Older releases on macOS could
 mark unrelated passing tests as leaky (#751), and the configuration warns
 about them.
 
-### Standalone samples
+### Samples
 
-The crates in `examples/rust/samples` sit outside the workspace, each with its
-own `Cargo.lock`, so none of the workspace runs compiles them. The Clippy job's
-last step, [`scripts/ci/check-samples.sh`](../scripts/ci/check-samples.sh),
-runs `cargo check --locked --all-targets` on each through its own manifest
-(#1406). It fails when a sample stops compiling or its lock is stale. A lock
-goes stale when a `bacnet-*` crate the sample uses by path gains a dependency,
-and on every workspace version bump, since the lock records those crates'
-versions. To refresh a stale lock without moving any locked registry version,
-run the command the script prints and commit the result:
-
-```bash
-cargo update --workspace --manifest-path examples/rust/samples/<name>/Cargo.toml
-```
-
-All the samples build into one target directory, `target/samples` (or
-`$CARGO_TARGET_DIR` if set), so the dependencies they share compile once. The
-samples' locks pin older releases of tokio, syn and other base crates than the
-workspace's `Cargo.lock`, so they reuse almost nothing the workspace build
-compiled. The step runs on every PR: the workflow has no path filters, and the
-samples depend on `crates/`, which nearly every PR changes. On the Forgejo
-runner it took about 18 s from cold (October 2026). `target/samples` is inside
-`target/`, so the job's Rust cache keeps it whenever the cache is saved.
-rust-cache saves only when its key misses, and its own key covers only the
-workspace's lock and manifests. So the Clippy job sets `SAMPLES_LOCKS`, a hash
-of the samples' `Cargo.lock` files, and names it in rust-cache's `env-vars`,
-which puts it in the key's environment hash: a lock refresh merged to `dev`
-saves a new cache with the samples' dependencies built, and later runs check
-only the samples and their `bacnet-*` crates. A variable keeps the key's
-prefix the same for every Clippy cache, which [pruning](#caches) relies on.
-rust-cache's cleanup keeps a dependency's build there only if the workspace
-depends on a crate of the same name, which holds for every crate the samples
-lock (October 2026). The environment hash is part of the restore prefix, so a
-new one restores nothing, and the first Clippy runs on it, the PR's and then
-the `dev` merge's, start cold (about 3 minutes longer on the Forgejo runner).
+The sample programs in `examples/rust/samples` are workspace members with
+`publish = false` (#1450). The root `Cargo.toml` lists each one in `members`,
+so a new sample needs adding there: with a glob, a leftover directory without
+a `Cargo.toml`, such as a renamed sample's ignored `target/`, would break every
+cargo command. The samples share the workspace's `Cargo.lock`, so a version
+bump or a new dependency of a `bacnet-*` crate needs no lock refresh, and every
+`--workspace` run covers them: clippy, rustdoc and the tests, in CI and in the
+[native tests](#native-tests-macos-and-windows). They stay out of
+`default-members`, so a plain `cargo build` or `cargo test` at the root skips
+them; `-p` picks one, as in `cargo run -p whois-scan -- --help`. A sample
+inherits the workspace's license, which Cargo Deny checks for every member,
+but not `[workspace.lints]`, since samples print to the terminal.
 
 ### Runner
 
@@ -234,10 +211,12 @@ The Lint job's "Check the pins" step fails when:
   archive the comment above it names:
   `curl -sSfL <url> | sha256sum`.
 
-The [release](#release) reads the same file: maturin's version, and pins of
-its own for its [builds](#builds), the manylinux2014 images' digests,
-rustup-init's version and digests, and libpcap's version and digest. The same
-format check covers them.
+The [release](#release) reads the same file for pins of its own for its
+[builds](#builds): the manylinux2014 images' digests, rustup-init's version
+and digests, and libpcap's version and digest. The same format check covers
+them. Its builds install maturin from
+`scripts/release/maturin-requirements.txt`, by sha256, at the
+`MATURIN_VERSION` here.
 
 ### Caches
 
@@ -519,7 +498,6 @@ cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --feature
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
 bash scripts/ci/check-default-features.sh   # the host; or pass target triples, as CI does
-bash scripts/ci/check-samples.sh            # the standalone samples, each with its own lock
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$FEATURES"
 RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
@@ -566,7 +544,8 @@ merge comes from that PR's run, not an older one. On a PR from `dev` to
 `main`, the head commit also carries the `CI OK` of `dev`'s push run, which
 covers only the Lean jobs, so check that the `pull_request` run's `CI OK`,
 the one with MSRV and audit and deny, is green. The release's
-[CI gate](#ci-gate) counts only a run that ran those jobs.
+[CI gate](#ci-gate) requires the CI run of the tag's own push, which runs
+them.
 
 ## Release
 

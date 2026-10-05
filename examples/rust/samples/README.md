@@ -1,6 +1,6 @@
 # Network samples
 
-Standalone BACnet/IP **client and server binaries** that complement the single-file examples in this directory. Each crate is self-contained with its own `Cargo.toml` and uses **path dependencies** on the workspace `bacnet-*` crates.
+BACnet/IP **client and server programs** that complement the single-file examples in [`examples/rust`](../). Each is a crate in the repository's Cargo workspace, with **path dependencies** on the `bacnet-*` crates.
 
 ## Samples
 
@@ -49,12 +49,11 @@ Only one process should bind UDP `:47808` on a host at a time.
 
 ## Build
 
-Each subfolder is its own Cargo crate:
+The samples are workspace members, left out of the workspace's default build, so pick one by package name from anywhere in the checkout (or run `cargo build --release` in its folder):
 
 ```bash
-cd mini-device-revisited && cargo build --release
-cd whois-scan           && cargo build --release
-cd point-discover       && cargo build --release
+cargo build --release -p mini-device-revisited
+cargo run --release -p whois-scan -- --help
 ```
 
-The `run.sh` / `run-5007.sh` wrappers build automatically on first use. Build artifacts go to each crate's `target/` directory (gitignored).
+They share the workspace's `Cargo.lock`, and binaries land in its `target/release/`. The `run.sh` / `run-5007.sh` wrappers go through `cargo run --release`, which builds the sample first when needed.

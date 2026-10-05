@@ -10,9 +10,9 @@ These examples demonstrate using the `bacnet-*` crates directly in Rust.
 | [`cov_subscriptions.rs`](cov_subscriptions.rs) | COV subscription with broadcast channel receiver |
 | [`multi_object_server.rs`](multi_object_server.rs) | Server with 14 object types, bulk RPM queries |
 
-## Standalone sample binaries
+## Sample programs
 
-For full client/server programs (discovery, point enumeration, priority arrays), see [`samples/`](samples/):
+For full client/server programs (discovery, point enumeration, priority arrays), see [`samples/`](samples/). Each is a workspace crate outside the default build; run one with `cargo run -p <name> -- --help`:
 
 | Sample | Description |
 |--------|-------------|

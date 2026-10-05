@@ -13,8 +13,7 @@ name: CI
 #           clippy and rustdoc with warnings denied (every feature, the PyO3
 #           crate, and each published crate alone with default features, for
 #           Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs
-#           include private items), then cargo check --locked of each
-#           standalone sample in examples/rust/samples,
+#           include private items),
 #           every-feature Linux tests plus bacnet-cli's feature-off tests,
 #           and the Python bindings built with maturin, their unittest suite
 #           and the PyO3 crate's own Rust tests.
@@ -187,22 +186,13 @@ jobs:
         run: |
           # shellcheck disable=SC2086 # one argument per target
           rustup target add $DEFAULT_FEATURES_TARGETS
-      # rust-cache saves only on a key miss, and its automatic key hashes only
-      # the workspace's Cargo.lock and manifests. SAMPLES_LOCKS, a hash of the
-      # samples' locks in env-vars, puts them in the key's environment hash, so
-      # a lock refresh saves a cache that holds their dependencies in
-      # target/samples. That hash is part of the restore prefix too, so the
-      # first runs on a new one (the PR's and the dev merge's) build from cold.
-      # It is a variable rather than part of `key` so that every Clippy cache
-      # keeps one prefix, which Prune caches relies on.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        env:
-          SAMPLES_LOCKS: ${{ hashFiles('examples/rust/samples/*/Cargo.lock') }}
         with:
           cache-bin: false
-          env-vars: LINUX_FEATURES DEFAULT_FEATURES_TARGETS SAMPLES_LOCKS
+          env-vars: LINUX_FEATURES DEFAULT_FEATURES_TARGETS
           save-if: ${{ github.ref == 'refs/heads/dev' }}
       # Warnings are errors for workspace code only; dependencies are unaffected.
+      # The workspace includes the samples in examples/rust/samples (#1450).
       - name: Clippy (every feature)
         run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$LINUX_FEATURES" -- -D warnings
       # !cancelled(): report every configuration, not just the first failure.
@@ -234,13 +224,6 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
-      # The standalone samples in examples/rust/samples, outside the workspace
-      # with a Cargo.lock each, so no step above compiles them (#1406): fails on
-      # a sample that no longer builds or a stale lock. They share target/samples,
-      # so their common dependencies compile once.
-      - name: Samples (cargo check --locked)
-        if: ${{ !cancelled() }}
-        run: bash scripts/ci/check-samples.sh
       # The runner has about 14 GB free on /, and the largest job needs about
       # 6 GB (docs/ci.md, "Runner"). This logs the margin, and the limits the
       # tests ran under.

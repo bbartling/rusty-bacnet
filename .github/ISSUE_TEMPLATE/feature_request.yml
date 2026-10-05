@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a feature, BACnet service or object support, or an API change.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What you're trying to do, and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The behaviour or API you'd like. For BACnet behaviour, cite the ASHRAE 135 clause numbers and describe the requirement in your own words; please don't paste text from the standard.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Workarounds or other designs you considered.
+  - type: input
+    id: area
+    attributes:
+      label: Crate or area
+      placeholder: bacnet-server, the bacnet CLI, the Python bindings, docs

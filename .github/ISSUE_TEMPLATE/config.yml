@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/jscott3201/rusty-bacnet/blob/dev/.github/SECURITY.md
+    about: Report vulnerabilities privately, as the security policy describes, not in a public issue.
