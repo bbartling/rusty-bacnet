@@ -274,7 +274,8 @@ impl BACnetClient {
     /// tuples: `channel` is a channel number 0..65535, `override_priority_or_none` is 1..16 or
     /// `None`, and `value` is a `PropertyValue`, which the binding encodes, or a `bytes` or
     /// `bytearray` holding one encoded BACnetChannelValue (a single application-tagged
-    /// primitive, or a context-0 lighting command) with no extra wrapper tag (#1359). Raises
+    /// primitive, or a context-0 lighting command, context-1 xy colour or context-2 colour
+    /// command, #1474) with no extra wrapper tag (#1359). Raises
     /// `ValueError`, or `OverflowError` for integers that don't fit, for an argument outside
     /// those rules.
     #[pyo3(signature = (address, group_number, write_priority, change_list, inhibit_delay=None, *, network=None))]

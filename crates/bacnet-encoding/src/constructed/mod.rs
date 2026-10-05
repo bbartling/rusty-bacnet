@@ -92,7 +92,7 @@ pub use calendar::{
     decode_calendar_entry, decode_calendar_entry_list, decode_date_range, encode_calendar_entry,
     encode_calendar_entry_list, encode_date_range,
 };
-pub use channel_value::{channel_value_end, is_lighting_command_channel_value};
+pub use channel_value::{channel_value_end, constructed_channel_value, ConstructedChannelValue};
 pub use color_command::{
     decode_color_command, decode_color_command_value, decode_xy_color, encode_color_command,
     encode_xy_color,

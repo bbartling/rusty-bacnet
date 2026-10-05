@@ -25,6 +25,9 @@ def invalid_write_groups():
     yield 1, 8, [(5, None, two)]  # two values
     yield 1, 8, [(5, None, PropertyValue.list([]))]  # no value
     yield 1, 8, [(5, None, PropertyValue.application_data(b"\x2e\x21\x01\x2f"))]  # constructed
+    # An xy colour of one REAL, and a colour command with no operation (#1474).
+    yield 1, 8, [(5, None, b"\x1e" + REAL_72 + b"\x1f")]
+    yield 1, 8, [(5, None, b"\x2e\x2a\x0a\x8c\x2f")]
 
 
 class WriteGroupTests(unittest.IsolatedAsyncioTestCase):
@@ -160,6 +163,21 @@ class WriteGroupTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(
                             packet[8:], bytes.fromhex("09 01 19 08 2e 09 05") + framed + b"\x2f"
                         )
+
+                # The colour alternatives (#1474) go the same way: an xy
+                # colour (0.5, 0.25) framed in context tag 1, and a colour
+                # command, STEP_UP_CCT by 100 K, framed in context tag 2.
+                xy = bytes.fromhex("1e 44 3f 00 00 00 44 3e 80 00 00 1f")
+                step_up = bytes.fromhex("2e 09 04 59 64 2f")
+                for framed in (xy, step_up):
+                    for value in (framed, PropertyValue.application_data(framed)):
+                        with self.subTest(value=value):
+                            await client.write_group(address, 1, 8, [(5, None, value)])
+                            packet, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 2)
+                            self.assertEqual(
+                                packet[8:],
+                                bytes.fromhex("09 01 19 08 2e 09 05") + framed + b"\x2f",
+                            )
 
 
 class WhoAmITests(unittest.IsolatedAsyncioTestCase):

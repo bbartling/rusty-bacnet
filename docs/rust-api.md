@@ -507,9 +507,14 @@ use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 `group_number` is a `NonZeroU32` (group 0 is reserved) and `write_priority` is 1 to 16.
 Each `GroupChannelValue` carries a `u16` channel number, an optional override priority
 (1 to 16) and the already-encoded BACnetChannelValue in `value`: one
-application-tagged primitive, or a context-0 lighting command, with no wrapper tag.
-A lighting command is the `encode_lighting_command` octets between an opening and
-a closing context tag 0; its priority, when present, must be 1 to 16.
+application-tagged primitive, a context-0 lighting command, or Addendum
+135-2020ca's context-1 xy colour or context-2 colour command (#1474), with no
+wrapper tag. A lighting command is the `encode_lighting_command` octets between
+an opening and a closing context tag 0; its priority, when present, must be 1
+to 16. The colour alternatives frame the `encode_xy_color` and
+`encode_color_command` octets in tags 1 and 2 the same way.
+`bacnet_encoding::constructed::constructed_channel_value` says which
+constructed alternative some octets hold.
 `encode` is fallible: it rejects priorities outside 1 to 16, an empty change list and
 a value that is not a single BACnetChannelValue with `Error::Encoding`, leaving the
 buffer unchanged. `decode` enforces the same rules and rejects trailing data.
@@ -3335,8 +3340,10 @@ delay per member (VALUE_OUT_OF_RANGE otherwise). A member naming the
 server's own Device is stored as the local reference it stands for; one
 naming another Device keeps it (#1264).
 
-Present_Value takes any primitive value or a lighting command framed in
-context tag 0, at priority 1 to 16 (Last_Priority reads 16 when the write
+Present_Value takes any primitive value or one of the constructed
+alternatives: a lighting command framed in context tag 0, or, as Addendum
+135-2020ca adds, an xy colour in tag 1 or a colour command in tag 2 (#1474),
+at priority 1 to 16 (Last_Priority reads 16 when the write
 carried none). Write_Status then reads IN_PROGRESS, and any Present_Value
 write is OBJECT / BUSY until the members are done. A running server writes
 each member through the `write_local` path with the Channel as the initiating
@@ -3344,8 +3351,12 @@ object, at the priority the write carried, once that member's delay has passed;
 every delay counts from the same start. The value is first converted to the
 datatype of the member property's current value by the Table 12-63 rules (a
 REAL 1.0 reaches a Binary Output as ACTIVE, a Multi-state Output as state 1).
-A lighting command goes only to a `Lighting_Command` member, as the command
-without its context-0 framing, which a Lighting Output takes.
+A constructed value goes only to a member of its own datatype, and no
+primitive goes to such a member: a lighting command to a `Lighting_Command`
+and a colour command to a `Color_Command`, each as the command without its
+framing, and an xy colour to a Color object's Present_Value (or
+`Default_Color`) as its two REALs. `MemberDatatype::of` tells those members by
+object type and property.
 Readings of the rules: an Unsigned or ENUMERATED value above 2147483647
 fails for INTEGER, REAL and Double members. A REAL or Double going to an
 integer type keeps its integer part if it lies in 0 to 2147483000 (Unsigned,
@@ -3377,8 +3388,9 @@ a REAL 1.0 reaches a remote Binary Output as ACTIVE. A primitive datatype is
 kept on the Channel until that member, or the whole member list, is written
 again, or a write made with it is refused as a configuration fault (an invalid
 datatype, an unknown property), so later distributions send no read until
-then. No read is sent for a NULL, a lighting command or a `Lighting_Command`
-member. A read that gets no answer after its retries, or whose Who-Is finds
+then. No read is sent for a NULL, a constructed value, or a member whose
+property fixes its datatype (`Lighting_Command`, `Color_Command`, a Color
+object's xy colour). A read that gets no answer after its retries, or whose Who-Is finds
 nothing, counts the device as silent, as a write would (every device executes
 ReadProperty): the member fails as COMMUNICATION_FAILURE with no write sent. A
 read that is refused, or returns NULL or a constructed value, keeps nothing,
