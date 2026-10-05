@@ -200,7 +200,9 @@ fn write_whole_state_text(
 
 /// Write one State_Text element, or the whole array
 /// ([`write_whole_state_text`]); an index past the states is
-/// INVALID_ARRAY_INDEX.
+/// INVALID_ARRAY_INDEX. The size, index 0, changes only with a whole write:
+/// written alone it is WRITE_ACCESS_DENIED, as Event_Message_Texts_Config
+/// answers.
 fn write_state_text(
     number_of_states: &mut u32,
     state_text: &mut Vec<String>,
@@ -210,7 +212,8 @@ fn write_state_text(
 ) -> Result<(), Error> {
     match array_index {
         None => write_whole_state_text(number_of_states, state_text, held, value),
-        Some(index) if index >= 1 && (index as usize) <= state_text.len() => {
+        Some(0) => Err(common::write_access_denied_error()),
+        Some(index) if (index as usize) <= state_text.len() => {
             let PropertyValue::CharacterString(label) = value else {
                 return Err(common::invalid_data_type_error());
             };

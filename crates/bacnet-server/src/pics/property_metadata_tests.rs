@@ -620,8 +620,9 @@ fn pics_multistate_property_metadata_is_exact() {
         (P::EVENT_ALGORITHM_INHIBIT_REF, true, true),
         (P::EVENT_ALGORITHM_INHIBIT, true, true),
         (P::OUT_OF_SERVICE, false, true),
-        // Writable through a whole State_Text write (#1443).
-        (P::NUMBER_OF_STATES, false, true),
+        // A whole State_Text write resizes it, but it takes no write of its
+        // own (#1443).
+        (P::NUMBER_OF_STATES, false, false),
         (P::RELIABILITY, true, true),
         (P::RELIABILITY_EVALUATION_INHIBIT, true, true),
         (P::STATE_TEXT, true, true),

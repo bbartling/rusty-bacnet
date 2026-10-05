@@ -5,9 +5,17 @@
 //! BACnetObjectPropertyReference, which has no device member, so it only
 //! ever names a property of this device; there is nothing remote to read.
 //! The clauses that define the pair (Clause 12.2.31 and its counterparts)
-//! map a BinaryPV of ACTIVE to TRUE and INACTIVE to FALSE, and take a
-//! property that doesn't exist as FALSE. This device also takes FALSE from
-//! a property it can't read or that holds another datatype.
+//! expect a Boolean or a BinaryPV there, map ACTIVE to TRUE and INACTIVE to
+//! FALSE, and take a property that doesn't exist as FALSE.
+//!
+//! A read only says Enumerated, not which enumeration, and an Event_State
+//! of FAULT or a Reliability of NO_SENSOR is Enumerated 1 as well. So the
+//! inhibit is TRUE only for a Boolean TRUE, or for an ACTIVE read from a
+//! property [`holds_binary_pv`] knows as a BinaryPV: Present_Value,
+//! Relinquish_Default, an element of Priority_Array, Alarm_Value and
+//! Feedback_Value on the binary types that have them, and an Access
+//! Credential's Credential_Status. Anything else, a property this device
+//! can't read included, is FALSE.
 //!
 //! The bundled server follows the reference every time it evaluates the
 //! object: the evaluation a write of the object runs, and the one-second
@@ -18,7 +26,7 @@
 //! evaluation already holds, so following takes no lock of its own.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{BinaryPV, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::ObjectDatabase;
@@ -47,15 +55,43 @@ impl ObjectDatabase {
     /// documentation.
     fn inhibit_value(&self, reference: &BACnetObjectPropertyReference) -> bool {
         let property = PropertyIdentifier::from_raw(reference.property_identifier);
-        let value = self.get(&reference.object_identifier).and_then(|object| {
-            object
-                .read_property(property, reference.property_array_index)
-                .ok()
-        });
-        matches!(
-            value,
-            Some(PropertyValue::Boolean(true) | PropertyValue::Enumerated(1))
-        )
+        let index = reference.property_array_index;
+        let target = reference.object_identifier;
+        let value = self
+            .get(&target)
+            .and_then(|object| object.read_property(property, index).ok());
+        match value {
+            Some(PropertyValue::Boolean(inhibit)) => inhibit,
+            Some(PropertyValue::Enumerated(raw)) => {
+                raw == BinaryPV::ACTIVE.to_raw()
+                    && holds_binary_pv(target.object_type(), property, index)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Whether `property`, read at `index`, holds a BACnetBinaryPV on an object
+/// of `object_type`: Tables 12-6, 12-8 and 12-10 for the binary types, and
+/// Table 12-40 for an Access Credential's Credential_Status.
+fn holds_binary_pv(
+    object_type: ObjectType,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+) -> bool {
+    use PropertyIdentifier as P;
+    let commanded = property == P::RELINQUISH_DEFAULT
+        || (property == P::PRIORITY_ARRAY && index.is_some_and(|slot| slot > 0));
+    match object_type {
+        ObjectType::BINARY_INPUT => matches!(property, P::PRESENT_VALUE | P::ALARM_VALUE),
+        ObjectType::BINARY_OUTPUT => {
+            matches!(property, P::PRESENT_VALUE | P::FEEDBACK_VALUE) || commanded
+        }
+        ObjectType::BINARY_VALUE => {
+            matches!(property, P::PRESENT_VALUE | P::ALARM_VALUE) || commanded
+        }
+        ObjectType::ACCESS_CREDENTIAL => property == P::CREDENTIAL_STATUS,
+        _ => false,
     }
 }
 

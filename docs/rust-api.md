@@ -1776,10 +1776,13 @@ CreateObject initial value, sets Number_Of_States to its number of labels
 leave Present_Value, Relinquish_Default, a Priority_Array command or an
 Alarm_Values entry past the new count is `PROPERTY/VALUE_OUT_OF_RANGE` and
 changes nothing. A Multi-state Output's Feedback_Value doesn't block a
-shrink; past the count it shows as CONFIGURATION_ERROR. The metadata and the
-PICS show Number_Of_States as writable through State_Text
-(`PropertyWriteCapability::Through`), though a WriteProperty naming it is
-still refused.
+shrink; past the count it shows as CONFIGURATION_ERROR. A WriteProperty
+naming Number_Of_States is still refused, and so is a write of State_Text's
+size alone, at index 0 (`PROPERTY/WRITE_ACCESS_DENIED`). The metadata gives
+Number_Of_States `PropertyWriteCapability::Through(STATE_TEXT)`, which
+doesn't count as writable, and the PICS keeps its row read-only, marks it
+"resized by writing STATE_TEXT whole", and leaves it off the creation-only
+line.
 
 On these objects the order of the initial values follows one rule: the
 values that give the state count are applied before every other initial
@@ -2699,9 +2702,16 @@ serves Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair
   the inhibit is then read-only. The server reads the property, through
   `ObjectDatabase::follow_event_algorithm_inhibit`, each time it evaluates
   the object: on a write to it and on the one-second tick, so a change
-  reaches the inhibit within a second. ACTIVE and TRUE inhibit; INACTIVE,
-  FALSE, a missing property or another datatype don't. Unset, it reads as
-  Binary Value 4194303's Present_Value, and writing that clears it.
+  reaches the inhibit within a second. A Boolean TRUE inhibits, and so does
+  ACTIVE read from a property known to hold a BinaryPV: Present_Value,
+  Relinquish_Default, a Priority_Array element, Alarm_Value and
+  Feedback_Value of the binary types, and an Access Credential's
+  Credential_Status. Anything else doesn't, an Event_State of FAULT or a
+  Reliability that reads as Enumerated 1 included, nor does a missing
+  property. Unset, it reads as Binary Value 4194303's Present_Value, and
+  writing that clears it and puts the inhibit back to FALSE.
+- Event_Message_Texts_Config is always three entries: a write of its size,
+  index 0, is `PROPERTY/WRITE_ACCESS_DENIED`, as on State_Text.
 
 Every Trend Log samples a BACnet property, so its Start_Time, Stop_Time,
 Log_Interval and Log_DeviceObjectProperty are classed required (Table 12-29

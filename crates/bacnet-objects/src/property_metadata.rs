@@ -77,17 +77,27 @@ pub enum PropertyWriteCapability {
     WhenOutOfService,
     /// Correction is restricted to the original command owner at that priority.
     WhenCommandOwner,
-    /// The property has no write route of its own, but a write to the named
-    /// property changes it too: State_Text written whole sets a multi-state
-    /// object's Number_Of_States (#1443). A WriteProperty naming this
-    /// property itself is refused.
+    /// The property has no write route of its own, but a whole write of the
+    /// named property changes it too: State_Text written whole sets a
+    /// multi-state object's Number_Of_States (#1443). A WriteProperty naming
+    /// this property itself is refused, so it doesn't count as writable.
     Through(PropertyIdentifier),
 }
 
 impl PropertyWriteCapability {
-    /// Whether any network property-write route is implemented.
+    /// Whether a network property-write route naming this property is
+    /// implemented. [`Self::Through`] has none.
     pub const fn is_writable(self) -> bool {
-        !matches!(self, Self::ReadOnly)
+        !matches!(self, Self::ReadOnly | Self::Through(_))
+    }
+
+    /// The property whose whole write changes this one, for
+    /// [`Self::Through`].
+    pub const fn written_through(self) -> Option<PropertyIdentifier> {
+        match self {
+            Self::Through(property) => Some(property),
+            _ => None,
+        }
     }
 }
 

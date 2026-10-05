@@ -191,7 +191,10 @@ fn the_inhibit_is_writable_only_without_a_reference_and_with_detection_on() {
     assert!(!options.inhibited());
     assert!(!options.follow(false), "no change");
 
-    // Writing the reserved instance clears the reference again.
+    // Writing the reserved instance clears the reference again, and the
+    // inhibit it left TRUE goes back to FALSE.
+    assert!(options.follow(true));
+    assert!(options.inhibited());
     options
         .write(
             P::EVENT_ALGORITHM_INHIBIT_REF,
@@ -202,6 +205,22 @@ fn the_inhibit_is_writable_only_without_a_reference_and_with_detection_on() {
         .unwrap()
         .unwrap();
     assert_eq!(options.inhibit_reference(), None);
+    assert!(!options.inhibited());
+    // Clearing a reference that isn't there leaves a written inhibit alone.
+    options
+        .write(P::EVENT_ALGORITHM_INHIBIT, None, &on, true)
+        .unwrap()
+        .unwrap();
+    options
+        .write(
+            P::EVENT_ALGORITHM_INHIBIT_REF,
+            None,
+            &encoded(&binary_value(4_194_303)),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(options.inhibited());
     options
         .write(P::EVENT_ALGORITHM_INHIBIT, None, &on, true)
         .unwrap()

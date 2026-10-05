@@ -179,6 +179,7 @@ mod read_range_audit_log;
 mod read_range_time;
 mod read_rpm;
 mod reference_writes;
+mod reporting_options_writes;
 mod scalar_null_writes;
 mod staging_writes;
 mod state_text_count;

@@ -442,10 +442,11 @@ mod tests {
                     PropertyValue::List(vec![]),
                     ErrorCode::VALUE_OUT_OF_RANGE,
                 ),
+                // The size changes only with a whole write.
                 (
                     Some(0),
                     PropertyValue::Unsigned(2),
-                    ErrorCode::INVALID_ARRAY_INDEX,
+                    ErrorCode::WRITE_ACCESS_DENIED,
                 ),
                 (
                     Some(4),

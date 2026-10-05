@@ -21,6 +21,17 @@ const PROPERTY_CAPABILITIES_EXPLANATION: &str = "Property rows aggregate configu
 /// WriteProperty as a whole, but a CreateObject initial value sets them.
 const CREATION_ONLY_LABEL: &str = "Whole value set only by CreateObject";
 
+/// A row's access as the text and Markdown PICS print it: the flags, and for
+/// a row a whole write of another property changes
+/// ([`PropertySupport::written_through`]) a note saying so, since no write
+/// naming the row itself is taken (#1443).
+fn access_text(row: &PropertySupport) -> String {
+    match row.written_through {
+        Some(through) => format!("{} (resized by writing {through} whole)", row.access),
+        None => row.access.to_string(),
+    }
+}
+
 /// The type's creation-only properties, comma-separated, or `None` if it
 /// has none.
 fn creation_only_names(support: &ObjectTypeSupport) -> Option<String> {
@@ -142,6 +153,10 @@ pub struct PropertySupport {
     pub property_id: PropertyIdentifier,
     /// Aggregated access flags for the property.
     pub access: PropertyAccess,
+    /// The property whose whole write changes this one on some instance,
+    /// although a write naming this one is refused: State_Text for a
+    /// multi-state object's Number_Of_States (#1443).
+    pub written_through: Option<PropertyIdentifier>,
 }
 
 /// Object type support declaration.
@@ -153,7 +168,9 @@ pub struct ObjectTypeSupport {
     pub createable: bool,
     /// The properties a CreateObject initial value may set whole on a type
     /// that is createable, although WriteProperty can't change them later
-    /// (#1429). Empty when the type isn't createable.
+    /// (#1429). Empty when the type isn't createable. A property a whole
+    /// write of another one changes, such as Number_Of_States, isn't listed:
+    /// its row says so instead ([`PropertySupport::written_through`]).
     pub creation_only_properties: Vec<PropertyIdentifier>,
     /// Whether the type can be deleted remotely with DeleteObject.
     pub deleteable: bool,
@@ -406,8 +423,15 @@ impl<'a> PicsGenerator<'a> {
 
             let createable = representative.is_createable();
             let deleteable = representative.is_deleteable();
+            let written_through = |property: &PropertyIdentifier| {
+                supported_properties
+                    .iter()
+                    .any(|row| row.property_id == *property && row.written_through.is_some())
+            };
             let creation_only_properties = if createable {
-                representative.creation_only_properties().to_vec()
+                let mut properties = representative.creation_only_properties().to_vec();
+                properties.retain(|property| !written_through(property));
+                properties
             } else {
                 Vec::new()
             };
@@ -439,6 +463,7 @@ impl<'a> PicsGenerator<'a> {
                         writable: object.is_writable_property(property_id),
                         optional: !required.contains(&property_id),
                     },
+                    written_through: None,
                 })
                 .collect()
         } else {
@@ -451,6 +476,7 @@ impl<'a> PicsGenerator<'a> {
                         writable: row.write_capability.is_writable(),
                         optional: !row.is_required(),
                     },
+                    written_through: row.write_capability.written_through(),
                 })
                 .collect()
         }
@@ -470,6 +496,7 @@ impl<'a> PicsGenerator<'a> {
                     existing.access.readable |= row.access.readable;
                     existing.access.writable |= row.access.writable;
                     existing.access.optional &= row.access.optional;
+                    existing.written_through = existing.written_through.or(row.written_through);
                 })
                 .or_insert(row);
         }
@@ -601,7 +628,7 @@ impl Pics {
                 out.push_str(&format!(
                     "    {:<40} {}\n",
                     prop.property_id.to_string(),
-                    prop.access
+                    access_text(prop)
                 ));
             }
         }
@@ -711,7 +738,11 @@ impl Pics {
             out.push_str("| Property | Access |\n");
             out.push_str("|----------|--------|\n");
             for prop in &ot.supported_properties {
-                out.push_str(&format!("| {} | {} |\n", prop.property_id, prop.access));
+                out.push_str(&format!(
+                    "| {} | {} |\n",
+                    prop.property_id,
+                    access_text(prop)
+                ));
             }
             out.push('\n');
         }

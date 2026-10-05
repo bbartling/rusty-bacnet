@@ -20,6 +20,8 @@
 //!   member, so it can only name a property of this device. Unset, it reads
 //!   as Binary Value 4194303's Present_Value, the reserved-instance form
 //!   other bare references take (#1417), and writing that form clears it.
+//!   Clearing it also puts Event_Algorithm_Inhibit back to FALSE, so the
+//!   object isn't left inhibited by a reference it no longer has.
 //! - **Event_Algorithm_Inhibit** is writable while there is no reference and
 //!   Event_Detection_Enable is TRUE; otherwise a write is
 //!   WRITE_ACCESS_DENIED. With a reference, the database refreshes it from
@@ -52,6 +54,12 @@ use crate::reference::{self, ReferenceFrame};
 /// The three rows, in the order the object tables list them. Each is only
 /// permitted, not required, of an intrinsic reporter, and each takes writes,
 /// Event_Algorithm_Inhibit only while it follows no reference.
+///
+/// Event_Algorithm_Inhibit's own footnote (6 in Table 12-2) makes it
+/// mandatory wherever Event_Algorithm_Inhibit_Ref is present, which here is
+/// always. It still keeps the class its intrinsic-reporting footnote gives,
+/// as Reliability does on objects that serve Reliability_Evaluation_Inhibit,
+/// whose footnote 7 ties Reliability's presence to it the same way.
 pub(crate) const REPORTING_OPTION_METADATA: [PropertyMetadata; 3] = [
     PropertyMetadata::new(
         P::EVENT_MESSAGE_TEXTS_CONFIG,
@@ -157,8 +165,10 @@ impl ReportingOptions {
     ///
     /// Event_Message_Texts_Config takes three CharacterStrings whole
     /// (VALUE_OUT_OF_RANGE for another count) or one by index 1 to 3; its
-    /// size, index 0, is fixed (WRITE_ACCESS_DENIED). The reference takes
-    /// the encodings Loop's references take ([`crate::reference`]).
+    /// size, index 0, is fixed (WRITE_ACCESS_DENIED, the answer State_Text
+    /// gives there too). The reference takes the encodings
+    /// Loop's references take ([`crate::reference`]); clearing it puts the
+    /// inhibit back to FALSE.
     pub(crate) fn write(
         &mut self,
         property: P,
@@ -174,8 +184,13 @@ impl ReportingOptions {
                 Err(common::property_is_not_an_array_error())
             }
             P::EVENT_ALGORITHM_INHIBIT_REF => {
-                reference::decode_reference_write(value, ReferenceFrame::Bare)
-                    .map(|reference| self.inhibit_reference = reference)
+                reference::decode_reference_write(value, ReferenceFrame::Bare).map(|reference| {
+                    // Cleared, the reference leaves no inhibit behind.
+                    if reference.is_none() && self.inhibit_reference.is_some() {
+                        self.inhibit = false;
+                    }
+                    self.inhibit_reference = reference;
+                })
             }
             P::EVENT_ALGORITHM_INHIBIT => {
                 let PropertyValue::Boolean(inhibit) = *value else {
