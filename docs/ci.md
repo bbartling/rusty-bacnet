@@ -48,7 +48,13 @@ Merge pushes to `dev` run the Lean jobs, for two reasons (#904).
   repo's merge commits, the `dev` run is the only test of what actually
   landed, after any merges since.
 
-A newer merge cancels the previous merge's run, since it tests a superset.
+Each push to `dev` gets a concurrency group of its own, keyed by its commit,
+and nothing cancels its run, as in the
+[native tests](#native-tests-macos-and-windows): two merges minutes apart each
+get a result, and a late duplicate push event for an older commit can't
+cancel the run for `dev`'s head. Every other run is grouped by event and ref,
+so a newer push to a PR, to `main` or to a tag, or a newer scheduled or manual
+run on a branch, cancels the one it supersedes.
 **After merging, check the `dev` run.** It isn't a required status, so a red
 merge run is the only signal of merge skew; fix it forward on `dev` right away.
 The weekly scheduled run checks the default branch (`dev`) with the Heavy jobs
