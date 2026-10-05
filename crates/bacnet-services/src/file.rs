@@ -1,75 +1,32 @@
-//! AtomicReadFile / AtomicWriteFile services per ASHRAE 135-2020 Clauses 15.1–15.2.
+//! AtomicReadFile / AtomicWriteFile services per ASHRAE 135-2020 Clauses 14.1–14.2.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_app_object_id, decode_app_primitive, decode_app_unsigned, decode_ctx_constructed,
+    decode_ctx_primitive, expect_end, next_is_context, next_is_opening,
+};
 use bacnet_encoding::{primitives, tags};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::{enums::RejectReason, error::Error};
 use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
 
-/// Decode a tag and validate the resulting slice bounds.
-fn checked_slice<'a>(
-    content: &'a [u8],
-    offset: usize,
-    context: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (t, p) = tags::decode_tag(content, offset)?;
-    let end = p + t.length as usize;
-    if end > content.len() {
-        return Err(Error::decoding(p, format!("{context} truncated")));
-    }
-    Ok((&content[p..end], end))
+/// The application-tagged INTEGER at `offset` (a file-start-position or
+/// file-start-record) and the offset past it.
+fn decode_start(data: &[u8], offset: usize, what: &str) -> Result<(i32, usize), Error> {
+    let (octets, end) = decode_app_primitive(data, offset, tags::app_tag::SIGNED, what)?;
+    Ok((primitives::decode_signed(octets)?, end))
 }
 
-fn checked_application_slice<'a>(
-    content: &'a [u8],
-    offset: usize,
-    expected_tag: u8,
-    context: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, pos) = tags::decode_tag(content, offset)?;
-    if tag.class != tags::TagClass::Application
-        || tag.number != expected_tag
-        || tag.is_opening
-        || tag.is_closing
-    {
-        return Err(Error::decoding(
-            offset,
-            format!("{context} has the wrong application tag"),
-        ));
+/// The fault where `what`'s access-method choice, `[0]` or `[1]`, is due at
+/// `offset` and neither opens there: a missing member when the data ends
+/// after the file identifier, any other tag a wrong one.
+fn unknown_access_method(data: &[u8], offset: usize, what: &str) -> Error {
+    if offset >= data.len() {
+        Error::missing(offset, format!("{what}: access method missing"))
+    } else {
+        Error::invalid_tag(offset, format!("{what}: unknown access method"))
     }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{context} length overflow")))?;
-    if end > content.len() {
-        return Err(Error::decoding(pos, format!("{context} truncated")));
-    }
-    Ok((&content[pos..end], end))
-}
-
-fn checked_unsigned_u32(
-    content: &[u8],
-    offset: usize,
-    context: &str,
-) -> Result<(u32, usize), Error> {
-    let (tag, pos) = tags::decode_tag(content, offset)?;
-    if tag.class != tags::TagClass::Application
-        || tag.number != tags::app_tag::UNSIGNED
-        || content[offset] & 0x07 > 5
-    {
-        return Err(Error::decoding(
-            offset,
-            format!("{context} expected application Unsigned"),
-        ));
-    }
-    let end = pos + tag.length as usize;
-    if end > content.len() {
-        return Err(Error::decoding(pos, format!("{context} truncated")));
-    }
-    let raw = primitives::decode_unsigned(&content[pos..end])?;
-    let value = u32::try_from(raw)
-        .map_err(|_| Error::decoding(pos, format!("{context} {raw} exceeds u32")))?;
-    Ok((value, end))
 }
 
 // ---------------------------------------------------------------------------
@@ -79,14 +36,18 @@ fn checked_unsigned_u32(
 /// AtomicReadFile-Request — stream or record access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicReadFileRequest {
+    /// File object to read from; should be of object type File (not checked here).
     pub file_identifier: ObjectIdentifier,
+    /// Stream or record access, with the position and amount requested.
     pub access: FileAccessMethod,
 }
 
 /// AtomicWriteFile-Request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicWriteFileRequest {
+    /// File object to write to; should be of object type File (not checked here).
     pub file_identifier: ObjectIdentifier,
+    /// Stream or record access, with the data to write.
     pub access: FileWriteAccessMethod,
 }
 
@@ -95,12 +56,16 @@ pub struct AtomicWriteFileRequest {
 pub enum FileAccessMethod {
     /// Stream access: file_start_position, requested_octet_count.
     Stream {
+        /// Octet offset at which reading starts (0 is the first octet).
         file_start_position: i32,
+        /// Maximum number of octets the responder should return.
         requested_octet_count: u32,
     },
     /// Record access: file_start_record, requested_record_count.
     Record {
+        /// Record number at which reading starts (0 is the first record).
         file_start_record: i32,
+        /// Maximum number of records the responder should return.
         requested_record_count: u32,
     },
 }
@@ -108,20 +73,30 @@ pub enum FileAccessMethod {
 /// File access method for writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileWriteAccessMethod {
-    /// Stream access: file_start_position, file_data.
+    /// Stream access: `file_data` is written beginning at octet offset
+    /// `file_start_position`, or appended when that offset is -1.
     Stream {
+        /// Octet offset at which writing starts, or -1 to append to the end of the file.
         file_start_position: i32,
+        /// Octets to write.
         file_data: Vec<u8>,
     },
-    /// Record access: file_start_record, record_count, file_record_data.
+    /// Record access: `record_count` records taken from `file_record_data` are
+    /// written beginning at record number `file_start_record`, or appended when
+    /// that record number is -1.
     Record {
+        /// Record number at which writing starts, or -1 to append after the last record.
         file_start_record: i32,
+        /// Number of records supplied in `file_record_data`. Encode writes it as given; decode
+        /// rejects a count that doesn't match the records.
         record_count: u32,
+        /// Records to write, each one an opaque octet string.
         file_record_data: Vec<Vec<u8>>,
     },
 }
 
 impl AtomicReadFileRequest {
+    /// Encode the request parameters (Clause 14.1.2) into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_object_id(buf, &self.file_identifier);
         match &self.access {
@@ -146,49 +121,49 @@ impl AtomicReadFileRequest {
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// on a member under any tag but its application tag, and on octets after the access
+    /// frame's members or after the frame.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
+        let (file_identifier, offset) =
+            decode_app_object_id(data, 0, "AtomicReadFile file-identifier")?;
 
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let file_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        let access = if tag.is_opening_tag(0) {
-            let (content, _) = tags::extract_context_value(data, tag_end, 0)?;
-            let (slice, inner) =
-                checked_slice(content, 0, "AtomicReadFile stream file-start-position")?;
-            let file_start_position = primitives::decode_signed(slice)?;
-            let (requested_octet_count, _) = checked_unsigned_u32(
+        let (access, end) = if next_is_opening(data, offset, 0)? {
+            const WHAT: &str = "AtomicReadFile stream";
+            let (content, end) = decode_ctx_constructed(data, offset, 0, WHAT)?;
+            let (file_start_position, inner) =
+                decode_start(content, 0, "AtomicReadFile stream file-start-position")?;
+            let (requested_octet_count, inner) = decode_app_unsigned::<u32>(
                 content,
                 inner,
                 "AtomicReadFile stream requested-octet-count",
             )?;
-            FileAccessMethod::Stream {
+            expect_end(content, inner, offset, WHAT)?;
+            let access = FileAccessMethod::Stream {
                 file_start_position,
                 requested_octet_count,
-            }
-        } else if tag.is_opening_tag(1) {
-            let (content, _) = tags::extract_context_value(data, tag_end, 1)?;
-            let (slice, inner) =
-                checked_slice(content, 0, "AtomicReadFile record file-start-record")?;
-            let file_start_record = primitives::decode_signed(slice)?;
-            let (requested_record_count, _) = checked_unsigned_u32(
+            };
+            (access, end)
+        } else if next_is_opening(data, offset, 1)? {
+            const WHAT: &str = "AtomicReadFile record";
+            let (content, end) = decode_ctx_constructed(data, offset, 1, WHAT)?;
+            let (file_start_record, inner) =
+                decode_start(content, 0, "AtomicReadFile record file-start-record")?;
+            let (requested_record_count, inner) = decode_app_unsigned::<u32>(
                 content,
                 inner,
                 "AtomicReadFile record requested-record-count",
             )?;
-            FileAccessMethod::Record {
+            expect_end(content, inner, offset, WHAT)?;
+            let access = FileAccessMethod::Record {
                 file_start_record,
                 requested_record_count,
-            }
+            };
+            (access, end)
         } else {
-            return Err(Error::decoding(offset, "Unknown file access method"));
+            return Err(unknown_access_method(data, offset, "AtomicReadFile"));
         };
+        expect_end(data, end, end, "AtomicReadFile")?;
 
         Ok(Self {
             file_identifier,
@@ -198,6 +173,7 @@ impl AtomicReadFileRequest {
 }
 
 impl AtomicWriteFileRequest {
+    /// Encode the request parameters (Clause 14.2.2) into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_object_id(buf, &self.file_identifier);
         match &self.access {
@@ -226,65 +202,70 @@ impl AtomicWriteFileRequest {
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// on a member under any tag but its application tag, and on octets after the stream
+    /// frame's file data or after the frame. In record access, a record list that doesn't
+    /// match its count is a Reject: MISSING_REQUIRED_PARAMETER when records are missing,
+    /// TOO_MANY_ARGUMENTS when anything follows the counted ones.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
+        let (file_identifier, offset) =
+            decode_app_object_id(data, 0, "AtomicWriteFile file-identifier")?;
 
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let file_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        let access = if tag.is_opening_tag(0) {
-            let (content, _) = tags::extract_context_value(data, tag_end, 0)?;
-            let (slice, inner) =
-                checked_slice(content, 0, "AtomicWriteFile stream file-start-position")?;
-            let file_start_position = primitives::decode_signed(slice)?;
-            let (slice, _) = checked_slice(content, inner, "AtomicWriteFile stream file-data")?;
-            let file_data = slice.to_vec();
-            FileWriteAccessMethod::Stream {
+        let (access, end) = if next_is_opening(data, offset, 0)? {
+            const WHAT: &str = "AtomicWriteFile stream";
+            let (content, end) = decode_ctx_constructed(data, offset, 0, WHAT)?;
+            let (file_start_position, inner) =
+                decode_start(content, 0, "AtomicWriteFile stream file-start-position")?;
+            let (file_data, inner) = decode_app_primitive(
+                content,
+                inner,
+                tags::app_tag::OCTET_STRING,
+                "AtomicWriteFile stream file-data",
+            )?;
+            expect_end(content, inner, offset, WHAT)?;
+            let access = FileWriteAccessMethod::Stream {
                 file_start_position,
-                file_data,
-            }
-        } else if tag.is_opening_tag(1) {
-            let (content, _) = tags::extract_context_value(data, tag_end, 1)?;
-            let (slice, mut inner) =
-                checked_slice(content, 0, "AtomicWriteFile record file-start-record")?;
-            let file_start_record = primitives::decode_signed(slice)?;
+                file_data: file_data.to_vec(),
+            };
+            (access, end)
+        } else if next_is_opening(data, offset, 1)? {
+            let (content, end) = decode_ctx_constructed(data, offset, 1, "AtomicWriteFile record")?;
+            let (file_start_record, mut inner) =
+                decode_start(content, 0, "AtomicWriteFile record file-start-record")?;
             let (record_count, new_inner) =
-                checked_unsigned_u32(content, inner, "AtomicWriteFile record record-count")?;
+                decode_app_unsigned::<u32>(content, inner, "AtomicWriteFile record record-count")?;
             inner = new_inner;
             if record_count as usize > MAX_DECODED_ITEMS {
-                return Err(Error::decoding(0, "record count exceeds maximum"));
+                return Err(Error::overflow(0, "record count exceeds maximum"));
             }
             let mut file_record_data = Vec::new();
             for i in 0..record_count {
                 if inner >= content.len() {
-                    return Err(Error::Reject {
-                        reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
-                    });
+                    return Err(Error::missing(
+                        inner,
+                        format!("AtomicWriteFile record: record {i} of the count is missing"),
+                    ));
                 }
-                let (slice, new_inner) =
-                    checked_slice(content, inner, &format!("AtomicWriteFile record data[{i}]"))?;
-                file_record_data.push(slice.to_vec());
+                let (record, new_inner) = decode_app_primitive(
+                    content,
+                    inner,
+                    tags::app_tag::OCTET_STRING,
+                    &format!("AtomicWriteFile record data[{i}]"),
+                )?;
+                file_record_data.push(record.to_vec());
                 inner = new_inner;
             }
-            if inner < content.len() {
-                return Err(Error::Reject {
-                    reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
-                });
-            }
-            FileWriteAccessMethod::Record {
+            expect_end(content, inner, inner, "AtomicWriteFile record")?;
+            let access = FileWriteAccessMethod::Record {
                 file_start_record,
                 record_count,
                 file_record_data,
-            }
+            };
+            (access, end)
         } else {
-            return Err(Error::decoding(offset, "Unknown file write access method"));
+            return Err(unknown_access_method(data, offset, "AtomicWriteFile"));
         };
+        expect_end(data, end, end, "AtomicWriteFile")?;
 
         Ok(Self {
             file_identifier,
@@ -300,7 +281,9 @@ impl AtomicWriteFileRequest {
 /// AtomicReadFile-ACK — response for stream or record access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicReadFileAck {
+    /// True when the returned data reaches the end of the file.
     pub end_of_file: bool,
+    /// Stream or record data returned, with its starting position.
     pub access: FileReadAckMethod,
 }
 
@@ -309,18 +292,24 @@ pub struct AtomicReadFileAck {
 pub enum FileReadAckMethod {
     /// Stream access: file_start_position + returned data.
     Stream {
+        /// Octet offset within the file of the first returned octet.
         file_start_position: i32,
+        /// Octets read from the file.
         file_data: Vec<u8>,
     },
     /// Record access: file_start_record + returned records.
     Record {
+        /// Record number of the first returned record.
         file_start_record: i32,
+        /// Number of records returned in `file_record_data`.
         returned_record_count: u32,
+        /// Records read from the file, each one an opaque octet string.
         file_record_data: Vec<Vec<u8>>,
     },
 }
 
 impl AtomicReadFileAck {
+    /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_boolean(buf, self.end_of_file);
         match &self.access {
@@ -349,6 +338,8 @@ impl AtomicReadFileAck {
         }
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
@@ -370,24 +361,15 @@ impl AtomicReadFileAck {
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         let (access, access_end) = if tag.is_opening_tag(0) {
             let (content, access_end) = tags::extract_context_value(data, tag_end, 0)?;
-            let (slice, inner) = checked_application_slice(
-                content,
-                0,
-                tags::app_tag::SIGNED,
-                "AtomicReadFileAck stream file-start-position",
-            )?;
-            let file_start_position = primitives::decode_signed(slice)?;
-            let (slice, inner) = checked_application_slice(
+            let (file_start_position, inner) =
+                decode_start(content, 0, "AtomicReadFileAck stream file-start-position")?;
+            let (slice, inner) = decode_app_primitive(
                 content,
                 inner,
                 tags::app_tag::OCTET_STRING,
                 "AtomicReadFileAck stream file-data",
             )?;
-            if inner != content.len() {
-                return Err(Error::Reject {
-                    reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
-                });
-            }
+            expect_end(content, inner, inner, "AtomicReadFileAck stream")?;
             let file_data = slice.to_vec();
             (
                 FileReadAckMethod::Stream {
@@ -398,30 +380,26 @@ impl AtomicReadFileAck {
             )
         } else if tag.is_opening_tag(1) {
             let (content, access_end) = tags::extract_context_value(data, tag_end, 1)?;
-            let (slice, mut inner) = checked_application_slice(
-                content,
-                0,
-                tags::app_tag::SIGNED,
-                "AtomicReadFileAck record file-start-record",
-            )?;
-            let file_start_record = primitives::decode_signed(slice)?;
-            let (returned_record_count, new_inner) = checked_unsigned_u32(
+            let (file_start_record, mut inner) =
+                decode_start(content, 0, "AtomicReadFileAck record file-start-record")?;
+            let (returned_record_count, new_inner) = decode_app_unsigned::<u32>(
                 content,
                 inner,
                 "AtomicReadFileAck record returned-record-count",
             )?;
             inner = new_inner;
             if returned_record_count as usize > MAX_DECODED_ITEMS {
-                return Err(Error::decoding(0, "record count exceeds maximum"));
+                return Err(Error::overflow(0, "record count exceeds maximum"));
             }
             let mut file_record_data = Vec::new();
             for i in 0..returned_record_count {
                 if inner >= content.len() {
-                    return Err(Error::Reject {
-                        reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
-                    });
+                    return Err(Error::missing(
+                        inner,
+                        format!("AtomicReadFileAck record: record {i} of the count is missing"),
+                    ));
                 }
-                let (slice, new_inner) = checked_application_slice(
+                let (slice, new_inner) = decode_app_primitive(
                     content,
                     inner,
                     tags::app_tag::OCTET_STRING,
@@ -430,11 +408,7 @@ impl AtomicReadFileAck {
                 file_record_data.push(slice.to_vec());
                 inner = new_inner;
             }
-            if inner != content.len() {
-                return Err(Error::Reject {
-                    reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
-                });
-            }
+            expect_end(content, inner, inner, "AtomicReadFileAck record")?;
             (
                 FileReadAckMethod::Record {
                     file_start_record,
@@ -449,11 +423,7 @@ impl AtomicReadFileAck {
                 "Unknown read file ACK access method",
             ));
         };
-        if access_end != data.len() {
-            return Err(Error::Reject {
-                reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
-            });
-        }
+        expect_end(data, access_end, access_end, "AtomicReadFileAck")?;
 
         Ok(Self {
             end_of_file,
@@ -469,6 +439,7 @@ impl AtomicReadFileAck {
 /// AtomicWriteFile-ACK — response for stream or record access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtomicWriteFileAck {
+    /// Stream or record form of the acknowledgment, echoing where the write took place.
     pub access: FileWriteAckMethod,
 }
 
@@ -476,12 +447,19 @@ pub struct AtomicWriteFileAck {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileWriteAckMethod {
     /// Stream: confirmed file_start_position.
-    Stream { file_start_position: i32 },
+    Stream {
+        /// Octet offset at which the data was actually written.
+        file_start_position: i32,
+    },
     /// Record: confirmed file_start_record.
-    Record { file_start_record: i32 },
+    Record {
+        /// Record number at which the records were actually written.
+        file_start_record: i32,
+    },
 }
 
 impl AtomicWriteFileAck {
+    /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         match &self.access {
             FileWriteAckMethod::Stream {
@@ -495,23 +473,27 @@ impl AtomicWriteFileAck {
         }
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input and on octets after the choice.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (tag, pos) = tags::decode_tag(data, 0)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let access = if tag.is_context(0) {
-            let file_start_position = primitives::decode_signed(&data[pos..end])?;
-            FileWriteAckMethod::Stream {
-                file_start_position,
-            }
-        } else if tag.is_context(1) {
-            let file_start_record = primitives::decode_signed(&data[pos..end])?;
-            FileWriteAckMethod::Record { file_start_record }
+        let (access, end) = if next_is_context(data, 0, 0)? {
+            let (octets, end) =
+                decode_ctx_primitive(data, 0, 0, "AtomicWriteFileAck file-start-position")?;
+            let access = FileWriteAckMethod::Stream {
+                file_start_position: primitives::decode_signed(octets)?,
+            };
+            (access, end)
+        } else if next_is_context(data, 0, 1)? {
+            let (octets, end) =
+                decode_ctx_primitive(data, 0, 1, "AtomicWriteFileAck file-start-record")?;
+            let access = FileWriteAckMethod::Record {
+                file_start_record: primitives::decode_signed(octets)?,
+            };
+            (access, end)
         } else {
             return Err(Error::decoding(0, "Unknown write file ACK access method"));
         };
+        expect_end(data, end, end, "AtomicWriteFileAck")?;
 
         Ok(Self { access })
     }
@@ -740,3 +722,5 @@ mod ack_strict_tests;
 #[cfg(test)]
 #[path = "file_ack_roundtrip_tests.rs"]
 mod ack_roundtrip_tests;
+#[path = "file_ack_size.rs"]
+mod ack_size;

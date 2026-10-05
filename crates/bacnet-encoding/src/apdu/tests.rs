@@ -662,6 +662,22 @@ fn error_pdu_truncated_error_code() {
 }
 
 #[test]
+fn error_pdu_class_or_code_cut_short_is_a_short_buffer() {
+    // An error class, then an error code, that says two octets and holds one.
+    for (wire, need) in [
+        (&[0x50, 0x01, 0x0C, 0x92, 0x00][..], 6),
+        (&[0x50, 0x01, 0x0C, 0x91, 0x02, 0x92, 0x00], 8),
+    ] {
+        match decode_apdu(Bytes::copy_from_slice(wire)) {
+            Err(Error::BufferTooShort { need: n, have }) => {
+                assert_eq!((n, have), (need, wire.len()), "{wire:02X?}");
+            }
+            other => panic!("expected a short buffer for {wire:02X?}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn unconfirmed_request_empty_service_data() {
     let pdu = UnconfirmedRequest {
         service_choice: UnconfirmedServiceChoice::WHO_IS,
@@ -671,4 +687,43 @@ fn unconfirmed_request_empty_service_data() {
     let encoded = encode_to_vec(&apdu);
     let decoded = decode_apdu(Bytes::from(encoded)).unwrap();
     assert_eq!(apdu, decoded);
+}
+
+#[test]
+fn raw_receive_capacity_floors_only_the_confirmed_header() {
+    assert!(max_apdu_header_at_or_below(49).is_err());
+    for (raw, header) in [
+        (50, 50),
+        (127, 50),
+        (1474, 1024),
+        (1476, 1476),
+        (u32::MAX, 1476),
+    ] {
+        assert_eq!(max_apdu_header_at_or_below(raw).unwrap(), header);
+        assert!(is_valid_max_apdu_length(header));
+        let request = Apdu::ConfirmedRequest(ConfirmedRequest {
+            segmented: false,
+            more_follows: false,
+            segmented_response_accepted: false,
+            max_segments: None,
+            max_apdu_length: header,
+            invoke_id: 9,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            service_request: Bytes::new(),
+        });
+        let mut bytes = BytesMut::new();
+        encode_apdu(&mut bytes, &request).unwrap();
+        assert_eq!(
+            bytes[1] & 0x0f,
+            match raw {
+                50 | 127 => 0,
+                1474 => 4,
+                _ => 5,
+            }
+        );
+    }
+    // The encoder's exact-code API and client canonical policy stay strict.
+    assert!(validate_max_apdu_length(1474).is_err());
 }

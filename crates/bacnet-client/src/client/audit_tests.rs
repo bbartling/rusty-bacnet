@@ -7,8 +7,11 @@ use bacnet_services::audit::{
     BACnetAuditLogRecordResult, BACnetAuditNotification,
 };
 use bacnet_transport::loopback::LoopbackTransport;
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::BACnetRecipient;
-use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
 
 fn object_identifier(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
@@ -50,7 +53,7 @@ fn query_request() -> AuditLogQueryRequest {
             source_device_address: None,
             source_object_identifier: Some(object_identifier(ObjectType::ANALOG_INPUT, 13)),
             operations: None,
-            successful_actions_only: false,
+            successful_actions_only: BACnetSuccessFilter::ALL,
         },
         start_at_sequence_number: Some(0x0102_0304),
         requested_count: 513,
@@ -77,7 +80,7 @@ fn query_ack() -> AuditLogQueryAck {
                         hundredths: 78,
                     },
                 ),
-                datum: BACnetAuditLogDatum::LogStatus(0b010),
+                datum: BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED),
             },
         }],
         no_more_items: true,
@@ -256,6 +259,39 @@ async fn audit_log_query_sends_exact_typed_payload_and_decodes_complex_ack() {
 }
 
 #[tokio::test]
+async fn audit_log_query_encodes_failures_only_with_u64_cursor() {
+    // RB-20: the corrected contract's third filter value and Unsigned64
+    // cursor (incl. identities above u32::MAX) round-trip exactly, keeping the
+    // RB-02 codec vectors in `bacnet-services` as the regression anchors.
+    let request = AuditLogQueryRequest {
+        audit_log: object_identifier(ObjectType::AUDIT_LOG, 11),
+        query_parameters: BACnetAuditLogQueryParameters::ByTarget {
+            target_device_identifier: object_identifier(ObjectType::DEVICE, 12),
+            target_device_address: None,
+            target_object_identifier: None,
+            target_property_identifier: None,
+            target_array_index: None,
+            target_priority: None,
+            operations: None,
+            successful_actions_only: BACnetSuccessFilter::FAILURES_ONLY,
+        },
+        start_at_sequence_number: Some(u64::from(u32::MAX) + 1),
+        requested_count: 1,
+    };
+    let mut encoded = BytesMut::new();
+    request.try_encode(&mut encoded).unwrap();
+    assert_eq!(AuditLogQueryRequest::decode(&encoded).unwrap(), request);
+
+    let wrap = AuditLogQueryRequest {
+        start_at_sequence_number: Some(u64::MAX - 1),
+        ..request.clone()
+    };
+    let mut wrapped = BytesMut::new();
+    wrap.try_encode(&mut wrapped).unwrap();
+    assert_eq!(AuditLogQueryRequest::decode(&wrapped).unwrap(), wrap);
+}
+
+#[tokio::test]
 async fn audit_log_query_rejects_malformed_trailing_and_missing_ack_service_data() {
     let client_mac = vec![0x01];
     let remote_mac = vec![0x02];
@@ -346,7 +382,7 @@ async fn audit_helpers_return_encode_errors_without_emitting_a_frame() {
             target_array_index: None,
             target_priority: Some(0),
             operations: None,
-            successful_actions_only: true,
+            successful_actions_only: BACnetSuccessFilter::SUCCESSES_ONLY,
         },
         start_at_sequence_number: None,
         requested_count: 1,

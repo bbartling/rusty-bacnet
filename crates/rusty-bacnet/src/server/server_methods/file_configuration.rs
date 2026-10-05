@@ -180,6 +180,7 @@ mod tests {
 
     fn test_server() -> BACnetServer {
         BACnetServer {
+            registered_network_port: None,
             inner: Arc::new(Mutex::new(None)),
             device_instance: 1,
             device_name: "Test Device".into(),
@@ -189,6 +190,7 @@ mod tests {
             broadcast_address: "255.255.255.255".into(),
             sc_hub: None,
             sc_vmac: None,
+            sc_device_uuid: [0; 16],
             sc_ca_cert: None,
             sc_client_cert: None,
             sc_client_key: None,
@@ -201,9 +203,30 @@ mod tests {
             mstp_max_master: 127,
             mstp_max_info_frames: 1,
             dcc_password: None,
+            mutation_policy: bacnet_server::mutation::MutationPolicy::default(),
+            dcc_policy: server::DccPolicy::default(),
+            dcc_source_restriction: None,
+            dcc_disable_rate_limit: None,
             reinit_password: None,
+            request_admission_policy: server::RequestAdmissionPolicy::default(),
+            read_property_multiple_budget: server::ReadPropertyMultipleBudget::default(),
+            get_alarm_summary_budget: server::GetAlarmSummaryBudget::default(),
+            get_enrollment_summary_budget: server::GetEnrollmentSummaryBudget::default(),
+            atomic_read_file_budget: server::AtomicReadFileBudget::default(),
+            atomic_write_file_budget: server::AtomicWriteFileBudget::default(),
+            read_range_budget: server::ReadRangeBudget::default(),
+            get_event_information_budget: server::GetEventInformationBudget::default(),
+            cov_policy: server::CovPolicy::default(),
+            time_sync_policy: server::TimeSyncPolicy::default(),
+            audit_notification_sink: None,
+            audit_reporters: None,
+            audit_recipient: std::sync::Mutex::new(None),
+            device_bindings: std::collections::BTreeMap::new(),
+            forwarding_configuration_started: AtomicBool::new(false),
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
+            pending_forwarder_save_counters: std::sync::Mutex::new(Vec::new()),
+            forwarder_save_counters: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -258,6 +281,7 @@ mod tests {
 
     #[test]
     fn pending_lookup_uses_file_identity_and_reverse_replacement_order() {
+        Python::initialize();
         let server = test_server();
         server
             .push_pending(Box::new(file(4, "FIRST", b"first")))
@@ -296,6 +320,7 @@ mod tests {
 
     #[test]
     fn missing_wrong_capability_invalid_method_and_mode_errors_are_atomic() {
+        Python::initialize();
         let server = test_server();
         server
             .push_pending(Box::new(BinaryValueObject::new(5, "NON-FILE").unwrap()))
@@ -362,6 +387,7 @@ mod tests {
 
     #[test]
     fn started_and_drained_states_reject_without_mutation() {
+        Python::initialize();
         let started = test_server();
         started
             .push_pending(Box::new(file(8, "STARTED", b"kept")))

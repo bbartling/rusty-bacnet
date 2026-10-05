@@ -1,15 +1,5 @@
-use bacnet_types::constructed::{BACnetEventParameter, FaultParameters};
 use bacnet_types::enums::{EventState, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-
-use crate::event::history::EventHistory;
-
-pub(super) struct AlertEnrollmentWriteRollback {
-    pub(super) enabled: bool,
-    pub(super) event_state: u32,
-    pub(super) acked_transitions: u8,
-    pub(super) event_history: EventHistory,
-}
 
 /// Effective object, property, and optional array index that own an Event
 /// Enrollment object's private evaluation state.
@@ -22,10 +12,10 @@ pub type EventEnrollmentMonitoredSource = (ObjectIdentifier, PropertyIdentifier,
 /// type because the driving mechanism differs: the server evaluator advances
 /// `remaining` once per *evaluation pass* (the `event_enrollment_task`
 /// interval, configurable via #133), whereas the intrinsic detectors tick on
-/// a fixed one-second task and seed from per-write probes. Clause 13.2.4
-/// semantics are shared — the observable `Event_State` holds at the confirmed
-/// state while the countdown runs, a reverted condition cancels without
-/// firing, and a redundant qualifying observation never re-seeds — but the
+/// a fixed one-second task and seed from per-write probes. The Clause 13.3
+/// delay semantics are shared — the observable `Event_State` holds at the
+/// confirmed state while the countdown runs, a reverted condition cancels
+/// without firing, and a redundant qualifying observation never re-seeds — but the
 /// two implementations do not share code across the objects/server boundary.
 ///
 /// In-memory only: like the intrinsic detectors' pending state and baselines,
@@ -43,8 +33,8 @@ pub struct EventEnrollmentPending {
     /// seconds by the evaluator as `ceil(delay_secs / interval_secs)`.
     pub remaining: u32,
     /// Identity of the indicating condition, per algorithm. CHANGE_OF_STATE
-    /// uses one identity for condition (a)'s "any" alarm value and a
-    /// value-specific identity for condition (c)'s "that" value.
+    /// uses one identity for condition (a)'s set-membership check and a
+    /// value-specific identity for condition (c)'s sustained-value check.
     /// CHANGE_OF_BITSTRING uses the masked monitored bytes. Algorithms whose
     /// delay applies to the threshold condition itself (OUT_OF_RANGE,
     /// FLOATING_LIMIT, CHANGE_OF_VALUE) use `0`; the target identifies them.
@@ -71,37 +61,15 @@ pub struct EventEnrollmentPending {
 pub struct EventEnrollmentEvalState {
     /// Delayed transition in flight, if any.
     pub pending: Option<EventEnrollmentPending>,
-    /// CHANGE_OF_VALUE detection baseline (Clause 13.3.3: "the value of the
-    /// monitored value when a transition to NORMAL is indicated shall be used
-    /// in evaluation of the conditions until the next transition to NORMAL is
-    /// indicated"). `None` before the first sample; the first observed value
-    /// initializes it without indicating a transition ("the initialization of
-    /// the value used in evaluation before the first transition to NORMAL is
-    /// indicated is a local matter" — the policy chosen here).
+    /// CHANGE_OF_VALUE detection baseline. Clause 13.3.3 retains the sample
+    /// from a NORMAL indication for subsequent comparisons until the next
+    /// NORMAL indication replaces it. Initialization before that first
+    /// indication is implementation-defined: here it is `None` until the
+    /// first sample, which establishes a baseline without a transition.
     pub cov_baseline: Option<PropertyValue>,
-    /// Domain-tagged identity of the monitored value that caused the last
-    /// transition to OFFNORMAL. CHANGE_OF_STATE condition (c) requires a
+    /// Domain-tagged identity of the monitored value behind the most recent
+    /// OFFNORMAL transition. CHANGE_OF_STATE condition (c) requires a
     /// re-indication only for a different alarm value; retaining the BACnet
     /// datatype keeps equal numeric values from different domains distinct.
     pub last_offnormal_value: Option<u64>,
-}
-
-pub(super) enum EventEnrollmentWriteRollback {
-    Detection {
-        enabled: bool,
-        event_state: u32,
-        acked_transitions: u8,
-        event_history: EventHistory,
-        monitored_reference: Option<EventEnrollmentMonitoredSource>,
-        evaluation: EventEnrollmentEvalState,
-    },
-    EventParameters {
-        value: BACnetEventParameter,
-        pending: Option<EventEnrollmentPending>,
-    },
-    FaultParameters(Option<FaultParameters>),
-    TimeDelayNormal {
-        value: Option<u32>,
-        pending: Option<EventEnrollmentPending>,
-    },
 }

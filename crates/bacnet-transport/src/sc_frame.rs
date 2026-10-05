@@ -12,14 +12,23 @@
 use bacnet_types::error::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 
+mod address_resolution;
+mod advertisement;
 mod connect;
 mod control;
+mod npdu;
+mod proprietary;
 mod result;
+
+pub(crate) use address_resolution::{address_resolution_message_error, is_valid_wss_uri};
+pub(crate) use advertisement::advertisement_message_error;
+pub(crate) use proprietary::proprietary_message_error;
 
 pub(crate) use connect::connect_message_error;
 #[cfg(feature = "sc-tls")]
 pub(crate) use connect::validate_connect_request;
 pub(crate) use control::{control_envelope_error, validate_control, ControlRecipient};
+pub(crate) use npdu::missing_npdu_payload;
 
 #[cfg(test)]
 pub(crate) mod heartbeat_test_support;
@@ -32,6 +41,9 @@ pub use result::{decode_sc_bvlc_result, ScBvlcResult};
 /// BACnet/SC hub WebSocket subprotocol (Annex AB.7.1).
 pub const BACNET_SC_HUB_SUBPROTOCOL: &str = "hub.bsc.bacnet.org";
 
+/// BACnet/SC direct-connection WebSocket subprotocol (Annex AB.7.1).
+pub const BACNET_SC_DIRECT_SUBPROTOCOL: &str = "dc.bsc.bacnet.org";
+
 /// BACnet/SC BVLC function codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -40,25 +52,25 @@ pub enum ScFunction {
     Result = 0x00,
     /// Encapsulated-NPDU — carries BACnet NPDU data.
     EncapsulatedNpdu = 0x01,
-    /// Address-Resolution
+    /// Address-Resolution — asks a node for its direct-connect WebSocket URIs.
     AddressResolution = 0x02,
-    /// Address-Resolution-ACK
+    /// Address-Resolution-ACK — reply listing those direct-connect URIs.
     AddressResolutionAck = 0x03,
-    /// Advertisement
+    /// Advertisement — reports hub status, direct-connect support and size limits.
     Advertisement = 0x04,
-    /// Advertisement-Solicitation
+    /// Advertisement-Solicitation — prompts a node to send an Advertisement.
     AdvertisementSolicitation = 0x05,
-    /// Connect-Request
+    /// Connect-Request — initiator's bid to open a hub or direct connection.
     ConnectRequest = 0x06,
-    /// Connect-Accept
+    /// Connect-Accept — the accepting peer's yes to a Connect-Request.
     ConnectAccept = 0x07,
-    /// Disconnect-Request
+    /// Disconnect-Request — asks the peer to close the connection cleanly.
     DisconnectRequest = 0x08,
-    /// Disconnect-ACK
+    /// Disconnect-ACK — confirms a Disconnect-Request.
     DisconnectAck = 0x09,
-    /// Heartbeat-Request
+    /// Heartbeat-Request — liveness probe for an otherwise idle connection.
     HeartbeatRequest = 0x0A,
-    /// Heartbeat-ACK
+    /// Heartbeat-ACK — answers a Heartbeat-Request to show the link is up.
     HeartbeatAck = 0x0B,
     /// Proprietary-Message
     ProprietaryMessage = 0x0C,
@@ -67,6 +79,7 @@ pub enum ScFunction {
 }
 
 impl ScFunction {
+    /// Map a wire function-code octet to an `ScFunction`; unassigned values become `Unknown`.
     pub fn from_raw(val: u8) -> Self {
         match val {
             0x00 => Self::Result,
@@ -86,6 +99,7 @@ impl ScFunction {
         }
     }
 
+    /// Wire function-code octet for this function (the original value for `Unknown`).
     pub fn to_raw(self) -> u8 {
         match self {
             Self::Result => 0x00,
@@ -173,8 +187,9 @@ pub fn is_broadcast_vmac(vmac: &Vmac) -> bool {
 
 /// Check if a VMAC has the Clause H.7.3 Random-48 shape.
 ///
-/// A Random-48 VMAC is six octets with the least significant four bits of the
-/// first octet fixed at B'0010' (X'2'); the remaining 44 bits are random.
+/// The only fixed part of a Random-48 VMAC is the low nibble of its first
+/// octet, which is always X'2' (B'0010'). The other 44 bits are random, so
+/// that nibble is all this check can test.
 pub fn is_valid_random48_vmac(vmac: &Vmac) -> bool {
     vmac[0] & 0x0F == 0x02
 }
@@ -197,9 +212,13 @@ fn is_valid_sc_option_type(option_type: u8) -> bool {
 /// A decoded BACnet/SC BVLC message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScMessage {
+    /// BVLC function this message carries.
     pub function: ScFunction,
+    /// Message identifier, echoed by the peer in its reply.
     pub message_id: u16,
+    /// Originating VMAC, or `None` when the header omits it.
     pub originating_vmac: Option<Vmac>,
+    /// Destination VMAC, or `None` when the header omits it.
     pub destination_vmac: Option<Vmac>,
     /// Destination options (TLV-encoded).
     pub dest_options: Vec<ScOption>,

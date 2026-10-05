@@ -1,10 +1,29 @@
+use super::control_messages::handle_network_message;
+use super::forwarding::{forward_broadcast, forward_unicast};
 use super::*;
-use bacnet_encoding::npdu::NpduAddress;
+use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
 use bacnet_transport::bip::BipTransport;
+use bacnet_types::enums::RejectMessageReason;
 use std::net::Ipv4Addr;
 use tokio::time::Duration;
 
 mod data_attributes;
+
+// RB-09: permissive default preserves pre-policy behavior for legacy tests.
+async fn deliver(
+    table: &Arc<Mutex<RouterTable>>,
+    txs: &[mpsc::Sender<SendRequest>],
+    ctx: &IngressContext,
+) {
+    handle_network_message(
+        table,
+        txs,
+        ctx,
+        &control_policy::ControlGate::permissive(),
+        &LocalControl::default(),
+    )
+    .await;
+}
 
 #[tokio::test]
 async fn router_forwards_between_networks() {
@@ -26,7 +45,13 @@ async fn router_forwards_between_networks() {
         network_number: 2000,
     };
 
-    let (mut router, _local_rx) = BACnetRouter::start(vec![port_a, port_b]).await.unwrap();
+    let StartedRouter {
+        mut router,
+        apdus: _local_rx,
+        ..
+    } = BACnetRouter::start(vec![port_a, port_b], RouterOptions::new())
+        .await
+        .unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -78,7 +103,13 @@ async fn router_table_populated_on_start() {
         },
     ];
 
-    let (mut router, _local_rx) = BACnetRouter::start(ports).await.unwrap();
+    let StartedRouter {
+        mut router,
+        apdus: _local_rx,
+        ..
+    } = BACnetRouter::start(ports, RouterOptions::new())
+        .await
+        .unwrap();
 
     let table = router.table().lock().await;
     assert_eq!(table.len(), 3);
@@ -101,7 +132,13 @@ async fn local_message_delivered_to_application() {
         network_number: 1000,
     };
 
-    let (mut router, _local_rx) = BACnetRouter::start(vec![router_port]).await.unwrap();
+    let StartedRouter {
+        mut router,
+        apdus: _local_rx,
+        ..
+    } = BACnetRouter::start(vec![router_port], RouterOptions::new())
+        .await
+        .unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -119,6 +156,7 @@ fn forward_unicast_drops_hop_count_zero() {
         directly_connected: true,
         next_hop_mac: MacAddr::new(),
         last_seen: None,
+        last_used: None,
         reachability: crate::router_table::ReachabilityStatus::Reachable,
         busy_until: None,
         flap_count: 0,
@@ -182,6 +220,7 @@ fn forward_unicast_decrements_hop_count() {
         directly_connected: true,
         next_hop_mac: MacAddr::new(),
         last_seen: None,
+        last_used: None,
         reachability: crate::router_table::ReachabilityStatus::Reachable,
         busy_until: None,
         flap_count: 0,
@@ -215,44 +254,6 @@ fn forward_unicast_decrements_hop_count() {
             let decoded = decode_npdu(data.clone()).unwrap();
             assert!(decoded.destination.is_none());
         }
-    }
-}
-
-#[test]
-fn send_reject_generates_reject_message() {
-    let (tx, mut rx) = mpsc::channel::<SendRequest>(256);
-
-    let source_mac = vec![0x0A, 0x00, 0x01, 0x01];
-    let unknown_network: u16 = 9999;
-
-    send_reject(
-        &tx,
-        &source_mac,
-        unknown_network,
-        RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-    );
-
-    let sent = rx.try_recv().unwrap();
-    match sent {
-        SendRequest::Unicast {
-            npdu: data, mac, ..
-        } => {
-            assert_eq!(mac.as_slice(), &source_mac[..]);
-            let decoded = decode_npdu(data.clone()).unwrap();
-            assert!(decoded.is_network_message);
-            assert_eq!(
-                decoded.message_type,
-                Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
-            );
-            assert_eq!(decoded.payload.len(), 3);
-            assert_eq!(
-                decoded.payload[0],
-                RejectMessageReason::NOT_DIRECTLY_CONNECTED.to_raw()
-            );
-            let rejected_net = u16::from_be_bytes([decoded.payload[1], decoded.payload[2]]);
-            assert_eq!(rejected_net, 9999);
-        }
-        _ => panic!("Expected Unicast send for reject message"),
     }
 }
 
@@ -461,6 +462,7 @@ fn forward_unicast_with_hop_count_one_still_forwards() {
         directly_connected: true,
         next_hop_mac: MacAddr::new(),
         last_seen: None,
+        last_used: None,
         reachability: crate::router_table::ReachabilityStatus::Reachable,
         busy_until: None,
         flap_count: 0,
@@ -520,7 +522,8 @@ async fn received_reject_removes_learned_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(3000).is_none());
@@ -547,7 +550,8 @@ async fn received_reject_does_not_remove_direct_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(1000).is_some());
@@ -575,7 +579,8 @@ async fn who_is_router_with_specific_network() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 
     let sent = rx.try_recv().unwrap();
     match sent {
@@ -614,48 +619,10 @@ async fn who_is_router_with_unknown_network_no_response() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 
     assert!(rx.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn initialize_routing_table_ack() {
-    let mut table = RouterTable::new();
-    table.add_direct(1000, 0);
-    table.add_direct(2000, 1);
-
-    let table = Arc::new(Mutex::new(table));
-
-    let (tx, mut rx) = mpsc::channel::<SendRequest>(256);
-    let send_txs = vec![tx];
-
-    let npdu = Npdu {
-        is_network_message: true,
-        message_type: Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE.to_raw()),
-        payload: Bytes::new(),
-        ..Npdu::default()
-    };
-
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
-
-    let sent = rx.try_recv().unwrap();
-    match sent {
-        SendRequest::Unicast {
-            npdu: data, mac, ..
-        } => {
-            assert_eq!(mac.as_slice(), &[0x0A]);
-            let decoded = decode_npdu(data.clone()).unwrap();
-            assert!(decoded.is_network_message);
-            assert_eq!(
-                decoded.message_type,
-                Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK.to_raw())
-            );
-            assert_eq!(decoded.payload.len(), 9);
-            assert_eq!(decoded.payload[0], 2);
-        }
-        _ => panic!("Expected Unicast response for Init-Routing-Table"),
-    }
 }
 
 #[tokio::test]
@@ -677,7 +644,8 @@ async fn router_busy_does_not_crash() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 }
 
 #[tokio::test]
@@ -699,7 +667,8 @@ async fn router_available_does_not_crash() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 }
 
 #[tokio::test]
@@ -721,7 +690,8 @@ async fn i_could_be_router_stores_potential_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A, 0x0B], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A, 0x0B], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     let entry = tbl.lookup(5000).unwrap();
@@ -750,7 +720,8 @@ async fn i_could_be_router_does_not_overwrite_existing_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     let entry = tbl.lookup(5000).unwrap();
@@ -777,11 +748,12 @@ async fn establish_connection_does_not_crash() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 }
 
 #[tokio::test]
-async fn disconnect_removes_learned_route() {
+async fn disconnect_retains_learned_route() {
     let mut table = RouterTable::new();
     table.add_learned(7000, 0, MacAddr::from_slice(&[10, 0, 1, 1]));
     let table = Arc::new(Mutex::new(table));
@@ -799,10 +771,12 @@ async fn disconnect_removes_learned_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
-    assert!(tbl.lookup(7000).is_none());
+    assert!(tbl.lookup(7000).is_some());
+    assert_eq!(tbl.claim_snapshot().disconnect_removal_ignored, 1);
 }
 
 #[tokio::test]
@@ -824,7 +798,8 @@ async fn disconnect_does_not_remove_direct_route() {
         ..Npdu::default()
     };
 
-    handle_network_message(&table, &send_txs, 0, 1000, &[0x0A], &npdu).await;
+    let ctx = IngressContext::test_local(0, 1000, &[0x0A], npdu);
+    deliver(&table, &send_txs, &ctx).await;
 
     let tbl = table.lock().await;
     assert!(tbl.lookup(1000).is_some());

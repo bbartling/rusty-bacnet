@@ -125,6 +125,7 @@ enum DeviceEndpoint<'a> {
 }
 
 impl DeviceTable {
+    /// Create an empty table.
     pub fn new() -> Self {
         Self {
             devices: HashMap::new(),
@@ -134,7 +135,7 @@ impl DeviceTable {
     /// Insert or update a discovered device.
     ///
     /// The row's `segmentation_supported` is treated as authoritative
-    /// capability (explicit configuration); see [`PeerSegmentation`].
+    /// capability (explicit configuration); see `PeerSegmentation`.
     /// This explicit administrative path replaces any row with the same
     /// instance regardless of endpoint identity.
     ///
@@ -274,7 +275,7 @@ impl DeviceTable {
             .map(|e| &e.device)
     }
 
-    /// Segmentation capability knowledge for the local row [`get_by_mac`]
+    /// Segmentation capability knowledge for the local row [`get_by_mac`](Self::get_by_mac)
     /// selects, or `None` when no local row matches. Coherent with request
     /// sizing: both consult the same row under one shared borrow.
     pub(crate) fn local_peer_segmentation(&self, mac: &[u8]) -> Option<PeerSegmentation> {
@@ -286,6 +287,8 @@ impl DeviceTable {
 
     /// Segmentation capability knowledge for the routed row
     /// [`get_by_network_address`] selects, or `None` when no row matches.
+    ///
+    /// [`get_by_network_address`]: Self::get_by_network_address
     pub(crate) fn routed_peer_segmentation(
         &self,
         network: u16,

@@ -8,9 +8,9 @@ use bacnet_types::enums::FileAccessMethod as ObjectFileAccessMethod;
 /// back as the Clause 21 `BACnetFileAccessMethod` production.
 ///
 /// Clauses 14.1 and 14.2 require SERVICES / INVALID_FILE_ACCESS_METHOD for
-/// an "Incorrect File access method"; Clause 18 defines the code as the
-/// error generated when AtomicReadFile or AtomicWriteFile specifies a File
-/// Access Method that is not valid for the specified file. Reading fails
+/// an access-method mismatch, and Clause 18 defines the code for exactly
+/// that case: a read or write request naming the stream or record method
+/// when the File object declares the other one. Reading fails
 /// closed: a missing, undecodable, or out-of-production property value is
 /// treated as a mismatch rather than defaulting to stream or record access.
 fn invalid_file_access_method() -> Error {
@@ -22,12 +22,12 @@ fn invalid_file_access_method() -> Error {
 
 /// Refuse a request whose 'File Identifier' names a non-File object type.
 ///
-/// The Clause 14.1.4.1 and 14.2.4.1 error tables pair "A non-File Object
-/// Identifier was provided" with SERVICES / INCONSISTENT_OBJECT_TYPE, and
+/// The Clause 14.1.4.1 and 14.2.4.1 error tables assign SERVICES /
+/// INCONSISTENT_OBJECT_TYPE to identifiers of non-File objects, and
 /// Clause 18 gives an AtomicReadFile request for a non-File object as the
 /// code's example. The type is a property of the parameter alone, so it is
 /// classified before the object lookup; the standard does not sequence this
-/// check against "The File object does not exist", so an absent non-File
+/// check against the missing-File-object check, so an absent non-File
 /// identifier gets this error rather than OBJECT / UNKNOWN_OBJECT.
 fn inconsistent_object_type() -> Error {
     Error::Protocol {
@@ -54,8 +54,8 @@ fn validate_file_access_method(
 /// file.
 ///
 /// The Clause 14.1 Service Procedure returns an error when 'File Start
-/// Position' or 'File Start Record' "is either less than 0 or exceeds the
-/// actual file size"; Clause 18 pairs both parameters with
+/// Position' or 'File Start Record' is negative or beyond the file's end;
+/// Clause 18 pairs both parameters with
 /// INVALID_FILE_START_POSITION. Clause 14.2 defines only -1 as a negative
 /// write start (append), so any other negative value gets the same error.
 fn invalid_file_start_position() -> Error {
@@ -67,9 +67,9 @@ fn invalid_file_start_position() -> Error {
 
 /// Refuse access to a File object the handler cannot safely use.
 ///
-/// Clause 18 scopes FILE_ACCESS_DENIED to a file "that is currently locked
-/// or otherwise not accessible", and Clause 14.2.4.1 pairs it with "Write
-/// to a read-only File". Both handlers report a File-typed object whose
+/// Clause 18 uses FILE_ACCESS_DENIED for locked or inaccessible files,
+/// and Clause 14.2.4.1 also uses it for attempted writes to read-only files.
+/// Both handlers report a File-typed object whose
 /// `file_storage_internal` hook returns `None` this way rather than reading
 /// it as empty, and the write handler also reports a `Read_Only` that is
 /// TRUE, unreadable, or not a BOOLEAN: like the access-method gate, it
@@ -109,26 +109,90 @@ pub fn handle_atomic_read_file(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    use bacnet_services::common::MAX_DECODED_ITEMS;
-    use bacnet_services::file::{
-        AtomicReadFileAck, AtomicReadFileRequest, FileAccessMethod, FileReadAckMethod,
-    };
+    read_file(db, service_data, buf, None, |_, _| {}).map_err(|failure| match failure {
+        AtomicReadFileFailure::Service(error) => error,
+        AtomicReadFileFailure::Budget(_) => unreachable!("unconfigured read has no budget"),
+    })
+}
 
-    let request = AtomicReadFileRequest::decode(service_data)?;
+/// Keep local budget refusals distinct from pre-existing service/storage errors.
+#[derive(Debug)]
+pub(crate) enum AtomicReadFileFailure {
+    Service(Error),
+    Budget(bacnet_types::enums::AbortReason),
+}
+
+impl From<Error> for AtomicReadFileFailure {
+    fn from(error: Error) -> Self {
+        Self::Service(error)
+    }
+}
+
+/// Apply local request-count and complete service-ACK budgets, preserving the
+/// legacy handler's validation and storage-error precedence for admitted reads.
+#[cfg(test)]
+pub(crate) fn handle_atomic_read_file_budgeted(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: crate::server::AtomicReadFileBudget,
+) -> Result<(), AtomicReadFileFailure> {
+    handle_atomic_read_file_observed(db, service_data, buf, budget, |_, _| {})
+}
+
+/// Observe one decoded file outcome without rereading storage. Configured
+/// budget failures are not service outcomes; no provisional intent escapes them.
+pub(crate) fn handle_atomic_read_file_observed(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: crate::server::AtomicReadFileBudget,
+    completed: impl FnOnce(ObjectIdentifier, &Result<(), Error>),
+) -> Result<(), AtomicReadFileFailure> {
+    read_file(db, service_data, buf, Some(budget), completed)
+}
+
+fn read_file(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: Option<crate::server::AtomicReadFileBudget>,
+    completed: impl FnOnce(ObjectIdentifier, &Result<(), Error>),
+) -> Result<(), AtomicReadFileFailure> {
+    let request = bacnet_services::file::AtomicReadFileRequest::decode(service_data)
+        .map_err(Error::into_request_reject)?;
+    let target = request.file_identifier;
+    let result = match execute_read_file(db, request, buf, budget) {
+        Ok(()) => Ok(()),
+        Err(AtomicReadFileFailure::Service(error)) => Err(error),
+        Err(failure @ AtomicReadFileFailure::Budget(_)) => return Err(failure),
+    };
+    completed(target, &result);
+    result.map_err(AtomicReadFileFailure::Service)
+}
+
+fn execute_read_file(
+    db: &ObjectDatabase,
+    request: bacnet_services::file::AtomicReadFileRequest,
+    buf: &mut BytesMut,
+    budget: Option<crate::server::AtomicReadFileBudget>,
+) -> Result<(), AtomicReadFileFailure> {
+    use bacnet_services::common::MAX_DECODED_ITEMS;
+    use bacnet_services::file::{AtomicReadFileAck, FileAccessMethod, FileReadAckMethod};
 
     if request.file_identifier.object_type() != ObjectType::FILE {
-        return Err(inconsistent_object_type());
+        return Err(inconsistent_object_type().into());
     }
 
     let object = db
         .get(&request.file_identifier)
         .ok_or_else(unknown_object)?;
 
-    // Clause 14.1 Service Procedure, first step: a File object "currently
-    // inaccessible for another reason" is refused before its properties are
+    // Clause 14.1 Service Procedure, first step: reject an inaccessible
+    // File object before its properties are
     // consulted; an object without storage is that case.
     if object.file_storage_internal().is_none() {
-        return Err(file_access_denied());
+        return Err(file_access_denied().into());
     }
 
     // Clause 14.1: refuse a mismatched access method before any file read
@@ -152,6 +216,13 @@ pub fn handle_atomic_read_file(
         } => {
             let start =
                 u64::try_from(file_start_position).map_err(|_| invalid_file_start_position())?;
+            if budget.is_some_and(|b| {
+                u64::from(requested_octet_count) > b.max_requested_stream_octets as u64
+            }) {
+                return Err(AtomicReadFileFailure::Budget(
+                    bacnet_types::enums::AbortReason::OUT_OF_RESOURCES,
+                ));
+            }
             let read = storage.read_stream(start, u64::from(requested_octet_count))?;
             let ack = AtomicReadFileAck {
                 end_of_file: read.end_of_file,
@@ -160,7 +231,7 @@ pub fn handle_atomic_read_file(
                     file_data: read.data,
                 },
             };
-            ack.encode(buf);
+            encode_read_ack(&ack, buf, budget)?;
             Ok(())
         }
         FileAccessMethod::Record {
@@ -169,6 +240,13 @@ pub fn handle_atomic_read_file(
         } => {
             let start =
                 u64::try_from(file_start_record).map_err(|_| invalid_file_start_position())?;
+            if budget
+                .is_some_and(|b| u64::from(requested_record_count) > b.max_requested_records as u64)
+            {
+                return Err(AtomicReadFileFailure::Budget(
+                    bacnet_types::enums::AbortReason::OUT_OF_RESOURCES,
+                ));
+            }
             // The workspace's AtomicReadFile-ACK decoder accepts at most
             // MAX_DECODED_ITEMS records in one SEQUENCE OF, so one ACK never
             // carries more. A client sees 'Returned Record Count' below its
@@ -186,18 +264,34 @@ pub fn handle_atomic_read_file(
                     file_record_data: read.records,
                 },
             };
-            ack.encode(buf);
+            encode_read_ack(&ack, buf, budget)?;
             Ok(())
         }
     }
+}
+
+fn encode_read_ack(
+    ack: &bacnet_services::file::AtomicReadFileAck,
+    buf: &mut BytesMut,
+    budget: Option<crate::server::AtomicReadFileBudget>,
+) -> Result<(), AtomicReadFileFailure> {
+    if budget.is_some_and(|b| ack.encoded_len_bounded(b.max_service_ack_bytes).is_none()) {
+        return Err(AtomicReadFileFailure::Budget(
+            bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
+        ));
+    }
+    // All budget failures precede encoding: no payload copy or caller mutation
+    // is needed to size the owned storage result.
+    ack.encode(buf);
+    Ok(())
 }
 
 /// Handle an AtomicWriteFile request.
 ///
 /// The dispatcher holds the object database's write guard for the whole
 /// handler, so the gates, the write, and the ACK are one atomic operation
-/// per Clause 14. Every refusal the handler itself raises leaves both the
-/// object and the response buffer untouched; a storage that breaks the
+/// per Clause 14. Pre-write refusals do not invoke a storage write or modify
+/// caller output (metadata/hook side effects are excluded); a storage that breaks the
 /// [`FileStorage`](bacnet_objects::file::FileStorage) position contract
 /// can leave the object mutated and still draw DEVICE / INTERNAL_ERROR
 /// from the ACK conversion.
@@ -206,11 +300,60 @@ pub fn handle_atomic_write_file(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    use bacnet_services::file::{
-        AtomicWriteFileAck, AtomicWriteFileRequest, FileWriteAccessMethod, FileWriteAckMethod,
-    };
+    write_file(db, service_data, buf, None, |_, _, _| {}).map_err(|failure| match failure {
+        AtomicWriteFileFailure::Service(error) => error,
+        AtomicWriteFileFailure::Budget => unreachable!("unconfigured write has no budget"),
+    })
+}
 
-    let request = AtomicWriteFileRequest::decode(service_data)?;
+/// A local admission refusal is not an opaque storage `Error::Abort`.
+#[derive(Debug)]
+pub(crate) enum AtomicWriteFileFailure {
+    Service(Error),
+    Budget,
+}
+
+impl From<Error> for AtomicWriteFileFailure {
+    fn from(error: Error) -> Self {
+        Self::Service(error)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn handle_atomic_write_file_budgeted(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: crate::server::AtomicWriteFileBudget,
+) -> Result<(), AtomicWriteFileFailure> {
+    handle_atomic_write_file_observed(db, service_data, buf, budget, |_, _, _| {})
+}
+
+/// Observe non-budget outcomes accepted by the service decoder, under the
+/// caller's database guard. The decoder refuses a request with octets after
+/// its last member, so such a request writes nothing and never reaches the
+/// hook, like any other decoder rejection or configured pre-execution overload.
+pub(crate) fn handle_atomic_write_file_observed(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: crate::server::AtomicWriteFileBudget,
+    completed: impl FnOnce(&mut ObjectDatabase, ObjectIdentifier, &Result<(), Error>),
+) -> Result<(), AtomicWriteFileFailure> {
+    write_file(db, service_data, buf, Some(budget), completed)
+}
+
+fn write_file(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: Option<crate::server::AtomicWriteFileBudget>,
+    completed: impl FnOnce(&mut ObjectDatabase, ObjectIdentifier, &Result<(), Error>),
+) -> Result<(), AtomicWriteFileFailure> {
+    use bacnet_services::file::{AtomicWriteFileRequest, FileWriteAccessMethod};
+
+    let request =
+        AtomicWriteFileRequest::decode(service_data).map_err(Error::into_request_reject)?;
 
     // Wire decoding enforces record cardinality. Keep this cross-check so a
     // future typed or internal request path cannot bypass the same pre-mutation
@@ -224,32 +367,51 @@ pub fn handle_atomic_write_file(
         if *record_count as usize != file_record_data.len() {
             return Err(Error::Reject {
                 reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
-            });
+            }
+            .into());
         }
     }
 
+    let target = request.file_identifier;
+    let result = match execute_write_file(db, request, buf, budget) {
+        Ok(()) => Ok(()),
+        Err(AtomicWriteFileFailure::Service(error)) => Err(error),
+        Err(AtomicWriteFileFailure::Budget) => return Err(AtomicWriteFileFailure::Budget),
+    };
+    completed(db, target, &result);
+    result.map_err(AtomicWriteFileFailure::Service)
+}
+
+fn execute_write_file(
+    db: &mut ObjectDatabase,
+    request: bacnet_services::file::AtomicWriteFileRequest,
+    buf: &mut BytesMut,
+    budget: Option<crate::server::AtomicWriteFileBudget>,
+) -> Result<(), AtomicWriteFileFailure> {
+    use bacnet_services::file::{AtomicWriteFileAck, FileWriteAccessMethod, FileWriteAckMethod};
+
     if request.file_identifier.object_type() != ObjectType::FILE {
-        return Err(inconsistent_object_type());
+        return Err(inconsistent_object_type().into());
     }
 
     let object = db
         .get_mut(&request.file_identifier)
         .ok_or_else(unknown_object)?;
 
-    // Clause 14.2 Service Procedure, first step: a File object "currently
-    // inaccessible for another reason" is refused before its properties are
+    // Clause 14.2 Service Procedure, first step: reject an inaccessible
+    // File object before its properties are
     // consulted; an object without storage is that case.
     if object.file_storage_internal().is_none() {
-        return Err(file_access_denied());
+        return Err(file_access_denied().into());
     }
 
-    // Clause 14.2.4.1 "Write to a read-only File". Reading the property
+    // Clause 14.2.4.1 rejects writes to read-only files. Reading the property
     // fails closed, as the access-method gate below does: a missing,
     // undecodable, or non-BOOLEAN Read_Only is treated as read-only rather
     // than as permission to write.
     match object.read_property(PropertyIdentifier::READ_ONLY, None) {
         Ok(PropertyValue::Boolean(false)) => {}
-        _ => return Err(file_access_denied()),
+        _ => return Err(file_access_denied().into()),
     }
 
     // Clause 14.2: refuse a mismatched access method before any mutation or
@@ -260,7 +422,7 @@ pub fn handle_atomic_write_file(
         FileWriteAccessMethod::Stream { .. } => ObjectFileAccessMethod::STREAM_ACCESS,
         FileWriteAccessMethod::Record { .. } => ObjectFileAccessMethod::RECORD_ACCESS,
     };
-    validate_file_access_method(&**object, expected)?;
+    validate_file_access_method(object, expected)?;
 
     let storage = object
         .file_storage_internal_mut()
@@ -272,6 +434,9 @@ pub fn handle_atomic_write_file(
             file_data,
         } => {
             let start = write_start(file_start_position)?;
+            if budget.is_some_and(|b| file_data.len() > b.max_stream_payload_octets) {
+                return Err(AtomicWriteFileFailure::Budget);
+            }
             let actual = storage.write_stream(start, &file_data)?;
             let ack = AtomicWriteFileAck {
                 access: FileWriteAckMethod::Stream {
@@ -287,6 +452,15 @@ pub fn handle_atomic_write_file(
             ..
         } => {
             let start = write_start(file_start_record)?;
+            if budget.is_some_and(|b| {
+                file_record_data.len() > b.max_records
+                    || !record_payload_fits(
+                        file_record_data.iter().map(Vec::len),
+                        b.max_record_payload_bytes,
+                    )
+            }) {
+                return Err(AtomicWriteFileFailure::Budget);
+            }
             let actual = storage.write_records(start, &file_record_data)?;
             let ack = AtomicWriteFileAck {
                 access: FileWriteAckMethod::Record {
@@ -309,5 +483,34 @@ fn write_start(requested: i32) -> Result<FileWriteStart, Error> {
         position => u64::try_from(position)
             .map(FileWriteStart::At)
             .map_err(|_| invalid_file_start_position()),
+    }
+}
+
+/// Checked sum, stopping at the first excess without examining later lengths.
+fn record_payload_fits(lengths: impl IntoIterator<Item = usize>, cap: usize) -> bool {
+    let mut total = 0usize;
+    for len in lengths {
+        let Some(next) = total.checked_add(len).filter(|&next| next <= cap) else {
+            return false;
+        };
+        total = next;
+    }
+    true
+}
+
+#[cfg(test)]
+mod write_budget_arithmetic {
+    use super::record_payload_fits;
+
+    #[test]
+    fn atomic_write_file_checked_sum_and_early_stop() {
+        assert!(record_payload_fits([0, usize::MAX], usize::MAX));
+        assert!(!record_payload_fits([usize::MAX, 1], usize::MAX));
+        assert!(record_payload_fits([2, 3, 0], 5));
+        assert!(!record_payload_fits([2, 3], 4));
+        assert!(!record_payload_fits(
+            std::iter::once(6).chain(std::iter::from_fn(|| panic!("past excess"))),
+            5
+        ));
     }
 }

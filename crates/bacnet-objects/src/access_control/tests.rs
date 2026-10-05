@@ -10,7 +10,7 @@ fn access_door_create_and_read_defaults() {
     assert_eq!(
         door.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Enumerated(0) // closed
+        PropertyValue::Enumerated(DoorValue::LOCK.to_raw())
     );
 }
 
@@ -128,9 +128,9 @@ fn access_credential_create_and_read_defaults() {
     let cred = AccessCredentialObject::new(1, "CRED-1").unwrap();
     assert_eq!(cred.object_name(), "CRED-1");
     assert_eq!(
-        cred.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+        cred.read_property(PropertyIdentifier::CREDENTIAL_STATUS, None)
             .unwrap(),
-        PropertyValue::Enumerated(0) // inactive
+        PropertyValue::Enumerated(BinaryPV::ACTIVE.to_raw())
     );
 }
 
@@ -148,7 +148,7 @@ fn access_credential_object_type() {
 fn access_credential_property_list() {
     let cred = AccessCredentialObject::new(1, "CRED-1").unwrap();
     let list = cred.property_list();
-    assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
+    assert!(!list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::CREDENTIAL_STATUS));
     assert!(list.contains(&PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS));
     assert!(list.contains(&PropertyIdentifier::AUTHENTICATION_FACTORS));
@@ -160,7 +160,7 @@ fn access_credential_read_assigned_access_rights() {
     assert_eq!(
         cred.read_property(PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS, None)
             .unwrap(),
-        PropertyValue::Unsigned(0)
+        PropertyValue::List(vec![])
     );
 }
 
@@ -182,7 +182,7 @@ fn access_point_create_and_read_defaults() {
     assert_eq!(point.object_name(), "AP-1");
     assert_eq!(
         point
-            .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+            .read_property(PropertyIdentifier::ACCESS_EVENT, None)
             .unwrap(),
         PropertyValue::Enumerated(0)
     );
@@ -203,7 +203,8 @@ fn access_point_object_type() {
 fn access_point_property_list() {
     let point = AccessPointObject::new(1, "AP-1").unwrap();
     let list = point.property_list();
-    assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
+    // Table 12-36 has no Present_Value row (#1064).
+    assert!(!list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::ACCESS_EVENT));
     assert!(list.contains(&PropertyIdentifier::ACCESS_EVENT_TAG));
     assert!(list.contains(&PropertyIdentifier::ACCESS_EVENT_TIME));
@@ -214,15 +215,15 @@ fn access_point_property_list() {
 #[test]
 fn access_point_read_access_event_time() {
     let point = AccessPointObject::new(1, "AP-1").unwrap();
-    let val = point
-        .read_property(PropertyIdentifier::ACCESS_EVENT_TIME, None)
-        .unwrap();
-    match val {
-        PropertyValue::List(items) => {
-            assert_eq!(items.len(), 2);
-        }
-        other => panic!("expected List, got {other:?}"),
-    }
+    // The unspecified date and time, framed as the datetime [2] choice.
+    assert_eq!(
+        point
+            .read_property(PropertyIdentifier::ACCESS_EVENT_TIME, None)
+            .unwrap(),
+        PropertyValue::ApplicationData(vec![
+            0x2E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF, 0x2F
+        ])
+    );
 }
 
 #[test]
@@ -268,23 +269,26 @@ fn access_rights_property_list() {
     assert!(list.contains(&PropertyIdentifier::GLOBAL_IDENTIFIER));
     assert!(list.contains(&PropertyIdentifier::POSITIVE_ACCESS_RULES));
     assert!(list.contains(&PropertyIdentifier::NEGATIVE_ACCESS_RULES));
+    // Table 12-39's Enable row, property 133 (#1332).
+    assert!(list.contains(&PropertyIdentifier::LOG_ENABLE));
 }
 
 #[test]
-fn access_rights_read_rules_counts() {
+fn access_rights_read_rules_as_empty_arrays() {
     let rights = AccessRightsObject::new(1, "AR-1").unwrap();
-    assert_eq!(
-        rights
-            .read_property(PropertyIdentifier::POSITIVE_ACCESS_RULES, None)
-            .unwrap(),
-        PropertyValue::Unsigned(0)
-    );
-    assert_eq!(
-        rights
-            .read_property(PropertyIdentifier::NEGATIVE_ACCESS_RULES, None)
-            .unwrap(),
-        PropertyValue::Unsigned(0)
-    );
+    for p in [
+        PropertyIdentifier::POSITIVE_ACCESS_RULES,
+        PropertyIdentifier::NEGATIVE_ACCESS_RULES,
+    ] {
+        assert_eq!(
+            rights.read_property(p, None).unwrap(),
+            PropertyValue::List(vec![])
+        );
+        assert_eq!(
+            rights.read_property(p, Some(0)).unwrap(),
+            PropertyValue::Unsigned(0)
+        );
+    }
 }
 
 #[test]
@@ -313,7 +317,7 @@ fn access_user_create_and_read_defaults() {
     let user = AccessUserObject::new(1, "USER-1").unwrap();
     assert_eq!(user.object_name(), "USER-1");
     assert_eq!(
-        user.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+        user.read_property(PropertyIdentifier::USER_TYPE, None)
             .unwrap(),
         PropertyValue::Enumerated(0)
     );
@@ -333,10 +337,11 @@ fn access_user_object_type() {
 fn access_user_property_list() {
     let user = AccessUserObject::new(1, "USER-1").unwrap();
     let list = user.property_list();
-    assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::USER_TYPE));
     assert!(list.contains(&PropertyIdentifier::CREDENTIALS));
-    assert!(list.contains(&PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS));
+    // Table 12-38 has neither of these rows (#1064).
+    assert!(!list.contains(&PropertyIdentifier::PRESENT_VALUE));
+    assert!(!list.contains(&PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS));
 }
 
 #[test]
@@ -373,9 +378,9 @@ fn access_zone_create_and_read_defaults() {
     let zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
     assert_eq!(zone.object_name(), "ZONE-1");
     assert_eq!(
-        zone.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+        zone.read_property(PropertyIdentifier::OCCUPANCY_COUNT, None)
             .unwrap(),
-        PropertyValue::Enumerated(0)
+        PropertyValue::Unsigned(0)
     );
 }
 
@@ -393,22 +398,18 @@ fn access_zone_object_type() {
 fn access_zone_property_list() {
     let zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
     let list = zone.property_list();
-    assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::GLOBAL_IDENTIFIER));
     assert!(list.contains(&PropertyIdentifier::OCCUPANCY_COUNT));
-    assert!(list.contains(&PropertyIdentifier::ACCESS_DOORS));
     assert!(list.contains(&PropertyIdentifier::ENTRY_POINTS));
+    // Table 12-37 has neither of these rows (#1064).
+    assert!(!list.contains(&PropertyIdentifier::PRESENT_VALUE));
+    assert!(!list.contains(&PropertyIdentifier::ACCESS_DOORS));
     assert!(list.contains(&PropertyIdentifier::EXIT_POINTS));
 }
 
 #[test]
 fn access_zone_read_lists_empty() {
     let zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
-    assert_eq!(
-        zone.read_property(PropertyIdentifier::ACCESS_DOORS, None)
-            .unwrap(),
-        PropertyValue::List(vec![])
-    );
     assert_eq!(
         zone.read_property(PropertyIdentifier::ENTRY_POINTS, None)
             .unwrap(),
@@ -457,7 +458,8 @@ fn credential_data_input_create_and_read_defaults() {
     assert_eq!(
         cdi.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Enumerated(0) // notReady
+        // The UNDEFINED factor: format type [0] 0, class [1] 0, empty value [2].
+        PropertyValue::ApplicationData(vec![0x09, 0x00, 0x19, 0x00, 0x28])
     );
 }
 
@@ -484,15 +486,13 @@ fn credential_data_input_property_list() {
 #[test]
 fn credential_data_input_read_update_time() {
     let cdi = CredentialDataInputObject::new(1, "CDI-1").unwrap();
-    let val = cdi
-        .read_property(PropertyIdentifier::UPDATE_TIME, None)
-        .unwrap();
-    match val {
-        PropertyValue::List(items) => {
-            assert_eq!(items.len(), 2);
-        }
-        other => panic!("expected List, got {other:?}"),
-    }
+    assert_eq!(
+        cdi.read_property(PropertyIdentifier::UPDATE_TIME, None)
+            .unwrap(),
+        PropertyValue::ApplicationData(vec![
+            0x2E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF, 0x2F
+        ])
+    );
 }
 
 #[test]
@@ -522,10 +522,10 @@ fn credential_data_input_write_denied() {
 // ---------------------------------------------------------------------------
 
 /// Access Door: Relinquish_Default carries R in Table 12-30 typed as
-/// BACnetDoorValue (Clause 21: lock(0), unlock(1), pulse-unlock(2),
-/// extended-pulse-unlock(3)) and writability is permitted; the write is
-/// validated against that production and — with an all-NULL priority array —
-/// Present_Value immediately resolves to the written default.
+/// BACnetDoorValue and writability is permitted; Clause 12.26.11 narrows it
+/// to LOCK and UNLOCK, the write is validated against those two, and — with
+/// an all-NULL priority array — Present_Value immediately resolves to the
+/// written default.
 #[test]
 fn access_door_relinquish_default_write_recaptures_present_value() {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
@@ -550,9 +550,8 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
         "with an empty priority array, PV must resolve to the written default"
     );
 
-    // Every named BACnetDoorValue is accepted, including
-    // extended-pulse-unlock (3) — matching the priority-slot PV arm.
-    for &(_, value) in DoorValue::ALL_NAMED {
+    // LOCK and UNLOCK are accepted; the two pulses are refused (#1073).
+    for value in [DoorValue::LOCK, DoorValue::UNLOCK] {
         let named = value.to_raw();
         door.write_property(
             PropertyIdentifier::RELINQUISH_DEFAULT,
@@ -572,12 +571,14 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
             PropertyValue::Enumerated(named)
         );
     }
-    door.set_relinquish_default(1).unwrap();
+    door.set_relinquish_default(DoorValue::UNLOCK).unwrap();
 
-    // 4 is out of the production; so are large values; so are wrong types.
-    // Each refuses PROPERTY / VALUE_OUT_OF_RANGE (or INVALID_DATA_TYPE) and
-    // the stored default is byte-identical afterward.
+    // The pulses and 4 are outside the two; so are large values; so are
+    // wrong types. Each refuses PROPERTY / VALUE_OUT_OF_RANGE (or
+    // INVALID_DATA_TYPE) and the stored default is byte-identical afterward.
     for (value, code) in [
+        (PropertyValue::Enumerated(2), ErrorCode::VALUE_OUT_OF_RANGE),
+        (PropertyValue::Enumerated(3), ErrorCode::VALUE_OUT_OF_RANGE),
         (PropertyValue::Enumerated(4), ErrorCode::VALUE_OUT_OF_RANGE),
         (
             PropertyValue::Enumerated(u32::MAX),
@@ -609,11 +610,14 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
     }
 
     // The local setter shares the validation domain.
-    assert!(door.set_relinquish_default(4).is_err());
-    door.set_relinquish_default(3).unwrap();
+    assert!(door.set_relinquish_default(DoorValue::from_raw(4)).is_err());
+    assert!(door
+        .set_relinquish_default(DoorValue::EXTENDED_PULSE_UNLOCK)
+        .is_err());
+    door.set_relinquish_default(DoorValue::LOCK).unwrap();
     assert_eq!(
         door.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Enumerated(3)
+        PropertyValue::Enumerated(0)
     );
 }

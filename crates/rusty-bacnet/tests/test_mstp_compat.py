@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import inspect
 import re
+import sys
 import tempfile
 import unittest
 import uuid
@@ -60,6 +61,23 @@ MSTP_KEYWORD_ONLY = [
     "mstp_mac",
     "mstp_max_master",
     "mstp_max_info_frames",
+]
+CLIENT_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + ["sc_device_uuid"]
+SERVER_KEYWORD_ONLY = ["mutation_policy", "dcc_policy", "dcc_source_restriction", "dcc_disable_rate_limit"] + MSTP_KEYWORD_ONLY + [
+    "max_confirmed_in_flight", "max_unconfirmed_in_flight",
+    "max_confirmed_in_flight_per_peer", "max_unconfirmed_in_flight_per_peer",
+    "confirmed_recovery_reserve", "max_recovery_in_flight_per_peer",
+    "rpm_max_result_elements", "rpm_max_service_ack_bytes",
+    "alarm_summary_max_objects", "alarm_summary_max_service_ack_bytes",
+    "enrollment_summary_max_objects", "enrollment_summary_max_service_ack_bytes",
+    "atomic_read_file_max_requested_stream_octets", "atomic_read_file_max_requested_records",
+    "atomic_read_file_max_service_ack_bytes",
+    "atomic_write_file_max_stream_payload_octets", "atomic_write_file_max_records",
+    "atomic_write_file_max_record_payload_bytes",
+    "read_range_max_returned_items", "read_range_max_service_ack_bytes",
+    "event_information_max_objects", "event_information_max_returned_summaries",
+    "event_information_max_service_ack_bytes",
+    "sc_device_uuid", "registered_network_port", "cov_policy", "time_sync_policy",
 ]
 SUPPORTED_BAUD_RATES = (9_600, 19_200, 38_400, 57_600, 76_800, 115_200)
 SUPPORTED_BAUD_ERROR = (
@@ -148,13 +166,13 @@ class SignatureCompatibilityTests(unittest.TestCase):
         )
 
     def test_runtime_and_stub_signatures_match_compatibility_contract(self) -> None:
-        self.assert_signature(BACnetClient, CLIENT_POSITIONAL, MSTP_KEYWORD_ONLY)
-        self.assert_signature(BACnetServer, SERVER_POSITIONAL, MSTP_KEYWORD_ONLY)
+        self.assert_signature(BACnetClient, CLIENT_POSITIONAL, CLIENT_KEYWORD_ONLY)
+        self.assert_signature(BACnetServer, SERVER_POSITIONAL, SERVER_KEYWORD_ONLY)
         self.assertEqual(
-            stub_signature("BACnetClient"), (CLIENT_POSITIONAL, MSTP_KEYWORD_ONLY)
+            stub_signature("BACnetClient"), (CLIENT_POSITIONAL, CLIENT_KEYWORD_ONLY)
         )
         self.assertEqual(
-            stub_signature("BACnetServer"), (SERVER_POSITIONAL, MSTP_KEYWORD_ONLY)
+            stub_signature("BACnetServer"), (SERVER_POSITIONAL, SERVER_KEYWORD_ONLY)
         )
 
     def test_old_positional_password_order_remains_accepted(self) -> None:
@@ -201,6 +219,24 @@ class SignatureCompatibilityTests(unittest.TestCase):
         path = nonexistent_serial_path()
         self.assertIsInstance(make_client(path), BACnetClient)
         self.assertIsInstance(make_server(path), BACnetServer)
+
+    def test_list_serial_ports_returns_port_names(self) -> None:
+        # The runners have no serial hardware, so the list may be empty; the
+        # call still goes through the OS's port listing (IOKit on macOS).
+        ports = rusty_bacnet.list_serial_ports()
+        self.assertIsInstance(ports, list)
+        for name in ports:
+            self.assertIsInstance(name, str)
+            self.assertTrue(name)
+            if sys.platform != "win32":
+                self.assertTrue(name.startswith("/dev/"), name)
+        stub = ast.parse(Path(rusty_bacnet.__file__).with_suffix(".pyi").read_text(encoding="utf-8"))
+        function = next(
+            node for node in stub.body
+            if isinstance(node, ast.FunctionDef) and node.name == "list_serial_ports"
+        )
+        self.assertEqual(function.args.args, [])
+        self.assertEqual(ast.unparse(function.returns), "list[str]")
 
 
 class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):

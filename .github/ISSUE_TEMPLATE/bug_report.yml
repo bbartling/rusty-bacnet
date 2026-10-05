@@ -1,0 +1,62 @@
+name: Bug report
+description: A crate, the bacnet CLI or the Python bindings behaves wrongly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. For a security vulnerability, don't open an issue: follow the [security policy](https://github.com/jscott3201/rusty-bacnet/blob/dev/.github/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Crate and version
+      description: The crate, the `bacnet` CLI or the `rusty-bacnet` Python package, and its version or the commit you built.
+      placeholder: bacnet-client 0.12.0
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      multiple: true
+      options:
+        - BACnet/IP
+        - BACnet/IPv6
+        - BACnet/SC
+        - MS/TP
+        - Ethernet
+        - Not transport-specific
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Operating system and architecture, and your Rust or Python version.
+      placeholder: Ubuntu 24.04 x86_64, Rust 1.99.0
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include any error message, panic or log output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: When the expectation comes from ASHRAE 135, cite the clause number and describe the behaviour in your own words; please don't paste text from the standard.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest program, CLI command or steps that show the problem, and the other BACnet device or stack involved, if any.
+    validations:
+      required: true
+  - type: textarea
+    id: capture
+    attributes:
+      label: Packet capture
+      description: A PCAP of the exchange is welcome; zip it and attach it here. Leave out credentials and anything from a real network you don't want public.

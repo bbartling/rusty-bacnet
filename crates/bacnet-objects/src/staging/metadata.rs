@@ -99,6 +99,13 @@ pub(super) const STAGING_PROPERTY_METADATA: &[PropertyMetadata] = &[
         None,
         PropertyWriteCapability::ReadOnly,
     ),
+    // Table 12-80 footnote 3: present because the object supports COV.
+    PropertyMetadata::new(
+        PropertyIdentifier::COV_INCREMENT,
+        PropertyConformance::Optional,
+        None,
+        PropertyWriteCapability::Always,
+    ),
     PropertyMetadata::new(
         PropertyIdentifier::PROPERTY_LIST,
         PropertyConformance::RequiredRead,

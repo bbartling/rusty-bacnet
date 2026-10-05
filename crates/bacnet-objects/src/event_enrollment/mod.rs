@@ -1,9 +1,13 @@
 //! EventEnrollment (type 9) object per ASHRAE 135-2020 Clause 12.12.
 
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, EventType, NotifyType, ObjectType, PropertyIdentifier,
+    Reliability,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -14,7 +18,7 @@ use crate::event::{
     EnrollmentSummaryCapability, EventTransitionCommit, EventTransitionCommitError,
 };
 use crate::property_metadata::PropertyMetadata;
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::traits::BACnetObject;
 
 mod alert;
 mod metadata;
@@ -22,7 +26,6 @@ mod parameters;
 mod state;
 mod transition;
 pub use alert::AlertEnrollmentObject;
-use state::EventEnrollmentWriteRollback;
 pub use state::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentPending};
 pub use transition::EventEnrollmentReliabilityCommit;
 
@@ -36,27 +39,25 @@ pub struct EventEnrollmentObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    event_type: u32,
-    notify_type: u32,
+    event_type: EventType,
+    notify_type: NotifyType,
     event_parameters: BACnetEventParameter,
     object_property_reference: Option<BACnetDeviceObjectPropertyReference>,
-    event_state: u32,
-    event_enable: u8,
-    acked_transitions: u8,
+    event_state: EventState,
+    event_enable: EventTransitionBits,
+    acked_transitions: EventTransitionBits,
     event_history: EventHistory,
     event_detection_enable: bool,
     notification_class: u32,
     fault_parameters: Option<FaultParameters>,
     status_flags: StatusFlags,
-    out_of_service: bool,
-    reliability: u32,
-    /// `Time_Delay_Normal` (property 356, Table 12-14 conformance O): the
-    /// pTimeDelayNormal parameter for the object's event algorithm (Clause
-    /// 12.12). `None` is the not-configured case and takes on the
-    /// `Time_Delay` carried inside `event_parameters` (Table 12-15 maps
-    /// `Time_Delay` to pTimeDelay for every evaluated algorithm): "If no
-    /// value is available for this parameter, then it takes on the value of
-    /// the pTimeDelay parameter" (Clause 13.3).
+    reliability: Reliability,
+    /// `Time_Delay_Normal` (property 356, Table 12-14 conformance O): Clause
+    /// 12.12 feeds this value to the enrollment's algorithm as its
+    /// pTimeDelayNormal input. `None` is the not-configured case and takes on
+    /// the `Time_Delay` carried inside `event_parameters` (Table 12-15 maps
+    /// `Time_Delay` to pTimeDelay for every evaluated algorithm), following
+    /// Clause 13.3's fallback from absent pTimeDelayNormal to pTimeDelay.
     time_delay_normal: Option<u32>,
     /// Delayed transition counting down, if any. In-memory only.
     pending: Option<EventEnrollmentPending>,
@@ -70,26 +71,28 @@ pub struct EventEnrollmentObject {
 }
 
 impl EventEnrollmentObject {
-    /// Create a new EventEnrollment object.
-    ///
-    /// `event_type` is the BACnet EventType enumeration value.
-    pub fn new(instance: u32, name: impl Into<String>, event_type: u32) -> Result<Self, Error> {
+    /// Create a new EventEnrollment object whose Event_Type is `event_type`.
+    pub fn new(
+        instance: u32,
+        name: impl Into<String>,
+        event_type: EventType,
+    ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, instance)?;
         Ok(Self {
             oid,
             name: name.into(),
             description: String::new(),
             event_type,
-            notify_type: 0,
+            notify_type: NotifyType::ALARM,
             event_parameters: BACnetEventParameter::Opaque {
                 tag: 0xFF,
                 data: Vec::new(),
             },
             object_property_reference: None,
-            event_state: 0,
-            event_enable: 0b111,
-            // Clause 12.12: "Each flag shall have the value TRUE if no event of
-            // that type has ever occurred for the object." That all-TRUE value
+            event_state: EventState::NORMAL,
+            event_enable: EventTransitionBits::all(),
+            // Clause 12.12 starts each flag TRUE until a transition of its
+            // kind first happens on the object. That all-TRUE initial value
             // is also the initial condition the detection-disabled reset
             // restores, so `RESET_ACKED_TRANSITIONS` names it once.
             acked_transitions: Self::RESET_ACKED_TRANSITIONS,
@@ -98,8 +101,7 @@ impl EventEnrollmentObject {
             notification_class: 0,
             fault_parameters: None,
             status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             // Absent so the delay behavior equals the normative pTimeDelay
             // fallback until a client writes the property — never an error,
             // never a zero.
@@ -112,20 +114,20 @@ impl EventEnrollmentObject {
     }
 
     /// `Acked_Transitions` in its initial condition: every transition flag TRUE,
-    /// meaning no event of that type has ever occurred (ASHRAE 135-2020
-    /// Clause 12.12).
-    const RESET_ACKED_TRANSITIONS: u8 = 0b111;
+    /// the value a flag holds until its transition kind first occurs on the
+    /// object (ASHRAE 135-2020 Clause 12.12).
+    const RESET_ACKED_TRANSITIONS: EventTransitionBits = EventTransitionBits::all();
 
-    /// Apply the reset ASHRAE 135-2020 Clause 13.2.2.1 requires while
-    /// `Event_Detection_Enable` is FALSE: "no transitions shall occur,
-    /// Event_State shall be set to NORMAL, and Event_Time_Stamps,
-    /// Event_Message_Texts and Acked_Transitions shall be set to their
-    /// respective initial conditions."
+    /// Put the object in the state ASHRAE 135-2020 Clause 13.2.2.1 prescribes
+    /// for disabled detection (`Event_Detection_Enable` FALSE): Event_State
+    /// reads NORMAL, the three per-transition properties (Event_Time_Stamps,
+    /// Event_Message_Texts, Acked_Transitions) go back to their initial
+    /// values, and no transition is generated while detection stays off.
     ///
     /// The monitored-source identity, pending countdown, and both baselines
     /// are cleared too: they are extensions of the same event-state-detection
-    /// state machine the clause freezes ("this state machine is not
-    /// evaluated"), so a stale countdown must not survive into the next
+    /// state machine whose evaluation the clause suspends, so a stale
+    /// countdown must not survive into the next
     /// enabled period and fire against a condition the object no longer
     /// observes. The intrinsic types make the same choice for their detectors
     /// (`analog/input.rs` clears `detector.pending` on the identical write).
@@ -133,7 +135,7 @@ impl EventEnrollmentObject {
     /// Clause 13.3.3 assigns it; clearing is consistent with the first-sample
     /// policy.
     fn apply_detection_disabled_reset(&mut self) {
-        self.event_state = EventState::NORMAL.to_raw();
+        self.event_state = EventState::NORMAL;
         self.acked_transitions = Self::RESET_ACKED_TRANSITIONS;
         self.event_history.reset();
         self.pending = None;
@@ -147,13 +149,25 @@ impl EventEnrollmentObject {
         self.description = desc.into();
     }
 
-    /// Set the object property reference.
+    /// Set Object_Property_Reference, the property the enrollment monitors,
+    /// or `None` for none. The property is read-only over the network.
+    /// A reference whose object or Device is at the reserved instance
+    /// 4194303 is the unset form, so it leaves the enrollment without one
+    /// (#1417).
+    ///
+    /// A reference whose device identifier isn't a Device object is refused
+    /// with PROPERTY / VALUE_OUT_OF_RANGE and the reference set before is
+    /// kept (#1308).
     pub fn set_object_property_reference(
         &mut self,
         reference: Option<BACnetDeviceObjectPropertyReference>,
-    ) {
-        self.object_property_reference = reference;
+    ) -> Result<(), Error> {
+        if let Some(reference) = &reference {
+            crate::device_reference::check_device_member(reference.device_identifier)?;
+        }
+        self.object_property_reference = reference.and_then(crate::device_reference::set_or_unset);
         self.pending = None;
+        Ok(())
     }
 
     /// Set the structured event parameters.
@@ -167,7 +181,7 @@ impl EventEnrollmentObject {
         self.fault_parameters = fp;
     }
 
-    /// Set the event state (raw u32).
+    /// Set the event state.
     ///
     /// A configuration/seeding helper, not a lifecycle path — the evaluator
     /// uses [`BACnetObject::set_event_state_internal`]. It honors the same
@@ -175,8 +189,8 @@ impl EventEnrollmentObject {
     /// must read NORMAL, so a non-NORMAL seed is ignored rather than silently
     /// breaking the invariant. Without this the public API would offer a way
     /// around a guard the rest of the object enforces.
-    pub fn set_event_state(&mut self, state: u32) {
-        if !self.event_detection_enable && state != EventState::NORMAL.to_raw() {
+    pub fn set_event_state(&mut self, state: EventState) {
+        if !self.event_detection_enable && state != EventState::NORMAL {
             return;
         }
         self.event_state = state;
@@ -187,9 +201,11 @@ impl EventEnrollmentObject {
         self.notification_class = nc;
     }
 
-    /// Set the event enable bitmask (3 bits: TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
-    pub fn set_event_enable(&mut self, enable: u8) {
-        self.event_enable = enable & 0x07;
+    /// Set `Event_Enable`: the transitions whose notifications are distributed.
+    ///
+    /// Flags outside the three named transitions are dropped.
+    pub fn set_event_enable(&mut self, enable: EventTransitionBits) {
+        self.event_enable = enable & EventTransitionBits::all();
     }
 
     /// Set `Time_Delay_Normal` (the pTimeDelayNormal parameter). `None`
@@ -245,7 +261,7 @@ impl BACnetObject for EventEnrollmentObject {
         );
         (self.object_property_reference.is_some() && supported_parameters).then_some(
             EnrollmentSummaryCapability {
-                event_type: bacnet_types::enums::EventType::from_raw(self.event_type),
+                event_type: self.event_type,
                 last_transition: self.event_history.last_transition(),
             },
         )
@@ -266,7 +282,10 @@ impl BACnetObject for EventEnrollmentObject {
                 self.event_state,
             ));
         }
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Table 12-14 has no Out_Of_Service (#1064).
+        if let Some(result) =
+            read_common_properties!(self, property, array_index, no_out_of_service)
+        {
             return result;
         }
         match property {
@@ -278,10 +297,10 @@ impl BACnetObject for EventEnrollmentObject {
                 ObjectType::EVENT_ENROLLMENT.to_raw(),
             )),
             p if p == PropertyIdentifier::EVENT_TYPE => {
-                Ok(PropertyValue::Enumerated(self.event_type))
+                Ok(PropertyValue::Enumerated(self.event_type.to_raw()))
             }
             p if p == PropertyIdentifier::NOTIFY_TYPE => {
-                Ok(PropertyValue::Enumerated(self.notify_type))
+                Ok(PropertyValue::Enumerated(self.notify_type.to_raw()))
             }
             p if p == PropertyIdentifier::EVENT_PARAMETERS => {
                 let mut buf = bytes::BytesMut::new();
@@ -291,33 +310,25 @@ impl BACnetObject for EventEnrollmentObject {
                 )?;
                 Ok(PropertyValue::ApplicationData(buf.to_vec()))
             }
+            // Table 12-14's BACnetDeviceObjectPropertyReference, its optional
+            // index and Device members present only when set (#1182); the
+            // unset form while the enrollment has no reference (#1417).
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
-                match &self.object_property_reference {
-                    None => Ok(PropertyValue::Null),
-                    Some(r) => Ok(PropertyValue::List(vec![
-                        PropertyValue::ObjectIdentifier(r.object_identifier),
-                        PropertyValue::Unsigned(r.property_identifier as u64),
-                        match r.property_array_index {
-                            Some(idx) => PropertyValue::Unsigned(idx as u64),
-                            None => PropertyValue::Null,
-                        },
-                        match r.device_identifier {
-                            Some(dev) => PropertyValue::ObjectIdentifier(dev),
-                            None => PropertyValue::Null,
-                        },
-                    ])),
-                }
+                Ok(crate::device_reference::optional_reference_value(
+                    self.object_property_reference.as_ref(),
+                    ObjectType::ANALOG_INPUT,
+                ))
             }
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             p if p == PropertyIdentifier::EVENT_ENABLE => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![bacnet_types::bitstring::pack_octet(self.event_enable)],
+                data: vec![self.event_enable.to_bacnet()],
             }),
             p if p == PropertyIdentifier::ACKED_TRANSITIONS => Ok(PropertyValue::BitString {
                 unused_bits: 5,
-                data: vec![bacnet_types::bitstring::pack_octet(self.acked_transitions)],
+                data: vec![self.acked_transitions.to_bacnet()],
             }),
             p if p == PropertyIdentifier::EVENT_DETECTION_ENABLE => {
                 Ok(PropertyValue::Boolean(self.event_detection_enable))
@@ -337,8 +348,8 @@ impl BACnetObject for EventEnrollmentObject {
                 Ok(PropertyValue::ApplicationData(buf.to_vec()))
             }
             p if p == PropertyIdentifier::TIME_DELAY_NORMAL => {
-                // Clause 13.3: "If no value is available for this parameter,
-                // then it takes on the value of the pTimeDelay parameter" —
+                // Clause 13.3 supplies pTimeDelay as the fallback when
+                // pTimeDelayNormal is absent —
                 // the read-back of an unwritten Time_Delay_Normal is the
                 // Event_Parameters Time_Delay, matching the algorithm's
                 // behavior (mirrors the intrinsic types' read arm).
@@ -364,13 +375,11 @@ impl BACnetObject for EventEnrollmentObject {
             // event, ack-notification} (Clause 21); out-of-production values
             // are PROPERTY / VALUE_OUT_OF_RANGE (Clause 15.9.1.3).
             if let PropertyValue::Enumerated(v) = value {
-                let named = bacnet_types::enums::NotifyType::ALL_NAMED
-                    .iter()
-                    .any(|&(_, n)| n.to_raw() == v);
-                if !named {
+                let notify_type = NotifyType::from_raw(v);
+                if !NotifyType::ALL_NAMED.iter().any(|&(_, n)| n == notify_type) {
                     return Err(common::value_out_of_range_error());
                 }
-                self.notify_type = v;
+                self.notify_type = notify_type;
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -387,7 +396,7 @@ impl BACnetObject for EventEnrollmentObject {
             // the written BitString must declare its canonical shape.
             if let PropertyValue::BitString { unused_bits, data } = &value {
                 let byte = common::check_fixed_width_bit_string(*unused_bits, data, 3)?;
-                self.event_enable = bacnet_types::bitstring::unpack_octet(&[byte], 3);
+                self.event_enable = EventTransitionBits::from_bacnet(&[byte]);
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
@@ -396,7 +405,7 @@ impl BACnetObject for EventEnrollmentObject {
             if let PropertyValue::Boolean(v) = value {
                 self.event_detection_enable = v;
                 // Clause 12.12 states the disabled condition as an invariant —
-                // "When this property is FALSE, Event_State shall be NORMAL" —
+                // disabled detection requires a persistent NORMAL Event_State —
                 // not as an action taken later. Resetting here rather than
                 // leaving it to the periodic evaluator closes the window in
                 // which a disabled object would still answer ReadProperty and
@@ -419,7 +428,10 @@ impl BACnetObject for EventEnrollmentObject {
             return Ok(());
         }
         if property == PropertyIdentifier::FAULT_PARAMETERS {
-            self.fault_parameters = parameters::decode_fault_parameters(value)?;
+            // The context-tagged `none` choice is the unset form (#1417).
+            let parameters = parameters::decode_fault_parameters(value)?;
+            self.fault_parameters =
+                (!matches!(parameters, FaultParameters::FaultNone)).then_some(parameters);
             return Ok(());
         }
         if property == PropertyIdentifier::TIME_DELAY_NORMAL {
@@ -433,18 +445,17 @@ impl BACnetObject for EventEnrollmentObject {
             }
             return Err(common::invalid_data_type_error());
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        Err(common::write_access_denied_error())
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            _array_index,
+        ))
     }
 
     /// Internal lifecycle path for the algorithmically-derived `Event_State`.
@@ -455,7 +466,7 @@ impl BACnetObject for EventEnrollmentObject {
     /// only caller is the trusted server evaluator.
     ///
     /// Refuses any non-NORMAL state while `Event_Detection_Enable` is FALSE.
-    /// Clause 13.2.2.1 requires that "no transitions shall occur" in that case,
+    /// Clause 13.2.2.1 prohibits transitions in that case,
     /// and the server evaluator already skips such objects — this guard makes
     /// the invariant hold by construction rather than by the caller
     /// remembering, so a future caller cannot reintroduce the violation.
@@ -463,7 +474,7 @@ impl BACnetObject for EventEnrollmentObject {
         if !self.event_detection_enable && state != EventState::NORMAL {
             return Err(common::write_access_denied_error());
         }
-        self.event_state = state.to_raw();
+        self.event_state = state;
         Ok(())
     }
 
@@ -479,7 +490,7 @@ impl BACnetObject for EventEnrollmentObject {
 
     /// Store the enrollment evaluation state. Refused while
     /// `Event_Detection_Enable` is FALSE: Clause 13.2.2.1 freezes the state
-    /// machine ("this state machine is not evaluated"), and the reset in the
+    /// machine by suspending evaluation, and the reset in the
     /// write arm has already returned these fields to their initial
     /// condition, so a write arriving while disabled can only be stale.
     fn set_enrollment_eval_state_internal(
@@ -514,20 +525,23 @@ impl BACnetObject for EventEnrollmentObject {
     /// Clause 13.9): Clause 13.2.3 sets the bit on the acknowledgment
     /// indication — unconditional and idempotent, so a repeated ack succeeds
     /// again. A detection-DISABLED enrollment instead refuses with
-    /// OBJECT/NO_ALARM_CONFIGURED, Table 13-10's "The object exists but does
-    /// not support or is not configured for event generation": it can
+    /// OBJECT/NO_ALARM_CONFIGURED, which Table 13-10 uses for an existing object
+    /// lacking event-generation support or configuration: it can
     /// generate nothing, and Clause 12.12 keeps its `Acked_Transitions` at
     /// the initial condition, which an accepted ack would break.
     /// Out_Of_Service does not gate the ack: no clause bars acknowledging a
     /// notification already issued while the object is out of service.
-    fn acknowledge_alarm(&mut self, transition_bit: u8) -> Result<(), bacnet_types::error::Error> {
+    fn acknowledge_alarm(
+        &mut self,
+        transition_bit: EventTransitionBits,
+    ) -> Result<(), bacnet_types::error::Error> {
         if !self.event_detection_enable {
             return Err(bacnet_types::error::Error::Protocol {
                 class: bacnet_types::enums::ErrorClass::OBJECT.to_raw() as u32,
                 code: bacnet_types::enums::ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
             });
         }
-        self.acked_transitions |= transition_bit & 0x07;
+        self.acked_transitions |= transition_bit & EventTransitionBits::all();
         Ok(())
     }
 
@@ -571,137 +585,55 @@ impl BACnetObject for EventEnrollmentObject {
     /// the evaluator resolves `Ack_Required` from the referenced Notification
     /// Class object and this call applies the outcome — clear the bit when
     /// ack is required, set it otherwise. Refused while detection is
-    /// disabled, the same invariant as above: "Acked_Transitions shall be
-    /// equal to [its] initial condition" while FALSE.
+    /// disabled, preserving the same invariant as above: Acked_Transitions
+    /// must retain its initial value throughout the disabled period.
     fn set_acked_transitions_internal(
         &mut self,
-        transition_bit: u8,
+        transition_bit: EventTransitionBits,
         acknowledged: bool,
     ) -> Result<(), Error> {
         if !self.event_detection_enable {
             return Err(common::write_access_denied_error());
         }
-        if acknowledged {
-            self.acked_transitions |= transition_bit & 0x07;
-        } else {
-            self.acked_transitions &= !(transition_bit & 0x07);
-        }
+        self.acked_transitions
+            .set(transition_bit & EventTransitionBits::all(), acknowledged);
         Ok(())
     }
 
     transition::impl_event_enrollment_transition_commit!();
 
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        _value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        match property {
-            PropertyIdentifier::EVENT_DETECTION_ENABLE => Some(WritePropertyRollback::new(
-                EventEnrollmentWriteRollback::Detection {
-                    enabled: self.event_detection_enable,
-                    event_state: self.event_state,
-                    acked_transitions: self.acked_transitions,
-                    event_history: self.event_history.clone(),
-                    monitored_reference: self.monitored_reference,
-                    evaluation: EventEnrollmentEvalState {
-                        pending: self.pending.clone(),
-                        cov_baseline: self.cov_baseline.clone(),
-                        last_offnormal_value: self.last_offnormal_value,
-                    },
-                },
-            )),
-            PropertyIdentifier::EVENT_PARAMETERS => Some(WritePropertyRollback::new(
-                EventEnrollmentWriteRollback::EventParameters {
-                    value: self.event_parameters.clone(),
-                    pending: self.pending.clone(),
-                },
-            )),
-            PropertyIdentifier::FAULT_PARAMETERS => Some(WritePropertyRollback::new(
-                EventEnrollmentWriteRollback::FaultParameters(self.fault_parameters.clone()),
-            )),
-            PropertyIdentifier::TIME_DELAY_NORMAL => Some(WritePropertyRollback::new(
-                EventEnrollmentWriteRollback::TimeDelayNormal {
-                    value: self.time_delay_normal,
-                    pending: self.pending.clone(),
-                },
-            )),
-            _ => None,
-        }
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        match rollback.downcast::<EventEnrollmentWriteRollback>()? {
-            EventEnrollmentWriteRollback::Detection {
-                enabled,
-                event_state,
-                acked_transitions,
-                event_history,
-                monitored_reference,
-                evaluation,
-            } => {
-                self.event_detection_enable = enabled;
-                self.event_state = event_state;
-                self.acked_transitions = acked_transitions;
-                self.event_history = event_history;
-                self.monitored_reference = monitored_reference;
-                self.pending = evaluation.pending;
-                self.cov_baseline = evaluation.cov_baseline;
-                self.last_offnormal_value = evaluation.last_offnormal_value;
-                Ok(())
-            }
-            EventEnrollmentWriteRollback::EventParameters { value, pending } => {
-                self.event_parameters = value;
-                self.pending = pending;
-                Ok(())
-            }
-            EventEnrollmentWriteRollback::FaultParameters(value) => {
-                self.fault_parameters = value;
-                Ok(())
-            }
-            EventEnrollmentWriteRollback::TimeDelayNormal { value, pending } => {
-                self.time_delay_normal = value;
-                self.pending = pending;
-                Ok(())
-            }
-        }
-    }
-
     /// Mirrors the `write_property` arms above, so PICS reports what dispatch
     /// actually accepts.
     ///
-    /// Enumerated rather than reusing `common::is_event_property_writable`:
-    /// that helper covers the intrinsic-reporting objects and includes
+    /// Enumerated explicitly: the intrinsic-reporting objects accept
     /// `HIGH_LIMIT`, `LOW_LIMIT`, `DEADBAND`, `LIMIT_ENABLE` and `TIME_DELAY`,
-    /// none of which an Event Enrollment accepts — it carries those inside
-    /// `Event_Parameters` instead. Reusing it would over-report writability.
-    /// `TIME_DELAY_NORMAL` overlaps the helper: an enrollment carries THAT
-    /// one as a real (O-coded) property, per Table 12-14.
+    /// none of which an Event Enrollment accepts, because it carries those
+    /// inside `Event_Parameters` instead. `TIME_DELAY_NORMAL` is accepted here
+    /// as a real (O-coded) property, per Table 12-14.
     ///
     /// `Event_Detection_Enable` is writable even though Table 12-14 codes it R
-    /// rather than W: Clause 12.1.2 allows an R property to be writable "at the
-    /// implementor's option unless specifically prohibited in the text
-    /// describing that particular standard object's property", and Clause 12.12
-    /// prohibits nothing — it only says the value "is expected" to be set
-    /// during configuration, which is guidance, not a "shall". Annex K's
+    /// rather than W: Clause 12.1.2 lets implementors accept writes to an R
+    /// property unless that object's property description expressly forbids
+    /// them. Clause 12.12 has no such prohibition; it anticipates setting the
+    /// value during configuration without mandating that timing. Annex K's
     /// AE-AVM-A BIBB (Table K-17) positively requires a conforming workstation
     /// to be able to *write* this property, so refusing the write would be
     /// interoperably hostile.
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        common::is_common_writable(property)
-            || matches!(
-                property,
-                PropertyIdentifier::NOTIFY_TYPE
-                    | PropertyIdentifier::NOTIFICATION_CLASS
-                    | PropertyIdentifier::EVENT_ENABLE
-                    | PropertyIdentifier::EVENT_DETECTION_ENABLE
-                    | PropertyIdentifier::EVENT_PARAMETERS
-                    | PropertyIdentifier::FAULT_PARAMETERS
-                    | PropertyIdentifier::TIME_DELAY_NORMAL
-            )
+        // Table 12-14 has no Out_Of_Service (#1064), so of the common
+        // writable rows only the name and description apply.
+        matches!(
+            property,
+            PropertyIdentifier::OBJECT_NAME
+                | PropertyIdentifier::DESCRIPTION
+                | PropertyIdentifier::NOTIFY_TYPE
+                | PropertyIdentifier::NOTIFICATION_CLASS
+                | PropertyIdentifier::EVENT_ENABLE
+                | PropertyIdentifier::EVENT_DETECTION_ENABLE
+                | PropertyIdentifier::EVENT_PARAMETERS
+                | PropertyIdentifier::FAULT_PARAMETERS
+                | PropertyIdentifier::TIME_DELAY_NORMAL
+        )
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

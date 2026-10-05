@@ -3,9 +3,13 @@ use std::borrow::Cow;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_services::alarm_event::{GetEventInformationAck, GetEventInformationRequest};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::primitives::{Date, Time};
 
 use super::*;
+
+#[path = "event_information_budget_tests.rs"]
+mod configured;
 
 struct ProjectionFixture {
     oid: ObjectIdentifier,
@@ -35,7 +39,7 @@ impl ProjectionFixture {
                 ),
                 (
                     PropertyIdentifier::ACKED_TRANSITIONS,
-                    transition_bits(0b111),
+                    transition_bits(EventTransitionBits::all()),
                 ),
                 (
                     PropertyIdentifier::EVENT_TIME_STAMPS,
@@ -49,7 +53,10 @@ impl ProjectionFixture {
                     PropertyIdentifier::NOTIFY_TYPE,
                     PropertyValue::Enumerated(0),
                 ),
-                (PropertyIdentifier::EVENT_ENABLE, transition_bits(0b111)),
+                (
+                    PropertyIdentifier::EVENT_ENABLE,
+                    transition_bits(EventTransitionBits::all()),
+                ),
                 (
                     PropertyIdentifier::NOTIFICATION_CLASS,
                     PropertyValue::Unsigned(42),
@@ -139,10 +146,10 @@ impl BACnetObject for ProjectionFixture {
     }
 }
 
-fn transition_bits(bits: u8) -> PropertyValue {
+fn transition_bits(bits: EventTransitionBits) -> PropertyValue {
     PropertyValue::BitString {
         unused_bits: 5,
-        data: vec![bacnet_types::bitstring::pack_octet(bits)],
+        data: vec![bits.to_bacnet()],
     }
 }
 
@@ -174,7 +181,29 @@ fn response(
     budget: Option<usize>,
 ) -> Result<(GetEventInformationAck, usize), Error> {
     let mut encoded = BytesMut::new();
-    handle_get_event_information_with_budget(db, &request(cursor), &mut encoded, budget)?;
+    let result =
+        handle_get_event_information_with_budget(db, &request(cursor), &mut encoded, budget);
+    if budget.is_none() {
+        let mut configured = BytesMut::new();
+        let configured_result = handle_get_event_information_configured(
+            db,
+            &request(cursor),
+            &mut configured,
+            crate::server::GetEventInformationBudget {
+                max_objects: usize::MAX,
+                max_returned_summaries: usize::MAX,
+                max_service_ack_bytes: usize::MAX,
+            },
+        );
+        match (&result, configured_result) {
+            (Ok(()), Ok(())) => assert_eq!(encoded, configured),
+            (Err(expected), Err(EventInformationFailure::Service(actual))) => {
+                assert_eq!(expected.to_string(), actual.to_string())
+            }
+            (expected, actual) => panic!("legacy/configured mismatch: {expected:?} / {actual:?}"),
+        }
+    }
+    result?;
     Ok((GetEventInformationAck::decode(&encoded)?, encoded.len()))
 }
 
@@ -208,9 +237,12 @@ fn selection_uses_state_acknowledgments_and_detection_not_event_enable() {
     );
     normal_unacked.set(
         PropertyIdentifier::ACKED_TRANSITIONS,
-        transition_bits(0b110),
+        transition_bits(EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL),
     );
-    normal_unacked.set(PropertyIdentifier::EVENT_ENABLE, transition_bits(0));
+    normal_unacked.set(
+        PropertyIdentifier::EVENT_ENABLE,
+        transition_bits(EventTransitionBits::empty()),
+    );
     db.add(Box::new(normal_unacked)).unwrap();
 
     let mut normal_acked = ProjectionFixture::summary(2);
@@ -229,7 +261,10 @@ fn selection_uses_state_acknowledgments_and_detection_not_event_enable() {
         .map(|summary| summary.object_identifier.instance_number())
         .collect();
     assert_eq!(instances, vec![1, 3]);
-    assert_eq!(ack.list_of_event_summaries[0].event_enable, 0);
+    assert_eq!(
+        ack.list_of_event_summaries[0].event_enable,
+        EventTransitionBits::empty()
+    );
     assert_eq!(
         ack.list_of_event_summaries[0].event_priorities,
         [4, 80, 255]

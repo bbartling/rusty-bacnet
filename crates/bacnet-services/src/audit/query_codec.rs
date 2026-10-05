@@ -1,15 +1,32 @@
+use bacnet_encoding::constructed::{check_decoded_mac_len, check_encoded_mac_len};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::BACnetAddress;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{BACnetSuccessFilter, PropertyIdentifier, RejectReason};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
-use crate::common::{decode_context, decode_context_bool};
+use bacnet_encoding::constructed::tagged::{
+    decode_app_primitive, decode_canonical_unsigned, decode_ctx_canonical_unsigned,
+    decode_ctx_object_id, decode_ctx_primitive, expect_end, misplaced_tag, next_is_context,
+    next_is_opening,
+};
 
-use super::{decode_canonical_unsigned, AuditLogQueryRequest, BACnetAuditLogQueryParameters};
+use super::{AuditLogQueryRequest, BACnetAuditLogQueryParameters};
+
+fn validate_filter(filter: BACnetSuccessFilter) -> Result<(), Error> {
+    if filter != BACnetSuccessFilter::ALL
+        && filter != BACnetSuccessFilter::SUCCESSES_ONLY
+        && filter != BACnetSuccessFilter::FAILURES_ONLY
+    {
+        return Err(Error::Encoding(format!(
+            "AuditLogQuery success-filter {} is outside 0..=2",
+            filter.to_raw()
+        )));
+    }
+    Ok(())
+}
 
 fn validate(request: &AuditLogQueryRequest) -> Result<(), Error> {
     if let BACnetAuditLogQueryParameters::ByTarget {
@@ -23,7 +40,22 @@ fn validate(request: &AuditLogQueryRequest) -> Result<(), Error> {
             ));
         }
     }
-    Ok(())
+    let (address, filter) = match &request.query_parameters {
+        BACnetAuditLogQueryParameters::ByTarget {
+            target_device_address: address,
+            successful_actions_only,
+            ..
+        }
+        | BACnetAuditLogQueryParameters::BySource {
+            source_device_address: address,
+            successful_actions_only,
+            ..
+        } => (address, *successful_actions_only),
+    };
+    if let Some(address) = address {
+        check_encoded_mac_len(&address.mac_address, "AuditLogQuery device address")?;
+    }
+    validate_filter(filter)
 }
 
 pub(super) fn encode(request: &AuditLogQueryRequest, buf: &mut BytesMut) -> Result<(), Error> {
@@ -67,7 +99,7 @@ pub(super) fn encode(request: &AuditLogQueryRequest, buf: &mut BytesMut) -> Resu
                 let (unused_bits, data) = flags.to_bacnet();
                 primitives::encode_ctx_bit_string(&mut encoded, 6, unused_bits, &data);
             }
-            primitives::encode_ctx_boolean(&mut encoded, 7, *successful_actions_only);
+            primitives::encode_ctx_enumerated(&mut encoded, 7, successful_actions_only.to_raw());
             tags::encode_closing_tag(&mut encoded, 0);
         }
         BACnetAuditLogQueryParameters::BySource {
@@ -89,14 +121,14 @@ pub(super) fn encode(request: &AuditLogQueryRequest, buf: &mut BytesMut) -> Resu
                 let (unused_bits, data) = flags.to_bacnet();
                 primitives::encode_ctx_bit_string(&mut encoded, 3, unused_bits, &data);
             }
-            primitives::encode_ctx_boolean(&mut encoded, 4, *successful_actions_only);
+            primitives::encode_ctx_enumerated(&mut encoded, 4, successful_actions_only.to_raw());
             tags::encode_closing_tag(&mut encoded, 1);
         }
     }
     tags::encode_closing_tag(&mut encoded, 1);
 
     if let Some(sequence) = request.start_at_sequence_number {
-        primitives::encode_ctx_unsigned(&mut encoded, 2, u64::from(sequence));
+        primitives::encode_ctx_unsigned(&mut encoded, 2, sequence);
     }
     primitives::encode_ctx_unsigned(&mut encoded, 3, u64::from(request.requested_count));
 
@@ -112,11 +144,14 @@ fn encode_address(buf: &mut BytesMut, tag: u8, address: &BACnetAddress) {
 }
 
 pub(super) fn decode(data: &[u8]) -> Result<AuditLogQueryRequest, Error> {
-    let (audit_log, mut offset) = decode_object_id(data, 0, 0, "AuditLogQuery audit-log")?;
+    let (audit_log, mut offset) = decode_ctx_object_id(data, 0, 0, "AuditLogQuery audit-log")?;
 
     let (wrapper_tag, wrapper_start) = tags::decode_tag(data, offset)?;
     if !wrapper_tag.is_opening_tag(1) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &wrapper_tag,
+            Some(1),
             offset,
             "AuditLogQuery query-parameters expected opening tag 1",
         ));
@@ -127,18 +162,20 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditLogQueryRequest, Error> {
 
     let mut start_at_sequence_number = None;
     if next_is_context(data, offset, 2)? {
-        let (sequence, end) =
-            decode_context_u32(data, offset, 2, "AuditLogQuery start-at-sequence-number")?;
+        let (sequence, end) = decode_ctx_canonical_unsigned::<u64>(
+            data,
+            offset,
+            2,
+            "AuditLogQuery start-at-sequence-number",
+        )?;
         start_at_sequence_number = Some(sequence);
         offset = end;
     }
 
     let (requested_count, end) =
-        decode_context_u16(data, offset, 3, "AuditLogQuery requested-count")?;
+        decode_ctx_canonical_unsigned::<u16>(data, offset, 3, "AuditLogQuery requested-count")?;
     offset = end;
-    if offset != data.len() {
-        return Err(Error::decoding(offset, "AuditLogQuery has trailing data"));
-    }
+    expect_end(data, offset, offset, "AuditLogQuery")?;
 
     Ok(AuditLogQueryRequest {
         audit_log,
@@ -157,22 +194,25 @@ fn decode_query_parameters(data: &[u8]) -> Result<BACnetAuditLogQueryParameters,
         let (content, end) = tags::extract_context_value(data, content_start, 1)?;
         (decode_by_source(content)?, end)
     } else {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &choice,
+            None,
             0,
             "AuditLogQuery query-parameters expected by-target [0] or by-source [1]",
         ));
     };
-    if choice_end != data.len() {
-        return Err(Error::decoding(
-            choice_end,
-            "AuditLogQuery query-parameters has trailing data",
-        ));
-    }
+    expect_end(
+        data,
+        choice_end,
+        choice_end,
+        "AuditLogQuery query-parameters",
+    )?;
     Ok(parameters)
 }
 
 fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error> {
-    let (target_device_identifier, mut offset) = decode_object_id(
+    let (target_device_identifier, mut offset) = decode_ctx_object_id(
         data,
         0,
         0,
@@ -188,7 +228,7 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
 
     let mut target_object_identifier = None;
     if next_is_context(data, offset, 2)? {
-        let (object, end) = decode_object_id(
+        let (object, end) = decode_ctx_object_id(
             data,
             offset,
             2,
@@ -200,7 +240,7 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
 
     let mut target_property_identifier = None;
     if next_is_context(data, offset, 3)? {
-        let (property, end) = decode_context_u32(
+        let (property, end) = decode_ctx_canonical_unsigned::<u32>(
             data,
             offset,
             3,
@@ -212,7 +252,7 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
 
     let mut target_array_index = None;
     if next_is_context(data, offset, 4)? {
-        let (index, end) = decode_context_u64(
+        let (index, end) = decode_ctx_canonical_unsigned::<u64>(
             data,
             offset,
             4,
@@ -224,10 +264,14 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
 
     let mut target_priority = None;
     if next_is_context(data, offset, 5)? {
-        let (priority, end) =
-            decode_context_u8(data, offset, 5, "AuditLogQuery by-target target-priority")?;
+        let (priority, end) = decode_ctx_canonical_unsigned::<u8>(
+            data,
+            offset,
+            5,
+            "AuditLogQuery by-target target-priority",
+        )?;
         if !(1..=16).contains(&priority) {
-            return Err(Error::decoding(
+            return Err(Error::out_of_range(
                 offset,
                 "AuditLogQuery target-priority must be in 1..=16",
             ));
@@ -244,18 +288,13 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
         offset = end;
     }
 
-    let (successful_actions_only, offset) = decode_context_bool(
+    let (successful_actions_only, offset) = decode_success_filter(
         data,
         offset,
         7,
         "AuditLogQuery by-target successful-actions-only",
     )?;
-    if offset != data.len() {
-        return Err(Error::decoding(
-            offset,
-            "AuditLogQuery by-target has trailing data",
-        ));
-    }
+    expect_end(data, offset, offset, "AuditLogQuery by-target")?;
 
     Ok(BACnetAuditLogQueryParameters::ByTarget {
         target_device_identifier,
@@ -270,7 +309,7 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
 }
 
 fn decode_by_source(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error> {
-    let (source_device_identifier, mut offset) = decode_object_id(
+    let (source_device_identifier, mut offset) = decode_ctx_object_id(
         data,
         0,
         0,
@@ -286,7 +325,7 @@ fn decode_by_source(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
 
     let mut source_object_identifier = None;
     if next_is_context(data, offset, 2)? {
-        let (object, end) = decode_object_id(
+        let (object, end) = decode_ctx_object_id(
             data,
             offset,
             2,
@@ -304,18 +343,13 @@ fn decode_by_source(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
         offset = end;
     }
 
-    let (successful_actions_only, offset) = decode_context_bool(
+    let (successful_actions_only, offset) = decode_success_filter(
         data,
         offset,
         4,
         "AuditLogQuery by-source successful-actions-only",
     )?;
-    if offset != data.len() {
-        return Err(Error::decoding(
-            offset,
-            "AuditLogQuery by-source has trailing data",
-        ));
-    }
+    expect_end(data, offset, offset, "AuditLogQuery by-source")?;
 
     Ok(BACnetAuditLogQueryParameters::BySource {
         source_device_identifier,
@@ -334,14 +368,17 @@ fn decode_address(
 ) -> Result<(BACnetAddress, usize), Error> {
     let (opening, content_start) = tags::decode_tag(data, offset)?;
     if !opening.is_opening_tag(expected_tag) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &opening,
+            Some(expected_tag),
             offset,
             format!("{field} expected opening tag {expected_tag}"),
         ));
     }
     let (content, end) = tags::extract_context_value(data, content_start, expected_tag)?;
 
-    let (network_bytes, inner_offset) = decode_application(
+    let (network_bytes, inner_offset) = decode_app_primitive(
         content,
         0,
         tags::app_tag::UNSIGNED,
@@ -349,20 +386,17 @@ fn decode_address(
     )?;
     let network_number = decode_canonical_unsigned(network_bytes, offset, field)?;
     let network_number = u16::try_from(network_number)
-        .map_err(|_| Error::decoding(offset, format!("{field} network-number exceeds u16")))?;
+        .map_err(|_| Error::out_of_range(offset, format!("{field} network-number exceeds u16")))?;
 
-    let (mac_address, inner_offset) = decode_application(
+    let mac_offset = inner_offset;
+    let (mac_address, inner_offset) = decode_app_primitive(
         content,
         inner_offset,
         tags::app_tag::OCTET_STRING,
         &format!("{field} mac-address"),
     )?;
-    if inner_offset != content.len() {
-        return Err(Error::decoding(
-            offset + inner_offset,
-            format!("{field} has trailing data"),
-        ));
-    }
+    check_decoded_mac_len(mac_address.len(), content_start + mac_offset, field)?;
+    expect_end(content, inner_offset, offset + inner_offset, field)?;
 
     Ok((
         BACnetAddress {
@@ -379,107 +413,38 @@ fn decode_operation_flags(
     expected_tag: u8,
     field: &str,
 ) -> Result<(AuditOperationFlags, usize), Error> {
-    let (content, end) = decode_context(data, offset, expected_tag, field)?;
+    let (content, end) = decode_ctx_primitive(data, offset, expected_tag, field)?;
     let (unused_bits, bits) = primitives::decode_bit_string(content)?;
     let flags = AuditOperationFlags::from_bacnet(unused_bits, &bits)?;
     Ok((flags, end))
 }
 
-fn decode_object_id(
+fn decode_success_filter(
     data: &[u8],
     offset: usize,
     expected_tag: u8,
     field: &str,
-) -> Result<(ObjectIdentifier, usize), Error> {
-    let (content, end) = decode_context(data, offset, expected_tag, field)?;
-    Ok((ObjectIdentifier::decode(content)?, end))
-}
-
-fn decode_context_u8(
-    data: &[u8],
-    offset: usize,
-    expected_tag: u8,
-    field: &str,
-) -> Result<(u8, usize), Error> {
-    let (content, end) = decode_context(data, offset, expected_tag, field)?;
-    let value = decode_canonical_unsigned(content, offset, field)?;
-    let value =
-        u8::try_from(value).map_err(|_| Error::decoding(offset, format!("{field} exceeds u8")))?;
-    Ok((value, end))
-}
-
-fn decode_context_u16(
-    data: &[u8],
-    offset: usize,
-    expected_tag: u8,
-    field: &str,
-) -> Result<(u16, usize), Error> {
-    let (content, end) = decode_context(data, offset, expected_tag, field)?;
-    let value = decode_canonical_unsigned(content, offset, field)?;
-    let value = u16::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{field} exceeds u16")))?;
-    Ok((value, end))
-}
-
-fn decode_context_u32(
-    data: &[u8],
-    offset: usize,
-    expected_tag: u8,
-    field: &str,
-) -> Result<(u32, usize), Error> {
-    let (content, end) = decode_context(data, offset, expected_tag, field)?;
-    let value = decode_canonical_unsigned(content, offset, field)?;
-    let value = u32::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{field} exceeds u32")))?;
-    Ok((value, end))
-}
-
-fn decode_context_u64(
-    data: &[u8],
-    offset: usize,
-    expected_tag: u8,
-    field: &str,
-) -> Result<(u64, usize), Error> {
-    let (content, end) = decode_context(data, offset, expected_tag, field)?;
-    Ok((decode_canonical_unsigned(content, offset, field)?, end))
-}
-
-fn decode_application<'a>(
-    data: &'a [u8],
-    offset: usize,
-    expected_tag: u8,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, content_start) = tags::decode_tag(data, offset)?;
-    if tag.class != tags::TagClass::Application
-        || tag.number != expected_tag
-        || tag.is_opening
-        || tag.is_closing
-    {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} expected application tag {expected_tag}"),
-        ));
-    }
-    let end = content_start
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(content_start, format!("{field} length overflow")))?;
-    if end > data.len() {
-        return Err(Error::decoding(content_start, format!("{field} truncated")));
-    }
-    Ok((&data[content_start..end], end))
-}
-
-fn next_is_context(data: &[u8], offset: usize, number: u8) -> Result<bool, Error> {
-    if offset == data.len() {
-        return Ok(false);
-    }
-    Ok(tags::decode_tag(data, offset)?.0.is_context(number))
-}
-
-fn next_is_opening(data: &[u8], offset: usize, number: u8) -> Result<bool, Error> {
-    if offset == data.len() {
-        return Ok(false);
-    }
-    Ok(tags::decode_tag(data, offset)?.0.is_opening_tag(number))
+) -> Result<(BACnetSuccessFilter, usize), Error> {
+    // Strict corrected-baseline enumerated form (Errata 2024-04-29 item 7):
+    // only 0 (all), 1 (successes-only), and 2 (failures-only) are accepted,
+    // in shortest canonical form. The omitted field still fails via the
+    // required-tag check in `decode_ctx_canonical_unsigned`. Note the 0/1
+    // octet contents are byte-identical to the old BOOLEAN encoding, so
+    // strictness here means the enumerated 0..=2 range plus canonical form —
+    // not a distinct tag — while the previously rejected value 2 is now
+    // required to decode.
+    let (value, end) = decode_ctx_canonical_unsigned::<u64>(data, offset, expected_tag, field)?;
+    let filter = match value {
+        0 => BACnetSuccessFilter::ALL,
+        1 => BACnetSuccessFilter::SUCCESSES_ONLY,
+        2 => BACnetSuccessFilter::FAILURES_ONLY,
+        // A value the enumeration doesn't define, as GetEnrollmentSummary
+        // answers its own filters.
+        _ => {
+            return Err(Error::Reject {
+                reason: RejectReason::UNDEFINED_ENUMERATION.to_raw(),
+            });
+        }
+    };
+    Ok((filter, end))
 }

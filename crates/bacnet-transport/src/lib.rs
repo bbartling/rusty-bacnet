@@ -16,6 +16,7 @@ pub mod bip;
 #[cfg(feature = "ipv6")]
 pub mod bip6;
 pub mod bvll;
+mod direct_response;
 #[cfg(feature = "ethernet")]
 pub mod ethernet;
 mod local_addresses;
@@ -25,6 +26,7 @@ pub mod mstp_frame;
 #[cfg(feature = "serial")]
 pub mod mstp_serial;
 pub mod port;
+mod port_ownership;
 pub mod sc;
 pub mod sc_frame;
 #[cfg(feature = "sc-tls")]
@@ -32,4 +34,14 @@ pub mod sc_hub;
 mod sc_limits;
 #[cfg(feature = "sc-tls")]
 pub mod sc_tls;
+#[cfg(feature = "sc-tls")]
+mod tcp_connect;
+#[cfg(feature = "sc-tls")]
+mod tls_reject;
 mod udp_metadata;
+#[cfg(windows)]
+mod windows_adapters;
+
+#[cfg(test)]
+#[path = "rb07_provenance_tests.rs"]
+mod rb07_provenance_tests;

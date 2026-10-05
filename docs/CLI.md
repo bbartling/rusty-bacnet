@@ -1,22 +1,33 @@
 # BACnet CLI Reference
 
-The `bacnet` command-line tool provides interactive and scripted access to BACnet networks for device discovery, property reading/writing, diagnostics, and packet analysis.
+The `bacnet` command-line tool provides interactive and scripted access to BACnet networks for device discovery, property reading/writing, diagnostics, and packet analysis. `bacnet tui` opens a full-screen terminal UI in builds with the opt-in `tui` feature; see [Terminal UI](#terminal-ui).
 
 ## Installation
 
+Download a release binary (see [Pre-built Binaries](#pre-built-binaries)), or
+build it with Cargo.
+
+`bacnet-cli` is published on crates.io with each release from 0.12.0:
+
 ```bash
-# From source
-cargo install bacnet-cli
+cargo install bacnet-cli --locked --features sc-tls
+```
+
+For changes merged after the release, install from a checkout:
+
+```bash
+# From a checkout of this repository
+cargo install --path crates/bacnet-cli --locked
 
 # With packet capture support (requires libpcap)
-cargo install bacnet-cli --features pcap
+cargo install --path crates/bacnet-cli --locked --features pcap
 
 # With BACnet/SC support
-cargo install bacnet-cli --features sc-tls
-
-# Pre-built binaries (from GitHub Releases)
-# Linux builds include pcap support by default
+cargo install --path crates/bacnet-cli --locked --features sc-tls
 ```
+
+The features combine (`--features sc-tls,pcap`). Packet capture needs libpcap
+and its headers (`libpcap-dev` on Debian and Ubuntu).
 
 ## Global Options
 
@@ -31,6 +42,7 @@ cargo install bacnet-cli --features sc-tls
 | `--device-instance <N>` | | Device instance for BIP6 VMAC derivation |
 | `--sc` | | Use BACnet/SC transport |
 | `--sc-url <URL>` | | SC hub WebSocket URL |
+| `--sc-ca <FILE>` | required for SC | Trusted site CA certificate(s) in PEM; no system-root fallback |
 | `--sc-cert <FILE>` | | SC TLS certificate PEM |
 | `--sc-key <FILE>` | | SC TLS private key PEM |
 | `--sc-vmac <HEX>` | | SC local VMAC as 12 hex digits or separated bytes |
@@ -41,7 +53,7 @@ cargo install bacnet-cli --features sc-tls
 
 Output auto-detects: tables in TTY, JSON when piped.
 
-**Interface selection:** When launching the interactive shell without `--interface` on BACnet/IP, the CLI lists available network interfaces and prompts you to select one. For one-shot commands without `--interface`, it defaults to `0.0.0.0`.
+**Interface selection:** When launching the interactive shell without `--interface` on BACnet/IP, the CLI lists available network interfaces and prompts you to select one; `bacnet tui` shows the same list as a dialog. For one-shot commands without `--interface`, it defaults to `0.0.0.0`.
 
 ## Target Resolution
 
@@ -93,6 +105,93 @@ exit                        # exit the shell (also: quit, Ctrl-D)
 
 **Command aliases in shell:** `whois`=discover, `whohas`=find, `rp`=read, `rpm`=readm, `rr`=read-range, `wp`=write, `wpm`=writem, `cov`=subscribe, `dcc`=control, `ack`=ack-alarm, `ts`=time-sync
 
+### Terminal UI
+
+```bash
+bacnet tui                               # full-screen UI on BACnet/IP
+bacnet tui -i 10.0.1.5                   # bind this interface, skip the picker
+bacnet --ipv6 tui                        # BACnet/IPv6
+bacnet --sc --sc-url wss://hub:443 --sc-ca ca.pem --sc-cert me.pem \
+  --sc-key me.key --sc-vmac 02:00:00:00:00:09 \
+  --sc-device-uuid 00112233-4455-6677-8899-aabbccddeeff tui   # BACnet/SC
+bacnet tui --fps 5 --log-file tui.log    # lower redraw rate, keep a log file
+```
+
+`bacnet tui` opens a full-screen terminal UI on the transport chosen by the
+global flags. This first version has one screen, **Devices**: a live table of
+the devices that answer Who-Is, built from the client's I-Am notifications. It
+is **read-only**: it sends discovery requests and nothing that changes a remote
+device, and the status bar says `READ-ONLY`. The design and the planned screens
+(browse, watch, BBMD, SC, MS/TP, capture) are in
+[docs/design/tui.md](design/tui.md).
+
+**Tui flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--fps <N>` | `20` | Redraws per second, 1 to 60. Idle screens are not redrawn |
+| `--log-file <FILE>` | | Append log lines to this file as well as the in-app log pane |
+
+`-v` and `-vv` raise the log level from info to debug and trace.
+
+**Requirements.** stdin and stdout must be a terminal and `TERM` must not be
+`dumb`; otherwise `bacnet tui` exits 1 with a hint on stderr and writes nothing
+to stdout. The same hint appears, with exit status 1, when the terminal refuses
+raw mode (as MSYS and mintty terminals on Windows do). Use the one-shot
+commands (`bacnet discover --json`) in scripts and pipes. 80x24 is the smallest
+supported terminal and 120x40 shows the full table; below 80x24 the TUI shows a
+notice until the window is resized. Colour follows `NO_COLOR`. On Windows use
+Windows Terminal or conhost; mintty and Git Bash are not supported.
+
+**Exit status.** 0 after `q` or a second Ctrl-C. 1 for an error, such as a
+failed connection or an internal error, with the reason on stderr. When a
+signal ends it, the terminal is restored first; on Unix the status then follows
+the shell convention of 128 plus the signal number (130 for SIGINT, 129 for
+SIGHUP, 143 for SIGTERM), and on Windows a console close or Ctrl-Break exits 1.
+
+**Interface selection.** On BACnet/IP without `-i`, a dialog lists the IPv4
+interfaces (one interface is used without asking, as in the shell).
+
+**Devices screen.** Press `d` for the Who-Is form:
+
+| Field | Values |
+|---|---|
+| Scope | Local broadcast, global broadcast, directed (one address), or remote network |
+| Target | For directed: `IP`, `IP:port`, `[IPv6]:port`, or an SC VMAC as 12 hex digits. For remote network: the network number |
+| Range | Blank for every instance, `N`, or `LOW-HIGH` (0 to 4194303) |
+| Listen | Seconds to show the request as running while replies arrive (1 to 60, default 3) |
+
+A global or unbounded Who-Is can draw a reply from every device on a site, so
+the first Enter shows a one-line warning with the number of devices already
+known, and a second Enter sends it. The table shows instance, address (for a
+routed device, its remote MAC and the router), network, vendor, max APDU,
+segmentation and time since the last I-Am. When two addresses answer for the
+same instance, a `DUPLICATE` banner names both. If the UI falls behind a burst
+of I-Am traffic, events are dropped rather than queued without limit; the
+status bar's `drop` counter shows how many, and the table is refreshed from the
+client's discovery table afterwards.
+
+**Keys:**
+
+| Key | Action |
+|---|---|
+| `d` | Who-Is form |
+| `/` | Filter rows by instance, address, network or vendor; Enter keeps the filter, Esc clears it |
+| `s` / `S` | Next sort column / reverse the order |
+| arrows, `j`/`k`, `PgUp`/`PgDn`, `Home`/`End` | Move |
+| `L` | Show or hide the log pane |
+| `?` | Help |
+| `Ctrl-C` | Close the open dialog or cancel the running Who-Is; press again within 2 s to quit |
+| `q` | Quit |
+
+The `tui` cargo feature is off by default until the terminal UI ships in
+0.13.0 (#975), so the release binaries and a plain `cargo install bacnet-cli`
+leave it out. Build it with `cargo install bacnet-cli --features tui`, or with
+`--features bacnet-cli/tui` in a workspace checkout. Without it, ratatui and
+crossterm aren't built and `bacnet tui` prints that rebuild advice. The
+one-shot commands and their JSON output are the same with or without the
+feature.
+
 ### Device Discovery
 
 ```bash
@@ -116,9 +215,8 @@ bacnet discover --bbmd 10.0.0.1 --ttl 300  # BBMD registration with TTL (default
 | `--ttl <N>` | `300` | TTL in seconds for BBMD foreign device registration |
 
 ```bash
-bacnet find "Zone Temp"                  # find objects by name (WhoHas)
-bacnet find --name "Zone Temp"           # same, explicit flag
-bacnet find "Zone Temp" --wait 5         # wait 5 seconds for responses
+bacnet find --name "Zone Temp"           # find objects by name (WhoHas)
+bacnet find --name "Zone Temp" --wait 5  # wait 5 seconds for responses
 ```
 
 ```bash
@@ -142,6 +240,15 @@ bacnet readm 192.168.1.100 ai:1 pv,object-name ao:1 pv
 bacnet read-range 192.168.1.100 trend-log:1 log-buffer
 bacnet read-range 192.168.1.100 trend-log:1     # defaults to log-buffer
 ```
+
+`read-range` decodes the Log_Buffer of a Trend Log, Event Log, Trend Log
+Multiple or Audit Log record by record, showing each record's timestamp, datum
+(a value, log status, time change, event notification or audit notification)
+and, for a Trend Log, status flags (blank when none is set). JSON output
+lists them under `records`, with the hex of anything from the first record
+that doesn't decode under `undecoded`. Other properties decode as application
+values under `items`, where anything that doesn't decode ends the list as
+`[raw: ..]` hex.
 
 **Aliases:** `rp` = read, `rpm` = readm, `rr` = read-range
 
@@ -241,10 +348,10 @@ raw `alarms` response is not a guided source for these values.
 
 ```bash
 # Communication control
-bacnet control 192.168.1.100 disable --duration 5
+bacnet control 192.168.1.100 disable-initiation --duration 5
 bacnet control 192.168.1.100 disable-initiation
 bacnet control 192.168.1.100 enable
-bacnet control 192.168.1.100 disable --password secret
+bacnet control 192.168.1.100 disable-initiation --password secret
 
 # Reinitialize
 bacnet reinit 192.168.1.100 coldstart
@@ -253,7 +360,8 @@ bacnet reinit 192.168.1.100 start-backup
 bacnet reinit 192.168.1.100 activate-changes
 ```
 
-**Control actions:** `enable`, `disable`, `disable-initiation`
+**Control actions:** `enable`, `disable`, `disable-initiation`. `disable` is
+deprecated, and a rusty-bacnet server refuses it under every DCC policy.
 
 **Control flags:**
 
@@ -421,8 +529,36 @@ bacnet --ipv6 discover
 bacnet --ipv6 read [fe80::1]:47808 ai:1 pv
 
 # BACnet/SC (requires sc-tls feature)
-bacnet --sc --sc-url wss://hub:443 --sc-cert cert.pem --sc-key key.pem --sc-vmac 22:01:02:03:04:05 --sc-device-uuid 00112233-4455-6677-8899-aabbccddeeff read 00:01:02:03:04:05 ai:1 pv
+bacnet --sc --sc-url wss://hub:443 --sc-ca site-ca.pem --sc-cert cert.pem --sc-key key.pem --sc-vmac 22:01:02:03:04:05 --sc-device-uuid 00112233-4455-6677-8899-aabbccddeeff discover
 ```
+
+**SC trust migration:** Existing `bacnet --sc` client invocations must now add
+`--sc-ca <FILE>`, naming a nonempty, usable site CA PEM file. Only certificates
+in that file become trust anchors: system roots and environment trust settings
+are not fallback sources, and there is no insecure opt-in. Keep supplying the
+operational `--sc-cert` and matching `--sc-key`, hub URL, non-reserved local VMAC,
+and nonzero device UUID. Global flags can appear before or after the subcommand;
+quote paths containing spaces in a shell. TLS 1.3-only remains local policy.
+
+SC construction rejects missing/empty CA paths, unreadable/empty/malformed or
+unusable CA PEM, and invalid or mismatched local cert/key before DNS/TCP dialing.
+Failures retain nonzero exit status and stderr diagnostics, not a successful JSON
+result. SC tracing (including connection-close warnings) also goes to stderr so
+it cannot corrupt JSON stdout. Peer trust and certificate validity dates are
+checked during TLS, not by an eager local date/issuer check. Help/version, capture
+paths that do not construct a client, and non-SC transports do not load SC files.
+A build without `sc-tls` still reports its rebuild advice without opening them.
+
+The CLI tests run the built executable against an ephemeral Rust mTLS SC hub and
+BACnet server, parse a known ReadProperty JSON value, and cover explicit/wrong
+site trust, credential failures, TLS 1.2 rejection, and pre-dial listener checks.
+This is bounded native CLI evidence, not full Annex AB security-profile or
+external-device interoperability certification. The CLI now delegates local
+policy construction to `ScNodeTlsConfig`; CLI flags and error phases stay compatible
+despite the [Rust source break](rust-api.md#strict-local-node-tls-configuration).
+Credentials are offered when requested and compatible, not proof of remote hub
+verification. A trusted server without CertificateRequest can complete, and normal
+TLS resumption may not retransmit certificates. That work is still incomplete.
 
 ## Object Type Shorthand
 
@@ -482,4 +618,20 @@ Available from [GitHub Releases](https://github.com/jscott3201/rusty-bacnet/rele
 | `bacnet-macos-arm64` | macOS Apple Silicon | sc-tls |
 | `bacnet-windows-amd64.exe` | Windows x86_64 | sc-tls |
 
-Linux binaries include packet capture support out of the box. macOS/Windows users who need capture can build from source with `--features pcap`.
+Rename the downloaded file to `bacnet` (`bacnet.exe` on Windows), make it
+executable and put it on your `PATH`. Linux binaries include packet capture
+support out of the box. macOS/Windows users who need capture can build from
+source with `--features pcap`.
+
+The Linux binaries need glibc 2.17 or newer, so they run on RHEL/CentOS 7,
+Debian 8, Ubuntu 14.04 and later. They link libpcap statically, so no libpcap
+package is needed (live capture still needs root, as
+[Packet Capture](#packet-capture) says). The macOS binaries need macOS 10.12
+(Intel) or 11.0 (Apple Silicon) or later and aren't notarized. The Windows
+binary links the C runtime statically. Each release also has a `SHA256SUMS`
+file and a `THIRD-PARTY-NOTICES` file listing the third-party code in the
+binaries; the [installation guide](https://jscott3201.github.io/rusty-bacnet/start/installation/)
+shows how to check a download.
+
+Before 0.12.0, the Linux binaries needed glibc 2.39 or newer and the system's
+libpcap.

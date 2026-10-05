@@ -1,6 +1,9 @@
 use super::*;
 use crate::sc_frame::ScOption;
 
+#[path = "identity_tests.rs"]
+pub(super) mod identity_tests;
+
 #[test]
 fn connection_initial_state() {
     let conn = ScConnection::new([0x01; 6], [0u8; 16]);
@@ -20,7 +23,7 @@ fn connection_flow() {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&[0x10; 6]); // hub VMAC
-    accept_payload.extend_from_slice(&[0u8; 16]); // hub UUID
+    accept_payload.extend_from_slice(&[0x33; 16]); // hub UUID
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     let accept = ScMessage {
@@ -263,7 +266,7 @@ fn connect_accept_with_payload_sets_hub_max_bvlc_and_apdu() {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&[0x10; 6]); // hub VMAC
-    accept_payload.extend_from_slice(&[0u8; 16]); // hub Device UUID
+    accept_payload.extend_from_slice(&[0x33; 16]); // hub Device UUID
     accept_payload.extend_from_slice(&1200u16.to_be_bytes()); // Max-BVLC-Length
     accept_payload.extend_from_slice(&480u16.to_be_bytes()); // Max-NPDU-Length
 
@@ -338,7 +341,7 @@ async fn loopback_websocket_pair() {
 async fn transport_start_stop() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
     let vmac = [0x01; 6];
-    let mut transport = ScTransport::new(ws_client, vmac);
+    let mut transport = ScTransport::new(ws_client, vmac).with_device_uuid([1; 16]);
 
     // Hub must accept the connection before start() returns
     let hub_task = tokio::spawn(async move {
@@ -356,7 +359,7 @@ async fn transport_receive_preserves_data_options_as_attributes() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
-    let mut transport = ScTransport::new(ws_client, client_vmac);
+    let mut transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
 
     let hub_accept_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -435,7 +438,7 @@ async fn hub_accept_with_limits(
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]); // Device UUID
+    accept_payload.extend_from_slice(&[0x33; 16]); // Device UUID
     accept_payload.extend_from_slice(&max_bvlc.to_be_bytes());
     accept_payload.extend_from_slice(&max_npdu.to_be_bytes());
 
@@ -461,7 +464,7 @@ async fn transport_send_unicast_delivers_message() {
     let dest_vmac: Vmac = [0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
     let npdu_payload = vec![0x01, 0x00, 0x30, 0x42];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac);
+    let mut transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
 
     // Hub must accept concurrently since start() now blocks on handshake
     let hub_accept_task = tokio::spawn(async move {
@@ -509,7 +512,7 @@ async fn transport_send_unicast_encodes_data_attributes_as_options() {
         },
     ];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac);
+    let mut transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
     let hub_accept_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
         ws_hub
@@ -543,7 +546,7 @@ async fn transport_send_unicast_encodes_data_attributes_as_options() {
 #[tokio::test]
 async fn transport_send_unicast_rejects_invalid_data_attribute_type() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
     let invalid_attribute = DataAttribute {
         option_type: 0,
         must_understand: false,
@@ -611,7 +614,7 @@ fn connection_rejects_oversize_data_attribute_payload_on_encode() {
 #[tokio::test]
 async fn transport_send_unicast_rejects_peer_max_npdu() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
 
     let hub_accept_task = tokio::spawn(async move {
         hub_accept_with_limits(&ws_hub, [0x10; 6], 1476, 2).await;
@@ -637,7 +640,7 @@ async fn transport_send_unicast_rejects_peer_max_npdu() {
 #[tokio::test]
 async fn transport_send_unicast_rejects_peer_max_bvlc() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
 
     let hub_accept_task = tokio::spawn(async move {
         hub_accept_with_limits(&ws_hub, [0x10; 6], 13, 1476).await;
@@ -707,7 +710,7 @@ async fn transport_send_broadcast_delivers_message() {
     let hub_vmac = [0x10; 6];
     let npdu_payload = vec![0x01, 0x20, 0xFF];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac);
+    let mut transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
 
     // Hub must accept concurrently since start() now blocks on handshake
     let hub_accept_task = tokio::spawn(async move {
@@ -749,6 +752,8 @@ fn connect_accept_validates_message_id() {
     let req_id = req.message_id;
     let mut payload = vec![0u8; 26];
     payload[..6].fill(0x10); // non-reserved hub VMAC
+    payload[6..22].fill(0x33); // nonzero hub UUID
+    payload[22..26].copy_from_slice(&[0x05, 0xc4, 0x05, 0xc4]); // positive capacities
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,
@@ -769,6 +774,8 @@ fn connect_accept_rejects_wrong_message_id() {
     let _req = conn.build_connect_request();
     let mut payload = vec![0u8; 26];
     payload[..6].fill(0x10); // isolate the correlation failure
+    payload[6..22].fill(0x33); // otherwise valid peer identity
+    payload[22..26].copy_from_slice(&[0x05, 0xc4, 0x05, 0xc4]); // isolate wrong ID
 
     let accept = ScMessage {
         function: ScFunction::ConnectAccept,

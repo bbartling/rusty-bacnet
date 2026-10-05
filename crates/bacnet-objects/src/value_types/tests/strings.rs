@@ -95,12 +95,12 @@ fn characterstring_value_priority_array_omitted_index_is_write_access_denied() {
         other => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
     }
 
-    // In-range stays valid, and out-of-range stays INVALID_ARRAY_INDEX.
+    // A valid Present_Value command populates the slot; direct array writes are denied.
     obj.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(3),
-        PropertyValue::CharacterString("cmd".into()),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::CharacterString("cmd".into()),
+        Some(3),
     )
     .unwrap();
     match obj
@@ -119,10 +119,10 @@ fn characterstring_value_priority_array_omitted_index_is_write_access_denied() {
             );
             assert_eq!(
                 code,
-                bacnet_types::enums::ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32
+                bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
             );
         }
-        other => panic!("expected PROPERTY/INVALID_ARRAY_INDEX, got {other:?}"),
+        other => panic!("expected PROPERTY/WRITE_ACCESS_DENIED, got {other:?}"),
     }
 }
 

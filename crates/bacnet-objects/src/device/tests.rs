@@ -1,3 +1,6 @@
+mod audit_recipient;
+mod description;
+
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 use bacnet_types::primitives::{Date, Time};
@@ -185,23 +188,6 @@ fn device_description_default_empty() {
 }
 
 #[test]
-fn device_description_write_read() {
-    let mut dev = make_device();
-    dev.write_property(
-        PropertyIdentifier::DESCRIPTION,
-        None,
-        PropertyValue::CharacterString("Main building controller".into()),
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        dev.read_property(PropertyIdentifier::DESCRIPTION, None)
-            .unwrap(),
-        PropertyValue::CharacterString("Main building controller".into())
-    );
-}
-
-#[test]
 fn device_set_description_convenience() {
     let mut dev = make_device();
     dev.set_description("Rooftop unit controller");
@@ -308,8 +294,8 @@ fn read_protocol_object_types_supported() {
             assert_eq!(unused_bits, 7);
             assert_eq!(
                 data,
-                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFD, 0xFF, 0xEB, 0xFF, 0x80],
-                "types 51 and 53 must stay clear while types 50, 52, 54, and 64 remain set"
+                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFD, 0xFF, 0xFF, 0xFF, 0x80],
+                "type 38 must stay clear while types 50 to 54 (51 Notification Forwarder, 53 Channel) and 64 remain set"
             );
         }
         _ => panic!("Expected BitString"),
@@ -348,12 +334,16 @@ fn read_protocol_services_supported() {
             assert!(ss.contains(ServiceSupported::READ_RANGE));
             assert!(ss.contains(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE));
             assert!(ss.contains(ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION));
-            assert!(!ss.contains(ServiceSupported::WRITE_GROUP));
+            // WriteGroup runs on the Channel objects (#1151).
+            assert!(ss.contains(ServiceSupported::WRITE_GROUP));
             // …and initiate-only services are not declared as executed.
             assert!(!ss.contains(ServiceSupported::I_AM));
             assert!(!ss.contains(ServiceSupported::I_HAVE));
-            assert!(!ss.contains(ServiceSupported::CONFIRMED_EVENT_NOTIFICATION));
             assert!(!ss.contains(ServiceSupported::UNCONFIRMED_COV_NOTIFICATION));
+            // Event notifications are executed for the Notification
+            // Forwarder objects (#1225).
+            assert!(ss.contains(ServiceSupported::CONFIRMED_EVENT_NOTIFICATION));
+            assert!(ss.contains(ServiceSupported::UNCONFIRMED_EVENT_NOTIFICATION));
         }
         _ => panic!("Expected BitString"),
     }
@@ -448,6 +438,9 @@ fn set_services_supported_overrides_default() {
     assert_eq!(ss.iter().count(), 1);
 }
 
+/// Standalone object data: the Device holds no subscription state. The live
+/// list is the server COV table's projection (bacnet-server wire tests); the
+/// constructed codec is covered by bacnet-encoding's golden vectors.
 #[test]
 fn active_cov_subscriptions_default_empty() {
     let dev = make_device();
@@ -466,80 +459,6 @@ fn active_cov_subscriptions_in_property_list() {
 }
 
 #[test]
-fn active_cov_subscriptions_after_add() {
-    use bacnet_types::constructed::{
-        BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
-        BACnetRecipientProcess,
-    };
-
-    let mut dev = make_device();
-    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap();
-    let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 3).unwrap();
-
-    dev.add_cov_subscription(BACnetCOVSubscription {
-        recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Device(dev_oid),
-            process_identifier: 7,
-        },
-        monitored_property_reference: BACnetObjectPropertyReference::new_indexed(ao_oid, 87, 2),
-        issue_confirmed_notifications: true,
-        time_remaining: 300,
-        cov_increment: Some(0.5),
-    });
-
-    let val = dev
-        .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
-        .unwrap();
-    assert_eq!(
-        val,
-        PropertyValue::ApplicationData(vec![
-            0x0E, 0x0E, 0x0C, 0x02, 0x00, 0x00, 0x07, 0x0F, 0x19, 0x07, 0x0F, 0x1E, 0x0C, 0x00,
-            0x40, 0x00, 0x03, 0x19, 0x57, 0x29, 0x02, 0x1F, 0x29, 0x01, 0x3A, 0x01, 0x2C, 0x4C,
-            0x3F, 0x00, 0x00, 0x00,
-        ])
-    );
-}
-
-#[test]
-fn active_cov_subscriptions_without_increment() {
-    use bacnet_types::constructed::{
-        BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
-        BACnetRecipientProcess,
-    };
-
-    let mut dev = make_device();
-    let bv_oid = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 3).unwrap();
-
-    dev.add_cov_subscription(BACnetCOVSubscription {
-        recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
-                network_number: 0x1234,
-                mac_address: bacnet_types::MacAddr::from_slice(&[0xAA, 0xBB]),
-            }),
-            process_identifier: 9,
-        },
-        monitored_property_reference: BACnetObjectPropertyReference::new(
-            bv_oid,
-            PropertyIdentifier::STATUS_FLAGS.to_raw(),
-        ),
-        issue_confirmed_notifications: false,
-        time_remaining: 0,
-        cov_increment: None,
-    });
-
-    let val = dev
-        .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
-        .unwrap();
-    assert_eq!(
-        val,
-        PropertyValue::ApplicationData(vec![
-            0x0E, 0x0E, 0x1E, 0x22, 0x12, 0x34, 0x62, 0xAA, 0xBB, 0x1F, 0x0F, 0x19, 0x09, 0x0F,
-            0x1E, 0x0C, 0x01, 0x40, 0x00, 0x03, 0x19, 0x6F, 0x1F, 0x29, 0x00, 0x39, 0x00,
-        ])
-    );
-}
-
-#[test]
 fn active_cov_subscriptions_write_denied() {
     let mut dev = make_device();
     let result = dev.write_property(
@@ -551,61 +470,36 @@ fn active_cov_subscriptions_write_denied() {
     assert!(result.is_err());
 }
 
+/// Table 12-13 footnote 18: the bundled Device executes
+/// SubscribeCOVPropertyMultiple, so its standalone object lists
+/// Active_COV_Multiple_Subscriptions as an optional, read-only, non-array
+/// list that is empty without the server's live COV table.
 #[test]
-fn set_active_cov_subscriptions_replaces() {
-    use bacnet_types::constructed::{
-        BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
-        BACnetRecipientProcess,
-    };
-
+fn active_cov_multiple_subscriptions_standalone_optional_read_only_list() {
+    let property = PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS;
     let mut dev = make_device();
-    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 10).unwrap();
-    let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let ai2 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
-
-    // Add two subscriptions
-    let sub1 = BACnetCOVSubscription {
-        recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Device(dev_oid),
-            process_identifier: 1,
-        },
-        monitored_property_reference: BACnetObjectPropertyReference::new(
-            ai1,
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        ),
-        issue_confirmed_notifications: true,
-        time_remaining: 100,
-        cov_increment: None,
-    };
-    let sub2 = BACnetCOVSubscription {
-        recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Device(dev_oid),
-            process_identifier: 2,
-        },
-        monitored_property_reference: BACnetObjectPropertyReference::new(
-            ai2,
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        ),
-        issue_confirmed_notifications: false,
-        time_remaining: 200,
-        cov_increment: Some(1.0),
-    };
-    let subscriptions = vec![sub1, sub2];
-    let mut expected = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_cov_subscription_list(&mut expected, &subscriptions);
-    dev.set_active_cov_subscriptions(subscriptions);
-
-    let val = dev
-        .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
+    assert_eq!(
+        dev.read_property(property, None).unwrap(),
+        PropertyValue::ApplicationData(Vec::new())
+    );
+    assert!(dev.property_list().contains(&property));
+    let metadata = dev.property_metadata();
+    let row = metadata
+        .iter()
+        .find(|row| row.property_identifier == property)
         .unwrap();
-    assert_eq!(val, PropertyValue::ApplicationData(expected.to_vec()));
-
-    // Replace with empty
-    dev.set_active_cov_subscriptions(vec![]);
-    let val = dev
-        .read_property(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::ApplicationData(Vec::new()));
+    assert!(!row.is_required());
+    assert!(!row.write_capability.is_writable());
+    assert!(!dev.is_array_property(property));
+    let denied = dev.write_property(
+        property,
+        None,
+        PropertyValue::ApplicationData(Vec::new()),
+        None,
+    );
+    assert!(matches!(denied, Err(Error::Protocol { class, code })
+        if class == ErrorClass::PROPERTY.to_raw() as u32
+            && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32));
 }
 
 #[test]
@@ -652,4 +546,115 @@ fn device_protocol_object_types_has_new_bits() {
     assert_ne!(bits[0] & 0x03, 0, "Calendar(6) and Command(7)");
     assert_ne!(bits[3] & 0x80, 0, "Accumulator (24)");
     assert_ne!(bits[7] & 0x80, 0, "NetworkPort (56)");
+}
+
+#[test]
+fn device_property_metadata_preserves_dynamic_list_and_write_dispatch() {
+    use crate::property_metadata::PropertyWriteCapability;
+    use PropertyIdentifier as P;
+
+    for segmentation_supported in [
+        Segmentation::NONE,
+        Segmentation::TRANSMIT,
+        Segmentation::RECEIVE,
+        Segmentation::BOTH,
+        Segmentation::from_raw(64),
+    ] {
+        let mut device = DeviceObject::new(DeviceConfig {
+            segmentation_supported,
+            ..DeviceConfig::default()
+        })
+        .unwrap();
+        let clock = FakeClock::new(clock_frame(12, 0));
+        // Bind, lose a sample, recover, and unbind on the same instance.
+        for state in [0, 1, 2, 1, 0] {
+            *clock.0.lock().unwrap() = (state == 1).then(|| clock_frame(12, 0));
+            device.bind_clock_internal(
+                (state != 0).then(|| Arc::new(clock.clone()) as Arc<dyn ClockReader>),
+            );
+            let mut expected: Vec<_> = device.properties.keys().copied().collect();
+            expected.extend([
+                P::OBJECT_LIST,
+                P::PROPERTY_LIST,
+                P::PROTOCOL_OBJECT_TYPES_SUPPORTED,
+                P::PROTOCOL_SERVICES_SUPPORTED,
+                P::ACTIVE_COV_SUBSCRIPTIONS,
+                P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
+            ]);
+            if state == 1 {
+                expected.extend([
+                    P::LOCAL_DATE,
+                    P::LOCAL_TIME,
+                    P::UTC_OFFSET,
+                    P::DAYLIGHT_SAVINGS_STATUS,
+                ]);
+            }
+            expected.sort_by_key(|p| p.to_raw());
+            let metadata = device.property_metadata();
+            assert!(matches!(metadata, Cow::Borrowed(_)));
+            assert_eq!(
+                metadata
+                    .iter()
+                    .map(|row| row.property_identifier)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(device.property_list().as_ref(), expected);
+            let wire: Vec<_> = expected
+                .iter()
+                .copied()
+                .filter(|p| {
+                    !matches!(
+                        *p,
+                        P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE | P::PROPERTY_LIST
+                    )
+                })
+                .map(|p| PropertyValue::Enumerated(p.to_raw()))
+                .collect();
+            assert_eq!(
+                device.read_property(P::PROPERTY_LIST, None).unwrap(),
+                PropertyValue::List(wire.clone())
+            );
+            assert_eq!(
+                device.read_property(P::PROPERTY_LIST, Some(0)).unwrap(),
+                PropertyValue::Unsigned(wire.len() as u64)
+            );
+            for (i, value) in wire.iter().enumerate() {
+                assert_eq!(
+                    device
+                        .read_property(P::PROPERTY_LIST, Some(i as u32 + 1))
+                        .unwrap(),
+                    *value
+                );
+            }
+            assert!(
+                matches!(device.read_property(P::PROPERTY_LIST, Some(wire.len() as u32 + 1)),
+                Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32
+                    && code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32)
+            );
+            let metadata = metadata.into_owned();
+            for row in metadata {
+                let p = row.property_identifier;
+                let before = device.read_property(p, None).unwrap();
+                assert_eq!(
+                    row.write_capability,
+                    if p == P::DESCRIPTION {
+                        PropertyWriteCapability::Always
+                    } else {
+                        PropertyWriteCapability::ReadOnly
+                    }
+                );
+                assert_eq!(device.is_writable_property(p), p == P::DESCRIPTION);
+                let result = device.write_property(p, None, before.clone(), None);
+                if p == P::DESCRIPTION {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(result, Err(Error::Protocol { class, code })
+                        if class == ErrorClass::PROPERTY.to_raw() as u32
+                            && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32));
+                }
+                assert_eq!(device.read_property(p, None).unwrap(), before);
+            }
+        }
+    }
 }

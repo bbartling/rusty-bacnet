@@ -3,13 +3,14 @@
 //! evaluator drives (#163/#137/#166; ASHRAE 135-2020 Clauses 12.12, 13.3).
 
 use super::super::*;
+use bacnet_types::bitstring::EventTransitionBits;
 
 /// Absent a write, the property reads back the `Event_Parameters`
-/// `Time_Delay` — the Clause 13.3 fallback ("it takes on the value of the
-/// pTimeDelay parameter"), matching the intrinsic types' read arm.
+/// `Time_Delay` — the Clause 13.3 fallback to pTimeDelay,
+/// matching the intrinsic types' read arm.
 #[test]
 fn time_delay_normal_defaults_to_event_parameters_time_delay() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     // Legacy Opaque parameters carry no Time_Delay: fallback reads 0.
     assert_eq!(
         ee.read_property(PropertyIdentifier::TIME_DELAY_NORMAL, None)
@@ -32,7 +33,7 @@ fn time_delay_normal_defaults_to_event_parameters_time_delay() {
 
 #[test]
 fn time_delay_normal_write_round_trips_and_is_writable() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     assert!(ee.is_writable_property(PropertyIdentifier::TIME_DELAY_NORMAL));
     ee.write_property(
         PropertyIdentifier::TIME_DELAY_NORMAL,
@@ -59,7 +60,7 @@ fn time_delay_normal_write_round_trips_and_is_writable() {
 
 #[test]
 fn time_delay_normal_in_property_list() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     assert!(
         ee.property_list()
             .contains(&PropertyIdentifier::TIME_DELAY_NORMAL),
@@ -72,7 +73,7 @@ fn time_delay_normal_in_property_list() {
 /// `common::write_generic_event_properties!`).
 #[test]
 fn time_delay_normal_write_validation() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.write_property(
         PropertyIdentifier::TIME_DELAY_NORMAL,
         None,
@@ -136,7 +137,7 @@ fn time_delay_normal_write_validation() {
 /// through the internal channel.
 #[test]
 fn enrollment_eval_state_round_trip() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     assert_eq!(
         ee.enrollment_eval_state_internal(),
         Some(EventEnrollmentEvalState::default()),
@@ -178,7 +179,7 @@ fn enrollment_eval_state_round_trip() {
 
 #[test]
 fn configuration_setters_cancel_pending_countdowns() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let pending = EventEnrollmentPending {
         state: EventState::OFFNORMAL,
         remaining: 2,
@@ -215,7 +216,7 @@ fn configuration_setters_cancel_pending_countdowns() {
         .is_none());
 
     seed(&mut ee);
-    ee.set_object_property_reference(None);
+    ee.set_object_property_reference(None).unwrap();
     assert!(ee
         .enrollment_eval_state_internal()
         .unwrap()
@@ -223,28 +224,34 @@ fn configuration_setters_cancel_pending_countdowns() {
         .is_none());
 
     seed(&mut ee);
-    let rollback = ee
-        .capture_write_property_rollback(PropertyIdentifier::EVENT_PARAMETERS, &PropertyValue::Null)
+    let before = ee
+        .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
         .unwrap();
-    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
-        time_delay: 4,
-        low_limit: 0.0,
-        high_limit: 1.0,
-        deadband: 0.0,
-    });
-    ee.restore_write_property_rollback(rollback).unwrap();
+    assert!(ee
+        .write_property(
+            PropertyIdentifier::EVENT_PARAMETERS,
+            None,
+            PropertyValue::Unsigned(1),
+            None
+        )
+        .is_err());
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
+            .unwrap(),
+        before
+    );
     assert_eq!(
         ee.enrollment_eval_state_internal().unwrap().pending,
         Some(pending)
     );
 }
 
-/// Clause 13.2.2.1's disable reset covers the evaluation state: "this state
-/// machine is not evaluated" — a stale countdown or baseline must not
+/// Clause 13.2.2.1's disable reset covers the evaluation state: evaluation
+/// is suspended, so a stale countdown or baseline must not
 /// survive into the next enabled period.
 #[test]
 fn disabling_detection_clears_eval_state_and_refuses_writes() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let source = (
         ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
         PropertyIdentifier::PRESENT_VALUE,
@@ -294,7 +301,9 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
     assert!(ee
         .set_enrollment_eval_source_internal(Some(source))
         .is_err());
-    assert!(ee.set_acked_transitions_internal(0x01, false).is_err());
+    assert!(ee
+        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+        .is_err());
 
     // Re-enabling both reopens the channel and evaluates afresh (the first
     // COV sample after re-enable seeds a new baseline, not a transition).
@@ -322,22 +331,37 @@ fn disabling_detection_clears_eval_state_and_refuses_writes() {
 /// clear per direction, never touching the other bits.
 #[test]
 fn acked_transitions_internal_set_and_clear() {
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let read = |ee: &EventEnrollmentObject| match ee
         .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
         .unwrap()
     {
-        PropertyValue::BitString { data, .. } => bacnet_types::bitstring::unpack_octet(&data, 3),
+        PropertyValue::BitString { data, .. } => EventTransitionBits::from_bacnet(&data),
         other => panic!("BitString expected, got {other:?}"),
     };
 
-    assert_eq!(read(&ee), 0b111);
-    ee.set_acked_transitions_internal(0x01, false).unwrap();
-    assert_eq!(read(&ee), 0b110, "TO_OFFNORMAL cleared (ack owed)");
-    ee.set_acked_transitions_internal(0x04, false).unwrap();
-    assert_eq!(read(&ee), 0b010, "TO_NORMAL cleared");
-    ee.set_acked_transitions_internal(0x01, true).unwrap();
-    assert_eq!(read(&ee), 0b011, "TO_OFFNORMAL re-set (acknowledged)");
+    assert_eq!(read(&ee), EventTransitionBits::all());
+    ee.set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+        .unwrap();
+    assert_eq!(
+        read(&ee),
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
+        "TO_OFFNORMAL cleared (ack owed)"
+    );
+    ee.set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
+        .unwrap();
+    assert_eq!(
+        read(&ee),
+        EventTransitionBits::TO_FAULT,
+        "TO_NORMAL cleared"
+    );
+    ee.set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, true)
+        .unwrap();
+    assert_eq!(
+        read(&ee),
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT,
+        "TO_OFFNORMAL re-set (acknowledged)"
+    );
 }
 
 /// The trait defaults keep custom downstream objects out of the channel:
@@ -351,5 +375,7 @@ fn eval_state_trait_defaults_reject() {
     assert!(object
         .set_enrollment_eval_state_internal(EventEnrollmentEvalState::default())
         .is_err());
-    assert!(object.set_acked_transitions_internal(0x01, false).is_err());
+    assert!(object
+        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+        .is_err());
 }

@@ -1,10 +1,12 @@
+//! Criterion suite: ReadProperty, WriteProperty and 10-object RPM round-trip latency over
+//! BACnet/SC with mutual TLS through a local hub.
+#![allow(clippy::print_stderr)] // benchmarks note skipped setups on the console
 use criterion::{criterion_group, criterion_main, Criterion};
 use tokio::runtime::Runtime;
 
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -22,7 +24,9 @@ fn bench_sc_mtls_read_property_latency(c: &mut Criterion) {
     let (mut hub, mut server, mut client, server_mac) = rt.block_on(async {
         let (hub, url) = start_sc_hub_mtls(&certs, hub_vmac).await;
 
-        let server_transport = make_sc_transport_mtls(&url, &certs, server_vmac).await;
+        let server_transport = make_sc_transport_mtls(&url, &certs, server_vmac)
+            .await
+            .with_device_uuid([1; 16]); // TEST-only server identity
         let db = bacnet_benchmarks::helpers::make_benchmark_db(6789);
         let server =
             bacnet_server::server::BACnetServer::<ScTransport<TlsWebSocket>>::generic_builder()
@@ -34,7 +38,9 @@ fn bench_sc_mtls_read_property_latency(c: &mut Criterion) {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let client_transport = make_sc_transport_mtls(&url, &certs, client_vmac).await;
+        let client_transport = make_sc_transport_mtls(&url, &certs, client_vmac)
+            .await
+            .with_device_uuid([2; 16]); // distinct TEST-only client
         let client =
             bacnet_client::client::BACnetClient::<ScTransport<TlsWebSocket>>::generic_builder()
                 .transport(client_transport)
@@ -87,7 +93,9 @@ fn bench_sc_mtls_write_property_latency(c: &mut Criterion) {
     let (mut hub, mut server, mut client, server_mac) = rt.block_on(async {
         let (hub, url) = start_sc_hub_mtls(&certs, hub_vmac).await;
 
-        let server_transport = make_sc_transport_mtls(&url, &certs, server_vmac).await;
+        let server_transport = make_sc_transport_mtls(&url, &certs, server_vmac)
+            .await
+            .with_device_uuid([1; 16]);
         let db = bacnet_benchmarks::helpers::make_benchmark_db(6789);
         let server =
             bacnet_server::server::BACnetServer::<ScTransport<TlsWebSocket>>::generic_builder()
@@ -99,7 +107,9 @@ fn bench_sc_mtls_write_property_latency(c: &mut Criterion) {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let client_transport = make_sc_transport_mtls(&url, &certs, client_vmac).await;
+        let client_transport = make_sc_transport_mtls(&url, &certs, client_vmac)
+            .await
+            .with_device_uuid([2; 16]);
         let client =
             bacnet_client::client::BACnetClient::<ScTransport<TlsWebSocket>>::generic_builder()
                 .transport(client_transport)
@@ -156,7 +166,9 @@ fn bench_sc_mtls_rpm_latency(c: &mut Criterion) {
     let (mut hub, mut server, mut client, server_mac) = rt.block_on(async {
         let (hub, url) = start_sc_hub_mtls(&certs, hub_vmac).await;
 
-        let server_transport = make_sc_transport_mtls(&url, &certs, server_vmac).await;
+        let server_transport = make_sc_transport_mtls(&url, &certs, server_vmac)
+            .await
+            .with_device_uuid([1; 16]);
         let db = bacnet_benchmarks::helpers::make_benchmark_db(6789);
         let server =
             bacnet_server::server::BACnetServer::<ScTransport<TlsWebSocket>>::generic_builder()
@@ -168,7 +180,9 @@ fn bench_sc_mtls_rpm_latency(c: &mut Criterion) {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let client_transport = make_sc_transport_mtls(&url, &certs, client_vmac).await;
+        let client_transport = make_sc_transport_mtls(&url, &certs, client_vmac)
+            .await
+            .with_device_uuid([2; 16]);
         let client =
             bacnet_client::client::BACnetClient::<ScTransport<TlsWebSocket>>::generic_builder()
                 .transport(client_transport)

@@ -160,8 +160,8 @@ fn ack_accepts_u32_max_with_leading_zero_octet() {
 
     let decoded = GetEventInformationAck::decode(&encode_ack(&wire, 1, &[1], &[])).unwrap();
     let summary = &decoded.list_of_event_summaries[0];
-    assert_eq!(summary.event_state, u32::MAX);
-    assert_eq!(summary.notify_type, u32::MAX);
+    assert_eq!(summary.event_state, EventState::from_raw(u32::MAX));
+    assert_eq!(summary.notify_type, NotifyType::from_raw(u32::MAX));
     assert_eq!(summary.event_priorities, [u32::MAX; 3]);
 }
 
@@ -315,4 +315,64 @@ fn ack_enforces_event_summary_limit() {
 
     let overflow = encode_ack(&wire, MAX_DECODED_ITEMS + 1, &[0], &[]);
     assert!(GetEventInformationAck::decode(&overflow).is_err());
+}
+
+#[test]
+fn get_event_information_ack_round_trip() {
+    let ack = GetEventInformationAck {
+        list_of_event_summaries: vec![EventSummary {
+            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+            event_state: EventState::HIGH_LIMIT,
+            acknowledged_transitions: EventTransitionBits::TO_OFFNORMAL
+                | EventTransitionBits::TO_NORMAL,
+            event_timestamps: [
+                BACnetTimeStamp::SequenceNumber(42),
+                BACnetTimeStamp::SequenceNumber(0),
+                BACnetTimeStamp::SequenceNumber(100),
+            ],
+            notify_type: NotifyType::ALARM,
+            event_enable: EventTransitionBits::all(),
+            event_priorities: [3, 3, 3],
+        }],
+        more_events: true,
+    };
+    let mut buf = BytesMut::new();
+    ack.encode(&mut buf).unwrap();
+    // Wire-byte check, not just a round trip: internal 0b101 must appear as
+    // its MSB-first octet 0xA0 (a symmetric encode/decode inversion would
+    // still round-trip, so the raw byte is the only witness — Clause 20.2.10).
+    assert!(
+        buf.contains(&0xA0),
+        "encoded ACK should contain the MSB-first acknowledged-transitions octet 0xA0"
+    );
+    let decoded = GetEventInformationAck::decode(&buf).unwrap();
+    assert_eq!(decoded.list_of_event_summaries.len(), 1);
+    assert!(decoded.more_events);
+    let s = &decoded.list_of_event_summaries[0];
+    assert_eq!(
+        s.object_identifier,
+        ack.list_of_event_summaries[0].object_identifier
+    );
+    assert_eq!(s.event_state, EventState::HIGH_LIMIT);
+    assert_eq!(
+        s.acknowledged_transitions,
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
+    );
+    assert_eq!(s.event_timestamps[0], BACnetTimeStamp::SequenceNumber(42));
+    assert_eq!(s.notify_type, NotifyType::ALARM);
+    assert_eq!(s.event_enable, EventTransitionBits::all());
+    assert_eq!(s.event_priorities, [3, 3, 3]);
+}
+
+#[test]
+fn get_event_information_ack_empty_list() {
+    let ack = GetEventInformationAck {
+        list_of_event_summaries: vec![],
+        more_events: false,
+    };
+    let mut buf = BytesMut::new();
+    ack.encode(&mut buf).unwrap();
+    let decoded = GetEventInformationAck::decode(&buf).unwrap();
+    assert!(decoded.list_of_event_summaries.is_empty());
+    assert!(!decoded.more_events);
 }

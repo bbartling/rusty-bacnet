@@ -1,10 +1,33 @@
 //! ConfirmedPrivateTransfer / UnconfirmedPrivateTransfer services
-//! per ASHRAE 135-2020 Clauses 15.19 and 16.10.6.
+//! per ASHRAE 135-2020 Clauses 16.2 and 16.3.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_constructed, decode_ctx_unsigned, expect_end, next_is_opening,
+};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::error::Error;
 use bytes::{BufMut, BytesMut};
+
+mod error;
+pub use error::PrivateTransferError;
+
+/// The `[0]` vendor identifier, `[1]` service number and optional `[2]`
+/// block that the request and the acknowledgment share, and nothing after
+/// them.
+fn decode_members(data: &[u8], what: &str) -> Result<(u32, u32, Option<Vec<u8>>), Error> {
+    let (vendor_id, offset) = decode_ctx_unsigned::<u32>(data, 0, 0, &format!("{what} vendorID"))?;
+    let (service_number, offset) =
+        decode_ctx_unsigned::<u32>(data, offset, 1, &format!("{what} serviceNumber"))?;
+    let (block, end) = if next_is_opening(data, offset, 2)? {
+        let (body, end) = decode_ctx_constructed(data, offset, 2, &format!("{what} block"))?;
+        (Some(body.to_vec()), end)
+    } else {
+        (None, offset)
+    };
+    expect_end(data, end, end, what)?;
+    Ok((vendor_id, service_number, block))
+}
 
 // ---------------------------------------------------------------------------
 // PrivateTransferRequest
@@ -14,13 +37,16 @@ use bytes::{BufMut, BytesMut};
 /// UnconfirmedPrivateTransfer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivateTransferRequest {
+    /// Vendor identifier of the organization that defines the private service.
     pub vendor_id: u32,
+    /// Vendor-defined number selecting the private service to invoke.
     pub service_number: u32,
     /// Vendor-defined payload (raw bytes, opaque to the stack).
     pub service_parameters: Option<Vec<u8>>,
 }
 
 impl PrivateTransferRequest {
+    /// Encode the request parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] vendorID
         primitives::encode_ctx_unsigned(buf, 0, self.vendor_id as u64);
@@ -34,69 +60,10 @@ impl PrivateTransferRequest {
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        // [0] vendorID
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                "PrivateTransfer expected context tag 0 for vendorID",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "PrivateTransfer truncated at vendorID",
-            ));
-        }
-        let vendor_id_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let vendor_id = u32::try_from(vendor_id_raw).map_err(|_| {
-            Error::decoding(
-                pos,
-                format!("PrivateTransfer vendorID {vendor_id_raw} exceeds u32"),
-            )
-        })?;
-        offset = end;
-
-        // [1] serviceNumber
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(1) {
-            return Err(Error::decoding(
-                offset,
-                "PrivateTransfer expected context tag 1 for serviceNumber",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "PrivateTransfer truncated at serviceNumber",
-            ));
-        }
-        let service_number_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let service_number = u32::try_from(service_number_raw).map_err(|_| {
-            Error::decoding(
-                pos,
-                format!("PrivateTransfer serviceNumber {service_number_raw} exceeds u32"),
-            )
-        })?;
-        offset = end;
-
-        // [2] serviceParameters (optional, opening/closing)
-        let mut service_parameters = None;
-        if offset < data.len() {
-            let (tag, tag_end) = tags::decode_tag(data, offset)?;
-            if tag.is_opening_tag(2) {
-                let (value_bytes, new_offset) = tags::extract_context_value(data, tag_end, 2)?;
-                service_parameters = Some(value_bytes.to_vec());
-                offset = new_offset;
-                let _ = offset;
-            }
-        }
-
+        let (vendor_id, service_number, service_parameters) =
+            decode_members(data, "PrivateTransfer")?;
         Ok(Self {
             vendor_id,
             service_number,
@@ -112,13 +79,16 @@ impl PrivateTransferRequest {
 /// ConfirmedPrivateTransfer-ACK service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivateTransferAck {
+    /// Vendor identifier of the organization that defines the private service.
     pub vendor_id: u32,
+    /// Vendor-defined service number this result answers.
     pub service_number: u32,
     /// Vendor-defined result (raw bytes, opaque to the stack).
     pub result_block: Option<Vec<u8>>,
 }
 
 impl PrivateTransferAck {
+    /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] vendorID
         primitives::encode_ctx_unsigned(buf, 0, self.vendor_id as u64);
@@ -132,69 +102,10 @@ impl PrivateTransferAck {
         }
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        // [0] vendorID
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                "PrivateTransferAck expected context tag 0 for vendorID",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "PrivateTransferAck truncated at vendorID",
-            ));
-        }
-        let vendor_id_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let vendor_id = u32::try_from(vendor_id_raw).map_err(|_| {
-            Error::decoding(
-                pos,
-                format!("PrivateTransferAck vendorID {vendor_id_raw} exceeds u32"),
-            )
-        })?;
-        offset = end;
-
-        // [1] serviceNumber
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(1) {
-            return Err(Error::decoding(
-                offset,
-                "PrivateTransferAck expected context tag 1 for serviceNumber",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "PrivateTransferAck truncated at serviceNumber",
-            ));
-        }
-        let service_number_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let service_number = u32::try_from(service_number_raw).map_err(|_| {
-            Error::decoding(
-                pos,
-                format!("PrivateTransferAck serviceNumber {service_number_raw} exceeds u32"),
-            )
-        })?;
-        offset = end;
-
-        // [2] resultBlock (optional, opening/closing)
-        let mut result_block = None;
-        if offset < data.len() {
-            let (tag, tag_end) = tags::decode_tag(data, offset)?;
-            if tag.is_opening_tag(2) {
-                let (value_bytes, new_offset) = tags::extract_context_value(data, tag_end, 2)?;
-                result_block = Some(value_bytes.to_vec());
-                offset = new_offset;
-                let _ = offset;
-            }
-        }
-
+        let (vendor_id, service_number, result_block) = decode_members(data, "PrivateTransferAck")?;
         Ok(Self {
             vendor_id,
             service_number,

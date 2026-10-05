@@ -8,54 +8,45 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
-use crate::common::{decode_context, decode_context_u32};
-
-fn decode_application<'a>(
-    data: &'a [u8],
-    offset: usize,
-    expected_tag: u8,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if tag.class != tags::TagClass::Application || tag.number != expected_tag {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} expected application tag {expected_tag}"),
-        ));
-    }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{field} length overflow")))?;
-    if end > data.len() {
-        return Err(Error::decoding(pos, format!("{field} truncated")));
-    }
-    Ok((&data[pos..end], end))
-}
-
-fn decode_application_u32(data: &[u8], offset: usize, field: &str) -> Result<(u32, usize), Error> {
-    let (content, end) = decode_application(data, offset, tags::app_tag::UNSIGNED, field)?;
-    let value = primitives::decode_unsigned(content)?;
-    let value = u32::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{field} exceeds u32")))?;
-    Ok((value, end))
-}
+use bacnet_encoding::constructed::tagged::{
+    decode_app_primitive, decode_app_unsigned, decode_ctx_object_id, decode_ctx_primitive,
+    decode_ctx_unsigned, expect_end, misplaced_tag, next_is_context,
+};
 
 fn decode_count(data: &[u8], offset: usize, field: &str) -> Result<(i32, usize), Error> {
-    let (content, end) = decode_application(data, offset, tags::app_tag::SIGNED, field)?;
+    let (content, end) = decode_app_primitive(data, offset, tags::app_tag::SIGNED, field)?;
     let value = primitives::decode_signed(content)?;
     let value = i16::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{field} exceeds INTEGER16")))?;
+        .map_err(|_| Error::out_of_range(offset, format!("{field} exceeds INTEGER16")))?;
     if value == 0 {
-        return Err(Error::decoding(offset, format!("{field} may not be zero")));
+        return Err(Error::out_of_range(
+            offset,
+            format!("{field} may not be zero"),
+        ));
     }
     Ok((i32::from(value), end))
+}
+
+fn specific_datetime(date: &Date, time: &Time) -> bool {
+    date.year != Date::UNSPECIFIED
+        && (1..=12).contains(&date.month)
+        && (1..=31).contains(&date.day)
+        && (1..=7).contains(&date.day_of_week)
+        && time.hour <= 23
+        && time.minute <= 59
+        && time.second <= 59
+        && time.hundredths <= 99
 }
 
 /// ReadRange-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadRangeRequest {
+    /// Object holding the list property to read.
     pub object_identifier: ObjectIdentifier,
+    /// List property to read; not ALL, REQUIRED or OPTIONAL.
     pub property_identifier: PropertyIdentifier,
+    /// Array index selecting one list within an array-of-lists property; `None` otherwise. Zero is
+    /// invalid.
     pub property_array_index: Option<u32>,
     /// Range specification: by-position, by-sequence-number, or by-time.
     pub range: Option<RangeSpec>,
@@ -65,18 +56,80 @@ pub struct ReadRangeRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RangeSpec {
     /// By position: reference_index, count.
-    ByPosition { reference_index: u32, count: i32 },
+    ByPosition {
+        /// One-based list index (first item is 1) of the item that anchors the range. Unsigned64
+        /// because this stack hosts Audit Log, whose Total_Record_Count is Unsigned64
+        /// (Clause 15.8.1.1.4.1.1).
+        reference_index: u64,
+        /// Signed INTEGER16 item count, never zero. Positive reads forward from the reference
+        /// and negative reads backward, ending at the reference.
+        count: i32,
+    },
     /// By sequence number: reference_seq, count.
-    BySequenceNumber { reference_seq: u32, count: i32 },
+    BySequenceNumber {
+        /// Sequence number of the item that anchors the range. Unsigned64 for the same reason as
+        /// `reference_index` (Clause 15.8.1.1.4.2.1).
+        reference_seq: u64,
+        /// Signed INTEGER16 item count, never zero. Positive reads forward from the reference
+        /// and negative reads backward, ending at the reference.
+        count: i32,
+    },
     /// By time: reference_time (Date, Time), count.
     ByTime {
+        /// Timestamp that anchors the range; must be fully specified.
         reference_time: (Date, Time),
+        /// Signed INTEGER16 item count, never zero. The reference time itself is excluded:
+        /// positive reads forward from the first item newer than it, negative reads backward
+        /// ending at the newest item older than it (Clause 15.8.1.1.4.3).
         count: i32,
     },
 }
 
 impl ReadRangeRequest {
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Validate typed arguments without output, leases or transport side effects.
+    pub fn validate(&self) -> Result<(), Error> {
+        if matches!(
+            self.property_identifier,
+            PropertyIdentifier::ALL | PropertyIdentifier::REQUIRED | PropertyIdentifier::OPTIONAL
+        ) {
+            return Err(Error::Encoding(
+                "ReadRange property may not be ALL, REQUIRED, or OPTIONAL".into(),
+            ));
+        }
+        if self.property_array_index == Some(0) {
+            return Err(Error::Encoding(
+                "ReadRange array index may not be zero".into(),
+            ));
+        }
+        if let Some(range) = &self.range {
+            let count = match range {
+                RangeSpec::ByPosition { count, .. } | RangeSpec::BySequenceNumber { count, .. } => {
+                    *count
+                }
+                RangeSpec::ByTime {
+                    reference_time: (date, time),
+                    count,
+                } => {
+                    if !specific_datetime(date, time) {
+                        return Err(Error::Encoding(
+                            "ReadRange byTime requires a specific datetime".into(),
+                        ));
+                    }
+                    *count
+                }
+            };
+            if count == 0 || i16::try_from(count).is_err() {
+                return Err(Error::Encoding(
+                    "ReadRange count must be a nonzero INTEGER16".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Encode only valid requests; on error, existing output remains unchanged.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.validate()?;
         // [0] objectIdentifier
         primitives::encode_ctx_object_id(buf, 0, &self.object_identifier);
         // [1] propertyIdentifier
@@ -93,7 +146,7 @@ impl ReadRangeRequest {
                     count,
                 } => {
                     tags::encode_opening_tag(buf, 3);
-                    primitives::encode_app_unsigned(buf, *reference_index as u64);
+                    primitives::encode_app_unsigned(buf, *reference_index);
                     primitives::encode_app_signed(buf, *count);
                     tags::encode_closing_tag(buf, 3);
                 }
@@ -102,7 +155,7 @@ impl ReadRangeRequest {
                     count,
                 } => {
                     tags::encode_opening_tag(buf, 6);
-                    primitives::encode_app_unsigned(buf, *reference_seq as u64);
+                    primitives::encode_app_unsigned(buf, *reference_seq);
                     primitives::encode_app_signed(buf, *count);
                     tags::encode_closing_tag(buf, 6);
                 }
@@ -118,19 +171,21 @@ impl ReadRangeRequest {
                 }
             }
         }
+        Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
         // [0] objectIdentifier
-        let (content, end) = decode_context(data, offset, 0, "ReadRange request object-id")?;
-        let object_identifier = ObjectIdentifier::decode(content)?;
+        let (object_identifier, end) =
+            decode_ctx_object_id(data, offset, 0, "ReadRange request object-id")?;
         offset = end;
 
         // [1] propertyIdentifier
         let (property_identifier, end) =
-            decode_context_u32(data, offset, 1, "ReadRange request property-id")?;
+            decode_ctx_unsigned::<u32>(data, offset, 1, "ReadRange request property-id")?;
         let property_identifier = PropertyIdentifier::from_raw(property_identifier);
         if matches!(
             property_identifier,
@@ -145,20 +200,17 @@ impl ReadRangeRequest {
 
         // [2] propertyArrayIndex (optional)
         let mut property_array_index = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(2) {
-                let (index, end) =
-                    decode_context_u32(data, offset, 2, "ReadRange request array-index")?;
-                if index == 0 {
-                    return Err(Error::decoding(
-                        offset,
-                        "ReadRange request array-index may not be zero",
-                    ));
-                }
-                property_array_index = Some(index);
-                offset = end;
+        if next_is_context(data, offset, 2)? {
+            let (index, end) =
+                decode_ctx_unsigned::<u32>(data, offset, 2, "ReadRange request array-index")?;
+            if index == 0 {
+                return Err(Error::out_of_range(
+                    offset,
+                    "ReadRange request array-index may not be zero",
+                ));
             }
+            property_array_index = Some(index);
+            offset = end;
         }
 
         // Range specification (optional)
@@ -169,15 +221,10 @@ impl ReadRangeRequest {
                 // byPosition
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 3)?;
                 let (reference_index, inner_offset) =
-                    decode_application_u32(content, 0, "ReadRange byPosition reference-index")?;
+                    decode_app_unsigned::<u64>(content, 0, "ReadRange byPosition reference-index")?;
                 let (count, inner_offset) =
                     decode_count(content, inner_offset, "ReadRange byPosition count")?;
-                if inner_offset != content.len() {
-                    return Err(Error::decoding(
-                        inner_offset,
-                        "ReadRange byPosition has trailing data",
-                    ));
-                }
+                expect_end(content, inner_offset, inner_offset, "ReadRange byPosition")?;
                 range = Some(RangeSpec::ByPosition {
                     reference_index,
                     count,
@@ -186,16 +233,19 @@ impl ReadRangeRequest {
             } else if tag.is_opening_tag(6) {
                 // bySequenceNumber
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 6)?;
-                let (reference_seq, inner_offset) =
-                    decode_application_u32(content, 0, "ReadRange bySequenceNumber reference-seq")?;
+                let (reference_seq, inner_offset) = decode_app_unsigned::<u64>(
+                    content,
+                    0,
+                    "ReadRange bySequenceNumber reference-seq",
+                )?;
                 let (count, inner_offset) =
                     decode_count(content, inner_offset, "ReadRange bySequenceNumber count")?;
-                if inner_offset != content.len() {
-                    return Err(Error::decoding(
-                        inner_offset,
-                        "ReadRange bySequenceNumber has trailing data",
-                    ));
-                }
+                expect_end(
+                    content,
+                    inner_offset,
+                    inner_offset,
+                    "ReadRange bySequenceNumber",
+                )?;
                 range = Some(RangeSpec::BySequenceNumber {
                     reference_seq,
                     count,
@@ -205,24 +255,16 @@ impl ReadRangeRequest {
                 // byTime
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 7)?;
                 let (date, inner_offset) =
-                    decode_application(content, 0, tags::app_tag::DATE, "ReadRange byTime date")?;
+                    decode_app_primitive(content, 0, tags::app_tag::DATE, "ReadRange byTime date")?;
                 let date = Date::decode(date)?;
-                let (time, inner_offset) = decode_application(
+                let (time, inner_offset) = decode_app_primitive(
                     content,
                     inner_offset,
                     tags::app_tag::TIME,
                     "ReadRange byTime time",
                 )?;
                 let time = Time::decode(time)?;
-                if date.year == Date::UNSPECIFIED
-                    || !(1..=12).contains(&date.month)
-                    || !(1..=31).contains(&date.day)
-                    || !(1..=7).contains(&date.day_of_week)
-                    || !(0..=23).contains(&time.hour)
-                    || !(0..=59).contains(&time.minute)
-                    || !(0..=59).contains(&time.second)
-                    || !(0..=99).contains(&time.hundredths)
-                {
+                if !specific_datetime(&date, &time) {
                     return Err(Error::decoding(
                         inner_offset,
                         "ReadRange byTime requires a specific datetime",
@@ -230,30 +272,23 @@ impl ReadRangeRequest {
                 }
                 let (count, inner_offset) =
                     decode_count(content, inner_offset, "ReadRange byTime count")?;
-                if inner_offset != content.len() {
-                    return Err(Error::decoding(
-                        inner_offset,
-                        "ReadRange byTime has trailing data",
-                    ));
-                }
+                expect_end(content, inner_offset, inner_offset, "ReadRange byTime")?;
                 range = Some(RangeSpec::ByTime {
                     reference_time: (date, time),
                     count,
                 });
                 offset = new_offset;
             } else {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &tag,
+                    None,
                     offset,
                     "ReadRange request has invalid range choice",
                 ));
             }
         }
-        if offset != data.len() {
-            return Err(Error::decoding(
-                offset,
-                "ReadRange request has trailing data",
-            ));
-        }
+        expect_end(data, offset, offset, "ReadRange request")?;
 
         Ok(Self {
             object_identifier,
@@ -267,19 +302,25 @@ impl ReadRangeRequest {
 /// ReadRange-ACK service parameters.
 #[derive(Debug, Clone)]
 pub struct ReadRangeAck {
+    /// Object that was read.
     pub object_identifier: ObjectIdentifier,
+    /// Property that was read.
     pub property_identifier: PropertyIdentifier,
+    /// Array index that was requested, echoed from the request; `None` when absent.
     pub property_array_index: Option<u32>,
     /// Result flags: first_item, last_item, more_items.
     pub result_flags: (bool, bool, bool),
+    /// Number of items encoded in `item_data`.
     pub item_count: u32,
     /// Raw item data (application-layer interprets content).
     pub item_data: Vec<u8>,
-    /// Optional first sequence number (context tag [6]).
-    pub first_sequence_number: Option<u32>,
+    /// Optional first sequence number (context tag \[6\]). Unsigned64, since a device holding
+    /// an Audit Log must accept and report its 64-bit sequence numbers (Clause 15.8.1.2.7).
+    pub first_sequence_number: Option<u64>,
 }
 
 impl ReadRangeAck {
+    /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] objectIdentifier
         primitives::encode_ctx_object_id(buf, 0, &self.object_identifier);
@@ -309,38 +350,37 @@ impl ReadRangeAck {
         tags::encode_closing_tag(buf, 5);
         // [6] firstSequenceNumber (optional)
         if let Some(seq) = self.first_sequence_number {
-            primitives::encode_ctx_unsigned(buf, 6, seq as u64);
+            primitives::encode_ctx_unsigned(buf, 6, seq);
         }
     }
 
+    /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
+    /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut offset = 0;
 
         // [0] objectIdentifier
-        let (content, end) = decode_context(data, offset, 0, "ReadRange ACK object-id")?;
-        let object_identifier = ObjectIdentifier::decode(content)?;
+        let (object_identifier, end) =
+            decode_ctx_object_id(data, offset, 0, "ReadRange ACK object-id")?;
         offset = end;
 
         // [1] propertyIdentifier
         let (property_identifier, end) =
-            decode_context_u32(data, offset, 1, "ReadRange ACK property-id")?;
+            decode_ctx_unsigned::<u32>(data, offset, 1, "ReadRange ACK property-id")?;
         let property_identifier = PropertyIdentifier::from_raw(property_identifier);
         offset = end;
 
         // [2] propertyArrayIndex (optional)
         let mut property_array_index = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(2) {
-                let (index, end) =
-                    decode_context_u32(data, offset, 2, "ReadRange ACK array-index")?;
-                property_array_index = Some(index);
-                offset = end;
-            }
+        if next_is_context(data, offset, 2)? {
+            let (index, end) =
+                decode_ctx_unsigned::<u32>(data, offset, 2, "ReadRange ACK array-index")?;
+            property_array_index = Some(index);
+            offset = end;
         }
 
         // [3] resultFlags
-        let (content, end) = decode_context(data, offset, 3, "ReadRange ACK result-flags")?;
+        let (content, end) = decode_ctx_primitive(data, offset, 3, "ReadRange ACK result-flags")?;
         let (unused_bits, bits) = primitives::decode_bit_string(content)?;
         if unused_bits != 5 || bits.len() != 1 || bits[0] & 0x1f != 0 {
             return Err(Error::decoding(
@@ -353,13 +393,17 @@ impl ReadRangeAck {
         offset = end;
 
         // [4] itemCount
-        let (item_count, end) = decode_context_u32(data, offset, 4, "ReadRange ACK item-count")?;
+        let (item_count, end) =
+            decode_ctx_unsigned::<u32>(data, offset, 4, "ReadRange ACK item-count")?;
         offset = end;
 
         // [5] itemData
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if !tag.is_opening_tag(5) {
-            return Err(Error::decoding(
+            return Err(misplaced_tag(
+                data,
+                &tag,
+                Some(5),
                 offset,
                 "ReadRange ACK item-data expected opening tag 5",
             ));
@@ -379,7 +423,10 @@ impl ReadRangeAck {
         if offset < data.len() {
             let (tag, _) = tags::decode_tag(data, offset)?;
             if !tag.is_context(6) {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &tag,
+                    Some(6),
                     offset,
                     "ReadRange ACK expected context tag 6 for first-sequence-number",
                 ));
@@ -391,13 +438,11 @@ impl ReadRangeAck {
                 ));
             }
             let (sequence_number, end) =
-                decode_context_u32(data, offset, 6, "ReadRange ACK first-sequence-number")?;
+                decode_ctx_unsigned::<u64>(data, offset, 6, "ReadRange ACK first-sequence-number")?;
             first_sequence_number = Some(sequence_number);
             offset = end;
         }
-        if offset != data.len() {
-            return Err(Error::decoding(offset, "ReadRange ACK has trailing data"));
-        }
+        expect_end(data, offset, offset, "ReadRange ACK")?;
 
         Ok(Self {
             object_identifier,
@@ -416,253 +461,9 @@ impl ReadRangeAck {
 mod width_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use bacnet_types::enums::ObjectType;
-    use bacnet_types::primitives::{Date, Time};
+#[path = "read_range_tests.rs"]
+mod tests;
 
-    fn make_oid() -> ObjectIdentifier {
-        ObjectIdentifier::new(ObjectType::TREND_LOG, 1).unwrap()
-    }
-
-    #[test]
-    fn request_round_trip() {
-        let req = ReadRangeRequest {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            range: Some(RangeSpec::ByPosition {
-                reference_index: 1,
-                count: 10,
-            }),
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        let decoded = ReadRangeRequest::decode(&buf).unwrap();
-        assert_eq!(decoded.object_identifier, req.object_identifier);
-        assert_eq!(decoded.property_identifier, req.property_identifier);
-        assert_eq!(decoded.range, req.range);
-    }
-
-    #[test]
-    fn request_no_range() {
-        let req = ReadRangeRequest {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            range: None,
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        let decoded = ReadRangeRequest::decode(&buf).unwrap();
-        assert!(decoded.range.is_none());
-    }
-
-    #[test]
-    fn request_by_sequence_number() {
-        let req = ReadRangeRequest {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            range: Some(RangeSpec::BySequenceNumber {
-                reference_seq: 100,
-                count: -5,
-            }),
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        let decoded = ReadRangeRequest::decode(&buf).unwrap();
-        assert_eq!(decoded.range, req.range);
-    }
-
-    #[test]
-    fn ack_round_trip() {
-        let ack = ReadRangeAck {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            result_flags: (true, false, true),
-            item_count: 2,
-            item_data: vec![0xAA, 0xBB, 0xCC],
-            first_sequence_number: None,
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        let decoded = ReadRangeAck::decode(&buf).unwrap();
-        assert_eq!(decoded.object_identifier, ack.object_identifier);
-        assert_eq!(decoded.result_flags, (true, false, true));
-        assert_eq!(decoded.item_count, 2);
-        assert_eq!(decoded.item_data, vec![0xAA, 0xBB, 0xCC]);
-        assert_eq!(decoded.first_sequence_number, None);
-    }
-
-    #[test]
-    fn ack_round_trip_with_first_sequence_number() {
-        let ack = ReadRangeAck {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            result_flags: (true, true, false),
-            item_count: 5,
-            item_data: vec![0x01, 0x02],
-            first_sequence_number: Some(42),
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        let decoded = ReadRangeAck::decode(&buf).unwrap();
-        assert_eq!(decoded.object_identifier, ack.object_identifier);
-        assert_eq!(decoded.result_flags, (true, true, false));
-        assert_eq!(decoded.item_count, 5);
-        assert_eq!(decoded.item_data, vec![0x01, 0x02]);
-        assert_eq!(decoded.first_sequence_number, Some(42));
-    }
-
-    #[test]
-    fn request_by_time() {
-        let req = ReadRangeRequest {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            range: Some(RangeSpec::ByTime {
-                reference_time: (
-                    Date {
-                        year: 126, // 2026
-                        month: 3,
-                        day: 1,
-                        day_of_week: 7, // Sunday
-                    },
-                    Time {
-                        hour: 14,
-                        minute: 30,
-                        second: 0,
-                        hundredths: 0,
-                    },
-                ),
-                count: -10,
-            }),
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        let decoded = ReadRangeRequest::decode(&buf).unwrap();
-        assert_eq!(decoded.range, req.range);
-    }
-
-    // -----------------------------------------------------------------------
-    // Malformed-input decode error tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_decode_read_range_request_empty_input() {
-        assert!(ReadRangeRequest::decode(&[]).is_err());
-    }
-
-    #[test]
-    fn test_decode_read_range_request_truncated_1_byte() {
-        let req = ReadRangeRequest {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            range: Some(RangeSpec::ByPosition {
-                reference_index: 1,
-                count: 10,
-            }),
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        assert!(ReadRangeRequest::decode(&buf[..1]).is_err());
-    }
-
-    #[test]
-    fn test_decode_read_range_request_truncated_3_bytes() {
-        let req = ReadRangeRequest {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            range: Some(RangeSpec::ByPosition {
-                reference_index: 1,
-                count: 10,
-            }),
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        assert!(ReadRangeRequest::decode(&buf[..3]).is_err());
-    }
-
-    #[test]
-    fn test_decode_read_range_request_invalid_tag() {
-        assert!(ReadRangeRequest::decode(&[0xFF, 0xFF, 0xFF]).is_err());
-    }
-
-    #[test]
-    fn test_decode_read_range_ack_empty_input() {
-        assert!(ReadRangeAck::decode(&[]).is_err());
-    }
-
-    #[test]
-    fn test_decode_read_range_ack_truncated_1_byte() {
-        let ack = ReadRangeAck {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            result_flags: (true, false, true),
-            item_count: 2,
-            item_data: vec![0xAA, 0xBB, 0xCC],
-            first_sequence_number: None,
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        assert!(ReadRangeAck::decode(&buf[..1]).is_err());
-    }
-
-    #[test]
-    fn test_decode_read_range_ack_truncated_3_bytes() {
-        let ack = ReadRangeAck {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            result_flags: (true, false, true),
-            item_count: 2,
-            item_data: vec![0xAA, 0xBB, 0xCC],
-            first_sequence_number: None,
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        assert!(ReadRangeAck::decode(&buf[..3]).is_err());
-    }
-
-    #[test]
-    fn test_decode_read_range_ack_truncated_half() {
-        let ack = ReadRangeAck {
-            object_identifier: make_oid(),
-            property_identifier: PropertyIdentifier::LOG_BUFFER,
-            property_array_index: None,
-            result_flags: (true, false, true),
-            item_count: 2,
-            item_data: vec![0xAA, 0xBB, 0xCC],
-            first_sequence_number: None,
-        };
-        let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
-        let half = buf.len() / 2;
-        assert!(ReadRangeAck::decode(&buf[..half]).is_err());
-    }
-
-    #[test]
-    fn test_decode_read_range_ack_invalid_tag() {
-        assert!(ReadRangeAck::decode(&[0xFF, 0xFF, 0xFF]).is_err());
-    }
-
-    #[test]
-    fn read_range_request_truncated_inner_tag() {
-        // Craft a ReadRangeRequest with truncated inner content in byPosition
-        let data = [
-            0x0C, 0x05, 0x00, 0x00, 0x01, // [0] object id (TrendLog:1)
-            0x19, 0x83, // [1] property id (LOG_BUFFER=131)
-            // Opening tag [3] byPosition
-            0x3E, // Inner tag claiming 50 bytes but only 1 byte present
-            0x21, 50, 0x01, // Closing tag [3]
-            0x3F,
-        ];
-        assert!(ReadRangeRequest::decode(&data).is_err());
-    }
-}
+#[cfg(test)]
+#[path = "read_range_validation_tests.rs"]
+mod validation_tests;

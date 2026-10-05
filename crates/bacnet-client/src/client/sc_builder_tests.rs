@@ -17,7 +17,7 @@ async fn sc_client_builder_sends_configured_vmac_and_device_uuid() {
         expected.extend_from_slice(&client_vmac);
         expected.extend_from_slice(&device_uuid);
         expected.extend_from_slice(&5705u16.to_be_bytes());
-        expected.extend_from_slice(&1476u16.to_be_bytes());
+        expected.extend_from_slice(&1478u16.to_be_bytes());
         assert_eq!(data, expected);
 
         let req = decode_sc_message(&data).unwrap();
@@ -33,7 +33,7 @@ async fn sc_client_builder_sends_configured_vmac_and_device_uuid() {
 
         let mut accept_payload = Vec::with_capacity(26);
         accept_payload.extend_from_slice(&hub_vmac);
-        accept_payload.extend_from_slice(&[0u8; 16]);
+        accept_payload.extend_from_slice(&[0x33; 16]);
         accept_payload.extend_from_slice(&1476u16.to_be_bytes());
         accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 

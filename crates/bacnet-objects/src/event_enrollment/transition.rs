@@ -1,5 +1,6 @@
 use crate::event::history::{EventHistory, EventTransitionState};
 use crate::event::{EventTransitionCommit, EventTransitionCommitError};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{EventState, Reliability};
 
 /// All object-owned values needed to commit Event Enrollment Reliability.
@@ -16,47 +17,46 @@ pub struct EventEnrollmentReliabilityCommit {
 }
 
 pub(super) fn commit_event_transition(
-    event_state: &mut u32,
-    acked_transitions: &mut u8,
+    event_state: &mut EventState,
+    acked_transitions: &mut EventTransitionBits,
     event_history: &mut EventHistory,
     commit: EventTransitionCommit,
 ) -> Result<(), EventTransitionCommitError> {
-    // Event Enrollment stores Event_State as its wire enumeration. Stage
-    // typed and cloned locals so validation and kernel mutation complete
-    // before any object-owned field changes.
-    let mut typed_event_state = EventState::from_raw(*event_state);
+    // Stage copied and cloned locals so validation and kernel mutation
+    // complete before any object-owned field changes.
+    let mut staged_event_state = *event_state;
     let mut staged_acknowledgments = *acked_transitions;
     let mut staged_history = event_history.clone();
     EventTransitionState::new(
-        &mut typed_event_state,
+        &mut staged_event_state,
         &mut staged_acknowledgments,
         &mut staged_history,
     )
     .commit(commit)?;
 
-    *event_state = typed_event_state.to_raw();
+    *event_state = staged_event_state;
     *acked_transitions = staged_acknowledgments;
     *event_history = staged_history;
     Ok(())
 }
 
 pub(super) fn commit_reliability(
-    reliability: &mut u32,
-    event_state: &mut u32,
-    acked_transitions: &mut u8,
+    reliability: &mut Reliability,
+    event_state: &mut EventState,
+    acked_transitions: &mut EventTransitionBits,
     event_history: &mut EventHistory,
     commit: EventEnrollmentReliabilityCommit,
 ) -> Result<(), EventTransitionCommitError> {
     // Reliability is staged alongside the three event-transition stores. A
     // rejected transition therefore leaves all four properties unchanged.
-    let staged_reliability = commit.reliability.to_raw();
-    let mut typed_event_state = EventState::from_raw(*event_state);
+    let staged_reliability = commit.reliability;
+    let mut staged_event_state = *event_state;
     let mut staged_acknowledgments = *acked_transitions;
     let mut staged_history = event_history.clone();
 
     if let Some(transition) = commit.transition {
         EventTransitionState::new(
-            &mut typed_event_state,
+            &mut staged_event_state,
             &mut staged_acknowledgments,
             &mut staged_history,
         )
@@ -64,7 +64,7 @@ pub(super) fn commit_reliability(
     }
 
     *reliability = staged_reliability;
-    *event_state = typed_event_state.to_raw();
+    *event_state = staged_event_state;
     *acked_transitions = staged_acknowledgments;
     *event_history = staged_history;
     Ok(())

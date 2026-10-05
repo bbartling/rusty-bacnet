@@ -90,8 +90,9 @@ async fn read_bdt_ack_encodes_bdt_entries_as_n10_payload() {
     assert!(
         response
             .payload
-            .chunks_exact(bbmd::BDT_ENTRY_SIZE)
-            .any(|chunk| chunk == configured_wire),
+            .as_chunks::<{ bbmd::BDT_ENTRY_SIZE }>()
+            .0
+            .contains(&configured_wire),
         "Read-BDT-Ack must include configured BDT entry bytes"
     );
 
@@ -105,6 +106,7 @@ async fn read_bdt_ack_encodes_bdt_entries_as_n10_payload() {
 async fn read_fdt_ack_encodes_fdt_entries_as_n10_payload() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 

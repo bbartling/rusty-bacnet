@@ -13,7 +13,7 @@ async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&[0x33; 16]);
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 
@@ -42,6 +42,7 @@ fn forward_unicast_preserves_data_attributes() {
         directly_connected: true,
         next_hop_mac: MacAddr::new(),
         last_seen: None,
+        last_used: None,
         reachability: crate::router_table::ReachabilityStatus::Reachable,
         busy_until: None,
         flap_count: 0,
@@ -154,14 +155,20 @@ async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
     });
 
     let port_a = RouterPort {
-        transport: ScTransport::new(ws_client_a, [0x01; 6]),
+        transport: ScTransport::new(ws_client_a, [0x01; 6]).with_device_uuid([1; 16]),
         network_number: 1000,
     };
     let port_b = RouterPort {
-        transport: ScTransport::new(ws_client_b, [0x02; 6]),
+        transport: ScTransport::new(ws_client_b, [0x02; 6]).with_device_uuid([1; 16]),
         network_number: 2000,
     };
-    let (mut router, _local_rx) = BACnetRouter::start(vec![port_a, port_b]).await.unwrap();
+    let StartedRouter {
+        mut router,
+        apdus: _local_rx,
+        ..
+    } = BACnetRouter::start(vec![port_a, port_b], RouterOptions::new())
+        .await
+        .unwrap();
     let ws_hub_a = accept_a.await.unwrap();
     let ws_hub_b = accept_b.await.unwrap();
 

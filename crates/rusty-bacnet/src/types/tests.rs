@@ -44,6 +44,7 @@ fn parse_address_mstp_peer_boundaries() {
 
 #[test]
 fn parse_address_rejects_mstp_broadcast_and_out_of_range_peers() {
+    Python::initialize();
     for address in ["255", "mstp:255"] {
         let err = parse_address(address).unwrap_err();
         assert_eq!(
@@ -62,6 +63,7 @@ fn parse_address_rejects_mstp_broadcast_and_out_of_range_peers() {
 
 #[test]
 fn parse_address_rejects_malformed_and_negative_mstp_peers_explicitly() {
+    Python::initialize();
     for address in ["mstp:", "mstp:not-a-number"] {
         let err = parse_address(address).unwrap_err();
         assert_eq!(

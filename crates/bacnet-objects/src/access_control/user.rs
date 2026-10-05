@@ -5,19 +5,28 @@ use super::*;
 
 /// BACnet Access User object (type 35).
 ///
-/// Represents a person or entity that uses credentials to gain access.
-/// Present value indicates the user type (AccessUserType enumeration).
+/// Stands for whoever or whatever is granted access (someone, a team, a
+/// tracked item) and the credentials it holds. Its kind lives in User_Type;
+/// Table 12-38 has no Present_Value, Assigned_Access_Rights or Out_Of_Service
+/// row, so the object serves none of them (#1064).
+///
+/// Credentials, Members and Member_Of are lists of
+/// `BACnetDeviceObjectReference` (Clauses 12.33.12 to 12.33.14; #1394), so an
+/// entry may name an object in another device. Credentials names the user's
+/// Access Credential objects. Members and Member_Of name other Access Users,
+/// one level down and one level up a hierarchy of users (a department and
+/// the people in it, say). The application sets all three; they are
+/// read-only over the network.
 pub struct AccessUserObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32, // AccessUserType enumeration
-    user_type: u32,
-    credentials: Vec<ObjectIdentifier>,
-    assigned_access_rights_count: u32,
+    user_type: AccessUserType,
+    credentials: Vec<BACnetDeviceObjectReference>,
+    members: Vec<BACnetDeviceObjectReference>,
+    member_of: Vec<BACnetDeviceObjectReference>,
     status_flags: StatusFlags,
-    out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl AccessUserObject {
@@ -28,14 +37,50 @@ impl AccessUserObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0,
-            user_type: 0,
+            user_type: AccessUserType::ASSET,
             credentials: Vec::new(),
-            assigned_access_rights_count: 0,
+            members: Vec::new(),
+            member_of: Vec::new(),
             status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
+    }
+
+    /// Set Credentials, the Access Credential objects the user holds
+    /// (Clause 12.33.14). A reference with no device identifier names an
+    /// object in this device.
+    ///
+    /// Each reference has to name an Access Credential object, and its
+    /// device identifier, when given, a Device object; a list breaking either
+    /// rule is refused with VALUE_OUT_OF_RANGE and the credentials set before
+    /// are kept. The list is read-only over the network.
+    pub fn set_credentials(
+        &mut self,
+        credentials: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+    ) -> Result<(), Error> {
+        self.credentials = references_to(ObjectType::ACCESS_CREDENTIAL, credentials)?;
+        Ok(())
+    }
+
+    /// Set Members, the Access Users one level below this one
+    /// (Clause 12.33.12), with the checks [`Self::set_credentials`] makes,
+    /// for Access User objects.
+    pub fn set_members(
+        &mut self,
+        members: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+    ) -> Result<(), Error> {
+        self.members = references_to(ObjectType::ACCESS_USER, members)?;
+        Ok(())
+    }
+
+    /// Set Member_Of, the Access Users one level above this one
+    /// (Clause 12.33.13), with the checks [`Self::set_members`] makes.
+    pub fn set_member_of(
+        &mut self,
+        groups: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+    ) -> Result<(), Error> {
+        self.member_of = references_to(ObjectType::ACCESS_USER, groups)?;
+        Ok(())
     }
 }
 
@@ -53,28 +98,28 @@ impl BACnetObject for AccessUserObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Clause 12.33 holds the OUT_OF_SERVICE flag FALSE.
+        if let Some(result) =
+            read_common_properties!(self, property, array_index, no_out_of_service)
+        {
             return result;
         }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_USER.to_raw()))
             }
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
-            }
             p if p == PropertyIdentifier::USER_TYPE => {
-                Ok(PropertyValue::Enumerated(self.user_type))
+                Ok(PropertyValue::Enumerated(self.user_type.to_raw()))
             }
-            p if p == PropertyIdentifier::CREDENTIALS => Ok(PropertyValue::List(
-                self.credentials
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
-            p if p == PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS => Ok(PropertyValue::Unsigned(
-                self.assigned_access_rights_count as u64,
-            )),
+            p if p == PropertyIdentifier::CREDENTIALS => {
+                Ok(crate::device_reference::reference_list(&self.credentials))
+            }
+            p if p == PropertyIdentifier::MEMBERS => {
+                Ok(crate::device_reference::reference_list(&self.members))
+            }
+            p if p == PropertyIdentifier::MEMBER_OF => {
+                Ok(crate::device_reference::reference_list(&self.member_of))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -86,50 +131,32 @@ impl BACnetObject for AccessUserObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
         match property {
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                if let PropertyValue::Enumerated(v) = value {
-                    self.present_value = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
             p if p == PropertyIdentifier::USER_TYPE => {
                 if let PropertyValue::Enumerated(v) = value {
-                    self.user_type = v;
+                    self.user_type = AccessUserType::from_raw(v);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
                 }
             }
-            _ => Err(common::write_access_denied_error()),
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                _array_index,
+            )),
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        super::metadata_identity::for_access_user_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::USER_TYPE,
-            PropertyIdentifier::CREDENTIALS,
-            PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 

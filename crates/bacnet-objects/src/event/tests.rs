@@ -4,21 +4,21 @@ use super::*;
 /// constant so the event algorithm, rather than Clause 13.2.2 fault
 /// precedence, is what decides the state. Fault precedence has its own
 /// tests below.
-const NO_FAULT: u32 = bacnet_types::enums::Reliability::NO_FAULT_DETECTED.to_raw();
+const NO_FAULT: Reliability = Reliability::NO_FAULT_DETECTED;
 
 fn make_detector() -> OutOfRangeDetector {
     OutOfRangeDetector {
         high_limit: 80.0,
         low_limit: 20.0,
         deadband: 2.0,
-        limit_enable: LimitEnable::BOTH,
+        limit_enable: LimitEnable::all(),
         notification_class: 1,
-        notify_type: 0,
-        event_enable: 0x07, // all transitions
+        notify_type: NotifyType::ALARM,
+        event_enable: EventTransitionBits::all(),
         time_delay: 0,
         time_delay_normal: None,
         event_state: EventState::NORMAL,
-        acked_transitions: 0b111,
+        acked_transitions: EventTransitionBits::all(),
         pending: None,
         fault_reliability: None,
     }
@@ -111,7 +111,7 @@ fn low_limit_to_high_limit_direct() {
 #[test]
 fn high_limit_disabled_no_transition() {
     let mut det = make_detector();
-    det.limit_enable.high_limit_enable = false;
+    det.limit_enable.remove(LimitEnable::HIGH_LIMIT_ENABLE);
 
     // Above high_limit but disabled — stays NORMAL
     assert!(det.evaluate(100.0, NO_FAULT).is_none());
@@ -120,7 +120,7 @@ fn high_limit_disabled_no_transition() {
 #[test]
 fn low_limit_disabled_no_transition() {
     let mut det = make_detector();
-    det.limit_enable.low_limit_enable = false;
+    det.limit_enable.remove(LimitEnable::LOW_LIMIT_ENABLE);
 
     // Below low_limit but disabled — stays NORMAL
     assert!(det.evaluate(0.0, NO_FAULT).is_none());
@@ -129,25 +129,9 @@ fn low_limit_disabled_no_transition() {
 #[test]
 fn both_limits_disabled() {
     let mut det = make_detector();
-    det.limit_enable = LimitEnable::NONE;
+    det.limit_enable = LimitEnable::empty();
     assert!(det.evaluate(100.0, NO_FAULT).is_none());
     assert!(det.evaluate(0.0, NO_FAULT).is_none());
-}
-
-#[test]
-fn limit_enable_bits_round_trip() {
-    let le = LimitEnable::BOTH;
-    let bits = le.to_bits();
-    let decoded = LimitEnable::from_bits(bits);
-    assert_eq!(decoded, le);
-
-    let le = LimitEnable {
-        low_limit_enable: true,
-        high_limit_enable: false,
-    };
-    let bits = le.to_bits();
-    let decoded = LimitEnable::from_bits(bits);
-    assert_eq!(decoded, le);
 }
 
 #[test]
@@ -177,16 +161,15 @@ fn event_state_change_uses_supplied_algorithm() {
     );
 }
 
-/// ASHRAE 135-2020 Clause 13.2.5.3: "For all transitions to, or from, the FAULT
-/// state, the corresponding event notification shall use the Event Type
-/// CHANGE_OF_RELIABILITY."
+/// ASHRAE 135-2020 Clause 13.2.5.3 requires CHANGE_OF_RELIABILITY as the
+/// notification's Event Type whenever a transition enters or leaves FAULT.
 ///
 /// Both directions are tested because the standard states them separately: the
 /// Event Type parameter of ConfirmedEventNotification (Clause 13.8) and
 /// UnconfirmedEventNotification (Clause 13.9) gives the to-FAULT rule and then
-/// adds "The Event Type CHANGE_OF_RELIABILITY shall be used for reporting a
-/// transition from FAULT." Table 13-3 states the combined predicate directly:
-/// "When 'To State' or 'From State' is FAULT, set to CHANGE_OF_RELIABILITY."
+/// separately requires CHANGE_OF_RELIABILITY on departure from FAULT.
+/// Table 13-3 combines both directions: FAULT at either endpoint selects
+/// CHANGE_OF_RELIABILITY.
 #[test]
 fn fault_transitions_are_change_of_reliability() {
     use bacnet_types::enums::EventType;
@@ -284,7 +267,7 @@ fn event_enable_zero_suppresses_distribution_not_the_transition() {
     // requires the transition actions regardless. So every transition is still
     // reported and Event_State still advances; only `distribute` goes false.
     let mut det = make_detector();
-    det.event_enable = 0x00; // all disabled
+    det.event_enable = EventTransitionBits::empty();
 
     for (pv, expected) in [
         (81.0, EventState::HIGH_LIMIT),
@@ -303,7 +286,7 @@ fn event_enable_zero_suppresses_distribution_not_the_transition() {
 #[test]
 fn event_enable_to_normal_only() {
     let mut det = make_detector();
-    det.event_enable = 0x04; // only TO_NORMAL
+    det.event_enable = EventTransitionBits::TO_NORMAL;
 
     // NORMAL → HIGH_LIMIT: TO_OFFNORMAL not enabled, so not distributed —
     // but still reported, and Event_State still advances.
@@ -332,7 +315,7 @@ fn event_enable_to_normal_only() {
 #[test]
 fn event_enable_to_offnormal_only() {
     let mut det = make_detector();
-    det.event_enable = 0x01; // only TO_OFFNORMAL
+    det.event_enable = EventTransitionBits::TO_OFFNORMAL;
 
     // NORMAL → HIGH_LIMIT: TO_OFFNORMAL enabled, fires
     let change = det.evaluate(81.0, NO_FAULT).unwrap().change;
@@ -364,7 +347,7 @@ fn event_state_change_generic() {
 #[test]
 fn cos_normal_when_no_alarm_values() {
     let mut det = ChangeOfStateDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     assert!(det.evaluate(0, NO_FAULT).is_none()); // empty alarm_values → always NORMAL
@@ -374,7 +357,7 @@ fn cos_normal_when_no_alarm_values() {
 fn cos_normal_to_offnormal() {
     let mut det = ChangeOfStateDetector {
         alarm_values: vec![1], // ACTIVE (1) is alarm
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     let change = det.evaluate(1, NO_FAULT).unwrap().change;
@@ -386,7 +369,7 @@ fn cos_normal_to_offnormal() {
 fn cos_offnormal_to_normal() {
     let mut det = ChangeOfStateDetector {
         alarm_values: vec![1],
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     det.evaluate(1, NO_FAULT); // → OFFNORMAL
@@ -399,7 +382,7 @@ fn cos_offnormal_to_normal() {
 fn cos_stays_offnormal_while_in_alarm() {
     let mut det = ChangeOfStateDetector {
         alarm_values: vec![1],
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     det.evaluate(1, NO_FAULT); // → OFFNORMAL
@@ -410,7 +393,7 @@ fn cos_stays_offnormal_while_in_alarm() {
 fn cos_multistate_alarm_values() {
     let mut det = ChangeOfStateDetector {
         alarm_values: vec![3, 5, 7], // multiple alarm states
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     assert!(det.evaluate(1, NO_FAULT).is_none()); // not an alarm state
@@ -426,7 +409,7 @@ fn cos_multistate_alarm_values() {
 #[test]
 fn cmdfail_matching_stays_normal() {
     let mut det = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     assert!(det.evaluate(1, 1, NO_FAULT).is_none()); // present == feedback
@@ -435,7 +418,7 @@ fn cmdfail_matching_stays_normal() {
 #[test]
 fn cmdfail_mismatch_goes_offnormal() {
     let mut det = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     let change = det.evaluate(1, 0, NO_FAULT).unwrap().change; // present != feedback
@@ -445,7 +428,7 @@ fn cmdfail_mismatch_goes_offnormal() {
 #[test]
 fn cmdfail_match_restores_normal() {
     let mut det = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
     det.evaluate(1, 0, NO_FAULT); // → OFFNORMAL
@@ -453,7 +436,7 @@ fn cmdfail_match_restores_normal() {
     assert_eq!(change.to, EventState::NORMAL);
 }
 
-// --- Time_Delay tests (AS-HRAE 135-2020 §13.2.4) ---
+// --- Time_Delay tests (ASHRAE 135-2020 Clause 13.3) ---
 //
 // `probe` is the per-write entry; `tick` is the 1 Hz periodic entry. The
 // invariant under test: the countdown advances per tick (elapsed second),
@@ -509,9 +492,10 @@ fn time_delay_redundant_probe_does_not_reset_countdown() {
     // Regression for the symmetric bug class: a redundant write of the SAME
     // qualifying value while a pending transition already exists must NOT
     // re-seed (which would reset `remaining` to the full delay). Per
-    // ASHRAE 135-2020 §13.2.4 Time_Delay is a debounce timer — writes faster
-    // than the 1s tick must not pin the transition forever. Interleave probe
-    // and tick to prove the elapsed countdown survives a redundant probe.
+    // ASHRAE 135-2020 Clause 13.3 the delay runs from when the condition
+    // began to hold — writes faster than the 1s tick must not pin the
+    // transition forever. Interleave probe and tick to prove the elapsed
+    // countdown survives a redundant probe.
     let mut det = make_delayed_detector(3);
     det.probe(81.0, NO_FAULT); // seed HIGH_LIMIT, remaining = 3
     assert!(det.tick(81.0, NO_FAULT).is_none()); // remaining 2
@@ -603,7 +587,7 @@ fn time_delay_reseeded_when_target_changes_mid_delay() {
 fn time_delay_change_of_state_seeds_and_fires() {
     let mut det = ChangeOfStateDetector {
         alarm_values: vec![1],
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         time_delay: 2,
         ..Default::default()
     };
@@ -618,7 +602,7 @@ fn time_delay_change_of_state_seeds_and_fires() {
 #[test]
 fn time_delay_command_failure_seeds_and_fires() {
     let mut det = CommandFailureDetector {
-        event_enable: 0x07,
+        event_enable: EventTransitionBits::all(),
         time_delay: 1,
         ..Default::default()
     };
@@ -634,7 +618,7 @@ fn time_delay_event_enable_gates_distribution_not_state_during_delay() {
     // Event_State still advances, and the transition is still reported — with
     // `distribute` false so the notification is suppressed at the send site.
     let mut det = make_delayed_detector(1);
-    det.event_enable = 0x00;
+    det.event_enable = EventTransitionBits::empty();
     assert!(
         det.probe(81.0, NO_FAULT).is_none(),
         "delay seeded, nothing fired yet"

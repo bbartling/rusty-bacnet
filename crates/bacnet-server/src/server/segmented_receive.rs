@@ -1,5 +1,40 @@
 use super::*;
 
+impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Send a `'server' = TRUE` Abort back along the request's path.
+    ///
+    /// Split from `lifecycle.rs` to keep the 700-LOC file cap; no behavior
+    /// change. Every Abort this dispatch loop originates answers a client's
+    /// request, so the flag is always TRUE (Clause 20.1.9.1).
+    pub(super) async fn send_server_abort(
+        network: &Arc<NetworkLayer<T>>,
+        source_mac: &MacAddr,
+        source_network: Option<&NpduAddress>,
+        route: &bacnet_network::response_route::ResponseRoute,
+        invoke_id: u8,
+        abort_reason: AbortReason,
+    ) {
+        let abort_pdu = Apdu::Abort(AbortPdu {
+            sent_by_server: true,
+            invoke_id,
+            abort_reason,
+        });
+        let mut abort_buf = BytesMut::new();
+        encode_apdu(&mut abort_buf, &abort_pdu).expect("valid APDU encoding");
+        if let Err(e) = Self::send_confirmed_response_apdu(
+            network,
+            &abort_buf,
+            source_mac,
+            source_network,
+            route,
+        )
+        .await
+        {
+            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send Abort");
+        }
+    }
+}
+
 /// Private defensive limit, not a normative SegmentTimer or total-request age.
 const SEG_RECEIVER_PROGRESS_TIMEOUT: Duration = Duration::from_secs(16);
 
@@ -13,7 +48,7 @@ const MAX_SEG_RECEIVERS_PER_PEER: usize = 16;
 const MAX_SAVED_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 
 pub(super) fn saved_request_payload_bytes(
-    receivers: &HashMap<SegKey, SegmentedRequestState>,
+    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
 ) -> Option<usize> {
     receivers.values().try_fold(0usize, |sum, state| {
         sum.checked_add(state.payload.saved_payload_bytes())
@@ -29,7 +64,7 @@ fn payload_fits(saved: Option<usize>, additional: usize) -> bool {
 /// Owns all active payload storage and its accounting. The mutable encoding
 /// receiver never escapes: server saves are append-only, ordered, and charged
 /// exactly once, while the first request template contains metadata only.
-pub(super) struct RequestPayload {
+pub(crate) struct RequestPayload {
     receiver: SegmentReceiver,
     first: ConfirmedRequestPdu,
     saved_payload_bytes: usize,
@@ -101,8 +136,8 @@ pub(super) mod tests;
 /// Only for a new, supported sequence-zero request with a valid window.
 /// Global capacity takes precedence; the bounded key scan ignores invoke ID.
 pub(super) fn segmented_request_admission_error(
-    receivers: &HashMap<SegKey, SegmentedRequestState>,
-    key: &SegKey,
+    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
+    key: &SegRecvKey,
 ) -> Option<AbortReason> {
     if receivers.len() >= MAX_SEG_RECEIVERS {
         return Some(AbortReason::BUFFER_OVERFLOW);
@@ -118,10 +153,60 @@ pub(super) fn segmented_request_admission_error(
     None
 }
 
+/// Fail-closed conflict for segmented request reassembly (RB-07).
+/// Returns the conflicting key when the same (peer, invoke) exists under a
+/// different non-direct scope; the caller aborts that session rather than
+/// merging. Direct identities always own independent exact keys, including
+/// when a non-direct frame claims their address.
+pub(super) fn find_receive_provenance_conflict(
+    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
+    key: &SegRecvKey,
+) -> Option<SegRecvKey> {
+    if key.3.is_direct_peer() {
+        return None;
+    }
+    receivers
+        .keys()
+        .find(|existing| {
+            !existing.3.is_direct_peer()
+                && existing.0 == key.0
+                && existing.1 == key.1
+                && existing.2 == key.2
+                && existing.3 != key.3
+        })
+        .cloned()
+}
+
+/// A direct Abort cancels only its exact principal/incarnation key. Legacy
+/// address-scoped cancellation may sweep non-direct contexts only. Whole-server
+/// shutdown and timeouts retain their independent global cleanup semantics.
+pub(super) fn remove_matching_reassemblies(
+    receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
+    key: &SegRecvKey,
+) {
+    if key.3.is_direct_peer() {
+        receivers.remove(key);
+        return;
+    }
+    let doomed: Vec<SegRecvKey> = receivers
+        .keys()
+        .filter(|existing| {
+            !existing.3.is_direct_peer()
+                && existing.0 == key.0
+                && existing.1 == key.1
+                && existing.2 == key.2
+        })
+        .cloned()
+        .collect();
+    for doomed in doomed {
+        receivers.remove(&doomed);
+    }
+}
+
 /// Drop stale incarnations and all their retained payload ownership before input.
 /// Cleanup is silent and synchronous; idle or blocked dispatch is not reclaimed.
 pub(super) fn expire_segmented_requests(
-    receivers: &mut HashMap<SegKey, SegmentedRequestState>,
+    receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
     now: Instant,
 ) {
     receivers.retain(|_key, state| {
@@ -193,4 +278,37 @@ pub(super) fn classify_non_next_segment(
         sequence_number: state.last_acked_seq,
         actual_window_size: state.actual_window_size,
     })
+}
+
+/// Segment zero owns the immutable authorization and response snapshots.
+pub(super) fn initial_state(
+    payload: RequestPayload,
+    provenance: bacnet_transport::port::TransportProvenance,
+    direct_response: Option<bacnet_transport::port::DirectResponse>,
+    request: &ConfirmedRequestPdu,
+) -> (SegmentedRequestState, Option<SegmentAckPdu>) {
+    let actual_window_size = request.proposed_window_size.unwrap_or(0);
+    let should_ack = !request.more_follows || actual_window_size <= 1;
+    let state = SegmentedRequestState {
+        payload,
+        provenance,
+        direct_response,
+        last_activity: Instant::now(),
+        last_progress: Instant::now(),
+        expected_seq: 1,
+        initial_sequence_number: 0,
+        duplicate_count: 0,
+        last_acked_seq: 0,
+        window_pos: if should_ack { 0 } else { 1 },
+        actual_window_size,
+        accepted_segments: 1,
+    };
+    let ack = should_ack.then_some(SegmentAckPdu {
+        negative_ack: false,
+        sent_by_server: true,
+        invoke_id: request.invoke_id,
+        sequence_number: request.sequence_number.unwrap_or(0),
+        actual_window_size,
+    });
+    (state, ack)
 }

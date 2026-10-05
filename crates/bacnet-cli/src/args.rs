@@ -1,12 +1,13 @@
 //! Command-line argument definitions.
 //!
 //! Split out of `main.rs` so that adding a flag or a subcommand does not push
-//! that file into the 700-LOC cap enforced by `.github/scripts/check-file-size.sh`.
+//! that file into the 700-LOC cap enforced by `scripts/ci/check-file-size.sh`.
 //! Dispatch stays in `main.rs`; this module is the clap surface only.
 
 use std::{net::Ipv4Addr, path::PathBuf};
 
 use bacnet_types::primitives::BACnetTimeStamp;
+use clap::builder::{OsStringValueParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -54,6 +55,12 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub(crate) sc_url: Option<String>,
 
+    /// SC trusted site CA PEM file (required for SC; no system-root fallback).
+    // Validate emptiness only when constructing an SC client, not for discovery
+    // or a feature-disabled build. Preserve native OS path bytes.
+    #[arg(long, global = true, value_name = "FILE", value_parser = OsStringValueParser::new().map(PathBuf::from))]
+    pub(crate) sc_ca: Option<PathBuf>,
+
     /// SC TLS certificate PEM file.
     #[arg(long, global = true)]
     pub(crate) sc_cert: Option<PathBuf>,
@@ -90,6 +97,20 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     /// Launch interactive shell.
     Shell,
+
+    /// Open the full-screen terminal UI (read-only).
+    ///
+    /// Uses the transport chosen by the global flags (BACnet/IP by default,
+    /// --ipv6 or --sc). Needs an interactive terminal: stdin and stdout must be
+    /// a TTY and TERM must not be "dumb".
+    Tui {
+        /// Frames per second for redraws (1-60).
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u16).range(1..=60))]
+        fps: u16,
+        /// Also write log lines to this file (the in-app log pane is `L`).
+        #[arg(long, value_name = "FILE")]
+        log_file: Option<PathBuf>,
+    },
 
     /// Discover BACnet devices (WhoIs).
     #[command(alias = "whois")]
@@ -367,15 +388,50 @@ mod tests {
     use bacnet_types::primitives::{Date, Time};
     use clap::error::ErrorKind;
 
+    // The derived parser's debug-build frames nearly fill a 1 MiB test thread,
+    // so parse where `main` does: on a thread with a larger stack (#953).
+    fn parse<const N: usize>(args: [&'static str; N]) -> Result<Cli, clap::Error> {
+        crate::parse_on_large_stack(move || Cli::try_parse_from(args))
+    }
+
+    #[test]
+    fn tui_takes_fps_and_log_file_and_global_flags() {
+        let cli = parse([
+            "bacnet",
+            "tui",
+            "--fps",
+            "5",
+            "--log-file",
+            "tui.log",
+            "-i",
+            "10.0.0.5",
+        ])
+        .unwrap();
+        assert_eq!(cli.interface, Some(Ipv4Addr::new(10, 0, 0, 5)));
+        let Some(Command::Tui { fps, log_file }) = cli.command else {
+            panic!("expected Tui");
+        };
+        assert_eq!(fps, 5);
+        assert_eq!(log_file, Some(PathBuf::from("tui.log")));
+
+        let Some(Command::Tui { fps, log_file }) = parse(["bacnet", "tui"]).unwrap().command else {
+            panic!("expected Tui");
+        };
+        assert_eq!((fps, log_file), (20, None));
+        for bad in ["0", "61"] {
+            let error = parse(["bacnet", "tui", "--fps", bad]).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        }
+    }
+
     #[test]
     fn ack_alarm_and_alias_require_both_timestamp_flags() {
         for command in ["ack-alarm", "ack"] {
             let missing_both =
-                Cli::try_parse_from(["bacnet", command, "127.0.0.1", "ai:1", "--state", "1"])
-                    .unwrap_err();
+                parse(["bacnet", command, "127.0.0.1", "ai:1", "--state", "1"]).unwrap_err();
             assert_eq!(missing_both.kind(), ErrorKind::MissingRequiredArgument);
 
-            let missing_ack_time = Cli::try_parse_from([
+            let missing_ack_time = parse([
                 "bacnet",
                 command,
                 "127.0.0.1",
@@ -392,7 +448,7 @@ mod tests {
 
     #[test]
     fn ack_alarm_clap_uses_lossless_shared_timestamp_parser() {
-        let cli = Cli::try_parse_from([
+        let cli = parse([
             "bacnet",
             "ack",
             "127.0.0.1",
@@ -449,7 +505,7 @@ mod tests {
 
     #[test]
     fn ack_alarm_clap_reports_shared_parser_error_before_execution() {
-        let error = Cli::try_parse_from([
+        let error = parse([
             "bacnet",
             "ack-alarm",
             "127.0.0.1",

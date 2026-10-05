@@ -76,7 +76,10 @@ fn request_values_must_fit_public_field_widths() {
         true,
     ))
     .unwrap();
-    assert_eq!(decoded.acknowledgment_filter, 2);
+    assert_eq!(
+        decoded.acknowledgment_filter,
+        AcknowledgmentFilter::NOT_ACKED
+    );
     assert_eq!(
         decoded.enrollment_filter.unwrap().process_identifier,
         u32::MAX
@@ -116,7 +119,7 @@ fn request_values_must_fit_public_field_widths() {
 fn request_enrollment_filter_uses_standard_recipient_process_framing() {
     let device = ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap();
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         enrollment_filter: Some(RecipientProcess {
             recipient: BACnetRecipient::Device(device),
             process_identifier: 7,
@@ -156,7 +159,7 @@ fn request_enrollment_filter_uses_standard_recipient_process_framing() {
 #[test]
 fn request_enrollment_filter_address_choice_golden_and_round_trip() {
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 1,
+        acknowledgment_filter: AcknowledgmentFilter::ACKED,
         enrollment_filter: Some(RecipientProcess {
             recipient: BACnetRecipient::Address(BACnetAddress {
                 network_number: 5,
@@ -218,7 +221,7 @@ fn request_rejects_malformed_nested_and_trailing_fields() {
 #[test]
 fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 3,
+        acknowledgment_filter: AcknowledgmentFilter::from_raw(3),
         enrollment_filter: None,
         event_state_filter: None,
         event_type_filter: None,
@@ -230,7 +233,7 @@ fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
     assert!(encoded.is_empty());
 
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         priority_filter: Some(PriorityFilter {
             min_priority: 10,
             max_priority: 9,
@@ -239,6 +242,31 @@ fn request_try_encode_rejects_unrepresentable_filters_without_writing() {
     };
     assert!(request.try_encode(&mut encoded).is_err());
     assert!(encoded.is_empty());
+}
+
+#[test]
+fn request_acknowledgment_filter_constants_encode_their_production_values() {
+    for (filter, raw) in [
+        (AcknowledgmentFilter::ALL, 0),
+        (AcknowledgmentFilter::ACKED, 1),
+        (AcknowledgmentFilter::NOT_ACKED, 2),
+    ] {
+        let request = GetEnrollmentSummaryRequest {
+            acknowledgment_filter: filter,
+            enrollment_filter: None,
+            event_state_filter: None,
+            event_type_filter: None,
+            priority_filter: None,
+            notification_class_filter: None,
+        };
+        let mut encoded = BytesMut::new();
+        request.try_encode(&mut encoded).unwrap();
+        assert_eq!(&encoded[..], &[0x09, raw]);
+        assert_eq!(
+            GetEnrollmentSummaryRequest::decode(&encoded).unwrap(),
+            request
+        );
+    }
 }
 
 #[test]
@@ -258,11 +286,13 @@ fn request_rejects_undefined_acknowledgment_filter_and_inverted_priority() {
     primitives::encode_ctx_unsigned(&mut encoded, 0, 10);
     primitives::encode_ctx_unsigned(&mut encoded, 1, 9);
     tags::encode_closing_tag(&mut encoded, 4);
-    assert!(matches!(
-        GetEnrollmentSummaryRequest::decode(&encoded),
-        Err(Error::Reject { reason })
-            if reason == bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw()
-    ));
+    // A minimum above the maximum is out of range (#1446).
+    assert_eq!(
+        GetEnrollmentSummaryRequest::decode(&encoded)
+            .unwrap_err()
+            .reject_reason(),
+        Some(bacnet_types::enums::RejectReason::PARAMETER_OUT_OF_RANGE)
+    );
 }
 
 #[test]
@@ -438,15 +468,16 @@ fn request_rejects_undefined_event_state_filter() {
         } else {
             &noncanonical[..]
         };
-        assert!(matches!(
-            GetEnrollmentSummaryRequest::decode(encoded),
-            Err(Error::Reject { reason })
-                if reason == bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw()
-        ));
+        assert_eq!(
+            GetEnrollmentSummaryRequest::decode(encoded)
+                .unwrap_err()
+                .reject_reason(),
+            Some(bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING)
+        );
     }
 
     let request = GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         enrollment_filter: None,
         event_state_filter: Some(EnrollmentSummaryEventStateFilter::from_raw(5)),
         event_type_filter: None,
@@ -492,4 +523,46 @@ fn ack_requires_exact_application_field_tags() {
     let mut trailing = valid;
     primitives::encode_app_null(&mut trailing);
     assert!(GetEnrollmentSummaryAck::decode(&trailing).is_err());
+}
+
+#[test]
+fn enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound() {
+    // #1156: the filter's recipient is a BACnetRecipient, so its address MAC
+    // is at most BACnetAddress::MAX_MAC_LEN (18) octets in both directions.
+    let request = |len: usize| GetEnrollmentSummaryRequest {
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
+        enrollment_filter: Some(RecipientProcess {
+            recipient: BACnetRecipient::Address(BACnetAddress {
+                network_number: 7,
+                mac_address: MacAddr::from_slice(&vec![0xA5; len]),
+            }),
+            process_identifier: 3,
+        }),
+        event_state_filter: None,
+        event_type_filter: None,
+        priority_filter: None,
+        notification_class_filter: None,
+    };
+    let longest = BACnetAddress::MAX_MAC_LEN;
+    let mut encoded = BytesMut::new();
+    request(longest).try_encode(&mut encoded).unwrap();
+    assert_eq!(
+        GetEnrollmentSummaryRequest::decode(&encoded).unwrap(),
+        request(longest)
+    );
+    // The same request with its MAC one octet longer on the wire.
+    let mac = [&[0x65, longest as u8][..], &vec![0xA5; longest]].concat();
+    let at = encoded.windows(mac.len()).position(|w| w == mac).unwrap();
+    let mut wire = encoded[..at].to_vec();
+    wire.extend([0x65, longest as u8 + 1]);
+    wire.extend(vec![0xA5; longest + 1]);
+    wire.extend_from_slice(&encoded[at + mac.len()..]);
+    assert!(GetEnrollmentSummaryRequest::decode(&wire).is_err());
+
+    let mut output = BytesMut::new();
+    assert!(matches!(
+        request(longest + 1).try_encode(&mut output),
+        Err(Error::Encoding(_))
+    ));
+    assert!(output.is_empty());
 }

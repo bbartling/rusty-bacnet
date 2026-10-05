@@ -64,6 +64,8 @@ pub enum FrameType {
 }
 
 impl FrameType {
+    /// Map a wire frame-type octet to a `FrameType`; any value without a variant here, including
+    /// the extended frame types 32-34 and proprietary 128-255, becomes `Unknown`.
     pub fn from_raw(val: u8) -> Self {
         match val {
             0x00 => Self::Token,
@@ -78,6 +80,7 @@ impl FrameType {
         }
     }
 
+    /// Wire frame-type octet for this type (the original value for `Unknown`).
     pub fn to_raw(self) -> u8 {
         match self {
             Self::Token => 0x00,
@@ -111,8 +114,11 @@ fn is_unsupported_cobs_frame_type(raw: u8) -> bool {
 /// A decoded MS/TP frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MstpFrame {
+    /// Kind of frame.
     pub frame_type: FrameType,
+    /// Destination station address (`0xFF` is broadcast).
     pub destination: u8,
+    /// Source station address.
     pub source: u8,
     /// NPDU/data payload (empty for Token, PFM, ReplyToPFM, ReplyPostponed).
     pub data: Bytes,
@@ -294,11 +300,19 @@ pub fn encode_frame(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamDecode {
     /// A complete, validated frame was decoded.
-    Complete { frame: MstpFrame, consumed: usize },
+    Complete {
+        /// The decoded frame.
+        frame: MstpFrame,
+        /// Number of buffer bytes the frame occupied, including the preamble.
+        consumed: usize,
+    },
     /// More bytes are required before a decode decision can be made.
     NeedMore,
     /// The buffer contains invalid data; discard at least `discard` bytes and resync.
-    Invalid { discard: usize },
+    Invalid {
+        /// Minimum number of leading bytes to drop before resynchronizing.
+        discard: usize,
+    },
 }
 
 /// Incrementally decode an MS/TP frame from a receive buffer (starting at the preamble).

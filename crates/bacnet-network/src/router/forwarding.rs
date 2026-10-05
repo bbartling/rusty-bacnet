@@ -1,8 +1,7 @@
 use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::port::DataAttribute;
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::MacAddr;
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -59,8 +58,12 @@ pub(super) fn forward_unicast(
         destination: forwarded_dest,
         source: Some(source),
         hop_count: forwarded_hop_count,
-        message_type: None,
-        vendor_id: None,
+        // RB-03: routed network-layer messages (including proprietary and
+        // other directed controls) keep their identity opaquely. Clearing
+        // these corrupted unicast-routed controls while broadcast preserved
+        // them; APDUs carry None here, so this is a no-op for APDU traffic.
+        message_type: npdu.message_type,
+        vendor_id: npdu.vendor_id,
         payload: npdu.payload,
     };
 
@@ -94,6 +97,9 @@ pub(super) fn forward_unicast(
 }
 
 /// Forward a global broadcast to all ports except the source port.
+///
+/// The destination is copied as it arrived. Ingress has already dropped a
+/// DNET 0xFFFF that carries a DADR (#1379), so what goes out is DLEN 0.
 pub(super) fn forward_broadcast(
     send_txs: &[mpsc::Sender<SendRequest>],
     source_port: usize,
@@ -102,6 +108,12 @@ pub(super) fn forward_broadcast(
     npdu: &Npdu,
     data_attributes: &[DataAttribute],
 ) {
+    debug_assert!(
+        npdu.destination
+            .as_ref()
+            .is_some_and(|destination| destination.mac_address.is_empty()),
+        "ingress drops a global broadcast with a DADR before forwarding"
+    );
     if npdu.hop_count == 0 {
         warn!("Discarding NPDU with hop_count=0");
         return;
@@ -136,37 +148,5 @@ pub(super) fn forward_broadcast(
         }) {
             warn!(%e, "Router dropped broadcast: output channel full");
         }
-    }
-}
-
-/// Send a Reject-Message-To-Network.
-pub(super) fn send_reject(
-    send_tx: &mpsc::Sender<SendRequest>,
-    source_mac: &[u8],
-    rejected_network: u16,
-    reason: RejectMessageReason,
-) {
-    let mut payload = BytesMut::with_capacity(3);
-    payload.put_u8(reason.to_raw());
-    payload.put_u16(rejected_network);
-
-    let reject = Npdu {
-        is_network_message: true,
-        message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
-        payload: payload.freeze(),
-        ..Npdu::default()
-    };
-
-    let mut buf = BytesMut::with_capacity(8);
-    if let Err(e) = encode_npdu(&mut buf, &reject) {
-        warn!("Failed to encode Reject-Message NPDU: {e}");
-        return;
-    }
-
-    if let Err(e) = send_tx.try_send(SendRequest::unicast(
-        buf.freeze(),
-        MacAddr::from_slice(source_mac),
-    )) {
-        warn!(%e, "Router dropped reject message: output channel full");
     }
 }

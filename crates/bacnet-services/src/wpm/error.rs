@@ -1,14 +1,16 @@
 //! Formal WritePropertyMultiple Error service body (Clause 21).
 
+use crate::common::error_type::{decode_error_type, encode_error_type};
 use bacnet_encoding::apdu::ErrorPdu;
+use bacnet_encoding::constructed::tagged::{decode_ctx_constructed, expect_end};
 use bacnet_encoding::constructed::{
     decode_object_property_reference, encode_object_property_reference,
 };
-use bacnet_encoding::{primitives, tags};
+use bacnet_encoding::tags;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
-use bacnet_types::error::Error;
-use bytes::{Bytes, BytesMut};
+use bacnet_types::error::{Error, ErrorDetail};
+use bytes::BytesMut;
 
 /// Formal service-16 Result(-) body with the first failed write coordinate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,10 +26,7 @@ pub struct WritePropertyMultipleError {
 impl WritePropertyMultipleError {
     /// Encode `[0] Error` followed by `[1] BACnetObjectPropertyReference`.
     pub fn encode(&self, buf: &mut BytesMut) {
-        tags::encode_opening_tag(buf, 0);
-        primitives::encode_app_enumerated(buf, self.error_class.to_raw() as u32);
-        primitives::encode_app_enumerated(buf, self.error_code.to_raw() as u32);
-        tags::encode_closing_tag(buf, 0);
+        encode_error_type(buf, self.error_class, self.error_code);
         tags::encode_opening_tag(buf, 1);
         encode_object_property_reference(buf, &self.first_failed_write_attempt);
         tags::encode_closing_tag(buf, 1);
@@ -35,12 +34,9 @@ impl WritePropertyMultipleError {
 
     /// Decode one complete formal service body with no trailing content.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (error_body, offset) = decode_constructed(data, 0, 0, "WPM Error [0]")?;
-        let (error_class, error_code) = decode_error(error_body)?;
-        let (reference_body, end) = decode_constructed(data, offset, 1, "WPM Error [1]")?;
-        if end != data.len() {
-            return Err(Error::decoding(end, "WPM Error has trailing content"));
-        }
+        let ((error_class, error_code), offset) = decode_error_type(data, "WPM Error")?;
+        let (reference_body, end) = decode_ctx_constructed(data, offset, 1, "WPM Error")?;
+        expect_end(data, end, end, "WPM Error")?;
         let first_failed_write_attempt = decode_object_property_reference(reference_body)?;
         Ok(Self {
             error_class,
@@ -89,47 +85,16 @@ impl TryFrom<&ErrorPdu> for WritePropertyMultipleError {
     }
 }
 
-fn decode_constructed<'a>(
-    data: &'a [u8],
-    offset: usize,
-    tag_number: u8,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, content_start) = tags::decode_tag(data, offset)?;
-    if !tag.is_opening_tag(tag_number) {
-        return Err(Error::decoding(
-            offset,
-            format!("{field}: expected opening tag {tag_number}"),
-        ));
+impl From<WritePropertyMultipleError> for Error {
+    fn from(error: WritePropertyMultipleError) -> Self {
+        Error::protocol(
+            error.error_class.to_raw() as u32,
+            error.error_code.to_raw() as u32,
+            Some(ErrorDetail::FirstFailedWriteAttempt(
+                error.first_failed_write_attempt,
+            )),
+        )
     }
-    tags::extract_context_value(data, content_start, tag_number)
-}
-
-fn decode_error(data: &[u8]) -> Result<(ErrorClass, ErrorCode), Error> {
-    let (class, offset) = decode_enumerated(data, 0, "WPM error-class")?;
-    let (code, end) = decode_enumerated(data, offset, "WPM error-code")?;
-    if end != data.len() {
-        return Err(Error::decoding(end, "WPM Error [0] has extra fields"));
-    }
-    Ok((ErrorClass::from_raw(class), ErrorCode::from_raw(code)))
-}
-
-fn decode_enumerated(data: &[u8], offset: usize, field: &str) -> Result<(u16, usize), Error> {
-    let (tag, content_start) = tags::decode_tag(data, offset)?;
-    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
-        return Err(Error::decoding(
-            offset,
-            format!("{field}: expected application Enumerated"),
-        ));
-    }
-    let end = content_start
-        .checked_add(tag.length as usize)
-        .filter(|end| *end <= data.len())
-        .ok_or_else(|| Error::decoding(content_start, format!("{field}: truncated payload")))?;
-    let value = primitives::decode_unsigned(&data[content_start..end])?;
-    let value = u16::try_from(value)
-        .map_err(|_| Error::decoding(content_start, format!("{field}: value exceeds u16")))?;
-    Ok((value, end))
 }
 
 #[cfg(test)]
@@ -137,6 +102,7 @@ mod tests {
     use super::*;
     use bacnet_types::enums::{ObjectType, PropertyIdentifier};
     use bacnet_types::primitives::ObjectIdentifier;
+    use bytes::Bytes;
 
     fn sample(index: Option<u32>) -> WritePropertyMultipleError {
         WritePropertyMultipleError {
@@ -181,6 +147,13 @@ mod tests {
         assert_eq!(pdu.invoke_id, 9);
         assert_eq!(pdu.error_data[0], 0x0e);
         assert_eq!(WritePropertyMultipleError::try_from(&pdu).unwrap(), error);
+        assert!(matches!(
+            Error::from(error.clone()),
+            Error::Structured { class: 2, code: 40, detail }
+                if *detail == ErrorDetail::FirstFailedWriteAttempt(
+                    error.first_failed_write_attempt.clone()
+                )
+        ));
     }
 
     #[test]

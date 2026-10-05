@@ -21,8 +21,13 @@ async fn hub_admission_abort_before_first_poll_reclaims_slot() {
         tcp,
         address,
         tls.acceptor,
-        ([0x10; 6], [0x10; 16]),
-        clients(),
+        super::context::HubConnectionContext {
+            hub: ([0x10; 6], [0x10; 16]),
+            clients: clients(),
+            admission: Arc::new(super::admission::AdmissionRuntime::default()),
+            graceful: super::tasks::Tasks::new().graceful_ctx(),
+            timing: super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
+        },
         ScHubHandshakeTimeouts::default(),
         admission,
     ));
@@ -50,8 +55,13 @@ async fn hub_admission_abort_during_tls_reclaims_slot() {
         tcp,
         address,
         tls.acceptor,
-        ([0x10; 6], [0x10; 16]),
-        clients(),
+        super::context::HubConnectionContext {
+            hub: ([0x10; 6], [0x10; 16]),
+            clients: clients(),
+            admission: Arc::new(super::admission::AdmissionRuntime::default()),
+            graceful: super::tasks::Tasks::new().graceful_ctx(),
+            timing: super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
+        },
         ScHubHandshakeTimeouts::default(),
         admission,
     ));
@@ -67,35 +77,53 @@ pub(super) struct CountedHub {
     pub address: SocketAddr,
     pub active: Arc<AtomicUsize>,
     pub clients: Clients,
+    pub admission: Arc<super::admission::AdmissionRuntime>,
     pub hub: ScHub,
 }
 
 impl CountedHub {
     pub async fn start(tls: &TestTls, timeouts: ScHubHandshakeTimeouts) -> Self {
+        Self::start_with_limits(tls, timeouts, ScHubAdmissionLimits::default()).await
+    }
+
+    pub async fn start_with_limits(
+        tls: &TestTls,
+        timeouts: ScHubHandshakeTimeouts,
+        limits: ScHubAdmissionLimits,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let active = Arc::new(AtomicUsize::new(0));
         let clients = clients();
-        let tasks = super::tasks::Tasks::new();
+        let admission = Arc::new(super::admission::AdmissionRuntime::new(limits, None));
+        let mut tasks = super::tasks::Tasks::new();
+        tasks.timing = super::heartbeat_test_support::probe_runtime();
         let task = tokio::spawn(super::connection::accept_loop_with_counter(
-            listener,
-            tls.acceptor.clone(),
+            super::context::HubListener {
+                listener,
+                tls_acceptor: tls.acceptor.clone(),
+                timeouts,
+            },
             ([0x10; 6], [0x10; 16]),
             clients.clone(),
-            timeouts,
             active.clone(),
             tasks.clone(),
+            admission.clone(),
         ));
         Self {
             address,
-            active,
-            clients,
+            active: active.clone(),
+            clients: clients.clone(),
+            admission: admission.clone(),
             hub: ScHub {
                 hub_vmac: [0x10; 6],
                 hub_uuid: [0x10; 16],
                 listener_task: Some(task),
                 tasks,
                 local_addr: Some(address),
+                admission,
+                clients,
+                active,
             },
         }
     }
@@ -103,6 +131,9 @@ impl CountedHub {
 
 #[tokio::test]
 async fn hub_actual_512_stalled_slots_expire_and_legitimate_mtls_recovers() {
+    // Both ends of every stalled connection are open in this process, which
+    // exceeds the common 1024 soft limit.
+    reserve_descriptors(2 * 512 + 64);
     let tls = TestTls::new();
     let timeouts = ScHubHandshakeTimeouts::new(
         Duration::from_secs(300),
@@ -110,7 +141,17 @@ async fn hub_actual_512_stalled_slots_expire_and_legitimate_mtls_recovers() {
         Duration::from_secs(5),
     )
     .unwrap();
-    let hub = CountedHub::start(&tls, timeouts).await;
+    let hub = CountedHub::start_with_limits(
+        &tls,
+        timeouts,
+        // Split-capacity accounting: 512 stalled handshakes stay under the
+        // 512-handshake bound and the 256 + 512 = 768 total.
+        ScHubAdmissionLimits {
+            max_clients: 256,
+            max_handshakes: 512,
+        },
+    )
+    .await;
     let mut stalled = Vec::new();
     for admitted in 1..=512 {
         let mut tcp = TcpStream::connect(hub.address).await.unwrap();
@@ -187,5 +228,36 @@ async fn hub_phase_error_upgrade_timeout_and_connect_timeout_release_slots() {
         Some(Ok(Message::Close(_)))
     ));
     until(|| hub.active.load(Ordering::Acquire) == 0).await;
+    assert!(hub.clients.lock().await.is_empty());
+    assert_eq!(
+        hub.hub.status().await.outcomes,
+        ScHubOutcomeCounts {
+            websocket_timeouts: 1,
+            connect_timeouts: 1,
+            ..ScHubOutcomeCounts::default()
+        }
+    );
+}
+
+/// A peer that sends a bad record and then streams junk is dropped, and its
+/// admission slot comes back (#950). Whether the byte cap or the linger ends
+/// the drain isn't observable here; tls_reject's unit tests prove the cap.
+#[tokio::test]
+async fn hub_tls_rejection_of_a_writing_peer_drops_it_and_releases_the_slot() {
+    let tls = TestTls::new();
+    let hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
+    let mut peer = TcpStream::connect(hub.address).await.unwrap();
+    until(|| hub.active.load(Ordering::Acquire) == 1).await;
+    let writer = tokio::spawn(async move {
+        peer.write_all(b"not a TLS record").await.unwrap();
+        let junk = [0x17u8; 4096];
+        while peer.write_all(&junk).await.is_ok() {}
+    });
+    until(|| hub.active.load(Ordering::Acquire) == 0).await;
+    // The hub dropped the socket, so the writer's sends start failing.
+    tokio::time::timeout(Duration::from_secs(5), writer)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(hub.clients.lock().await.is_empty());
 }

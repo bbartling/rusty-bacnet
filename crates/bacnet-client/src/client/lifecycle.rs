@@ -1,3 +1,4 @@
+use super::dispatch_context::{DispatchContext, InboundApdu};
 use super::*;
 
 const DEVICE_PURGE_INTERVAL: Duration = Duration::from_secs(300);
@@ -10,11 +11,22 @@ const DEVICE_MAX_AGE: Duration = Duration::from_secs(600);
 const DEVICE_MAX_AGE: Duration = Duration::ZERO;
 
 impl<T: TransportPort> BACnetClient<T> {
-    fn abort_dispatch_task(&mut self) -> Option<JoinHandle<()>> {
-        let task = self.dispatch_task.take()?;
-        task.abort();
-        Some(task)
+    fn abort_owned_tasks(&self) {
+        for task in [&self.dispatch_task, &self.network_number_task]
+            .into_iter()
+            .flatten()
+        {
+            task.abort();
+        }
     }
+}
+
+async fn join_owned_task(slot: &mut Option<JoinHandle<()>>) {
+    // A canceled stop retains the join and its network Arc until it completes.
+    if let Some(task) = slot.as_mut() {
+        let _ = task.await;
+    }
+    *slot = None;
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -32,7 +44,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         validate_max_apdu_length(config.max_apdu_length)?;
         validate_max_segments(config.max_segments)?;
         config.max_apdu_length =
-            cap_max_apdu_to_transport(config.max_apdu_length, transport.max_apdu_length())?;
+            cap_max_apdu_to_transport(config.max_apdu_length, transport.egress_apdu_limit())?;
         if !(1..=127).contains(&config.proposed_window_size) {
             return Err(Error::Encoding(format!(
                 "invalid proposed-window-size {}; expected 1..=127",
@@ -46,11 +58,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut apdu_rx = network.start().await?;
         config.max_apdu_length = cap_max_apdu_to_transport(
             config.max_apdu_length,
-            network.transport().max_apdu_length(),
+            network.transport().egress_apdu_limit(),
         )?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
+        let (number_tx, network_number_task) = if network
+            .transport()
+            .supports_local_nonrouter_number_controls()
+        {
+            let (tx, task) = network_number::spawn(&network);
+            (Some(tx), Some(task))
+        } else {
+            (None, None)
+        };
 
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let tsm = Arc::new(Mutex::new(new_coordinated_tsm(&config, coordinator)));
@@ -61,13 +82,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let (cov_tx, _) =
             broadcast::channel::<ReceivedCOVNotification>(options.cov_channel_capacity);
         let cov_tx_dispatch = cov_tx.clone();
+        let (event_tx, _) =
+            broadcast::channel::<ReceivedEventNotification>(options.event_channel_capacity);
+        let event_tx_dispatch = event_tx.clone();
         let confirmed_cov_ack_policy = options.confirmed_cov_notification_ack_policy.clone();
         let (device_tx, _) = broadcast::channel::<DeviceEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_tx_dispatch = device_tx.clone();
         let (device_collision_tx, _) =
             broadcast::channel::<DeviceCollisionEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_collision_tx_dispatch = device_collision_tx.clone();
-        let seg_ack_senders: Arc<Mutex<HashMap<SegKey, SegmentAckRoute>>> =
+        let seg_ack_senders: Arc<Mutex<HashMap<SegAckKey, SegmentAckRoute>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
         let (cleanup_tx, mut cleanup_rx) = mpsc::unbounded_channel::<TransactionCleanup>();
@@ -94,9 +118,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     control = network_control_rx.recv(), if network_control_open => {
                         match control {
                             Some(control) => {
-                                routed_path_limits_dispatch
-                                    .handle_network_control(&tsm_dispatch, control)
-                                    .await;
+                                if let Some((tx, parsed)) = number_tx
+                                    .as_ref()
+                                    .zip(bacnet_network::network_number::NumberControl::parse(&control))
+                                {
+                                    if tx.try_send(parsed).is_err() {
+                                        debug!("client Number control queue full or closed; dropping control");
+                                    }
+                                } else {
+                                    // Preserve the original envelope and ingress sequence for Reject correlation.
+                                    routed_path_limits_dispatch
+                                        .handle_network_control(&tsm_dispatch, control)
+                                        .await;
+                                }
                             }
                             None => network_control_open = false,
                         }
@@ -112,14 +146,28 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 &cleanup.owner,
                             );
                         }
-                        let key = (cleanup.mac, cleanup.invoke_id);
-                        let removed = seg_state
-                            .get(&key)
-                            .is_some_and(|state| state.owner.same_as(&cleanup.owner));
-                        if removed {
-                            seg_state.remove(&key);
+                        // Cleanup is provenance-agnostic: drop any reassembly
+                        // snapshot for this (mac, invoke) with a matching
+                        // owner, regardless of trust context (fail-closed).
+                        let found = seg_state
+                            .keys()
+                            .find(|key| {
+                                key.0 == cleanup.mac
+                                    && key.1 == cleanup.invoke_id
+                                    && seg_state
+                                        .get(*key)
+                                        .is_some_and(|state| {
+                                            state.owner.same_as(&cleanup.owner)
+                                        })
+                            })
+                            .cloned();
+                        #[cfg(test)]
+                        let removed = found.is_some();
+                        if let Some(found) = found {
+                            seg_state.remove(&found);
                         }
                         if let Some(expected_sender) = cleanup.seg_ack_sender {
+                            let key = (cleanup.mac, cleanup.invoke_id);
                             let mut senders = seg_ack_senders_dispatch.lock().await;
                             if senders
                                 .get(&key)
@@ -153,19 +201,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         match apdu::decode_apdu(received.apdu.clone()) {
                             Ok(decoded) => {
                                 Self::dispatch_apdu(
-                                    &tsm_dispatch,
-                                    &device_table_dispatch,
-                                    &network_dispatch,
-                                    &cov_tx_dispatch,
-                                    &confirmed_cov_ack_policy,
-                                    &device_tx_dispatch,
-                                    &device_collision_tx_dispatch,
+                                    DispatchContext {
+                                        tsm: &tsm_dispatch,
+                                        device_table: &device_table_dispatch,
+                                        network: &network_dispatch,
+                                        cov_tx: &cov_tx_dispatch,
+                                        event_tx: &event_tx_dispatch,
+                                        confirmed_cov_ack_policy: &confirmed_cov_ack_policy,
+                                        device_tx: &device_tx_dispatch,
+                                        device_collision_tx: &device_collision_tx_dispatch,
+                                        seg_ack_senders: &seg_ack_senders_dispatch,
+                                    },
                                     &mut seg_state,
-                                    &seg_ack_senders_dispatch,
-                                    &received.source_mac,
-                                    &received.source_network,
-                                    received.is_group,
-                                    received.reply_tx,
+                                    InboundApdu {
+                                        source_mac: &received.source_mac,
+                                        source_network: &received.source_network,
+                                        provenance: received.provenance,
+                                        direct_response: received.direct_response,
+                                        is_group: received.is_group,
+                                        reply_tx: received.reply_tx,
+                                    },
                                     decoded,
                                     response_limits,
                                 )
@@ -186,9 +241,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             tsm,
             device_table,
             cov_tx,
+            event_tx,
             device_tx,
             device_collision_tx,
             dispatch_task: Some(dispatch_task),
+            network_number_task,
             seg_ack_senders,
             cleanup_tx,
             #[cfg(test)]
@@ -213,7 +270,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         max_apdu_bucket_at_or_below(
             self.config
                 .max_apdu_length
-                .min(self.network.transport().max_apdu_length()),
+                .min(self.network.transport().egress_apdu_limit()),
         )
         .unwrap_or(0)
     }
@@ -224,14 +281,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// and may be lower than the encoded BACnet max-APDU bucket advertised by
     /// the client.
     pub fn transport_max_apdu_length(&self) -> u16 {
-        self.network.transport().max_apdu_length()
+        self.network.transport().egress_apdu_limit()
     }
 
-    /// Stop the client, aborting the dispatch task.
+    /// Stop the client, aborting and joining dispatch and local Number work.
+    /// Canceling this waiter retains task joins for a subsequent stop.
     pub async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(task) = self.abort_dispatch_task() {
-            let _ = task.await;
-        }
+        self.abort_owned_tasks();
+        join_owned_task(&mut self.network_number_task).await;
+        join_owned_task(&mut self.dispatch_task).await;
         self.tsm.lock().await.cancel_all_transactions();
         let network = Arc::get_mut(&mut self.network).ok_or_else(|| {
             Error::Encoding("cannot stop BACnetClient while network references remain".into())
@@ -243,7 +301,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
 impl<T: TransportPort> Drop for BACnetClient<T> {
     fn drop(&mut self) {
-        let _ = self.abort_dispatch_task();
+        self.abort_owned_tasks();
         if let Ok(mut tsm) = self.tsm.try_lock() {
             tsm.cancel_all_transactions();
         }

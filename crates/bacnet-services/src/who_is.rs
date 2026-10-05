@@ -1,106 +1,218 @@
 //! Who-Is and I-Am services per ASHRAE 135-2020 Clause 16.10.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_app_enumerated, decode_app_object_id, decode_app_unsigned, decode_ctx_unsigned,
+    decode_optional_ctx, expect_end,
+};
 use bacnet_encoding::primitives;
-use bacnet_encoding::tags::{self};
 use bacnet_types::enums::Segmentation;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 // ---------------------------------------------------------------------------
+// DeviceInstanceRange
+// ---------------------------------------------------------------------------
+
+/// The devices a Who-Is or Who-Has asks to answer: those whose Device object
+/// instance lies from [`low`](Self::low) to [`high`](Self::high), both
+/// included (Clauses 16.10.1.1.1-2 and 16.9.1.1.1-2).
+///
+/// The clauses send both limits or neither, keep the low one at or below
+/// the high one, and give each the instance range 0 to
+/// [`ObjectIdentifier::MAX_INSTANCE`]. A request holds an
+/// `Option<DeviceInstanceRange>`, so it can't carry one limit alone, and
+/// [`Self::new`] refuses a low limit above the high one, a range no device
+/// lies in, and a limit past the highest instance. The decoders refuse the
+/// first two forms on the wire as well (#1447, #1483), but take a limit past
+/// the highest instance, since some devices send one to mean every device;
+/// [`Self::contains`] reads such a range as written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeviceInstanceRange {
+    low: u32,
+    high: u32,
+}
+
+impl DeviceInstanceRange {
+    /// The instances from `low` to `high`, both included. Fails with
+    /// [`Error::OutOfRange`] when `low` is above `high`, or `high` is above
+    /// [`ObjectIdentifier::MAX_INSTANCE`].
+    pub fn new(low: u32, high: u32) -> Result<Self, Error> {
+        let range = Self::decoded(low, high)?;
+        if high > ObjectIdentifier::MAX_INSTANCE {
+            return Err(Error::OutOfRange(format!(
+                "device instance range high limit {high} is above the highest instance, {}",
+                ObjectIdentifier::MAX_INSTANCE
+            )));
+        }
+        Ok(range)
+    }
+
+    /// The range as a decoder reads it: `low` no greater than `high`, with
+    /// either past the highest instance taken as written.
+    fn decoded(low: u32, high: u32) -> Result<Self, Error> {
+        if low > high {
+            return Err(Error::OutOfRange(format!(
+                "device instance range low limit {low} is above its high limit {high}, \
+                 so it would match no device"
+            )));
+        }
+        Ok(Self { low, high })
+    }
+
+    /// The one instance `instance`, as when a Who-Is looks for one device;
+    /// fails as [`Self::new`] does for an instance past the highest.
+    pub fn single(instance: u32) -> Result<Self, Error> {
+        Self::new(instance, instance)
+    }
+
+    /// The one instance of `device`, which always lies in the instance range.
+    pub fn device(device: ObjectIdentifier) -> Self {
+        let instance = device.instance_number();
+        Self {
+            low: instance,
+            high: instance,
+        }
+    }
+
+    /// The range two separately held limits give: none for neither, a range
+    /// for both, as the Python bindings take them. One limit alone fails with
+    /// [`Error::OutOfRange`] naming it, rather than becoming a request for
+    /// every device, and so does any range [`Self::new`] refuses.
+    pub fn from_limits(low: Option<u32>, high: Option<u32>) -> Result<Option<Self>, Error> {
+        match (low, high) {
+            (None, None) => Ok(None),
+            (Some(low), Some(high)) => Self::new(low, high).map(Some),
+            (Some(low), None) => Err(Error::OutOfRange(format!(
+                "a device instance range needs both limits or neither: \
+                 low limit {low} was given without a high limit"
+            ))),
+            (None, Some(high)) => Err(Error::OutOfRange(format!(
+                "a device instance range needs both limits or neither: \
+                 high limit {high} was given without a low limit"
+            ))),
+        }
+    }
+
+    /// The lowest instance in the range.
+    pub const fn low(self) -> u32 {
+        self.low
+    }
+
+    /// The highest instance in the range.
+    pub const fn high(self) -> u32 {
+        self.high
+    }
+
+    /// Whether `instance` lies in the range.
+    pub const fn contains(self, instance: u32) -> bool {
+        self.low <= instance && instance <= self.high
+    }
+
+    /// Write the range as the `[0]` low and `[1]` high limits.
+    pub(crate) fn encode(self, buf: &mut BytesMut) {
+        primitives::encode_ctx_unsigned(buf, 0, self.low as u64);
+        primitives::encode_ctx_unsigned(buf, 1, self.high as u64);
+    }
+}
+
+/// A Who-Is or Who-Has request's optional `[0]` low and `[1]` high limits,
+/// as read from the start of its service-request octets. The decoders read
+/// the rest of the request before [`Self::range`] checks the pairing.
+pub(crate) struct WireLimits {
+    low: Option<u32>,
+    high: Option<u32>,
+    /// Where a `[1]` high limit after a lone low limit was due.
+    after_low: usize,
+    /// The offset after the limits.
+    pub(crate) end: usize,
+}
+
+impl WireLimits {
+    /// Read the limits; `service` (`WhoIs` or `WhoHas`) names them in errors.
+    pub(crate) fn decode(data: &[u8], service: &str) -> Result<Self, Error> {
+        let (low, after_low) = decode_optional_ctx(
+            data,
+            0,
+            0,
+            &format!("{service} low limit"),
+            decode_ctx_unsigned::<u32>,
+        )?;
+        let (high, end) = decode_optional_ctx(
+            data,
+            after_low,
+            1,
+            &format!("{service} high limit"),
+            decode_ctx_unsigned::<u32>,
+        )?;
+        Ok(Self {
+            low,
+            high,
+            after_low,
+            end,
+        })
+    }
+
+    /// The range the limits give. One limit without the other is malformed
+    /// (#1447, #1483): a receiver drops it rather than reading it as a
+    /// request for every device, which would make every device answer one
+    /// that probably meant a range. So is a low limit above the high one.
+    pub(crate) fn range(&self, service: &str) -> Result<Option<DeviceInstanceRange>, Error> {
+        match (self.low, self.high) {
+            (None, None) => Ok(None),
+            (Some(low), Some(high)) => {
+                DeviceInstanceRange::decoded(low, high)
+                    .map(Some)
+                    .map_err(|_| {
+                        Error::out_of_range(0, format!("{service} low limit exceeds high limit"))
+                    })
+            }
+            (Some(_), None) => Err(Error::missing(
+                self.after_low,
+                format!("{service} low limit needs the high limit [1] with it"),
+            )),
+            (None, Some(_)) => Err(Error::missing(
+                0,
+                format!("{service} high limit needs the low limit [0] before it"),
+            )),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // WhoIsRequest
 // ---------------------------------------------------------------------------
 
 /// Who-Is-Request service parameters.
-///
-/// Both limits must be present or both absent. If only one is set,
-/// the request is treated as unbounded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoIsRequest {
-    pub low_limit: Option<u32>,
-    pub high_limit: Option<u32>,
+    /// The devices that should answer; `None` asks every device.
+    pub range: Option<DeviceInstanceRange>,
 }
 
 impl WhoIsRequest {
     /// Create an unbounded WhoIs (all devices).
     pub fn all() -> Self {
-        Self {
-            low_limit: None,
-            high_limit: None,
-        }
+        Self { range: None }
     }
 
-    /// Create a ranged WhoIs.
-    pub fn range(low: u32, high: u32) -> Self {
-        Self {
-            low_limit: Some(low),
-            high_limit: Some(high),
-        }
-    }
-
+    /// Encode the request into `buf`: both limits for a range, nothing for an
+    /// unbounded request.
     pub fn encode(&self, buf: &mut BytesMut) {
-        if let (Some(low), Some(high)) = (self.low_limit, self.high_limit) {
-            primitives::encode_ctx_unsigned(buf, 0, low as u64);
-            primitives::encode_ctx_unsigned(buf, 1, high as u64);
+        if let Some(range) = self.range {
+            range.encode(buf);
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// on any octet that isn't a `[0]` or `[1]` limit in its place, so a limit under another
+    /// tag or anything after the limits refuses the request rather than reading as no limits,
+    /// on one limit without the other (#1447), and on a low limit above the high one.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        if data.is_empty() {
-            return Ok(Self::all());
-        }
-
-        let mut offset = 0;
-        let mut low_limit = None;
-        let mut high_limit = None;
-
-        // [0] device-instance-range-low-limit
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.is_context(0) {
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "WhoIs truncated at low-limit"));
-            }
-            let low_limit_raw = primitives::decode_unsigned(&data[pos..end])?;
-            low_limit = Some(u32::try_from(low_limit_raw).map_err(|_| {
-                Error::decoding(pos, format!("WhoIs low-limit {low_limit_raw} exceeds u32"))
-            })?);
-            offset = end;
-        }
-
-        // [1] device-instance-range-high-limit
-        if offset < data.len() {
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            if tag.is_context(1) {
-                let end = pos + tag.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(pos, "WhoIs truncated at high-limit"));
-                }
-                let high_limit_raw = primitives::decode_unsigned(&data[pos..end])?;
-                high_limit = Some(u32::try_from(high_limit_raw).map_err(|_| {
-                    Error::decoding(
-                        pos,
-                        format!("WhoIs high-limit {high_limit_raw} exceeds u32"),
-                    )
-                })?);
-            }
-        }
-
-        // Both present or both absent
-        if low_limit.is_some() != high_limit.is_some() {
-            tracing::warn!("WhoIs: only one of low/high limit present — treating as unbounded per lenient decode policy");
-            return Ok(Self::all());
-        }
-
-        if let (Some(low), Some(high)) = (low_limit, high_limit) {
-            if low > high {
-                return Err(Error::decoding(0, "WhoIs low_limit exceeds high_limit"));
-            }
-        }
-
+        let limits = WireLimits::decode(data, "WhoIs")?;
+        expect_end(data, limits.end, limits.end, "WhoIs")?;
         Ok(Self {
-            low_limit,
-            high_limit,
+            range: limits.range("WhoIs")?,
         })
     }
 }
@@ -114,13 +226,18 @@ impl WhoIsRequest {
 /// All fields use APPLICATION tags (not context-specific).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IAmRequest {
+    /// Device object of the announcing device.
     pub object_identifier: ObjectIdentifier,
+    /// Largest APDU, in octets, the device can accept.
     pub max_apdu_length: u32,
+    /// Segmentation abilities the device supports.
     pub segmentation_supported: Segmentation,
+    /// Vendor identifier (Unsigned16) of the device manufacturer.
     pub vendor_id: u16,
 }
 
 impl IAmRequest {
+    /// Encode the request parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_object_id(buf, &self.object_identifier);
         primitives::encode_app_unsigned(buf, self.max_apdu_length as u64);
@@ -128,89 +245,16 @@ impl IAmRequest {
         primitives::encode_app_unsigned(buf, self.vendor_id as u64);
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input
+    /// and on octets after the vendor identifier.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        // Application L/V/T values 6 and 7 are reserved, but decode_tag treats
-        // them as extended lengths because they mark context opening/closing tags.
-        if tag.class != tags::TagClass::Application
-            || tag.number != tags::app_tag::OBJECT_IDENTIFIER
-            || data[offset] & 0x07 > 5
-        {
-            return Err(Error::decoding(
-                offset,
-                "IAm object identifier: expected application-tagged object identifier",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IAm truncated at object-identifier"));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application
-            || tag.number != tags::app_tag::UNSIGNED
-            || data[offset] & 0x07 > 5
-        {
-            return Err(Error::decoding(
-                offset,
-                "IAm max APDU length: expected application-tagged unsigned",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IAm truncated at max-apdu-length"));
-        }
-        let max_apdu_length_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let max_apdu_length = u32::try_from(max_apdu_length_raw).map_err(|_| {
-            Error::decoding(
-                pos,
-                format!("IAm max APDU length {max_apdu_length_raw} exceeds u32"),
-            )
-        })?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application
-            || tag.number != tags::app_tag::ENUMERATED
-            || data[offset] & 0x07 > 5
-        {
-            return Err(Error::decoding(
-                offset,
-                "IAm segmentation: expected application-tagged enumerated",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IAm truncated at segmentation"));
-        }
-        let seg_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let seg_raw = u8::try_from(seg_raw)
-            .map_err(|_| Error::decoding(pos, format!("IAm segmentation {seg_raw} exceeds u8")))?;
-        let segmentation_supported = Segmentation::from_raw(seg_raw);
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application
-            || tag.number != tags::app_tag::UNSIGNED
-            || data[offset] & 0x07 > 5
-        {
-            return Err(Error::decoding(
-                offset,
-                "IAm vendor ID: expected application-tagged unsigned",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IAm truncated at vendor-id"));
-        }
-        let vendor_id_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let vendor_id = u16::try_from(vendor_id_raw).map_err(|_| {
-            Error::decoding(pos, format!("IAm vendor ID {vendor_id_raw} exceeds u16"))
-        })?;
+        let (object_identifier, offset) = decode_app_object_id(data, 0, "IAm object identifier")?;
+        let (max_apdu_length, offset) =
+            decode_app_unsigned::<u32>(data, offset, "IAm max APDU length")?;
+        let (segmentation, offset) = decode_app_enumerated::<u8>(data, offset, "IAm segmentation")?;
+        let segmentation_supported = Segmentation::from_raw(segmentation);
+        let (vendor_id, end) = decode_app_unsigned::<u16>(data, offset, "IAm vendor ID")?;
+        expect_end(data, end, end, "IAm")?;
 
         Ok(Self {
             object_identifier,
@@ -224,6 +268,7 @@ impl IAmRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_encoding::tags;
     use bacnet_types::enums::ObjectType;
 
     #[test]
@@ -238,7 +283,9 @@ mod tests {
 
     #[test]
     fn who_is_range_round_trip() {
-        let req = WhoIsRequest::range(1000, 2000);
+        let req = WhoIsRequest {
+            range: Some(DeviceInstanceRange::new(1000, 2000).unwrap()),
+        };
         let mut buf = BytesMut::new();
         req.encode(&mut buf);
         assert!(!buf.is_empty());
@@ -281,44 +328,57 @@ mod tests {
 
     #[test]
     fn test_decode_who_is_truncated() {
-        // WhoIs with range: encode valid, then truncate to only first tag byte
-        let req = WhoIsRequest::range(1000, 2000);
+        // A range cut anywhere fails: inside the low limit, or after it,
+        // which leaves one limit alone.
+        let req = WhoIsRequest {
+            range: Some(DeviceInstanceRange::new(1000, 2000).unwrap()),
+        };
         let mut buf = BytesMut::new();
         req.encode(&mut buf);
-        // Truncate to just the first tag + partial value (missing high-limit)
-        // This should still decode as "all" because only one limit is present
-        // Actually truncating at 1 byte should cause tag decode error
-        assert!(WhoIsRequest::decode(&buf[..1]).is_err());
+        for cut in 1..buf.len() {
+            assert!(WhoIsRequest::decode(&buf[..cut]).is_err(), "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn who_is_with_one_limit_is_refused() {
+        // [0] low limit 1 alone, then [1] high limit 10 alone (#1447).
+        for data in [&[0x09, 0x01][..], &[0x19, 0x0A]] {
+            let error = WhoIsRequest::decode(data).unwrap_err();
+            assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
+        }
     }
 
     #[test]
     fn test_decode_who_is_invalid_tag() {
-        // Non-empty but with non-matching context tags — decoder treats as unbounded
-        let result = WhoIsRequest::decode(&[0x29, 0]).unwrap();
-        assert_eq!(result.low_limit, None);
-        assert_eq!(result.high_limit, None);
+        // A tag that is neither limit is left over, not read as no limits.
+        let error = WhoIsRequest::decode(&[0x29, 0]).unwrap_err();
+        assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
     }
 
     #[test]
     fn who_is_low_exceeds_high_is_error() {
-        let req = WhoIsRequest::range(2000, 1000);
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        let err = WhoIsRequest::decode(&buf).unwrap_err();
+        // Low limit 2000, high limit 1000: no range can be built this way,
+        // so the octets are written out.
+        let data = [0x0A, 0x07, 0xD0, 0x1A, 0x03, 0xE8];
+        let err = WhoIsRequest::decode(&data).unwrap_err();
         assert!(
-            format!("{err:?}").contains("low_limit exceeds high_limit"),
-            "expected low_limit > high_limit error, got: {err:?}"
+            err.to_string()
+                .contains("WhoIs low limit exceeds high limit"),
+            "expected a low limit above the high limit to fail, got: {err:?}"
         );
     }
 
     #[test]
     fn who_is_equal_limits_is_valid() {
-        let req = WhoIsRequest::range(1500, 1500);
+        let req = WhoIsRequest {
+            range: Some(DeviceInstanceRange::single(1500).unwrap()),
+        };
         let mut buf = BytesMut::new();
         req.encode(&mut buf);
+        assert_eq!(buf[..], [0x0A, 0x05, 0xDC, 0x1A, 0x05, 0xDC]);
         let decoded = WhoIsRequest::decode(&buf).unwrap();
-        assert_eq!(decoded.low_limit, Some(1500));
-        assert_eq!(decoded.high_limit, Some(1500));
+        assert_eq!(decoded, req);
     }
 
     #[test]
@@ -330,16 +390,22 @@ mod tests {
             buf
         };
 
+        // The shared readers' wording names the member, its tag and the value.
         for (low, high, field, value) in [
-            (4_294_967_297, 4_294_967_297, "low-limit", 4_294_967_297_u64),
-            (1, 4_294_967_297, "high-limit", 4_294_967_297),
+            (
+                4_294_967_297,
+                4_294_967_297,
+                "low limit: [0]",
+                4_294_967_297_u64,
+            ),
+            (1, 4_294_967_297, "high limit: [1]", 4_294_967_297),
         ] {
             let encoded = encode_range(low, high);
             let error = WhoIsRequest::decode(&encoded).unwrap_err();
             assert!(
                 error
                     .to_string()
-                    .contains(&format!("WhoIs {field} {value}")),
+                    .contains(&format!("WhoIs {field} value {value} exceeds u32")),
                 "unexpected error for {field} {value}: {error}"
             );
         }
@@ -350,8 +416,9 @@ mod tests {
             leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
         }
         let decoded = WhoIsRequest::decode(&leading_zero).unwrap();
-        assert_eq!(decoded.low_limit, Some(u32::MAX));
-        assert_eq!(decoded.high_limit, Some(u32::MAX));
+        // Past the highest instance, but taken as written.
+        let range = decoded.range.unwrap();
+        assert_eq!((range.low(), range.high()), (u32::MAX, u32::MAX));
     }
 
     #[test]
@@ -366,16 +433,18 @@ mod tests {
             buf
         };
 
-        for (max_apdu_length, segmentation, vendor_id, field, value) in [
-            (4_294_967_296, 0, 0, "max APDU length", 4_294_967_296_u64),
-            (1, 256, 0, "segmentation", 256),
-            (1, 0, 65_536, "vendor ID", 65_536),
+        // The shared application readers name the member, its type and the
+        // width it must fit.
+        for (max_apdu_length, segmentation, vendor_id, refusal) in [
+            (4_294_967_296, 0, 0, "max APDU length: Unsigned exceeds u32"),
+            (1, 256, 0, "segmentation: ENUMERATED exceeds u8"),
+            (1, 0, 65_536, "vendor ID: Unsigned exceeds u16"),
         ] {
             let encoded = encode_request(max_apdu_length, segmentation, vendor_id);
             let error = IAmRequest::decode(&encoded).unwrap_err();
             assert!(
-                error.to_string().contains(&format!("IAm {field} {value}")),
-                "unexpected error for {field} {value}: {error}"
+                error.to_string().contains(&format!("IAm {refusal}")),
+                "unexpected error for {refusal}: {error}"
             );
         }
 
@@ -526,3 +595,7 @@ mod tests {
         assert!(IAmRequest::decode(&[0xFF, 0xFF, 0xFF]).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "device_range_tests.rs"]
+mod device_range_tests;

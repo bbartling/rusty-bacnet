@@ -1,6 +1,7 @@
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
+    /// Delete an object on a remote device (DeleteObject, Clause 15.4).
     pub async fn delete_object(
         &self,
         destination_mac: &[u8],

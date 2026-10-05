@@ -14,7 +14,9 @@
 
 use super::*;
 use crate::handlers::{handle_add_list_element, handle_remove_list_element};
+use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::apdu::decode_apdu;
+use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -22,43 +24,10 @@ use bacnet_objects::multistate::{MultiStateInputObject, MultiStateValueObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_services::list_manipulation::ListElementRequest;
-use bacnet_transport::port::TransportPort;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{EventState, EventType, NotifyType};
+use bacnet_types::primitives::StatusFlags;
 use bytes::{Bytes, BytesMut};
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
-
-/// Records every broadcast NPDU and discards unicasts.
-#[derive(Clone, Default)]
-struct RecordingTransport {
-    sent_broadcast: StdArc<StdMutex<Vec<Bytes>>>,
-}
-
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.sent_broadcast
-            .lock()
-            .unwrap()
-            .push(Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xBA, 0xC0]
-    }
-}
 
 /// The state value the fixture treats as an alarm, and the one it does not.
 const ALARM_STATE: u64 = 2;
@@ -83,17 +52,17 @@ async fn analog_event_enable_set_delivers_committed_event_values() {
             None,
         )
         .unwrap();
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
+    let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
 
     assert_eq!(sent.len(), 1);
-    let notification = decode_broadcast_notification(&StdMutex::new(sent));
-    assert_eq!(notification.notify_type, NotifyType::EVENT.to_raw());
-    assert_eq!(notification.event_type, EventType::OUT_OF_RANGE.to_raw());
+    let notification = decode_broadcast_notification(&sent);
+    assert_eq!(notification.notify_type, NotifyType::EVENT);
+    assert_eq!(notification.event_type, EventType::OUT_OF_RANGE);
     assert_eq!(
         notification.event_values,
         Some(NotificationParameters::OutOfRange {
             exceeding_value: 81.0,
-            status_flags: 0b1000,
+            status_flags: StatusFlags::IN_ALARM,
             deadband: 2.0,
             exceeded_limit: 80.0,
         })
@@ -104,11 +73,11 @@ async fn analog_event_enable_set_delivers_committed_event_values() {
 /// notification path needs to run against it.
 struct Fixture {
     db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<RecordingTransport>>,
-    comm_state: Arc<AtomicU8>,
-    server_tsm: Arc<Mutex<ServerTsm>>,
+    network: Arc<NetworkLayer<TestTransport>>,
+    comm_state: Arc<CommState>,
+    learned_routers: Arc<Mutex<LearnedRouterCache>>,
     notification_transactions: Arc<NotificationTransactions>,
-    sent: StdArc<StdMutex<Vec<Bytes>>>,
+    sent: SendLog,
     oid: ObjectIdentifier,
 }
 
@@ -142,8 +111,14 @@ impl Fixture {
                 PropertyValue::Enumerated(NotifyType::EVENT.to_raw()),
             ),
         ] {
-            msi.write_property(property, None, value, None)
-                .unwrap_or_else(|e| panic!("{property:?} must be writable since #229: {e:?}"));
+            msi.write_property_from(
+                property,
+                None,
+                value,
+                None,
+                &crate::command_source::test_origin(),
+            )
+            .unwrap_or_else(|e| panic!("{property:?} must be writable since #229: {e:?}"));
         }
         let fixture = Self::from_object(Box::new(msi)).await;
         fixture.add_alarm_value(ALARM_STATE as u8).await;
@@ -171,14 +146,12 @@ impl Fixture {
         ))
         .unwrap();
 
-        let sent = StdArc::new(StdMutex::new(Vec::new()));
+        let (transport, sent) = super::event_notifications_tests::recording_transport();
         Self {
             db: Arc::new(RwLock::new(db)),
-            network: Arc::new(NetworkLayer::new(RecordingTransport {
-                sent_broadcast: StdArc::clone(&sent),
-            })),
-            comm_state: Arc::new(AtomicU8::new(0)), // DCC not blocking
-            server_tsm: Arc::new(Mutex::new(ServerTsm::new())),
+            network: Arc::new(NetworkLayer::new(transport)),
+            comm_state: Arc::new(CommState::default()), // DCC not blocking
+            learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
             notification_transactions: NotificationTransactions::new(),
             sent,
             oid,
@@ -198,17 +171,31 @@ impl Fixture {
             .await
             .get_mut(&self.oid)
             .expect("the MSI is in the database")
-            .write_property(PropertyIdentifier::PRESENT_VALUE, None, value, None)
+            .write_property_from(
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+                value,
+                None,
+                &crate::command_source::test_origin(),
+            )
             .expect("Out_Of_Service is TRUE, so Present_Value must be writable");
 
-        BACnetServer::<RecordingTransport>::fire_event_notifications(
-            &self.db,
-            &self.network,
-            &self.comm_state,
-            &self.server_tsm,
-            &self.notification_transactions,
+        BACnetServer::<TestTransport>::fire_event_notifications_with_bindings(
+            &crate::server::event_delivery::EventDelivery {
+                db: &self.db,
+                network: &self.network,
+                comm_state: &self.comm_state,
+                learned_routers: &self.learned_routers,
+                notification_transactions: &self.notification_transactions,
+                device_bindings: &Arc::new(RwLock::new(
+                    crate::server::device_bindings::DeviceBindingTable::new(),
+                )),
+                suppressions: &Default::default(),
+                retry_timeout_ms: 1000,
+                local_apdu_capacity: 1476,
+            },
+            &Arc::new(RwLock::new(crate::cov::CovSubscriptionTable::new())),
             &self.oid,
-            1000,
         )
         .await;
     }
@@ -222,7 +209,7 @@ impl Fixture {
             list_of_elements: vec![0x21, value],
         };
         let mut encoded = BytesMut::new();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
         let mut db = self.db.write().await;
         handle_add_list_element(&mut db, &encoded)
             .expect("AddListElement is the working network Alarm_Values route");
@@ -236,7 +223,7 @@ impl Fixture {
             list_of_elements: vec![0x21, value],
         };
         let mut encoded = BytesMut::new();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
         let mut db = self.db.write().await;
         handle_remove_list_element(&mut db, &encoded)
             .expect("RemoveListElement must remove the commissioned alarm value");
@@ -244,7 +231,11 @@ impl Fixture {
 
     /// Take the broadcasts recorded since the last call.
     fn drain(&self) -> Vec<Bytes> {
-        std::mem::take(&mut *self.sent.lock().unwrap())
+        self.sent
+            .take()
+            .into_iter()
+            .map(|frame| frame.npdu)
+            .collect()
     }
 
     async fn event_state(&self) -> PropertyValue {
@@ -280,8 +271,7 @@ fn assert_sole_notification(
                 req.service_choice,
                 UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION
             );
-            EventNotificationRequest::decode(&req.service_request)
-                .expect("decode EventNotification")
+            decode_event_notification(&req.service_request).expect("decode EventNotification")
         }
         other => panic!("{context}: expected UnconfirmedRequest, got {other:?}"),
     };
@@ -292,22 +282,14 @@ fn assert_sole_notification(
     );
     assert_eq!(
         notif.event_type,
-        EventType::CHANGE_OF_STATE.to_raw(),
+        EventType::CHANGE_OF_STATE,
         "{context}: the detector's CHANGE_OF_STATE algorithm must reach the wire"
     );
-    assert_eq!(
-        notif.from_state,
-        from.to_raw(),
-        "{context}: from_state on the wire"
-    );
-    assert_eq!(
-        notif.to_state,
-        to.to_raw(),
-        "{context}: to_state on the wire"
-    );
+    assert_eq!(notif.from_state, from, "{context}: from_state on the wire");
+    assert_eq!(notif.to_state, to, "{context}: to_state on the wire");
     assert_eq!(
         notif.notify_type,
-        NotifyType::EVENT.to_raw(),
+        NotifyType::EVENT,
         "{context}: the commissioned Notify_Type must reach the wire, not the ALARM fallback"
     );
 }
@@ -420,7 +402,14 @@ async fn bi_bv_and_msv_alarm_values_commission_and_reach_the_wire() {
             PropertyValue::Enumerated(1),
         ),
     ] {
-        bi.write_property(property, None, value, None).unwrap();
+        bi.write_property_from(
+            property,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        )
+        .unwrap();
     }
     let bi_fixture = Fixture::from_object(Box::new(bi)).await;
     bi_fixture
@@ -456,7 +445,14 @@ async fn bi_bv_and_msv_alarm_values_commission_and_reach_the_wire() {
             PropertyValue::Enumerated(1),
         ),
     ] {
-        bv.write_property(property, None, value, None).unwrap();
+        bv.write_property_from(
+            property,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        )
+        .unwrap();
     }
     let bv_fixture = Fixture::from_object(Box::new(bv)).await;
     bv_fixture
@@ -484,7 +480,14 @@ async fn bi_bv_and_msv_alarm_values_commission_and_reach_the_wire() {
             PropertyValue::Enumerated(NotifyType::EVENT.to_raw()),
         ),
     ] {
-        msv.write_property(property, None, value, None).unwrap();
+        msv.write_property_from(
+            property,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        )
+        .unwrap();
     }
     let msv_fixture = Fixture::from_object(Box::new(msv)).await;
     msv_fixture.add_alarm_value(2).await;

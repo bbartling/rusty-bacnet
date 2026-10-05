@@ -1,10 +1,9 @@
 use super::super::*;
 
-#[allow(clippy::too_many_arguments)]
 fn build_acknowledge_alarm_request(
     acknowledging_process_identifier: u32,
     event_object_identifier: bacnet_types::primitives::ObjectIdentifier,
-    event_state_acknowledged: u32,
+    event_state_acknowledged: bacnet_types::enums::EventState,
     timestamp: BACnetTimeStamp,
     acknowledgment_source: String,
     time_of_acknowledgment: BACnetTimeStamp,
@@ -36,7 +35,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let oid = object_id.to_rust();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -46,7 +45,8 @@ impl BACnetClient {
             };
             c.delete_object(&mac, oid).await.map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Create an object on a remote device.
@@ -55,20 +55,12 @@ impl BACnetClient {
     /// or an `ObjectIdentifier` (specific instance).
     /// `initial_values` is an optional list of `(PropertyIdentifier, PropertyValue, priority, array_index)` tuples.
     #[pyo3(signature = (address, object_specifier, initial_values=None))]
-    #[allow(clippy::type_complexity)]
     fn create_object<'py>(
         &self,
         py: Python<'py>,
         address: String,
         object_specifier: Bound<'py, PyAny>,
-        initial_values: Option<
-            Vec<(
-                PyPropertyIdentifier,
-                PyPropertyValue,
-                Option<u8>,
-                Option<u32>,
-            )>,
-        >,
+        initial_values: Option<Vec<PyPropertyWrite>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
 
@@ -98,7 +90,7 @@ impl BACnetClient {
             })
             .collect();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -110,7 +102,7 @@ impl BACnetClient {
                 .create_object(&mac, specifier, init_vals)
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
+            crate::py_async::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
         })
     }
 
@@ -131,7 +123,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let ed = enable_disable.to_rust();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -143,7 +135,8 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Send a ReinitializeDevice request.
@@ -158,7 +151,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let state = reinitialized_state.to_rust();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -170,7 +163,8 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -182,14 +176,13 @@ impl BACnetClient {
     /// `timestamp` must exactly echo the original event-notification timestamp;
     /// `time_of_acknowledgment` is the caller-selected acknowledgment time.
     #[pyo3(signature = (address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, timestamp, acknowledgment_source, time_of_acknowledgment))]
-    #[allow(clippy::too_many_arguments)]
     fn acknowledge_alarm_request<'py>(
         &self,
         py: Python<'py>,
         address: String,
         acknowledging_process_identifier: u32,
         event_object_identifier: PyObjectIdentifier,
-        event_state_acknowledged: u32,
+        event_state_acknowledged: PyEventState,
         timestamp: PyBACnetTimeStamp,
         acknowledgment_source: String,
         time_of_acknowledgment: PyBACnetTimeStamp,
@@ -199,13 +192,13 @@ impl BACnetClient {
         let request = build_acknowledge_alarm_request(
             acknowledging_process_identifier,
             event_object_identifier.to_rust(),
-            event_state_acknowledged,
+            event_state_acknowledged.to_rust(),
             timestamp.to_rust().clone(),
             acknowledgment_source,
             time_of_acknowledgment.to_rust().clone(),
         );
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -216,7 +209,8 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Deprecated compatibility helper for acknowledging an alarm.
@@ -224,14 +218,14 @@ impl BACnetClient {
     /// This method fabricates SequenceNumber(0) for both timestamps. Use
     /// `acknowledge_alarm_request` with exact caller-supplied timestamps.
     #[pyo3(signature = (address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, acknowledgment_source))]
-    #[allow(clippy::too_many_arguments, deprecated)]
+    #[allow(deprecated)]
     fn acknowledge_alarm<'py>(
         &self,
         py: Python<'py>,
         address: String,
         acknowledging_process_identifier: u32,
         event_object_identifier: PyObjectIdentifier,
-        event_state_acknowledged: u32,
+        event_state_acknowledged: PyEventState,
         acknowledgment_source: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         PyErr::warn(
@@ -242,8 +236,9 @@ impl BACnetClient {
         )?;
         let inner = self.inner.clone();
         let oid = event_object_identifier.to_rust();
+        let event_state_acknowledged = event_state_acknowledged.to_rust();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -261,7 +256,8 @@ impl BACnetClient {
             .await
             .map_err(to_py_err)?;
             Ok(())
-        })
+        };
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Get event information from a remote device.
@@ -275,7 +271,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let last_oid = last_received_object_identifier.map(|o| o.to_rust());
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -287,7 +283,7 @@ impl BACnetClient {
                 .get_event_information(&mac, last_oid)
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
+            crate::py_async::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
         })
     }
 
@@ -299,7 +295,6 @@ impl BACnetClient {
     ///
     /// `range_type` is `"position"`, `"sequence"`, or `None` (no range).
     #[pyo3(signature = (address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None))]
-    #[allow(clippy::too_many_arguments)]
     fn read_range<'py>(
         &self,
         py: Python<'py>,
@@ -308,32 +303,22 @@ impl BACnetClient {
         property_id: PyPropertyIdentifier,
         array_index: Option<u32>,
         range_type: Option<String>,
-        reference_index: Option<u32>,
-        reference_seq: Option<u32>,
-        count: Option<i32>,
+        reference_index: Option<u64>,
+        reference_seq: Option<u64>,
+        count: Option<i16>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let oid = object_id.to_rust();
-        let pid = property_id.to_rust();
+        let request = crate::read_range::request(
+            &object_id,
+            &property_id,
+            array_index,
+            range_type.as_deref(),
+            reference_index,
+            reference_seq,
+            count,
+        )?;
 
-        let range = match range_type.as_deref() {
-            Some("position") => Some(RangeSpec::ByPosition {
-                reference_index: reference_index.unwrap_or(0),
-                count: count.unwrap_or(0),
-            }),
-            Some("sequence") => Some(RangeSpec::BySequenceNumber {
-                reference_seq: reference_seq.unwrap_or(0),
-                count: count.unwrap_or(0),
-            }),
-            Some(other) => {
-                return Err(PyValueError::new_err(format!(
-                    "range_type must be 'position', 'sequence', or None, got '{other}'"
-                )));
-            }
-            None => None,
-        };
-
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -342,28 +327,16 @@ impl BACnetClient {
                 })?)
             };
             let ack = c
-                .read_range(&mac, oid, pid, array_index, range)
+                .read_range(
+                    &mac,
+                    request.object_identifier,
+                    request.property_identifier,
+                    request.property_array_index,
+                    request.range,
+                )
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| {
-                let dict = PyDict::new(py);
-                dict.set_item(
-                    "object_id",
-                    PyObjectIdentifier::from_rust(ack.object_identifier),
-                )?;
-                dict.set_item(
-                    "property_id",
-                    PyPropertyIdentifier {
-                        inner: ack.property_identifier,
-                    },
-                )?;
-                dict.set_item("array_index", ack.property_array_index)?;
-                dict.set_item("result_flags", ack.result_flags)?;
-                dict.set_item("item_count", ack.item_count)?;
-                dict.set_item("item_data", PyBytes::new(py, &ack.item_data))?;
-                dict.set_item("first_sequence_number", ack.first_sequence_number)?;
-                Ok(dict.into_any().unbind())
-            })
+            crate::py_async::attach(|py| crate::read_range::ack_to_dict(py, ack))
         })
     }
 }
@@ -401,7 +374,7 @@ mod acknowledgment_request_tests {
         let request = build_acknowledge_alarm_request(
             0x1020_3040,
             oid,
-            EventState::HIGH_LIMIT.to_raw(),
+            EventState::HIGH_LIMIT,
             event_timestamp.clone(),
             "operator-console".into(),
             acknowledgment_timestamp.clone(),
@@ -409,10 +382,7 @@ mod acknowledgment_request_tests {
 
         assert_eq!(request.acknowledging_process_identifier, 0x1020_3040);
         assert_eq!(request.event_object_identifier, oid);
-        assert_eq!(
-            request.event_state_acknowledged,
-            EventState::HIGH_LIMIT.to_raw()
-        );
+        assert_eq!(request.event_state_acknowledged, EventState::HIGH_LIMIT);
         assert_eq!(request.timestamp, event_timestamp);
         assert_eq!(request.acknowledgment_source, "operator-console");
         assert_eq!(request.time_of_acknowledgment, acknowledgment_timestamp);

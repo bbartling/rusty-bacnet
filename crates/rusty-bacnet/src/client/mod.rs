@@ -10,7 +10,8 @@ use pyo3::types::{PyBytes, PyDict};
 use tokio::sync::Mutex;
 
 use bacnet_client::client;
-use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
+use bacnet_client::client::WriteGroupDestination;
+use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
 type ClientInner =
@@ -26,29 +27,50 @@ use bacnet_services::file::{FileAccessMethod, FileWriteAccessMethod};
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_services::object_mgmt::ObjectSpecifier;
 use bacnet_services::private_transfer::{PrivateTransferAck, PrivateTransferRequest};
-use bacnet_services::read_range::RangeSpec;
 use bacnet_services::text_message::{MessageClass, TextMessageRequest};
 use bacnet_services::virtual_terminal::{
     VTCloseRequest, VTDataAck, VTDataRequest, VTOpenAck, VTOpenRequest,
 };
 use bacnet_services::who_am_i::WhoAmIRequest;
 use bacnet_services::who_has::WhoHasObject;
+use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+use bacnet_types::enums::{AcknowledgmentFilter, ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 use crate::errors::to_py_err;
 use crate::types::{
     audit_log_query_ack_to_py, audit_log_query_request_from_py, audit_notification_request_from_py,
-    parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyBACnetTimeStamp,
-    PyCovNotificationIterator, PyDiscoveredDevice, PyEnableDisable,
-    PyEnrollmentSummaryEventStateFilter, PyEventState, PyEventType, PyLifeSafetyOperation,
-    PyMessagePriority, PyObjectIdentifier, PyObjectType, PyPropertyIdentifier, PyPropertyValue,
-    PyReinitializedState,
+    decode_read_ack, parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py,
+    PyAcknowledgmentFilter, PyBACnetTimeStamp, PyCovNotificationIterator, PyDeviceWrite,
+    PyDiscoveredDevice, PyEnableDisable, PyEnrollmentSummaryEventStateFilter, PyEventState,
+    PyEventType, PyLifeSafetyOperation, PyMessagePriority, PyObjectIdentifier, PyObjectType,
+    PyPropertyIdentifier, PyPropertyValue, PyPropertyWrite, PyReadAccessSpec, PyReinitializedState,
+    PyWriteAccessSpec,
 };
+
+fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {
+    bacnet_services::write_property::validate_priority(priority)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// The Who-Is or Who-Has range the `low_limit` and `high_limit` keywords
+/// give: both or neither, each from 0 to 4194303 (Clauses 16.9 and 16.10).
+/// One alone, a low limit above the high one, or a limit past 4194303 raises
+/// `ValueError` before anything is sent, where one limit used to go out as a
+/// request for every device (#1483).
+fn device_range(
+    low_limit: Option<u32>,
+    high_limit: Option<u32>,
+) -> PyResult<Option<DeviceInstanceRange>> {
+    DeviceInstanceRange::from_limits(low_limit, high_limit).map_err(|error| match error {
+        bacnet_types::error::Error::OutOfRange(message) => PyValueError::new_err(message),
+        other => PyValueError::new_err(other.to_string()),
+    })
+}
 
 /// Async BACnet client for reading/writing properties on remote devices.
 ///
@@ -62,9 +84,14 @@ use crate::types::{
 /// Supports multiple transports via the `transport` parameter:
 /// - `"bip"` (default): BACnet/IP over UDP
 /// - `"ipv6"`: BACnet/IPv6 over UDP multicast
-/// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`)
+/// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`,
+///   `sc_ca_cert`, `sc_client_cert`, `sc_client_key`, and persistent `sc_device_uuid`)
 /// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
-#[pyclass(name = "BACnetClient")]
+///
+/// SC credential paths must be nonempty at construction (ValueError otherwise).
+/// Files are loaded on async entry; invalid TLS configuration raises RuntimeError
+/// before dialing. No system trust or unauthenticated-client fallback is used.
+#[pyclass(name = "BACnetClient", module = "rusty_bacnet")]
 pub struct BACnetClient {
     inner: ClientInner,
     transport_type: String,
@@ -76,6 +103,7 @@ pub struct BACnetClient {
     // SC config
     sc_hub: Option<String>,
     sc_vmac: Option<Vec<u8>>,
+    sc_device_uuid: [u8; 16],
     sc_ca_cert: Option<String>,
     sc_client_cert: Option<String>,
     sc_client_key: Option<String>,

@@ -36,12 +36,61 @@ impl CanonicalPeer {
         }
     }
 
-    /// Selects routed source identity when present, ignoring the immediate router.
-    pub fn from_source(immediate_mac: &[u8], routed_source: Option<&NpduAddress>) -> Self {
+    /// The peer an inbound APDU came from, which every role matches its
+    /// answers by: the SNET/SADR a router added when there is one, ignoring
+    /// the immediate router, otherwise the immediate link MAC.
+    ///
+    /// `local_network` is the number of the network the receiving link is
+    /// attached to, once known. A router attached to it that passes a
+    /// station's NPDU back onto it adds that number and the station's MAC as
+    /// SNET/SADR (Clause 6.5.4), and network numbers are unique, so the
+    /// source is that station: the same direct peer as an NPDU from its MAC
+    /// with no SNET (#1465), as the server already reads a request's source
+    /// (#1404). Any other SNET, and every SNET while the number is unknown,
+    /// stays a routed peer. A routed source with no SADR names no station, so
+    /// the immediate MAC stands.
+    ///
+    /// This changes what a direct transaction trusts. Before, an answer
+    /// completed one only when its link source was the station's own MAC.
+    /// Now any node that can put a frame on this link, including any peer
+    /// the hub admits on BACnet/SC, can complete it by naming this network
+    /// as SNET and the station as SADR, provided the invoke ID, service and
+    /// owner match. The link source of such an answer is not checked. That
+    /// is the trust every routed transaction already places in a claimed
+    /// SNET/SADR, whichever router relays it, and the trust the server's
+    /// request-source rule (#1404) places in the same pairing. SNET/SADR is
+    /// never a credential here.
+    pub fn from_source(
+        immediate_mac: &[u8],
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+    ) -> Self {
         match routed_source {
+            Some(source) if source.mac_address.is_empty() => Self::direct(immediate_mac),
+            Some(source) if Some(source.network) == local_network => {
+                Self::direct(&source.mac_address)
+            }
             Some(source) => Self::routed(source.network, &source.mac_address),
             None => Self::direct(immediate_mac),
         }
+    }
+
+    /// The routed form of a source that [`Self::from_source`] reads as the
+    /// direct station: `Routed(SNET, SADR)` when SNET is the known
+    /// `local_network` and SADR is not empty, otherwise `None`. A request
+    /// routed to this network while its number was still unknown is keyed to
+    /// that form, and keeps that key once the number is learned, so its
+    /// relayed answer has to find it there (#1465). It is exactly the peer
+    /// such an answer matched before the number was known.
+    pub fn routed_alias(
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+    ) -> Option<Self> {
+        routed_source
+            .filter(|source| {
+                !source.mac_address.is_empty() && Some(source.network) == local_network
+            })
+            .map(|source| Self::routed(source.network, &source.mac_address))
     }
 }
 
@@ -50,8 +99,11 @@ impl CanonicalPeer {
 pub enum LeaseOwner {
     /// A local client-side confirmed request.
     Requester,
-    /// A confirmed notification initiated by the local server role.
-    ServerNotification,
+    /// A confirmed request the local server role initiates: a notification,
+    /// a write a Command or Channel object makes in another device, or the
+    /// read a Channel makes there to learn a member's datatype. The recipient
+    /// answers it as that transaction's server.
+    Notification,
 }
 
 /// Successful acknowledgment shape accepted for a lease.
@@ -116,16 +168,27 @@ impl LeaseMetadata {
         }
     }
 
-    /// Metadata for a server notification, whose successful terminal is SimpleACK.
-    pub fn server_notification(
-        peer: CanonicalPeer,
-        service_choice: ConfirmedServiceChoice,
-    ) -> Self {
+    /// Metadata for a request the server role initiates, whose successful
+    /// terminal is SimpleACK.
+    pub fn notification(peer: CanonicalPeer, service_choice: ConfirmedServiceChoice) -> Self {
         Self {
-            owner: LeaseOwner::ServerNotification,
+            owner: LeaseOwner::Notification,
             peer,
             service_choice,
             terminal_policy: TerminalPolicy::SimpleAck,
+            segmented_request: false,
+        }
+    }
+
+    /// Metadata for a read the server role initiates, whose successful
+    /// terminal is an unsegmented ComplexACK. The server role reassembles
+    /// nothing: it asks for an unsegmented answer and admits no segment.
+    pub fn server_read(peer: CanonicalPeer, service_choice: ConfirmedServiceChoice) -> Self {
+        Self {
+            owner: LeaseOwner::Notification,
+            peer,
+            service_choice,
+            terminal_policy: TerminalPolicy::ComplexAck,
             segmented_request: false,
         }
     }
@@ -292,9 +355,12 @@ struct ActiveLease {
     terminal_claimed: bool,
 }
 
+// The per-invoke-ID tables live on the heap. Inline, they made the state about
+// 18 KB, and a debug build built and moved it through several stack frames
+// (about 110 KB of stack) on every server, client and endpoint start (#953).
 struct CoordinatorState {
-    slots: [Option<ActiveLease>; INVOKE_ID_COUNT],
-    last_released: [Option<u64>; INVOKE_ID_COUNT],
+    slots: Box<[Option<ActiveLease>]>,
+    last_released: Box<[Option<u64>]>,
     next_invoke_id: usize,
     last_generation: u64,
     active_count: usize,
@@ -303,8 +369,8 @@ struct CoordinatorState {
 impl CoordinatorState {
     fn new() -> Self {
         Self {
-            slots: std::array::from_fn(|_| None),
-            last_released: [None; INVOKE_ID_COUNT],
+            slots: vec![None; INVOKE_ID_COUNT].into_boxed_slice(),
+            last_released: vec![None; INVOKE_ID_COUNT].into_boxed_slice(),
             next_invoke_id: 0,
             last_generation: 0,
             active_count: 0,
@@ -342,6 +408,7 @@ impl CoordinatorState {
 /// await point.
 pub struct OutboundTransactionCoordinator {
     state: Mutex<CoordinatorState>,
+    released: tokio::sync::Notify,
 }
 
 impl Default for OutboundTransactionCoordinator {
@@ -355,6 +422,7 @@ impl OutboundTransactionCoordinator {
     pub fn new() -> Self {
         Self {
             state: Mutex::new(CoordinatorState::new()),
+            released: tokio::sync::Notify::new(),
         }
     }
 
@@ -426,6 +494,33 @@ impl OutboundTransactionCoordinator {
         }))
     }
 
+    /// [`Self::admit`] for an answer, by its envelope: the link MAC, the
+    /// SNET/SADR, and `local_network`, the receiving link's known network
+    /// number. The answer is matched against [`CanonicalPeer::from_source`].
+    /// Only when that misses on the peer, and the answer has a
+    /// [`CanonicalPeer::routed_alias`], is the alias tried: a lease reserved
+    /// while the number was unknown then gets the answer it would have
+    /// matched before (#1465). The admission's metadata names the peer that
+    /// matched, which the owner keys its completion to.
+    pub fn admit_from_source(
+        &self,
+        immediate_mac: &[u8],
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+        apdu: &Apdu,
+    ) -> Result<AdmissionOutcome, CoordinatorError> {
+        let peer = CanonicalPeer::from_source(immediate_mac, routed_source, local_network);
+        match self.admit(&peer, apdu)? {
+            AdmissionOutcome::PeerMismatch => {
+                match CanonicalPeer::routed_alias(routed_source, local_network) {
+                    Some(alias) => self.admit(&alias, apdu),
+                    None => Ok(AdmissionOutcome::PeerMismatch),
+                }
+            }
+            outcome => Ok(outcome),
+        }
+    }
+
     /// Releases a lease after its admitted terminal has been delivered.
     pub fn complete(&self, token: LeaseToken) -> Result<ReleaseOutcome, CoordinatorError> {
         self.release_token(token)
@@ -450,14 +545,28 @@ impl OutboundTransactionCoordinator {
     }
 
     fn release_token(&self, token: LeaseToken) -> Result<ReleaseOutcome, CoordinatorError> {
-        self.state
+        let outcome = self
+            .state
             .lock()
             .map(|mut state| state.release_exact(token))
-            .map_err(|_| CoordinatorError::StatePoisoned)
+            .map_err(|_| CoordinatorError::StatePoisoned)?;
+        // Wake after releasing the state lock, and only for actual capacity.
+        if outcome == ReleaseOutcome::Released {
+            self.released.notify_waiters();
+        }
+        Ok(outcome)
+    }
+
+    /// Internal passive capacity wait. Register before checking reservation.
+    #[doc(hidden)]
+    pub fn released(&self) -> tokio::sync::futures::Notified<'_> {
+        self.released.notified()
     }
 }
 
-fn response_invoke_id(apdu: &Apdu) -> Option<u8> {
+/// The invoke ID an answer carries, or `None` for a request, which no
+/// outbound lease owns.
+pub fn response_invoke_id(apdu: &Apdu) -> Option<u8> {
     match apdu {
         Apdu::SimpleAck(pdu) => Some(pdu.invoke_id),
         Apdu::ComplexAck(pdu) => Some(pdu.invoke_id),
@@ -482,7 +591,10 @@ fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind,
             if !pdu.segmented {
                 validate_service(metadata, pdu.service_choice)?;
             }
-            if metadata.owner != LeaseOwner::Requester {
+            // A server-role lease takes a ComplexACK only when it asked for
+            // one ([`LeaseMetadata::server_read`]), and never a segment.
+            let server_read = !pdu.segmented && metadata.terminal_policy.accepts_complex_ack();
+            if metadata.owner != LeaseOwner::Requester && !server_read {
                 return Err(AdmissionOutcome::OwnerMismatch);
             }
             if !metadata.terminal_policy.accepts_complex_ack() {
@@ -494,14 +606,18 @@ fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind,
                 Ok(AdmissionKind::Terminal)
             }
         }
-        Apdu::Error(_) => Ok(AdmissionKind::Terminal),
+        Apdu::Error(pdu) => {
+            validate_service(metadata, pdu.service_choice)?;
+            Ok(AdmissionKind::Terminal)
+        }
         Apdu::Reject(_) => Ok(AdmissionKind::Terminal),
         Apdu::Abort(pdu) => {
-            let expected_server_bit = match metadata.owner {
-                LeaseOwner::Requester => true,
-                LeaseOwner::ServerNotification => false,
-            };
-            if pdu.sent_by_server != expected_server_bit {
+            // Every lease is the requesting side of its transaction, a
+            // confirmed notification included, so the peer's Abort comes from
+            // the responding side and has the server flag set (Clause 5.4).
+            // A clear flag marks an Abort meant for a transaction this device
+            // serves, whatever the lease owner.
+            if !pdu.sent_by_server {
                 return Err(AdmissionOutcome::DirectionMismatch);
             }
             Ok(AdmissionKind::Terminal)
@@ -538,3 +654,7 @@ fn validate_service(
 #[cfg(test)]
 #[path = "coordinator_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "coordinator_peer_tests.rs"]
+mod peer_tests;

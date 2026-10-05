@@ -6,10 +6,13 @@
 
 use core::ops::ControlFlow;
 
-use bacnet_types::enums::{EventState, EventType, Reliability};
+use bacnet_types::bitstring::{EventTransitionBits, LimitEnable};
+use bacnet_types::enums::{EventState, EventType, NotifyType, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 pub(crate) mod history;
+pub(crate) mod options;
+pub(crate) mod state_reporting;
 
 /// A detected change in event state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,23 +23,26 @@ pub struct EventStateChange {
     pub to: EventState,
 }
 
-/// A transition that occurred, and whether it may be distributed.
+/// A fire-ready transition and its external distribution policy.
 ///
-/// ASHRAE 135-2020 Clause 13.2.2.1.4 mandates four actions on every transition:
-/// store the new `Event_State`, store the time in `Event_Time_Stamps`, store the
-/// message text in `Event_Message_Texts` *if present*, and indicate the
-/// transition to the alarm-acknowledgment and notification-distribution
-/// processes. None of the four is `Event_Enable`-scoped; the property disables
-/// external distribution downstream (Clause 13.2.5), so a cleared bit must not
-/// suppress the first three actions, nor the alarm-acknowledgment half of the
-/// fourth.
+/// ASHRAE 135-2020 Clause 13.2.2.1.4 attaches four effects to every
+/// transition: `Event_State` takes the new state, `Event_Time_Stamps` records
+/// when it happened, `Event_Message_Texts` (on objects that have it) records
+/// the message, and both alarm-acknowledgment and notification distribution
+/// are told about it. `Event_Enable` gates none of the four; it only turns off
+/// external distribution further downstream (Clause 13.2.5), so a cleared bit
+/// must not suppress the three property updates, nor the alarm-acknowledgment
+/// part of the hand-off.
 ///
-/// Separating the two answers keeps that distinction in the type: `None` from a
-/// detector means no transition occurred, while `distribute == false` means one
-/// occurred and must be recorded but not sent.
+/// The object intrinsic-reporting hooks return this value as an uncommitted
+/// proposal. The server commits object-owned state and history before considering
+/// distribution, including when `distribute == false`. A failed commit leaves the
+/// proposal retryable. The value alone does not prove a committed object transition.
+/// Standalone detector `probe` and `tick` methods may finalize detector-local state
+/// according to their own contracts; they do not commit object event history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransitionOutcome {
-    /// The transition itself. Always recorded, whatever `distribute` says.
+    /// The proposed transition, to be committed regardless of `distribute`.
     pub change: EventStateChange,
     /// The Event Type selected by the detector's event algorithm, with the
     /// mandatory `CHANGE_OF_RELIABILITY` override for transitions to/from FAULT.
@@ -50,9 +56,9 @@ impl EventStateChange {
     ///
     /// ASHRAE 135-2020 Clause 13.2.5.3 requires
     /// `CHANGE_OF_RELIABILITY` for every transition to or from FAULT.
-    /// Otherwise Clauses 13.8.1.1 and 13.9.1.1 require the Event Type
-    /// associated with the event-initiating object's configured event
-    /// algorithm, supplied here as `algorithm`.
+    /// Any other transition reports the Event Type that belongs to the
+    /// object's own configured algorithm (Clauses 13.8.1.1 and 13.9.1.1),
+    /// which the caller passes as `algorithm`.
     pub fn event_type(&self, algorithm: EventType) -> EventType {
         if self.from == EventState::FAULT || self.to == EventState::FAULT {
             EventType::CHANGE_OF_RELIABILITY
@@ -100,9 +106,8 @@ pub struct EnrollmentSummaryCapability {
 impl EventTransition {
     /// Classify a destination event state under ASHRAE 135-2020 Clause 13.2.
     ///
-    /// "All states that are not normal and not fault are offnormal states,"
-    /// while Clause 13.2.2.1.2 confirms that "the OffNormal state includes all
-    /// event states other than NORMAL and FAULT". Therefore the residual case
+    /// NORMAL and FAULT are the only states outside the offnormal category,
+    /// as also specified by Clause 13.2.2.1.2. Therefore the residual case
     /// is deliberately TO_OFFNORMAL, not TO_FAULT.
     pub fn for_target_state(state: EventState) -> Self {
         if state == EventState::NORMAL {
@@ -114,20 +119,20 @@ impl EventTransition {
         }
     }
 
-    /// Bit mask for this transition in the `BACnetDestination.transitions` field.
-    ///
-    /// bit 0 = TO_OFFNORMAL, bit 1 = TO_FAULT, bit 2 = TO_NORMAL.
-    pub fn bit_mask(self) -> u8 {
+    /// This transition's flag in a `BACnetEventTransitionBits` value, such as
+    /// `Event_Enable`, `Acked_Transitions`, `Ack_Required` or a
+    /// `BACnetDestination`'s transitions.
+    pub fn bit_mask(self) -> EventTransitionBits {
         match self {
-            EventTransition::ToOffnormal => 0x01,
-            EventTransition::ToFault => 0x02,
-            EventTransition::ToNormal => 0x04,
+            EventTransition::ToOffnormal => EventTransitionBits::TO_OFFNORMAL,
+            EventTransition::ToFault => EventTransitionBits::TO_FAULT,
+            EventTransition::ToNormal => EventTransitionBits::TO_NORMAL,
         }
     }
 
-    /// Positional index into the NotificationClass `PRIORITY` and
-    /// `ACK_REQUIRED` arrays, both ordered `[TO_OFFNORMAL, TO_FAULT,
-    /// TO_NORMAL]` per ASHRAE 135-2020 Clause 12.31.5 / 12.31.6.
+    /// Positional index into the NotificationClass `PRIORITY` array, ordered
+    /// `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`. `ACK_REQUIRED` is a bit string:
+    /// test it with [`EventTransition::bit_mask`].
     pub fn index(self) -> usize {
         match self {
             EventTransition::ToOffnormal => 0,
@@ -177,65 +182,24 @@ pub enum EventTransitionCommitError {
     },
 }
 
-/// Which limits are enabled.
-///
-/// Encoded as a BACnet BIT STRING: bit 0 = low_limit_enable, bit 1 = high_limit_enable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LimitEnable {
-    pub low_limit_enable: bool,
-    pub high_limit_enable: bool,
-}
-
-impl LimitEnable {
-    pub const NONE: Self = Self {
-        low_limit_enable: false,
-        high_limit_enable: false,
-    };
-
-    pub const BOTH: Self = Self {
-        low_limit_enable: true,
-        high_limit_enable: true,
-    };
-
-    /// Encode as a BACnet bitstring byte (2 bits used, 6 unused).
-    pub fn to_bits(self) -> u8 {
-        let mut bits = 0u8;
-        if self.low_limit_enable {
-            bits |= 0x80; // bit 0 (MSB first)
-        }
-        if self.high_limit_enable {
-            bits |= 0x40; // bit 1
-        }
-        bits
-    }
-
-    /// Decode from a BACnet bitstring byte.
-    pub fn from_bits(byte: u8) -> Self {
-        Self {
-            low_limit_enable: byte & 0x80 != 0,
-            high_limit_enable: byte & 0x40 != 0,
-        }
-    }
-}
-
 /// Pending (delayed) intrinsic-reporting transition state, shared by every
 /// detector that honors [`OutOfRangeDetector::time_delay`] and its peers.
 ///
-/// Per ASHRAE 135-2020 Clause 13.2.4, a transition to a new `EventState` is
+/// Per ASHRAE 135-2020 Clause 13.3, a transition to a new `EventState` is
 /// delayed by `Time_Delay` seconds. While the delay counts down the
 /// observable `event_state` stays at the *old* (confirmed) state; if the
 /// triggering condition clears before the delay elapses the pending
 /// transition is cancelled and no notification is sent.
 ///
 /// The countdown advances once per elapsed wall-clock second via
-/// [`PendingTransition::tick`], never per detector call — so a fast poll
+/// the detector's `tick` (for example [`OutOfRangeDetector::tick`]), never per `probe` call — so a fast poll
 /// loop writing the same out-of-range value cannot shorten the delay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingTransition {
     /// The state the detector wants to transition to once the delay elapses.
     pub state: EventState,
     /// Seconds remaining; seeded with the direction-appropriate delay (see
-    /// [`delay_toward`]) and decremented per tick.
+    /// `delay_toward`) and decremented per tick.
     pub remaining: u32,
 }
 
@@ -252,19 +216,17 @@ impl PendingTransition {
 /// Select the delay governing a transition toward `target`.
 ///
 /// ASHRAE 135-2020 Clause 13.3 gives the event algorithms two independent
-/// delays. pTimeDelay is "the time, in seconds, that the offnormal conditions
-/// must exist before an offnormal event state is indicated": it governs
+/// delays. pTimeDelay measures the required persistence of an offnormal
+/// condition in seconds before indicating that state: it governs
 /// every indication into an OFFNORMAL state, including offnormal→offnormal
 /// re-indication (CHANGE_OF_STATE (c) at 13.3.2, OUT_OF_RANGE (d)/(g) at
-/// 13.3.6, COMMAND_FAILURE (a) at 13.3.4). pTimeDelayNormal is "the time, in
-/// seconds, that the Normal conditions must exist before a NORMAL event
-/// state is indicated" and gates only the sustained-condition return to
+/// 13.3.6, COMMAND_FAILURE (a) at 13.3.4). pTimeDelayNormal measures the
+/// required persistence of a Normal condition in seconds and gates only the
+/// sustained-condition return to
 /// NORMAL (CHANGE_OF_STATE (b), COMMAND_FAILURE (b), OUT_OF_RANGE (e)/(h)).
 ///
-/// The fallback for the absent case is normative text: "If no value is
-/// available for this parameter, then it takes on the value of the
-/// pTimeDelay parameter" — so `None` behaves exactly as `time_delay`, never
-/// as an error or a zero.
+/// An absent pTimeDelayNormal uses pTimeDelay as its fallback, so `None`
+/// behaves exactly as `time_delay`, never as an error or a zero.
 ///
 /// FAULT never reaches this selector: Clause 13.2.2 fault precedence runs
 /// ahead of the event algorithm and carries no delay term.
@@ -276,21 +238,32 @@ fn delay_toward(time_delay: u32, time_delay_normal: Option<u32>, target: EventSt
     }
 }
 
+/// What an algorithm proposes while Event_Algorithm_Inhibit is TRUE, once
+/// fault precedence has had its say (Clauses 13.2.2.1 and 13.2.2.1.5): its
+/// own result is ignored and any countdown dropped, so a condition has to
+/// last its whole delay again once the inhibit clears, and an offnormal
+/// state goes back to NORMAL at once. `None` when already NORMAL.
+fn inhibited_target(
+    event_state: EventState,
+    pending: &mut Option<PendingTransition>,
+) -> Option<EventState> {
+    *pending = None;
+    (event_state != EventState::NORMAL).then_some(EventState::NORMAL)
+}
+
 /// What Clause 13.2.2's fault-precedence rule dictates for a single evaluation.
 ///
-/// ASHRAE 135-2020 Clause 13.2.2: "The event algorithm determines the normal or
-/// offnormal states and the Reliability property determines whether or not the
-/// event state will indicate a fault. Fault detection takes precedence over the
-/// detection of normal and offnormal states. As such, when Reliability has a
-/// value other than NO_FAULT_DETECTED, the event-state-detection process will
-/// determine the object's event state to be FAULT."
+/// ASHRAE 135-2020 Clause 13.2.2 assigns normal/offnormal selection to the
+/// event algorithm and fault selection to Reliability. A Reliability value
+/// unequal to NO_FAULT_DETECTED overrides normal/offnormal detection,
+/// making the object's event state FAULT.
 ///
 /// **Whether FAULT holds is a standing condition; whether a transition fires is
-/// an edge.** Clause 13.2.2.1 states the first directly — "In the Fault state
-/// reliability-evaluation indicates a value other than NO_FAULT_DETECTED" — so
+/// an edge.** Clause 13.2.2.1 ties the Fault state to a reliability-evaluation
+/// result unequal to NO_FAULT_DETECTED, so
 /// the FAULT determination is re-derived from `reliability` on every evaluation
-/// and is never latched. But the same clause's ToFault transition fires on "a
-/// **different** Reliability value", which is an edge and cannot be derived from
+/// and is never latched. But the same clause's ToFault transition requires a
+/// **change** in Reliability, which is an edge and cannot be derived from
 /// the current value alone. That is what `fault_reliability` stores: the value in
 /// force at the last entry to FAULT, and nothing else.
 ///
@@ -302,12 +275,11 @@ fn delay_toward(time_delay: u32, time_delay_normal: Option<u32>, target: EventSt
 pub(crate) enum FaultPrecedence {
     /// Reliability is bad and FAULT does not hold yet: transition immediately.
     ///
-    /// Clause 13.2.2.1's ToFault transitions are unconditional and carry no
-    /// delay term — "If reliability-evaluation indicates a value other than
-    /// NO_FAULT_DETECTED, then perform the corresponding transition actions and
-    /// enter the Fault state." `Time_Delay` belongs to the event algorithm
-    /// (Clause 13.3.1 defines pTimeDelay as the time "that the offnormal
-    /// conditions must exist before an offnormal event state is indicated"), and
+    /// Clause 13.2.2.1 puts no delay on ToFault: the moment reliability
+    /// evaluation yields any value other than NO_FAULT_DETECTED, the object
+    /// goes to Fault and the usual transition actions run. `Time_Delay` belongs
+    /// to the event algorithm (Clause 13.3.1 uses pTimeDelay to require sustained
+    /// offnormal conditions before an indication), and
     /// the algorithm is precisely what fault detection takes precedence over.
     EnterFault,
     /// Reliability is bad, **unchanged**, and FAULT already holds: the standing
@@ -318,10 +290,9 @@ pub(crate) enum FaultPrecedence {
     /// Reliability changed while FAULT already holds: execute the transition
     /// actions and re-enter FAULT.
     ///
-    /// Clause 13.2.2.1's Fault ToFault transition: "If reliability-evaluation
-    /// indicates a different Reliability value and the new Reliability value is
-    /// not NO_FAULT_DETECTED ... then perform the corresponding transition
-    /// actions and re-enter the Fault state."
+    /// In Clause 13.2.2.1's state machine a Reliability change while in Fault
+    /// is itself a ToFault transition, provided the new value is still a fault
+    /// (not NO_FAULT_DETECTED), so the transition actions run again.
     ///
     /// Also selected when FAULT holds with no recorded value — a state this
     /// crate never produces but a downstream implementor can construct, since
@@ -329,9 +300,9 @@ pub(crate) enum FaultPrecedence {
     ReenterFault,
     /// Reliability recovered while in FAULT.
     ///
-    /// Clause 13.2.2.1's Fault ToNormal transition: "If reliability-evaluation
-    /// indicates a value of NO_FAULT_DETECTED, then perform the corresponding
-    /// transition actions and enter the Normal state." **NORMAL specifically —
+    /// Clause 13.2.2.1 leaves Fault for Normal, with its transition actions, as
+    /// soon as reliability evaluation is back to NO_FAULT_DETECTED.
+    /// **NORMAL specifically —
     /// not a state re-derived from the event algorithm.** Recovering straight
     /// into HIGH_LIMIT because the present value is still out of range would
     /// invent a transition the state machine does not define; the algorithm gets
@@ -348,11 +319,11 @@ pub(crate) enum FaultPrecedence {
 /// added later that forgets to consult it is a visible omission rather than a
 /// silently missing clause.
 pub(crate) fn fault_precedence(
-    reliability: u32,
-    fault_reliability: Option<u32>,
+    reliability: Reliability,
+    fault_reliability: Option<Reliability>,
     current: EventState,
 ) -> FaultPrecedence {
-    let faulted = reliability != Reliability::NO_FAULT_DETECTED.to_raw();
+    let faulted = reliability != Reliability::NO_FAULT_DETECTED;
     match (faulted, current == EventState::FAULT, fault_reliability) {
         (true, false, _) => FaultPrecedence::EnterFault,
         (true, true, Some(previous)) if previous == reliability => FaultPrecedence::HoldFault,
@@ -389,32 +360,41 @@ pub(crate) fn fault_precedence(
 /// honored via the split [`Self::probe`] / [`Self::tick`] entry points: a
 /// present-value write calls `probe`, which seeds a pending transition (or
 /// fires immediately when the direction-appropriate delay is zero,
-/// [`delay_toward`]); a one-second periodic task calls `tick` to advance the
+/// `delay_toward`); a one-second periodic task calls `tick` to advance the
 /// countdown and fire on expiry.
 #[derive(Debug, Clone)]
 pub struct OutOfRangeDetector {
+    /// High_Limit; a present value above it is a HIGH_LIMIT condition.
     pub high_limit: f32,
+    /// Low_Limit; a present value below it is a LOW_LIMIT condition.
     pub low_limit: f32,
+    /// Deadband applied when returning toward NORMAL, in the monitored value's units.
     pub deadband: f32,
+    /// Which of the two limits are checked.
     pub limit_enable: LimitEnable,
+    /// Instance number of the Notification Class object that distributes the events.
     pub notification_class: u32,
-    pub notify_type: u32,
-    pub event_enable: u8,
+    /// Notify_Type: whether the transitions are reported as alarms or as events.
+    pub notify_type: NotifyType,
+    /// Event_Enable: the transitions whose notifications are distributed.
+    pub event_enable: EventTransitionBits,
+    /// Seconds an offnormal condition must persist before TO_OFFNORMAL fires, and the NORMAL
+    /// delay too when `time_delay_normal` is `None`; 0 fires immediately. Fault transitions are
+    /// never delayed.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.6 pTimeDelayNormal
-    /// parameter — seconds that Normal conditions must persist before a
-    /// NORMAL event state is indicated. `None` is the not-configured case
-    /// and takes on `time_delay`: "If no value is available for this
-    /// parameter, then it takes on the value of the pTimeDelay parameter."
+    /// parameter — the number of seconds a return to normal has to be
+    /// sustained before the detector confirms it. `None` is the not-configured case
+    /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
+    /// Current event state.
     pub event_state: EventState,
-    /// Acknowledged-transitions bitfield (3 bits: TO_OFFNORMAL, TO_FAULT, TO_NORMAL).
-    /// A set bit means the corresponding transition has been acknowledged.
-    pub acked_transitions: u8,
+    /// Acked_Transitions: a set flag means that transition was acknowledged.
+    pub acked_transitions: EventTransitionBits,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
     /// Reliability value in force at the last entry to FAULT; `None` outside FAULT.
-    pub fault_reliability: Option<u32>,
+    pub fault_reliability: Option<Reliability>,
 }
 
 impl Default for OutOfRangeDetector {
@@ -423,14 +403,14 @@ impl Default for OutOfRangeDetector {
             high_limit: 100.0,
             low_limit: 0.0,
             deadband: 1.0,
-            limit_enable: LimitEnable::NONE,
+            limit_enable: LimitEnable::empty(),
             notification_class: 0,
-            notify_type: 0, // ALARM
-            event_enable: 0,
+            notify_type: NotifyType::ALARM,
+            event_enable: EventTransitionBits::empty(),
             time_delay: 0,
             time_delay_normal: None,
             event_state: EventState::NORMAL,
-            acked_transitions: 0b111, // all acknowledged by default
+            acked_transitions: EventTransitionBits::all(), // all acknowledged by default
             pending: None,
             fault_reliability: None,
         }
@@ -449,7 +429,11 @@ impl OutOfRangeDetector {
     /// same value do not shorten the delay. Returns `Some(TransitionOutcome)`
     /// whenever a transition fires; the outcome's `distribute` flag carries
     /// the `event_enable` bit rather than withholding the transition.
-    pub fn evaluate(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
+    pub fn evaluate(
+        &mut self,
+        present_value: f32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
         self.probe(present_value, reliability)
     }
 
@@ -462,7 +446,7 @@ impl OutOfRangeDetector {
     /// Each detector carries its own copy because each reaches its own
     /// `event_state`, `pending`, and confirmation; the clause interpretation
     /// they share lives once, in [`fault_precedence`].
-    fn fault_proposal(&self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+    fn fault_proposal(&self, reliability: Reliability) -> ControlFlow<Option<TransitionOutcome>> {
         match fault_precedence(reliability, self.fault_reliability, self.event_state) {
             FaultPrecedence::EnterFault | FaultPrecedence::ReenterFault => {
                 ControlFlow::Break(self.proposal(EventState::FAULT))
@@ -477,14 +461,18 @@ impl OutOfRangeDetector {
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
     ///
-    /// When the direction-appropriate delay ([`delay_toward`]) is zero the
+    /// When the direction-appropriate delay (`delay_toward`) is zero the
     /// transition is confirmed immediately and `event_state` is updated,
     /// preserving the legacy instant-transition behavior. Otherwise a
     /// [`PendingTransition`] is seeded (or cleared if the condition
     /// reverted) and `None` is returned; the periodic [`Self::tick`]
     /// advances and eventually confirms it.
-    pub fn probe(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
-        let outcome = self.propose(present_value, reliability);
+    pub fn probe(
+        &mut self,
+        present_value: f32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
+        let outcome = self.propose(present_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -495,10 +483,15 @@ impl OutOfRangeDetector {
     pub(crate) fn propose(
         &mut self,
         present_value: f32,
-        reliability: u32,
+        reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
@@ -513,10 +506,11 @@ impl OutOfRangeDetector {
         }
         // Nonzero delay: seed a pending transition only when there is none to
         // the same target. A redundant write of the same qualifying value must
-        // NOT restart the countdown (ASHRAE 135-2020 §13.2.4 — Time_Delay is a
-        // debounce timer); re-seeding here would let writes faster than the
-        // 1s tick pin the transition forever. The periodic `tick` advances it.
-        if self.pending.as_ref().map_or(true, |p| p.state != desired) {
+        // NOT restart the countdown (ASHRAE 135-2020 Clause 13.3 times the
+        // delay from when the condition began to hold); re-seeding here would
+        // let writes faster than the 1s tick pin the transition forever. The
+        // periodic `tick` advances it.
+        if self.pending.as_ref().is_none_or(|p| p.state != desired) {
             self.pending = Some(PendingTransition::seed(desired, delay));
         }
         None
@@ -527,8 +521,12 @@ impl OutOfRangeDetector {
     /// Returns `Some(TransitionOutcome)` when the pending transition's delay
     /// elapses this tick, or `None` if still counting down / no pending
     /// transition / the condition reverted (which cancels the pending).
-    pub fn tick(&mut self, present_value: f32, reliability: u32) -> Option<TransitionOutcome> {
-        let outcome = self.tick_proposal(present_value, reliability);
+    pub fn tick(
+        &mut self,
+        present_value: f32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
+        let outcome = self.tick_proposal(present_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -539,10 +537,15 @@ impl OutOfRangeDetector {
     pub(crate) fn tick_proposal(
         &mut self,
         present_value: f32,
-        reliability: u32,
+        reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
@@ -582,7 +585,7 @@ impl OutOfRangeDetector {
             to: new_state,
         };
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
-        let distribute = self.event_enable & transition_bit != 0;
+        let distribute = self.event_enable.contains(transition_bit);
         let event_type = change.event_type(Self::ALGORITHM);
         Some(TransitionOutcome {
             change,
@@ -592,7 +595,11 @@ impl OutOfRangeDetector {
     }
 
     /// Finalize detector-local state only after the object commit kernel succeeds.
-    pub(crate) fn confirm_transition(&mut self, change: &EventStateChange, reliability: u32) {
+    pub(crate) fn confirm_transition(
+        &mut self,
+        change: &EventStateChange,
+        reliability: Reliability,
+    ) {
         self.event_state = change.to;
         self.pending = None;
         self.fault_reliability = if change.to == EventState::FAULT {
@@ -603,8 +610,8 @@ impl OutOfRangeDetector {
     }
 
     fn compute_new_state(&self, pv: f32) -> EventState {
-        let high_enabled = self.limit_enable.high_limit_enable;
-        let low_enabled = self.limit_enable.low_limit_enable;
+        let high_enabled = self.limit_enable.contains(LimitEnable::HIGH_LIMIT_ENABLE);
+        let low_enabled = self.limit_enable.contains(LimitEnable::LOW_LIMIT_ENABLE);
 
         match self.event_state {
             s if s == EventState::NORMAL => {
@@ -660,22 +667,29 @@ impl OutOfRangeDetector {
 pub struct ChangeOfStateDetector {
     /// Values that trigger an OFFNORMAL state.
     pub alarm_values: Vec<u32>,
+    /// Instance number of the Notification Class object that distributes the events.
     pub notification_class: u32,
-    pub notify_type: u32,
-    pub event_enable: u8,
+    /// Notify_Type: whether the transitions are reported as alarms or as events.
+    pub notify_type: NotifyType,
+    /// Event_Enable: the transitions whose notifications are distributed.
+    pub event_enable: EventTransitionBits,
+    /// Seconds an offnormal condition must persist before TO_OFFNORMAL fires, and the NORMAL
+    /// delay too when `time_delay_normal` is `None`; 0 fires immediately. Fault transitions are
+    /// never delayed.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.2 pTimeDelayNormal
-    /// parameter — seconds that Normal conditions must persist before a
-    /// NORMAL event state is indicated. `None` is the not-configured case
-    /// and takes on `time_delay`: "If no value is available for this
-    /// parameter, then it takes on the value of the pTimeDelay parameter."
+    /// parameter — the number of seconds a return to normal has to be
+    /// sustained before the detector confirms it. `None` is the not-configured case
+    /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
+    /// Current event state.
     pub event_state: EventState,
-    pub acked_transitions: u8,
+    /// Acked_Transitions: a set flag means that transition was acknowledged.
+    pub acked_transitions: EventTransitionBits,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
     /// Reliability value in force at the last entry to FAULT; `None` outside FAULT.
-    pub fault_reliability: Option<u32>,
+    pub fault_reliability: Option<Reliability>,
 }
 
 impl Default for ChangeOfStateDetector {
@@ -683,12 +697,12 @@ impl Default for ChangeOfStateDetector {
         Self {
             alarm_values: Vec::new(),
             notification_class: 0,
-            notify_type: 0,
-            event_enable: 0,
+            notify_type: NotifyType::ALARM,
+            event_enable: EventTransitionBits::empty(),
             time_delay: 0,
             time_delay_normal: None,
             event_state: EventState::NORMAL,
-            acked_transitions: 0b111,
+            acked_transitions: EventTransitionBits::all(),
             pending: None,
             fault_reliability: None,
         }
@@ -700,12 +714,16 @@ impl ChangeOfStateDetector {
     pub const ALGORITHM: EventType = EventType::CHANGE_OF_STATE;
 
     /// Per-write entry point; see [`OutOfRangeDetector::evaluate`].
-    pub fn evaluate(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
+    pub fn evaluate(
+        &mut self,
+        present_value: u32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
         self.probe(present_value, reliability)
     }
 
     /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_proposal`].
-    fn fault_proposal(&self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+    fn fault_proposal(&self, reliability: Reliability) -> ControlFlow<Option<TransitionOutcome>> {
         match fault_precedence(reliability, self.fault_reliability, self.event_state) {
             FaultPrecedence::EnterFault | FaultPrecedence::ReenterFault => {
                 ControlFlow::Break(self.proposal(EventState::FAULT))
@@ -719,8 +737,12 @@ impl ChangeOfStateDetector {
     }
 
     /// Per-write probe: seed or cancel a pending transition, fire on zero delay.
-    pub fn probe(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
-        let outcome = self.propose(present_value, reliability);
+    pub fn probe(
+        &mut self,
+        present_value: u32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
+        let outcome = self.propose(present_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -731,10 +753,15 @@ impl ChangeOfStateDetector {
     pub(crate) fn propose(
         &mut self,
         present_value: u32,
-        reliability: u32,
+        reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
@@ -747,15 +774,19 @@ impl ChangeOfStateDetector {
         }
         // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
         // countdown to the same target on a redundant qualifying write.
-        if self.pending.as_ref().map_or(true, |p| p.state != desired) {
+        if self.pending.as_ref().is_none_or(|p| p.state != desired) {
             self.pending = Some(PendingTransition::seed(desired, delay));
         }
         None
     }
 
     /// Periodic tick: advance the countdown and fire on expiry.
-    pub fn tick(&mut self, present_value: u32, reliability: u32) -> Option<TransitionOutcome> {
-        let outcome = self.tick_proposal(present_value, reliability);
+    pub fn tick(
+        &mut self,
+        present_value: u32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
+        let outcome = self.tick_proposal(present_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -766,10 +797,15 @@ impl ChangeOfStateDetector {
     pub(crate) fn tick_proposal(
         &mut self,
         present_value: u32,
-        reliability: u32,
+        reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
@@ -802,7 +838,7 @@ impl ChangeOfStateDetector {
             to: new_state,
         };
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
-        let distribute = self.event_enable & transition_bit != 0;
+        let distribute = self.event_enable.contains(transition_bit);
         let event_type = change.event_type(Self::ALGORITHM);
         Some(TransitionOutcome {
             change,
@@ -812,7 +848,11 @@ impl ChangeOfStateDetector {
     }
 
     /// Finalize detector-local state only after the object commit kernel succeeds.
-    pub(crate) fn confirm_transition(&mut self, change: &EventStateChange, reliability: u32) {
+    pub(crate) fn confirm_transition(
+        &mut self,
+        change: &EventStateChange,
+        reliability: Reliability,
+    ) {
         self.event_state = change.to;
         self.pending = None;
         self.fault_reliability = if change.to == EventState::FAULT {
@@ -840,34 +880,41 @@ impl ChangeOfStateDetector {
 /// entry points; see [`OutOfRangeDetector`] for the delay contract.
 #[derive(Debug, Clone)]
 pub struct CommandFailureDetector {
+    /// Instance number of the Notification Class object that distributes the events.
     pub notification_class: u32,
-    pub notify_type: u32,
-    pub event_enable: u8,
+    /// Notify_Type: whether the transitions are reported as alarms or as events.
+    pub notify_type: NotifyType,
+    /// Event_Enable: the transitions whose notifications are distributed.
+    pub event_enable: EventTransitionBits,
+    /// Seconds an offnormal condition must persist before TO_OFFNORMAL fires, and the NORMAL
+    /// delay too when `time_delay_normal` is `None`; 0 fires immediately. Fault transitions are
+    /// never delayed.
     pub time_delay: u32,
     /// `Time_Delay_Normal` (property 356): the Clause 13.3.4 pTimeDelayNormal
-    /// parameter — seconds that Normal conditions must persist before a
-    /// NORMAL event state is indicated. `None` is the not-configured case
-    /// and takes on `time_delay`: "If no value is available for this
-    /// parameter, then it takes on the value of the pTimeDelay parameter."
+    /// parameter — the number of seconds a return to normal has to be
+    /// sustained before the detector confirms it. `None` is the not-configured case
+    /// and uses `time_delay` as the fallback required for absent pTimeDelayNormal.
     pub time_delay_normal: Option<u32>,
+    /// Current event state.
     pub event_state: EventState,
-    pub acked_transitions: u8,
+    /// Acked_Transitions: a set flag means that transition was acknowledged.
+    pub acked_transitions: EventTransitionBits,
     /// Pending delayed transition, or `None` when no delay is in progress.
     pub pending: Option<PendingTransition>,
     /// Reliability value in force at the last entry to FAULT; `None` outside FAULT.
-    pub fault_reliability: Option<u32>,
+    pub fault_reliability: Option<Reliability>,
 }
 
 impl Default for CommandFailureDetector {
     fn default() -> Self {
         Self {
             notification_class: 0,
-            notify_type: 0,
-            event_enable: 0,
+            notify_type: NotifyType::ALARM,
+            event_enable: EventTransitionBits::empty(),
             time_delay: 0,
             time_delay_normal: None,
             event_state: EventState::NORMAL,
-            acked_transitions: 0b111,
+            acked_transitions: EventTransitionBits::all(),
             pending: None,
             fault_reliability: None,
         }
@@ -883,13 +930,13 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
         self.probe(present_value, feedback_value, reliability)
     }
 
     /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_proposal`].
-    fn fault_proposal(&self, reliability: u32) -> ControlFlow<Option<TransitionOutcome>> {
+    fn fault_proposal(&self, reliability: Reliability) -> ControlFlow<Option<TransitionOutcome>> {
         match fault_precedence(reliability, self.fault_reliability, self.event_state) {
             FaultPrecedence::EnterFault | FaultPrecedence::ReenterFault => {
                 ControlFlow::Break(self.proposal(EventState::FAULT))
@@ -907,9 +954,9 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.propose(present_value, feedback_value, reliability);
+        let outcome = self.propose(present_value, feedback_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -921,10 +968,15 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-        reliability: u32,
+        reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value, feedback_value);
         if desired == self.event_state {
@@ -937,7 +989,7 @@ impl CommandFailureDetector {
         }
         // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
         // countdown to the same target on a redundant qualifying write.
-        if self.pending.as_ref().map_or(true, |p| p.state != desired) {
+        if self.pending.as_ref().is_none_or(|p| p.state != desired) {
             self.pending = Some(PendingTransition::seed(desired, delay));
         }
         None
@@ -948,9 +1000,9 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-        reliability: u32,
+        reliability: Reliability,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.tick_proposal(present_value, feedback_value, reliability);
+        let outcome = self.tick_proposal(present_value, feedback_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -962,10 +1014,15 @@ impl CommandFailureDetector {
         &mut self,
         present_value: u32,
         feedback_value: u32,
-        reliability: u32,
+        reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value, feedback_value);
         if desired == self.event_state {
@@ -1003,7 +1060,7 @@ impl CommandFailureDetector {
         // distribution uniformly across all three transition directions, so
         // there is no basis for treating TO_FAULT differently.
         let transition_bit = EventTransition::for_target_state(new_state).bit_mask();
-        let distribute = self.event_enable & transition_bit != 0;
+        let distribute = self.event_enable.contains(transition_bit);
         let event_type = change.event_type(Self::ALGORITHM);
         Some(TransitionOutcome {
             change,
@@ -1013,7 +1070,11 @@ impl CommandFailureDetector {
     }
 
     /// Finalize detector-local state only after the object commit kernel succeeds.
-    pub(crate) fn confirm_transition(&mut self, change: &EventStateChange, reliability: u32) {
+    pub(crate) fn confirm_transition(
+        &mut self,
+        change: &EventStateChange,
+        reliability: Reliability,
+    ) {
         self.event_state = change.to;
         self.pending = None;
         self.fault_reliability = if change.to == EventState::FAULT {
@@ -1035,71 +1096,12 @@ impl CommandFailureDetector {
 #[cfg(test)]
 pub(crate) use history::commit_test_proposal;
 pub(crate) use history::impl_builtin_intrinsic_reporting;
-
-/// Implement legacy immediate intrinsic-reporting detector delegation.
-///
-/// This exported macro preserves the downstream behavior in which detector
-/// `probe` and `tick` calls immediately update detector-local state.
-#[macro_export]
-macro_rules! impl_intrinsic_reporting {
-    (
-        $detector_field:ident,
-        $present_value_field:ident,
-        $feedback_value_field:ident,
-        $reliability_field:ident,
-        $event_detection_enable_field:ident
-    ) => {
-        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            if !self.$event_detection_enable_field {
-                return None;
-            }
-            self.$detector_field.probe(
-                self.$present_value_field,
-                self.$feedback_value_field,
-                self.$reliability_field,
-            )
-        }
-
-        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            if !self.$event_detection_enable_field {
-                return None;
-            }
-            self.$detector_field.tick(
-                self.$present_value_field,
-                self.$feedback_value_field,
-                self.$reliability_field,
-            )
-        }
-    };
-    // Gated two-input detector delegation for intrinsic-reporting object types without a
-    // feedback value.
-    (
-        $detector_field:ident,
-        $present_value_field:ident,
-        $reliability_field:ident,
-        $event_detection_enable_field:ident
-    ) => {
-        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            if !self.$event_detection_enable_field {
-                return None;
-            }
-            self.$detector_field
-                .probe(self.$present_value_field, self.$reliability_field)
-        }
-
-        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
-            if !self.$event_detection_enable_field {
-                return None;
-            }
-            self.$detector_field
-                .tick(self.$present_value_field, self.$reliability_field)
-        }
-    }; // There is deliberately no ungated arm. Exporting one would let downstream
-       // implementors wire event-state detection permanently on despite Clause 13.2.2.1.
-}
+pub(crate) use state_reporting::impl_change_of_state_reporting;
 
 #[cfg(test)]
 mod fault_tests;
+#[cfg(test)]
+mod inhibit_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

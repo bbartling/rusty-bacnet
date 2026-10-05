@@ -1,7 +1,7 @@
 """Device management example.
 
 Demonstrates:
-- DeviceCommunicationControl (enable/disable)
+- DeviceCommunicationControl (disable initiation, then enable)
 - CreateObject / DeleteObject
 - Error handling with typed exceptions
 """
@@ -23,8 +23,13 @@ from rusty_bacnet import (
 
 
 async def main():
+    # The server refuses DeviceCommunicationControl unless a policy allows it.
     server = BACnetServer(
-        device_instance=3000, device_name="Managed Device", port=0
+        device_instance=3000,
+        device_name="Managed Device",
+        port=0,
+        dcc_policy="require_password",
+        dcc_password="dcc-secret",
     )
     server.add_analog_input(instance=1, name="Temp", units=62, present_value=72.0)
     await server.start()
@@ -48,44 +53,50 @@ async def main():
             print(f"General BACnet error: {e}")
 
         # --- Create an object remotely ---
+        # Only some object types can be created over the network; Analog
+        # Output is one of them. The server refuses a Units initial value
+        # (WRITE_ACCESS_DENIED), so only the name is given.
         print("\n=== CreateObject ===")
+        created = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 100)
         raw = await client.create_object(
             addr,
-            ObjectType.ANALOG_VALUE,
+            created,
             initial_values=[
                 (
                     PropertyIdentifier.OBJECT_NAME,
-                    PropertyValue.character_string("Dynamic AV"),
+                    PropertyValue.character_string("Dynamic AO"),
                     None,
                     None,
                 ),
-                (PropertyIdentifier.UNITS, PropertyValue.enumerated(62), None, None),
             ],
         )
         print(f"Created object (raw ACK: {len(raw)} bytes)")
 
         # --- DeviceCommunicationControl ---
         print("\n=== DeviceCommunicationControl ===")
+        # The deprecated DISABLE is always refused; DISABLE_INITIATION stops
+        # what the server starts but leaves it answering requests.
         await client.device_communication_control(
             addr,
-            EnableDisable.DISABLE,
+            EnableDisable.DISABLE_INITIATION,
             time_duration=1,  # 1 minute
+            password="dcc-secret",
         )
-        print("Device communication disabled")
+        print("Device initiation disabled")
 
         state = await server.comm_state()
-        print(f"Server comm_state: {state} (1 = disabled)")
+        print(f"Server comm_state: {state!r}")  # EnableDisable.DISABLE_INITIATION
 
         # Re-enable
-        await client.device_communication_control(addr, EnableDisable.ENABLE)
+        await client.device_communication_control(
+            addr, EnableDisable.ENABLE, password="dcc-secret"
+        )
         print("Device communication re-enabled")
 
         # --- Delete the object we created ---
         print("\n=== DeleteObject ===")
         try:
-            await client.delete_object(
-                addr, ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
-            )
+            await client.delete_object(addr, created)
             print("Object deleted")
         except BacnetError as e:
             print(f"Delete failed: {e}")

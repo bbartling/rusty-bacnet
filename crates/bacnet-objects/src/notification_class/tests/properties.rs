@@ -5,6 +5,7 @@
 use super::super::*;
 use super::{make_dest_device, make_time};
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
+use bacnet_types::enums::ErrorCode;
 use bacnet_types::MacAddr;
 
 #[test]
@@ -140,6 +141,22 @@ fn read_ack_required_default() {
 }
 
 #[test]
+fn read_ack_required_msb_first() {
+    // TO_OFFNORMAL | TO_FAULT is asymmetric: a reversed bit order would put
+    // TO_FAULT | TO_NORMAL (0x60) on the wire instead of 0xC0.
+    let mut nc = NotificationClass::new(1, "NC-1").unwrap();
+    nc.ack_required = EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT;
+    assert_eq!(
+        nc.read_property(PropertyIdentifier::ACK_REQUIRED, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0xC0],
+        }
+    );
+}
+
+#[test]
 fn read_recipient_list_empty() {
     let nc = NotificationClass::new(1, "NC-1").unwrap();
     let val = nc
@@ -152,7 +169,7 @@ fn read_recipient_list_empty() {
 #[test]
 fn add_destination_device_and_read_back() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-    nc.add_destination(make_dest_device(99));
+    nc.add_destination(make_dest_device(99)).unwrap();
 
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
@@ -180,13 +197,13 @@ fn add_destination_device_and_read_back() {
     let decoded = bacnet_encoding::constructed::decode_destination_list(bytes).unwrap();
     let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap();
     assert_eq!(decoded.len(), 1);
-    assert_eq!(decoded[0].valid_days, 0b0111_1111);
+    assert_eq!(decoded[0].valid_days, DaysOfWeek::all());
     assert_eq!(decoded[0].from_time, make_time(0, 0));
     assert_eq!(decoded[0].to_time, make_time(23, 59));
     assert_eq!(decoded[0].recipient, BACnetRecipient::Device(dev_oid));
     assert_eq!(decoded[0].process_identifier, 1);
     assert!(decoded[0].issue_confirmed_notifications);
-    assert_eq!(decoded[0].transitions, 0b0000_0111);
+    assert_eq!(decoded[0].transitions, EventTransitionBits::all());
 }
 
 #[test]
@@ -194,7 +211,11 @@ fn add_destination_address_variant() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
     let mac = MacAddr::from_slice(&[192u8, 168, 1, 100, 0xBA, 0xC0]);
     let dest = BACnetDestination {
-        valid_days: 0b0011_1110, // Tue–Sat (bits 1..5)
+        valid_days: DaysOfWeek::TUESDAY
+            | DaysOfWeek::WEDNESDAY
+            | DaysOfWeek::THURSDAY
+            | DaysOfWeek::FRIDAY
+            | DaysOfWeek::SATURDAY,
         from_time: make_time(8, 0),
         to_time: make_time(17, 0),
         recipient: BACnetRecipient::Address(BACnetAddress {
@@ -203,9 +224,9 @@ fn add_destination_address_variant() {
         }),
         process_identifier: 42,
         issue_confirmed_notifications: false,
-        transitions: 0b0000_0001, // TO_OFFNORMAL only
+        transitions: EventTransitionBits::TO_OFFNORMAL,
     };
-    nc.add_destination(dest.clone());
+    nc.add_destination(dest.clone()).unwrap();
 
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
@@ -237,9 +258,9 @@ fn add_destination_address_variant() {
 #[test]
 fn add_multiple_destinations() {
     let mut nc = NotificationClass::new(5, "NC-5").unwrap();
-    nc.add_destination(make_dest_device(100));
-    nc.add_destination(make_dest_device(200));
-    nc.add_destination(make_dest_device(300));
+    nc.add_destination(make_dest_device(100)).unwrap();
+    nc.add_destination(make_dest_device(200)).unwrap();
+    nc.add_destination(make_dest_device(300)).unwrap();
 
     let val = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
@@ -262,15 +283,15 @@ fn add_multiple_destinations() {
 #[test]
 fn write_recipient_list_clears_existing() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-    nc.add_destination(make_dest_device(10));
-    nc.add_destination(make_dest_device(20));
+    nc.add_destination(make_dest_device(10)).unwrap();
+    nc.add_destination(make_dest_device(20)).unwrap();
     assert_eq!(nc.recipient_list.len(), 2);
 
     // Write an empty list — should clear
     nc.write_property(
         PropertyIdentifier::RECIPIENT_LIST,
         None,
-        PropertyValue::List(vec![]),
+        PropertyValue::ApplicationData(Vec::new()),
         None,
     )
     .unwrap();
@@ -292,7 +313,7 @@ fn write_recipient_list_wrong_type_denied() {
 #[test]
 fn write_recipient_list_round_trip() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-    nc.add_destination(make_dest_device(10));
+    nc.add_destination(make_dest_device(10)).unwrap();
     // Read the encoded list, then write it back
     let encoded = nc
         .read_property(PropertyIdentifier::RECIPIENT_LIST, None)
@@ -312,20 +333,35 @@ fn read_event_state_default() {
     assert_eq!(val, PropertyValue::Enumerated(0)); // normal
 }
 
+/// Table 12-24 has no Out_Of_Service (#1064): a write finds no property and
+/// the OUT_OF_SERVICE status flag stays clear.
 #[test]
-fn write_out_of_service() {
+fn out_of_service_is_unknown() {
     let mut nc = NotificationClass::new(1, "NC-1").unwrap();
-    nc.write_property(
-        PropertyIdentifier::OUT_OF_SERVICE,
-        None,
-        PropertyValue::Boolean(true),
-        None,
-    )
-    .unwrap();
-    let val = nc
-        .read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Boolean(true));
+    for result in [
+        nc.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        ),
+        nc.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
+            .map(|_| ()),
+    ] {
+        assert!(matches!(
+            result,
+            Err(Error::Protocol { code, .. })
+                if code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+        ));
+    }
+    assert_eq!(
+        nc.read_property(PropertyIdentifier::STATUS_FLAGS, None)
+            .unwrap(),
+        PropertyValue::BitString {
+            unused_bits: 4,
+            data: vec![0],
+        }
+    );
 }
 
 #[test]

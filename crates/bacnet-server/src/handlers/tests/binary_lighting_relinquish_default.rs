@@ -35,7 +35,7 @@ fn write_wire(
         priority,
     };
     let mut bytes = BytesMut::new();
-    request.encode(&mut bytes);
+    request.encode(&mut bytes).unwrap();
     handle_write_property(db, &bytes).map(|_| ())
 }
 
@@ -59,7 +59,7 @@ fn write_multiple_relinquish_defaults(
         }],
     };
     let mut bytes = BytesMut::new();
-    request.encode(&mut bytes);
+    request.encode(&mut bytes).unwrap();
     handle_write_property_multiple(db, &bytes)
 }
 

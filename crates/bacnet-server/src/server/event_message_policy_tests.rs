@@ -20,6 +20,14 @@ fn builtin_intrinsic_objects() -> Vec<Box<dyn BACnetObject>> {
         Box::new(MultiStateInputObject::new(41, "localized multistate input", 3).unwrap()),
         Box::new(MultiStateOutputObject::new(41, "localized multistate output", 3).unwrap()),
         Box::new(MultiStateValueObject::new(41, "localized multistate value", 3).unwrap()),
+        Box::new(
+            bacnet_objects::access_control::AccessZoneObject::new(41, "localized access zone")
+                .unwrap(),
+        ),
+        Box::new(
+            bacnet_objects::access_control::AccessDoorObject::new(41, "localized access door")
+                .unwrap(),
+        ),
     ]
 }
 
@@ -30,7 +38,7 @@ fn commit(
     to: EventState,
     distribute: bool,
 ) -> Option<CommittedIntrinsicTransition> {
-    BACnetServer::<RecordingTransport>::commit_intrinsic_transition(
+    BACnetServer::<TestTransport>::commit_intrinsic_transition(
         db,
         &oid,
         TransitionOutcome {
@@ -78,9 +86,9 @@ fn committed_properties(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<Prope
 }
 
 #[test]
-fn all_nine_builtin_families_store_each_policy_message_in_only_its_coordinate() {
+fn all_eleven_builtin_families_store_each_policy_message_in_only_its_coordinate() {
     let objects = builtin_intrinsic_objects();
-    assert_eq!(objects.len(), 9);
+    assert_eq!(objects.len(), 11);
 
     for object in objects {
         let oid = object.object_identifier();
@@ -121,8 +129,7 @@ fn policy_format_uses_object_and_state_display_including_unknown_state_numbers()
     let committed = commit(&mut db, oid, EventState::NORMAL, unknown, true)
         .expect("the local transition and message commit independently of wire projection");
     assert!(
-        !crate::server::event_notifications::ResolvedIntrinsicTransition::Committed(committed)
-            .can_emit(),
+        committed.event_values.is_none(),
         "an unsupported structured projection suppresses only the outbound frame"
     );
     assert_eq!(
@@ -158,8 +165,8 @@ fn stale_commit_does_not_mutate_committed_event_properties() {
 #[tokio::test]
 async fn outbound_message_text_equals_the_committed_history_coordinate() {
     let db = db_with_high_limit_transition(0x80);
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
-    let notification = decode_broadcast_notification(&StdMutex::new(sent));
+    let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
+    let notification = decode_broadcast_notification(&sent);
     let expected = "ANALOG_INPUT,1: NORMAL -> HIGH_LIMIT";
     let history = message_slots(
         &*db.read().await,
@@ -173,8 +180,12 @@ async fn outbound_message_text_equals_the_committed_history_coordinate() {
 #[tokio::test]
 async fn event_enable_and_dcc_suppression_still_commit_the_policy_message() {
     for (event_enable, dcc, label) in [
-        (0x00, 0, "Event_Enable"),
-        (0x80, 1, "device communication control"),
+        (0x00, DccState::Enable, "Event_Enable"),
+        (
+            0x80,
+            DccState::DisableInitiation,
+            "device communication control",
+        ),
     ] {
         let db = db_with_high_limit_transition(event_enable);
         let sent = broadcasts_from_per_write_path(&db, dcc).await;

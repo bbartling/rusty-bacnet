@@ -3,6 +3,13 @@
 //! - CreateObject (Clause 15.3)
 //! - DeleteObject (Clause 15.4)
 
+use bacnet_encoding::constructed::tagged::{
+    decode_app_object_id, decode_ctx_object_id, decode_ctx_unsigned, expect_closing, expect_end,
+    expect_opening, misplaced_tag, next_is_context, next_is_opening,
+};
+use bacnet_encoding::constructed::{
+    decode_bacnet_property_value_in_list, encode_bacnet_property_value,
+};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::enums::ObjectType;
@@ -12,6 +19,9 @@ use bytes::BytesMut;
 
 use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
 
+mod error;
+pub use error::CreateObjectError;
+
 // ---------------------------------------------------------------------------
 // CreateObjectRequest
 // ---------------------------------------------------------------------------
@@ -19,20 +29,24 @@ use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
 /// The object specifier: by type (server picks instance) or by identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectSpecifier {
-    /// Create by type — server assigns instance number ([0] context tag inside [0] constructed).
+    /// Create by type — server assigns instance number (\[0\] context tag inside \[0\] constructed).
     Type(ObjectType),
-    /// Create with a specific identifier ([1] context tag inside [0] constructed).
+    /// Create with a specific identifier (\[1\] context tag inside \[0\] constructed).
     Identifier(ObjectIdentifier),
 }
 
 /// CreateObject-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateObjectRequest {
+    /// Object to create: either a type, letting the server choose the instance, or a full
+    /// identifier.
     pub object_specifier: ObjectSpecifier,
+    /// Initial property values to apply to the new object; empty means none were supplied.
     pub list_of_initial_values: Vec<BACnetPropertyValue>,
 }
 
 impl CreateObjectRequest {
+    /// Encode the request parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         // [0] object-specifier (constructed)
         tags::encode_opening_tag(buf, 0);
@@ -50,94 +64,63 @@ impl CreateObjectRequest {
         if !self.list_of_initial_values.is_empty() {
             tags::encode_opening_tag(buf, 1);
             for pv in &self.list_of_initial_values {
-                pv.encode(buf);
+                encode_bacnet_property_value(pv, buf);
             }
             tags::encode_closing_tag(buf, 1);
         }
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        // [0] object-specifier (opening tag 0)
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        if !tag.is_opening_tag(0) {
-            return Err(Error::decoding(
-                offset,
-                "CreateObject expected opening tag 0",
-            ));
-        }
-        offset = tag_end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "CreateObject truncated at object-specifier",
-            ));
-        }
-
-        let object_specifier = if tag.is_context(0) {
-            let raw = primitives::decode_unsigned(&data[pos..end])?;
-            let raw = u32::try_from(raw)
-                .map_err(|_| Error::decoding(pos, "CreateObject object-type exceeds u32"))?;
-            ObjectSpecifier::Type(ObjectType::from_raw(raw))
-        } else if tag.is_context(1) {
-            ObjectSpecifier::Identifier(ObjectIdentifier::decode(&data[pos..end])?)
+        // [0] object-specifier, a CHOICE read in place so a member cut short
+        // is reported as such
+        let what = "CreateObject object-specifier";
+        let offset = expect_opening(data, 0, 0, what)?;
+        let (object_specifier, offset) = if next_is_context(data, offset, 0)? {
+            let (raw, end) =
+                decode_ctx_unsigned::<u32>(data, offset, 0, "CreateObject object-type")?;
+            (ObjectSpecifier::Type(ObjectType::from_raw(raw)), end)
+        } else if next_is_context(data, offset, 1)? {
+            let (oid, end) =
+                decode_ctx_object_id(data, offset, 1, "CreateObject object-identifier")?;
+            (ObjectSpecifier::Identifier(oid), end)
         } else {
-            return Err(Error::decoding(
+            // Neither alternative: the frame closes empty, or another tag
+            // stands there.
+            let (found, _) = tags::decode_tag(data, offset)?;
+            return Err(misplaced_tag(
+                data,
+                &found,
+                None,
                 offset,
                 "CreateObject expected context tag 0 or 1 inside object-specifier",
             ));
         };
-        offset = end;
-
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        if !tag.is_closing_tag(0) {
-            return Err(Error::decoding(
-                offset,
-                "CreateObject expected closing tag 0",
-            ));
-        }
-        offset = tag_end;
+        let mut offset = expect_closing(data, offset, 0, what)?;
 
         // [1] list-of-initial-values (optional, opening tag 1)
         let mut values = Vec::new();
-        if offset < data.len() {
-            let (tag, tag_end) = tags::decode_tag(data, offset)?;
-            if tag.is_opening_tag(1) {
-                offset = tag_end;
-                loop {
-                    if offset >= data.len() {
-                        return Err(Error::decoding(
-                            offset,
-                            "CreateObject missing closing tag 1",
-                        ));
-                    }
-                    let (tag, closing_end) = tags::decode_tag(data, offset)?;
-                    if tag.is_closing_tag(1) {
-                        offset = closing_end;
-                        break;
-                    }
-                    if values.len() >= MAX_DECODED_ITEMS {
-                        return Err(Error::decoding(offset, "CreateObject values exceeds max"));
-                    }
-                    let (pv, new_offset) = BACnetPropertyValue::decode_in_list(data, offset, 1)?;
-                    values.push(pv);
-                    offset = new_offset;
+        if next_is_opening(data, offset, 1)? {
+            offset = expect_opening(data, offset, 1, "CreateObject list-of-initial-values")?;
+            loop {
+                if offset >= data.len() {
+                    return Err(Error::missing(offset, "CreateObject missing closing tag 1"));
                 }
-            } else {
-                return Err(Error::decoding(
-                    offset,
-                    "CreateObject expected opening tag 1",
-                ));
+                let (tag, closing_end) = tags::decode_tag(data, offset)?;
+                if tag.is_closing_tag(1) {
+                    offset = closing_end;
+                    break;
+                }
+                if values.len() >= MAX_DECODED_ITEMS {
+                    return Err(Error::overflow(offset, "CreateObject values exceeds max"));
+                }
+                let (pv, new_offset) = decode_bacnet_property_value_in_list(data, offset, 1)?;
+                values.push(pv);
+                offset = new_offset;
             }
         }
 
-        if offset != data.len() {
-            return Err(Error::decoding(offset, "CreateObject has trailing data"));
-        }
+        expect_end(data, offset, offset, "CreateObject")?;
 
         Ok(Self {
             object_specifier,
@@ -155,21 +138,22 @@ impl CreateObjectRequest {
 /// Uses SimpleACK (no ACK struct needed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteObjectRequest {
+    /// Object to delete.
     pub object_identifier: ObjectIdentifier,
 }
 
 impl DeleteObjectRequest {
+    /// Encode the request parameter into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         primitives::encode_app_object_id(buf, &self.object_identifier);
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// on an object identifier under any tag but its application tag, and on octets after it.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (tag, pos) = tags::decode_tag(data, 0)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "DeleteObject truncated at object-id"));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
+        let (object_identifier, end) =
+            decode_app_object_id(data, 0, "DeleteObject object-identifier")?;
+        expect_end(data, end, end, "DeleteObject")?;
         Ok(Self { object_identifier })
     }
 }

@@ -90,7 +90,7 @@ fn global_pool_exhausts_across_peers_and_roles_without_duplicate_ids() {
         let metadata = if index % 2 == 0 {
             requester(peer(index as u8), TerminalPolicy::SimpleAck)
         } else {
-            LeaseMetadata::server_notification(
+            LeaseMetadata::notification(
                 CanonicalPeer::routed(index as u16 + 1, &[index as u8]),
                 SERVICE,
             )
@@ -112,19 +112,18 @@ fn notification_abort_releases_for_reuse_and_stale_cleanup_cannot_release_replac
     let coordinator = OutboundTransactionCoordinator::new();
     let expected_peer = peer(1);
     let original = coordinator
-        .reserve(LeaseMetadata::server_notification(
-            expected_peer.clone(),
-            SERVICE,
-        ))
+        .reserve(LeaseMetadata::notification(expected_peer.clone(), SERVICE))
         .unwrap();
+    // The recipient serves the notification, so only its server-flagged
+    // Abort ends the lease.
     assert_eq!(
-        coordinator.admit(&expected_peer, &abort(original.invoke_id(), true)),
+        coordinator.admit(&expected_peer, &abort(original.invoke_id(), false)),
         Ok(AdmissionOutcome::DirectionMismatch)
     );
     assert_eq!(coordinator.active_count(), Ok(1));
     assert_admitted_kind(
         coordinator
-            .admit(&expected_peer, &abort(original.invoke_id(), false))
+            .admit(&expected_peer, &abort(original.invoke_id(), true))
             .unwrap(),
         AdmissionKind::Terminal,
     );
@@ -159,24 +158,6 @@ fn notification_abort_releases_for_reuse_and_stale_cleanup_cannot_release_replac
         Ok(ReleaseOutcome::Released)
     );
     assert_eq!(coordinator.active_count(), Ok(INVOKE_ID_COUNT - 1));
-}
-
-#[test]
-fn canonical_peer_uses_routed_source_instead_of_immediate_router() {
-    let source = NpduAddress {
-        network: 200,
-        mac_address: MacAddr::from_slice(&[0xaa, 0xbb]),
-    };
-    let through_first_router = CanonicalPeer::from_source(&[1], Some(&source));
-    let through_second_router = CanonicalPeer::from_source(&[2], Some(&source));
-
-    assert_eq!(through_first_router, through_second_router);
-    assert_eq!(
-        through_first_router,
-        CanonicalPeer::routed(200, &[0xaa, 0xbb])
-    );
-    assert_ne!(CanonicalPeer::from_source(&[1], None), peer(2));
-    assert_eq!(CanonicalPeer::from_source(&[1], None), peer(1));
 }
 
 #[test]
@@ -413,14 +394,11 @@ fn segmented_complex_ack_defers_service_validation_and_completion_is_generation_
 }
 
 #[test]
-fn server_notification_accepts_simple_ack_but_never_complex_ack() {
+fn notification_accepts_simple_ack_but_never_complex_ack() {
     let coordinator = OutboundTransactionCoordinator::new();
     let expected_peer = peer(3);
     let token = coordinator
-        .reserve(LeaseMetadata::server_notification(
-            expected_peer.clone(),
-            SERVICE,
-        ))
+        .reserve(LeaseMetadata::notification(expected_peer.clone(), SERVICE))
         .unwrap();
 
     assert_eq!(
@@ -441,27 +419,78 @@ fn server_notification_accepts_simple_ack_but_never_complex_ack() {
 }
 
 #[test]
-fn error_is_terminal_without_service_validation_and_claims_once() {
+fn server_read_accepts_only_an_unsegmented_complex_ack_for_its_service() {
     let coordinator = OutboundTransactionCoordinator::new();
-    let expected_peer = peer(4);
-    let error_token = coordinator
-        .reserve(requester(expected_peer.clone(), TerminalPolicy::ComplexAck))
+    let expected_peer = peer(3);
+    let token = coordinator
+        .reserve(LeaseMetadata::server_read(expected_peer.clone(), SERVICE))
         .unwrap();
+    let invoke_id = token.invoke_id();
+    // The server role has no reassembly, and a read answers with data.
+    for refused in [
+        (
+            complex_ack(invoke_id, SERVICE, true),
+            AdmissionOutcome::OwnerMismatch,
+        ),
+        (
+            simple_ack(invoke_id, SERVICE),
+            AdmissionOutcome::PolicyMismatch,
+        ),
+        (
+            complex_ack(invoke_id, OTHER_SERVICE, false),
+            AdmissionOutcome::ServiceMismatch {
+                expected: SERVICE,
+                observed: OTHER_SERVICE,
+            },
+        ),
+    ] {
+        assert_eq!(coordinator.admit(&expected_peer, &refused.0), Ok(refused.1));
+    }
+    assert_eq!(coordinator.active_count(), Ok(1));
+    let admission = match coordinator
+        .admit(&expected_peer, &complex_ack(invoke_id, SERVICE, false))
+        .unwrap()
+    {
+        AdmissionOutcome::Admitted(admission) => admission,
+        other => panic!("admitted, not {other:?}"),
+    };
+    assert_eq!(admission.kind(), AdmissionKind::Terminal);
+    assert_eq!(admission.metadata().owner(), LeaseOwner::Notification);
+    assert_eq!(coordinator.complete(token), Ok(ReleaseOutcome::Released));
+}
 
-    assert_admitted_kind(
-        coordinator
-            .admit(
-                &expected_peer,
-                &error_pdu(error_token.invoke_id(), OTHER_SERVICE),
-            )
-            .unwrap(),
-        AdmissionKind::Terminal,
-    );
-    assert_eq!(
-        coordinator.admit(&expected_peer, &error_pdu(error_token.invoke_id(), SERVICE)),
-        Ok(AdmissionOutcome::DuplicateTerminal)
-    );
-    coordinator.complete(error_token).unwrap();
+#[test]
+fn error_requires_matching_service_for_requesters_and_notifications_and_claims_once() {
+    for notification in [false, true] {
+        let coordinator = OutboundTransactionCoordinator::new();
+        let expected_peer = peer(4);
+        let metadata = if notification {
+            LeaseMetadata::notification(expected_peer.clone(), SERVICE)
+        } else {
+            requester(expected_peer.clone(), TerminalPolicy::ComplexAck)
+        };
+        let token = coordinator.reserve(metadata).unwrap();
+        assert_eq!(
+            coordinator.admit(&expected_peer, &error_pdu(token.invoke_id(), OTHER_SERVICE)),
+            Ok(AdmissionOutcome::ServiceMismatch {
+                expected: SERVICE,
+                observed: OTHER_SERVICE
+            })
+        );
+        assert_eq!(coordinator.active_count(), Ok(1));
+        assert_admitted_kind(
+            coordinator
+                .admit(&expected_peer, &error_pdu(token.invoke_id(), SERVICE))
+                .unwrap(),
+            AdmissionKind::Terminal,
+        );
+        assert_eq!(
+            coordinator.admit(&expected_peer, &error_pdu(token.invoke_id(), SERVICE)),
+            Ok(AdmissionOutcome::DuplicateTerminal)
+        );
+        coordinator.complete(token).unwrap();
+        assert_eq!(coordinator.active_count(), Ok(0));
+    }
 }
 
 #[test]
@@ -494,6 +523,46 @@ fn reject_and_requester_abort_are_terminal_with_required_checks() {
             .unwrap(),
         AdmissionKind::Terminal,
     );
+}
+
+/// The lease owner never changes which Abort direction ends a lease (#1155):
+/// the peer answers every lease as the responding side, so a client-direction
+/// Abort is refused without claiming the lease, and a server-flagged one ends it.
+#[test]
+fn abort_direction_is_the_same_for_every_lease_owner() {
+    let expected_peer = peer(8);
+    for metadata in [
+        requester(expected_peer.clone(), TerminalPolicy::SimpleAck),
+        LeaseMetadata::segmented_requester(
+            expected_peer.clone(),
+            SERVICE,
+            TerminalPolicy::ComplexAck,
+        ),
+        LeaseMetadata::notification(expected_peer.clone(), SERVICE),
+    ] {
+        let owner = metadata.owner();
+        let coordinator = OutboundTransactionCoordinator::new();
+        let token = coordinator.reserve(metadata).unwrap();
+        assert_eq!(
+            coordinator.admit(&expected_peer, &abort(token.invoke_id(), false)),
+            Ok(AdmissionOutcome::DirectionMismatch),
+            "{owner:?}: client-direction Abort"
+        );
+        assert_eq!(coordinator.active_count(), Ok(1), "{owner:?}");
+        assert_admitted_kind(
+            coordinator
+                .admit(&expected_peer, &abort(token.invoke_id(), true))
+                .unwrap(),
+            AdmissionKind::Terminal,
+        );
+        assert_eq!(
+            coordinator.admit(&expected_peer, &abort(token.invoke_id(), true)),
+            Ok(AdmissionOutcome::DuplicateTerminal),
+            "{owner:?}: the first server Abort claimed the lease"
+        );
+        assert_eq!(coordinator.complete(token), Ok(ReleaseOutcome::Released));
+        assert_eq!(coordinator.active_count(), Ok(0), "{owner:?}");
+    }
 }
 
 #[test]

@@ -14,7 +14,7 @@ const HUNDREDTHS_PER_MINUTE: i128 = 60 * HUNDREDTHS_PER_SECOND;
 const HUNDREDTHS_PER_DAY: i128 = 24 * 60 * HUNDREDTHS_PER_MINUTE;
 
 /// Validated civil-time settings for the bundled server clock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ClockConfig {
     utc_offset_minutes: i16,
     daylight_savings_status: bool,
@@ -42,15 +42,6 @@ impl ClockConfig {
     /// Return whether the one-hour daylight-saving adjustment is active.
     pub fn daylight_savings_status(self) -> bool {
         self.daylight_savings_status
-    }
-}
-
-impl Default for ClockConfig {
-    fn default() -> Self {
-        Self {
-            utc_offset_minutes: 0,
-            daylight_savings_status: false,
-        }
     }
 }
 
@@ -181,7 +172,7 @@ fn system_utc_hundredths() -> i128 {
     i128::from(elapsed.as_secs()) * HUNDREDTHS_PER_SECOND + i128::from(elapsed.subsec_millis() / 10)
 }
 
-fn date_time_to_hundredths(date: Date, time: Time) -> Result<i128, Error> {
+pub(super) fn date_time_to_hundredths(date: Date, time: Time) -> Result<i128, Error> {
     let year = date
         .actual_year()
         .ok_or_else(|| invalid_datetime("date contains an unspecified year"))?;
@@ -427,14 +418,21 @@ mod tests {
                 .unwrap(),
             PropertyValue::Time(frame.local_time)
         );
+        let (today, now) = crate::schedule::schedule_instant(frame).unwrap();
+        assert_eq!(today.to_date(), frame.local_date);
+        assert_eq!(today.weekday(), 4);
+        assert_eq!(now, frame.local_time);
         assert_eq!(
-            crate::schedule::current_time_components(frame),
-            Some((3, 9, 15))
+            frame.day_of_week(),
+            Some(bacnet_types::bitstring::DaysOfWeek::THURSDAY)
         );
-        assert_eq!(frame.day_of_week_bit(), Some(0x08));
         assert_eq!(
             crate::server::cov_clock::cov_multiple_datetime(frame),
             (frame.local_date, frame.local_time)
         );
     }
 }
+
+#[cfg(test)]
+#[path = "clock_vectors.rs"]
+mod vectors;

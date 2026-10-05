@@ -19,16 +19,16 @@ async fn exact_confirmed_multiple_preserves_routed_peer_and_mode() {
 
     fixture.fire(&[PropertyIdentifier::SILENCED]).await;
     for _ in 0..32 {
-        if !fixture.sent.lock().unwrap().is_empty() {
+        if !fixture.sent.is_empty() {
             break;
         }
         tokio::task::yield_now().await;
     }
 
-    let sent = fixture.sent.lock().unwrap();
+    let sent = fixture.sent.lock();
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].1, router);
-    let npdu = decode_npdu(sent[0].0.clone()).unwrap();
+    assert_eq!(sent[0].mac, router);
+    let npdu = decode_npdu(sent[0].npdu.clone()).unwrap();
     assert_eq!(npdu.destination, Some(remote.clone()));
     let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
         panic!("expected confirmed COVNotificationMultiple");
@@ -42,6 +42,7 @@ async fn exact_confirmed_multiple_preserves_routed_peer_and_mode() {
     assert!(fixture.transactions.admit_terminal(
         &router,
         Some(&remote),
+        None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id,
             service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,

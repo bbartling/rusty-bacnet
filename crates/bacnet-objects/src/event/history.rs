@@ -1,13 +1,18 @@
 //! Shared storage for intrinsic-reporting event history properties.
 
 use bacnet_encoding::primitives::encode_timestamp_choice;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 use bytes::BytesMut;
 
+use super::options::ReportingOptions;
 use super::{EventTransition, EventTransitionCommit, EventTransitionCommitError};
 
+/// The event state an intrinsic reporter keeps beside its detector: the
+/// history behind Event_Time_Stamps and Event_Message_Texts, and the
+/// optional rows that shape its transitions ([`ReportingOptions`]).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EventHistory {
     /// Transition slots ordered `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
@@ -20,6 +25,9 @@ pub(crate) struct EventHistory {
     pub(crate) message_texts: [String; 3],
     /// Coordinate of the most recent successful commit, independent of timestamp choice.
     last_transition: Option<EventTransition>,
+    /// Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair.
+    /// Configuration rather than history, so [`Self::reset`] keeps them.
+    pub(crate) options: ReportingOptions,
 }
 
 /// Borrowed object-owned state for one atomic event-transition commit.
@@ -29,14 +37,14 @@ pub(crate) struct EventHistory {
 /// lending its own three property stores through its trait hook.
 pub(crate) struct EventTransitionState<'a> {
     event_state: &'a mut EventState,
-    acked_transitions: &'a mut u8,
+    acked_transitions: &'a mut EventTransitionBits,
     history: &'a mut EventHistory,
 }
 
 impl<'a> EventTransitionState<'a> {
     pub(crate) fn new(
         event_state: &'a mut EventState,
-        acked_transitions: &'a mut u8,
+        acked_transitions: &'a mut EventTransitionBits,
         history: &'a mut EventHistory,
     ) -> Self {
         Self {
@@ -67,20 +75,20 @@ impl<'a> EventTransitionState<'a> {
         }
 
         let index = commit.coordinate.index();
-        let bit = commit.coordinate.bit_mask();
-        let acknowledged = !commit.ack_required;
 
         *self.event_state = commit.change.to;
-        if acknowledged {
-            *self.acked_transitions |= bit;
-        } else {
-            *self.acked_transitions &= !bit;
-        }
+        self.acked_transitions
+            .set(commit.coordinate.bit_mask(), !commit.ack_required);
         self.history.time_stamps[index] = commit.timestamp;
         self.history.original_from_states[index] = Some(commit.change.from);
         self.history.original_to_states[index] = Some(commit.change.to);
         if let Some(message_text) = commit.message_text {
-            self.history.message_texts[index] = message_text;
+            // A configured text takes the server's place (#1329).
+            self.history.message_texts[index] =
+                match self.history.options.message_text(commit.coordinate) {
+                    Some(configured) => configured.to_owned(),
+                    None => message_text,
+                };
         }
         self.history.last_transition = Some(commit.coordinate);
 
@@ -112,10 +120,6 @@ macro_rules! impl_builtin_intrinsic_reporting {
             })
         }
 
-        fn intrinsic_reporting_requires_atomic_commit(&self) -> bool {
-            true
-        }
-
         fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
             if !self.$event_detection_enable_field {
                 return None;
@@ -123,6 +127,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
             self.$detector_field.propose(
                 $(self.$input_field,)+
                 self.$reliability_field,
+                self.$history_field.options.inhibited(),
             )
         }
 
@@ -133,7 +138,18 @@ macro_rules! impl_builtin_intrinsic_reporting {
             self.$detector_field.tick_proposal(
                 $(self.$input_field,)+
                 self.$reliability_field,
+                self.$history_field.options.inhibited(),
             )
+        }
+
+        fn event_algorithm_inhibit_reference_internal(
+            &self,
+        ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
+            self.$history_field.options.inhibit_reference().cloned()
+        }
+
+        fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
+            self.$history_field.options.follow(inhibit)
         }
 
         fn commit_event_transition_internal(
@@ -147,8 +163,10 @@ macro_rules! impl_builtin_intrinsic_reporting {
                 &mut self.$history_field,
             )
             .commit(commit)?;
-            self.$detector_field
-                .confirm_transition(&change, self.$reliability_field);
+            self.$detector_field.confirm_transition(
+                &change,
+                self.$reliability_field,
+            );
             Ok(())
         }
 
@@ -212,6 +230,7 @@ impl Default for EventHistory {
             original_to_states: [None, None, None],
             message_texts: [String::new(), String::new(), String::new()],
             last_transition: None,
+            options: ReportingOptions::default(),
         }
     }
 }
@@ -221,14 +240,34 @@ impl EventHistory {
         self.last_transition
     }
 
+    /// Back to the starting history, as Event_Detection_Enable FALSE asks;
+    /// the [`ReportingOptions`] stay as configured.
     pub(crate) fn reset(&mut self) {
-        *self = Self::default();
+        let options = std::mem::take(&mut self.options);
+        *self = Self {
+            options,
+            ..Self::default()
+        };
+    }
+
+    /// Take a write of one of the [`ReportingOptions`] rows, or `None` for
+    /// any other property; `detection_enabled` is the object's
+    /// Event_Detection_Enable.
+    pub(crate) fn write(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: &PropertyValue,
+        detection_enabled: bool,
+    ) -> Option<Result<(), Error>> {
+        self.options
+            .write(property, array_index, value, detection_enabled)
     }
 
     /// Validate an acknowledgment against the latest committed transition slot.
     pub(crate) fn acknowledge_correlated(
         &self,
-        acked_transitions: &mut u8,
+        acked_transitions: &mut EventTransitionBits,
         requested_state: EventState,
         timestamp: &BACnetTimeStamp,
     ) -> Result<(), Error> {
@@ -240,7 +279,7 @@ impl EventHistory {
     /// its optional From State is available.
     pub(crate) fn acknowledge_correlated_detailed(
         &self,
-        acked_transitions: &mut u8,
+        acked_transitions: &mut EventTransitionBits,
         requested_state: EventState,
         timestamp: &BACnetTimeStamp,
     ) -> Result<Option<super::EventStateChange>, Error> {
@@ -299,7 +338,7 @@ impl EventHistory {
                 )),
                 Some(_) => Err(crate::common::invalid_array_index_error()),
             }),
-            _ => None,
+            _ => self.options.read(property, array_index),
         }
     }
 }
@@ -334,6 +373,10 @@ mod tests {
     };
     use crate::traits::BACnetObject;
 
+    const OFFNORMAL: EventTransitionBits = EventTransitionBits::TO_OFFNORMAL;
+    const FAULT: EventTransitionBits = EventTransitionBits::TO_FAULT;
+    const NORMAL: EventTransitionBits = EventTransitionBits::TO_NORMAL;
+
     fn time(hour: u8) -> BACnetTimeStamp {
         BACnetTimeStamp::Time(Time {
             hour,
@@ -362,21 +405,11 @@ mod tests {
 
     fn commit(
         state: &mut EventState,
-        acked: &mut u8,
+        acked: &mut EventTransitionBits,
         history: &mut EventHistory,
-        change: EventStateChange,
-        coordinate: EventTransition,
-        ack_required: bool,
-        timestamp: BACnetTimeStamp,
-        message_text: Option<&str>,
+        commit: EventTransitionCommit,
     ) -> Result<(), EventTransitionCommitError> {
-        EventTransitionState::new(state, acked, history).commit(EventTransitionCommit {
-            change,
-            coordinate,
-            ack_required,
-            timestamp,
-            message_text: message_text.map(str::to_owned),
-        })
+        EventTransitionState::new(state, acked, history).commit(commit)
     }
 
     #[test]
@@ -396,7 +429,7 @@ mod tests {
     #[test]
     fn commit_updates_each_coordinate_and_preserves_exact_timestamp_choices() {
         let mut state = EventState::NORMAL;
-        let mut acked = 0b101;
+        let mut acked = OFFNORMAL | NORMAL;
         let mut history = EventHistory {
             time_stamps: [
                 BACnetTimeStamp::SequenceNumber(10),
@@ -411,24 +444,27 @@ mod tests {
                 "old-normal".into(),
             ],
             last_transition: None,
+            options: ReportingOptions::default(),
         };
 
         commit(
             &mut state,
             &mut acked,
             &mut history,
-            EventStateChange {
-                from: EventState::NORMAL,
-                to: EventState::HIGH_LIMIT,
+            EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::NORMAL,
+                    to: EventState::HIGH_LIMIT,
+                },
+                coordinate: EventTransition::ToOffnormal,
+                ack_required: true,
+                timestamp: time(1),
+                message_text: Some("high-limit".to_owned()),
             },
-            EventTransition::ToOffnormal,
-            true,
-            time(1),
-            Some("high-limit"),
         )
         .unwrap();
         assert_eq!(state, EventState::HIGH_LIMIT);
-        assert_eq!(acked, 0b100, "only TO_OFFNORMAL is cleared");
+        assert_eq!(acked, NORMAL, "only TO_OFFNORMAL is cleared");
         assert_eq!(history.time_stamps[0], time(1));
         assert_eq!(history.original_from_states[0], Some(EventState::NORMAL));
         assert_eq!(history.original_to_states[0], Some(EventState::HIGH_LIMIT));
@@ -447,18 +483,24 @@ mod tests {
             &mut state,
             &mut acked,
             &mut history,
-            EventStateChange {
-                from: EventState::HIGH_LIMIT,
-                to: EventState::FAULT,
+            EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::HIGH_LIMIT,
+                    to: EventState::FAULT,
+                },
+                coordinate: EventTransition::ToFault,
+                ack_required: false,
+                timestamp: BACnetTimeStamp::SequenceNumber(0),
+                message_text: Some("fault".to_owned()),
             },
-            EventTransition::ToFault,
-            false,
-            BACnetTimeStamp::SequenceNumber(0),
-            Some("fault"),
         )
         .unwrap();
         assert_eq!(state, EventState::FAULT);
-        assert_eq!(acked, 0b110, "TO_FAULT is set and other bits are untouched");
+        assert_eq!(
+            acked,
+            FAULT | NORMAL,
+            "TO_FAULT is set and other bits are untouched"
+        );
         assert_eq!(history.time_stamps[0], time(1));
         assert_eq!(history.time_stamps[1], BACnetTimeStamp::SequenceNumber(0));
         assert_eq!(
@@ -474,18 +516,20 @@ mod tests {
             &mut state,
             &mut acked,
             &mut history,
-            EventStateChange {
-                from: EventState::FAULT,
-                to: EventState::NORMAL,
+            EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::FAULT,
+                    to: EventState::NORMAL,
+                },
+                coordinate: EventTransition::ToNormal,
+                ack_required: true,
+                timestamp: date_time(27),
+                message_text: Some("normal".to_owned()),
             },
-            EventTransition::ToNormal,
-            true,
-            date_time(27),
-            Some("normal"),
         )
         .unwrap();
         assert_eq!(state, EventState::NORMAL);
-        assert_eq!(acked, 0b010, "only TO_NORMAL is cleared");
+        assert_eq!(acked, FAULT, "only TO_NORMAL is cleared");
         assert_eq!(
             history.time_stamps,
             [time(1), BACnetTimeStamp::SequenceNumber(0), date_time(27)]
@@ -517,7 +561,7 @@ mod tests {
     #[test]
     fn same_state_reindication_commits_and_none_preserves_every_message() {
         let mut state = EventState::NORMAL;
-        let mut acked = 0b001;
+        let mut acked = OFFNORMAL;
         let mut history = EventHistory {
             time_stamps: [
                 BACnetTimeStamp::SequenceNumber(1),
@@ -528,6 +572,7 @@ mod tests {
             original_to_states: [None, None, None],
             message_texts: ["offnormal".into(), "fault".into(), "normal".into()],
             last_transition: Some(EventTransition::ToFault),
+            options: ReportingOptions::default(),
         };
         let messages_before = history.message_texts.clone();
 
@@ -535,20 +580,23 @@ mod tests {
             &mut state,
             &mut acked,
             &mut history,
-            EventStateChange {
-                from: EventState::NORMAL,
-                to: EventState::NORMAL,
+            EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::NORMAL,
+                    to: EventState::NORMAL,
+                },
+                coordinate: EventTransition::ToNormal,
+                ack_required: false,
+                timestamp: BACnetTimeStamp::SequenceNumber(u16::MAX),
+                message_text: None,
             },
-            EventTransition::ToNormal,
-            false,
-            BACnetTimeStamp::SequenceNumber(u16::MAX),
-            None,
         )
         .unwrap();
 
         assert_eq!(state, EventState::NORMAL);
         assert_eq!(
-            acked, 0b101,
+            acked,
+            OFFNORMAL | NORMAL,
             "TO_NORMAL is set and other bits are untouched"
         );
         assert_eq!(
@@ -570,7 +618,7 @@ mod tests {
     #[test]
     fn coordinate_mismatch_rejects_without_mutating_any_state() {
         let mut state = EventState::HIGH_LIMIT;
-        let mut acked = 0b101;
+        let mut acked = OFFNORMAL | NORMAL;
         let mut history = EventHistory {
             time_stamps: [time(9), BACnetTimeStamp::SequenceNumber(44), date_time(26)],
             original_from_states: [
@@ -585,6 +633,7 @@ mod tests {
             ],
             message_texts: ["offnormal".into(), "fault".into(), "normal".into()],
             last_transition: Some(EventTransition::ToOffnormal),
+            options: ReportingOptions::default(),
         };
         let expected_state = state;
         let expected_acked = acked;
@@ -594,14 +643,16 @@ mod tests {
             &mut state,
             &mut acked,
             &mut history,
-            EventStateChange {
-                from: EventState::HIGH_LIMIT,
-                to: EventState::NORMAL,
+            EventTransitionCommit {
+                change: EventStateChange {
+                    from: EventState::HIGH_LIMIT,
+                    to: EventState::NORMAL,
+                },
+                coordinate: EventTransition::ToOffnormal,
+                ack_required: false,
+                timestamp: BACnetTimeStamp::SequenceNumber(99),
+                message_text: Some("must-not-commit".to_owned()),
             },
-            EventTransition::ToOffnormal,
-            false,
-            BACnetTimeStamp::SequenceNumber(99),
-            Some("must-not-commit"),
         )
         .unwrap_err();
 
@@ -620,7 +671,7 @@ mod tests {
     #[test]
     fn stale_state_changing_replay_rejects_without_mutating_first_commit() {
         let mut state = EventState::NORMAL;
-        let mut acked = 0b111;
+        let mut acked = EventTransitionBits::all();
         let mut history = EventHistory::default();
         let first = EventTransitionCommit {
             change: EventStateChange {

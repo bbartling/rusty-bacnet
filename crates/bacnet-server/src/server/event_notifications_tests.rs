@@ -1,13 +1,13 @@
 use super::*;
+use crate::server::test_transport::{SendLog, SendMode, TestTransport, BIP_LOCAL_MAC};
+use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_transport::port::TransportPort;
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 
 #[path = "event_notifications_commit_tests.rs"]
 mod commit_tests;
@@ -18,54 +18,35 @@ mod history_tests;
 #[path = "event_message_policy_tests.rs"]
 mod message_policy_tests;
 
+#[path = "event_options_tests.rs"]
+mod options_tests;
+
+#[path = "event_notifications_priority_tests.rs"]
+mod priority_tests;
+
 /// A transport that records every broadcast NPDU it is asked to send and
 /// discards unicasts. Used to capture the EventNotification a server
 /// actually puts on the wire.
-#[derive(Clone, Default)]
-pub(super) struct RecordingTransport {
-    pub(super) sent_broadcast: StdArc<StdMutex<Vec<Bytes>>>,
-    pub(super) local_mac: Vec<u8>,
+pub(super) fn recording_transport() -> (TestTransport, SendLog) {
+    let transport = TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .unicast(SendMode::Ignore)
+        .build();
+    let sent = transport.sent();
+    (transport, sent)
 }
 
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.sent_broadcast
-            .lock()
-            .unwrap()
-            .push(Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
-}
-
-/// A DCC-disabled server (comm_state >= 1) suppresses the periodic event
+/// A server under DISABLE_INITIATION suppresses the periodic event
 /// send: `build_and_send_event_notification` returns without sending,
 /// matching the per-write path's DCC gate. Verified against a recording
 /// transport that would otherwise capture the broadcast APDU.
 #[tokio::test]
 async fn dcc_suppresses_periodic_event_send() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(1)); // DCC disabled
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let comm_state = Arc::new(CommState::default());
+    comm_state.set_for_test(DccState::DisableInitiation);
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     let mut db = clocked_test_database();
     db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
@@ -91,52 +72,55 @@ async fn dcc_suppresses_periodic_event_send() {
         from: EventState::NORMAL,
         to: EventState::HIGH_LIMIT,
     };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-        &db,
-        &network,
-        &comm_state,
-        &server_tsm,
-        &NotificationTransactions::new(),
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
+        &crate::server::event_delivery::EventDelivery {
+            db: &db,
+            network: &network,
+            comm_state: &comm_state,
+            learned_routers: &learned_routers,
+            notification_transactions: &NotificationTransactions::new(),
+            device_bindings: &Arc::new(RwLock::new(
+                crate::server::device_bindings::DeviceBindingTable::new(),
+            )),
+            suppressions: &Default::default(),
+            retry_timeout_ms: 1000,
+            local_apdu_capacity: 1476,
+        },
         &oid,
         (change, EventType::OUT_OF_RANGE),
-        1000,
     )
     .await;
 
     assert!(
-        sent.lock().unwrap().is_empty(),
+        sent.is_empty(),
         "DCC-disabled server must not send event notifications"
     );
 }
 
 /// Decode the single broadcast EventNotification captured by a
-/// [`RecordingTransport`] into its [`EventNotificationRequest`].
+/// [`recording_transport`] into its [`EventNotificationRequest`].
 ///
 /// Panics with a useful message if no notification was sent (so a regression
 /// that silently drops the notification is caught rather than masking as
 /// "no broadcast = pass").
-pub(super) fn decode_broadcast_notification(
-    sent: &StdMutex<Vec<Bytes>>,
-) -> EventNotificationRequest {
+pub(super) fn decode_broadcast_notification(sent: &[Bytes]) -> EventNotificationRequest {
     use bacnet_encoding::apdu::decode_apdu;
     use bacnet_encoding::npdu::decode_npdu;
 
-    let guard = sent.lock().unwrap();
     assert_eq!(
-        guard.len(),
+        sent.len(),
         1,
         "expected exactly one broadcast EventNotification, got {}",
-        guard.len()
+        sent.len()
     );
-    let npdu = decode_npdu(guard[0].clone()).expect("decode NPDU");
+    let npdu = decode_npdu(sent[0].clone()).expect("decode NPDU");
     match decode_apdu(npdu.payload).expect("decode APDU") {
         Apdu::UnconfirmedRequest(req) => {
             assert_eq!(
                 req.service_choice,
                 UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION
             );
-            EventNotificationRequest::decode(&req.service_request)
-                .expect("decode EventNotification")
+            decode_event_notification(&req.service_request).expect("decode EventNotification")
         }
         other => panic!("expected UnconfirmedRequest, got {other:?}"),
     }
@@ -153,7 +137,7 @@ pub(super) fn local_broadcast_destination() -> bacnet_types::constructed::BACnet
     use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
     use bacnet_types::primitives::Time;
     BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: Time {
             hour: 0,
             minute: 0,
@@ -172,7 +156,7 @@ pub(super) fn local_broadcast_destination() -> bacnet_types::constructed::BACnet
         }),
         process_identifier: 0,
         issue_confirmed_notifications: false,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     }
 }
 
@@ -182,34 +166,30 @@ pub(super) fn local_broadcast_destination() -> bacnet_types::constructed::BACnet
 pub(super) fn notification_class_0_broadcasting(
 ) -> bacnet_objects::notification_class::NotificationClass {
     let mut nc = bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap();
-    nc.add_destination(local_broadcast_destination());
+    nc.add_destination(local_broadcast_destination()).unwrap();
     nc
 }
 
 /// Build a server fixture: a Device, a NotificationClass (instance `nc`, whose
 /// recipient list holds the Clause 12.21 local-broadcast entry) with the given
-/// per-transition `priority` / `ack_required`, and an AnalogInput whose
+/// per-transition `priority` and `ack_required` bits, and an AnalogInput whose
 /// `Notification_Class` points at it with `Notify_Type = ALARM`.
 async fn fixture_with_commanded_nc(
     nc: u32,
     priority: [u8; 3],
-    ack_required: [bool; 3],
+    ack_required: EventTransitionBits,
 ) -> (
     Arc<RwLock<ObjectDatabase>>,
-    Arc<NetworkLayer<RecordingTransport>>,
-    Arc<AtomicU8>,
-    Arc<Mutex<ServerTsm>>,
-    Arc<StdMutex<Vec<Bytes>>>,
+    Arc<NetworkLayer<TestTransport>>,
+    Arc<CommState>,
+    Arc<Mutex<LearnedRouterCache>>,
+    SendLog,
     ObjectIdentifier,
 ) {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(0)); // DCC enabled
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let comm_state = Arc::new(CommState::default()); // DCC enabled
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     let mut db = clocked_test_database();
     // NotificationClass with the configured per-transition arrays and a single
@@ -218,7 +198,9 @@ async fn fixture_with_commanded_nc(
         bacnet_objects::notification_class::NotificationClass::new(nc, "NC").unwrap();
     notification_class.priority = priority;
     notification_class.ack_required = ack_required;
-    notification_class.add_destination(local_broadcast_destination());
+    notification_class
+        .add_destination(local_broadcast_destination())
+        .unwrap();
     db.add(Box::new(notification_class)).unwrap();
 
     db.add(Box::new(
@@ -251,147 +233,7 @@ async fn fixture_with_commanded_nc(
 
     let db = Arc::new(RwLock::new(db));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    (db, network, comm_state, server_tsm, sent, oid)
-}
-
-/// Per-transition `Priority` from the NotificationClass is projected into
-/// the broadcast EventNotification (TO_OFFNORMAL -> PRIORITY[0] = 50),
-/// not the legacy hardcoded 100.
-#[tokio::test]
-async fn event_notification_projects_offnormal_priority_from_class() {
-    let (db, network, comm_state, server_tsm, sent, oid) =
-        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
-
-    let change = EventStateChange {
-        from: EventState::NORMAL,
-        to: EventState::HIGH_LIMIT,
-    };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-        &db,
-        &network,
-        &comm_state,
-        &server_tsm,
-        &NotificationTransactions::new(),
-        &oid,
-        (change, EventType::OUT_OF_RANGE),
-        1000,
-    )
-    .await;
-
-    let notif = decode_broadcast_notification(&sent);
-    assert_eq!(notif.priority, 50, "TO_OFFNORMAL priority from PRIORITY[0]");
-    assert!(
-        notif.ack_required,
-        "TO_OFFNORMAL ack_required from ACK_REQUIRED bit 0"
-    );
-}
-
-/// TO_FAULT projects PRIORITY[1] and ACK_REQUIRED bit 1.
-#[tokio::test]
-async fn event_notification_projects_fault_priority_from_class() {
-    let (db, network, comm_state, server_tsm, sent, oid) =
-        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
-
-    let change = EventStateChange {
-        from: EventState::NORMAL,
-        to: EventState::FAULT,
-    };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-        &db,
-        &network,
-        &comm_state,
-        &server_tsm,
-        &NotificationTransactions::new(),
-        &oid,
-        (change, EventType::CHANGE_OF_RELIABILITY),
-        1000,
-    )
-    .await;
-
-    let notif = decode_broadcast_notification(&sent);
-    assert_eq!(notif.priority, 150, "TO_FAULT priority from PRIORITY[1]");
-    assert!(
-        !notif.ack_required,
-        "TO_FAULT ack_required from ACK_REQUIRED bit 1"
-    );
-    // Clause 13.2.5.3: a transition to FAULT is reported as
-    // CHANGE_OF_RELIABILITY, not as the object's own algorithm. Asserted on the
-    // decoded wire bytes rather than on `event_type()` in isolation, so the
-    // value is checked where it actually reaches a peer.
-    assert_eq!(
-        notif.event_type,
-        EventType::CHANGE_OF_RELIABILITY.to_raw(),
-        "TO_FAULT must be reported as CHANGE_OF_RELIABILITY"
-    );
-}
-
-/// The from-FAULT direction, which Clauses 13.8 and 13.9 state separately from
-/// the to-FAULT case: "The Event Type CHANGE_OF_RELIABILITY shall be used for
-/// reporting a transition from FAULT."
-///
-/// Worth its own test because the transition coordinate differs — this is a
-/// TO_NORMAL transition for Priority and Ack_Required purposes, while still
-/// being CHANGE_OF_RELIABILITY for Event Type. A fix that keyed the event type
-/// off the transition category rather than the states would get this wrong.
-#[tokio::test]
-async fn event_notification_from_fault_is_change_of_reliability() {
-    let (db, network, comm_state, server_tsm, sent, oid) =
-        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
-
-    let change = EventStateChange {
-        from: EventState::FAULT,
-        to: EventState::NORMAL,
-    };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-        &db,
-        &network,
-        &comm_state,
-        &server_tsm,
-        &NotificationTransactions::new(),
-        &oid,
-        (change, EventType::CHANGE_OF_RELIABILITY),
-        1000,
-    )
-    .await;
-
-    let notif = decode_broadcast_notification(&sent);
-    assert_eq!(
-        notif.event_type,
-        EventType::CHANGE_OF_RELIABILITY.to_raw(),
-        "a transition FROM FAULT is also CHANGE_OF_RELIABILITY"
-    );
-    // ...while the transition coordinate is still TO_NORMAL.
-    assert_eq!(notif.priority, 250, "TO_NORMAL priority from PRIORITY[2]");
-}
-
-/// TO_NORMAL projects PRIORITY[2] (250), not the legacy hardcoded 200.
-#[tokio::test]
-async fn event_notification_projects_normal_priority_from_class() {
-    let (db, network, comm_state, server_tsm, sent, oid) =
-        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
-
-    let change = EventStateChange {
-        from: EventState::HIGH_LIMIT,
-        to: EventState::NORMAL,
-    };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-        &db,
-        &network,
-        &comm_state,
-        &server_tsm,
-        &NotificationTransactions::new(),
-        &oid,
-        (change, EventType::OUT_OF_RANGE),
-        1000,
-    )
-    .await;
-
-    let notif = decode_broadcast_notification(&sent);
-    assert_eq!(notif.priority, 250, "TO_NORMAL priority from PRIORITY[2]");
-    assert!(
-        notif.ack_required,
-        "TO_NORMAL ack_required from ACK_REQUIRED bit 2"
-    );
+    (db, network, comm_state, learned_routers, sent, oid)
 }
 
 /// A `Notification_Class` naming an object that does not exist distributes
@@ -403,20 +245,16 @@ async fn event_notification_projects_normal_priority_from_class() {
 /// a deliberate choice for an undefined configuration, not a mandate.
 ///
 /// Silence is the defensible reading: a class that does not exist supplies no
-/// Recipient_List, and 13.2.5 distributes only "to the notification-clients
-/// specified by the Recipient_List input". The alternative was the previous
+/// Recipient_List, and 13.2.5 restricts distribution to that input's
+/// notification-clients. The alternative was the previous
 /// behavior, where a misconfigured `Notification_Class` broadcast the alarm to
 /// every device on the link.
 #[tokio::test]
 async fn event_notification_missing_class_distributes_nothing() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let comm_state = Arc::new(CommState::default());
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     let mut db = clocked_test_database();
     db.add(Box::new(
@@ -452,20 +290,27 @@ async fn event_notification_missing_class_distributes_nothing() {
         from: EventState::NORMAL,
         to: EventState::HIGH_LIMIT,
     };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-        &db,
-        &network,
-        &comm_state,
-        &server_tsm,
-        &NotificationTransactions::new(),
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
+        &crate::server::event_delivery::EventDelivery {
+            db: &db,
+            network: &network,
+            comm_state: &comm_state,
+            learned_routers: &learned_routers,
+            notification_transactions: &NotificationTransactions::new(),
+            device_bindings: &Arc::new(RwLock::new(
+                crate::server::device_bindings::DeviceBindingTable::new(),
+            )),
+            suppressions: &Default::default(),
+            retry_timeout_ms: 1000,
+            local_apdu_capacity: 1476,
+        },
         &oid,
         (change, EventType::OUT_OF_RANGE),
-        1000,
     )
     .await;
 
     assert!(
-        sent.lock().unwrap().is_empty(),
+        sent.is_empty(),
         "a Notification_Class that does not exist names no recipients, so \
          nothing may be distributed"
     );
@@ -476,8 +321,12 @@ async fn event_notification_missing_class_distributes_nothing() {
 /// `Notify_Type == ALARM`, so an EVENT notification would wrongly clear it.
 #[tokio::test]
 async fn event_notification_event_notify_type_honors_class_ack_required() {
-    let (db, network, comm_state, server_tsm, sent, oid) =
-        fixture_with_commanded_nc(5, [50, 150, 250], [true, false, true]).await;
+    let (db, network, comm_state, learned_routers, sent, oid) = fixture_with_commanded_nc(
+        5,
+        [50, 150, 250],
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL,
+    )
+    .await;
     // Reconfigure the AI to Notify_Type = EVENT.
     {
         let mut guard = db.write().await;
@@ -495,19 +344,26 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
         from: EventState::NORMAL,
         to: EventState::HIGH_LIMIT,
     };
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-        &db,
-        &network,
-        &comm_state,
-        &server_tsm,
-        &NotificationTransactions::new(),
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
+        &crate::server::event_delivery::EventDelivery {
+            db: &db,
+            network: &network,
+            comm_state: &comm_state,
+            learned_routers: &learned_routers,
+            notification_transactions: &NotificationTransactions::new(),
+            device_bindings: &Arc::new(RwLock::new(
+                crate::server::device_bindings::DeviceBindingTable::new(),
+            )),
+            suppressions: &Default::default(),
+            retry_timeout_ms: 1000,
+            local_apdu_capacity: 1476,
+        },
         &oid,
         (change, EventType::OUT_OF_RANGE),
-        1000,
     )
     .await;
 
-    let notif = decode_broadcast_notification(&sent);
+    let notif = decode_broadcast_notification(&sent.npdus());
     // ack_required is encoded for both ALARM and EVENT notify types; the
     // per-transition ACK_REQUIRED bit 0 (TO_OFFNORMAL) is true here.
     assert!(
@@ -579,31 +435,35 @@ pub(super) fn db_with_high_limit_transition(
 /// Drive the per-write path once and return the broadcasts it produced.
 pub(super) async fn broadcasts_from_per_write_path(
     db: &Arc<tokio::sync::RwLock<ObjectDatabase>>,
-    comm_state_value: u8,
+    state: DccState,
 ) -> Vec<Bytes> {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(comm_state_value));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    let comm_state = Arc::new(CommState::default());
+    comm_state.set_for_test(state);
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
-    BACnetServer::<RecordingTransport>::fire_event_notifications(
-        db,
-        &network,
-        &comm_state,
-        &server_tsm,
-        &NotificationTransactions::new(),
+    BACnetServer::<TestTransport>::fire_event_notifications_with_bindings(
+        &crate::server::event_delivery::EventDelivery {
+            db,
+            network: &network,
+            comm_state: &comm_state,
+            learned_routers: &learned_routers,
+            notification_transactions: &NotificationTransactions::new(),
+            device_bindings: &Arc::new(RwLock::new(
+                crate::server::device_bindings::DeviceBindingTable::new(),
+            )),
+            suppressions: &Default::default(),
+            retry_timeout_ms: 1000,
+            local_apdu_capacity: 1476,
+        },
+        &Arc::new(RwLock::new(crate::cov::CovSubscriptionTable::new())),
         &oid,
-        1000,
     )
     .await;
 
-    let out = sent.lock().unwrap().clone();
-    out
+    sent.npdus()
 }
 
 /// A cleared `Event_Enable` bit must suppress the outbound notification.
@@ -616,7 +476,7 @@ pub(super) async fn broadcasts_from_per_write_path(
 #[tokio::test]
 async fn event_enable_cleared_suppresses_per_write_send() {
     let db = db_with_high_limit_transition(0x00); // no transition distributable
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
+    let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
 
     assert!(
         sent.is_empty(),
@@ -648,11 +508,7 @@ async fn event_enable_cleared_suppresses_per_write_send() {
 /// replaced with `if true`.
 #[tokio::test(start_paused = true)]
 async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
 
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     for (p, v) in [
@@ -723,11 +579,12 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
             None,
             PropertyValue::Real(2.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .expect("local write should succeed");
     assert!(
-        sent.lock().unwrap().is_empty(),
+        sent.is_empty(),
         "a nonzero Time_Delay must not send on the write itself"
     );
 
@@ -735,9 +592,9 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     assert!(
-        sent.lock().unwrap().is_empty(),
+        sent.is_empty(),
         "Event_Enable cleared: the periodic Time_Delay path must not send, got {} broadcast(s)",
-        sent.lock().unwrap().len()
+        sent.len()
     );
 
     // The transition did fire internally — only distribution was withheld.
@@ -755,11 +612,7 @@ async fn event_enable_cleared_suppresses_periodic_time_delay_send() {
 
 #[tokio::test(start_paused = true)]
 async fn periodic_time_delay_carries_detector_event_type_to_wire() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let transport = RecordingTransport {
-        sent_broadcast: StdArc::clone(&sent),
-        local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-    };
+    let (transport, sent) = recording_transport();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     for (property, value) in [
         (PropertyIdentifier::HIGH_LIMIT, 80.0),
@@ -822,15 +675,16 @@ async fn periodic_time_delay_carries_detector_event_type_to_wire() {
             None,
             PropertyValue::Real(2.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .expect("local write should seed delayed transition");
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    let notif = decode_broadcast_notification(&sent);
+    let notif = decode_broadcast_notification(&sent.npdus());
     assert_eq!(
         notif.event_type,
-        EventType::OUT_OF_RANGE.to_raw(),
+        EventType::OUT_OF_RANGE,
         "the periodic path must preserve the detector's OUT_OF_RANGE type"
     );
 }

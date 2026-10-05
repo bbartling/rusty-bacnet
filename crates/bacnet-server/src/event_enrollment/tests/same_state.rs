@@ -1,8 +1,8 @@
 //! Same-state transition actions (#166; ASHRAE 135-2020 Clause 13.2.2.1.4).
 //!
-//! "The actions are the same for all transitions and they shall be executed
-//! even if the transition does not change the event state (e.g., a transition
-//! from the OFFNORMAL event state to the OFFNORMAL event state)." The pre-#166
+//! Every indicated transition runs the same actions, including transitions
+//! with identical source and destination states such as OFFNORMAL→OFFNORMAL.
+//! The pre-#166
 //! evaluator dropped every evaluation whose result equaled the current state;
 //! these tests pin the indication-driven replacement:
 //!
@@ -13,8 +13,8 @@
 //!   the transition is emitted with its `Event_Enable`-scoped `distribute`;
 //! - a *persisting* condition that satisfies no algorithm condition
 //!   (OUT_OF_RANGE sitting in HIGH_LIMIT, COS sitting at the SAME alarm
-//!   value) still emits nothing (Clause 13.3's "no condition evaluates to
-//!   true → no transition").
+//!   value) still emits nothing (Clause 13.3 requires a satisfied algorithm
+//!   condition before indicating a transition).
 //!
 //! CHANGE_OF_VALUE's same-state coverage lives in `change_of_value.rs`.
 
@@ -24,6 +24,7 @@ use bacnet_objects::binary::BinaryInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
 };
@@ -42,12 +43,12 @@ fn setup_cos(
     let bi_oid = bi.object_identifier();
     db.add(Box::new(bi)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(3, "EE-COS", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(3, "EE-COS", EventType::CHANGE_OF_STATE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay,
         list_of_values: alarm_values
@@ -55,7 +56,7 @@ fn setup_cos(
             .map(|v| BACnetPropertyStates::BinaryValue(*v))
             .collect(),
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -94,22 +95,21 @@ fn event_state(db: &ObjectDatabase, ee_oid: &ObjectIdentifier) -> EventState {
     }
 }
 
-fn acked_transitions(db: &ObjectDatabase, ee_oid: &ObjectIdentifier) -> u8 {
+fn acked_transitions(db: &ObjectDatabase, ee_oid: &ObjectIdentifier) -> EventTransitionBits {
     match db
         .get(ee_oid)
         .unwrap()
         .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
         .unwrap()
     {
-        PropertyValue::BitString { data, .. } => bacnet_types::bitstring::unpack_octet(&data, 3),
+        PropertyValue::BitString { data, .. } => EventTransitionBits::from_bacnet(&data),
         other => panic!("ACKED_TRANSITIONS must read BitString, got {other:?}"),
     }
 }
 
-/// Clause 13.3.2 condition (c) — "Optional: ... equal to one of the values
-/// contained in pAlarmValues that is DIFFERENT from the value that caused the
-/// last transition to OFFNORMAL ... indicate a transition to the OFFNORMAL
-/// event state" — implemented so the Clause 13.2.2.1.4 actions execute for
+/// Clause 13.3.2's optional condition (c) re-indicates OFFNORMAL for a match
+/// in pAlarmValues that differs from the value at the last OFFNORMAL
+/// indication. It is implemented so the Clause 13.2.2.1.4 actions execute for
 /// the OFFNORMAL→OFFNORMAL same-state transition: the transition is emitted
 /// and `Event_State` stores the specific state.
 #[test]
@@ -159,7 +159,7 @@ fn cos_moving_between_alarm_values_reindicates_offnormal() {
     );
 }
 
-/// Condition (c)'s "for pTimeDelay" is honored too: with a nonzero delay the
+/// Condition (c)'s pTimeDelay persistence requirement is honored too: with a nonzero delay the
 /// same-state re-indication counts down like any offnormal indication, and a
 /// flip back to the ORIGINAL alarm value mid-countdown re-seeds it (the
 /// condition identity is the matched value).
@@ -270,15 +270,15 @@ fn oor_across_band_stores_the_specific_state() {
 /// Clause 13.2.3 on a received transition: with the referenced Notification
 /// Class requiring acknowledgment of TO_OFFNORMAL, the corresponding
 /// `Acked_Transitions` bit is CLEARED (ack owed) when the transition fires —
-/// on the same-state re-indication too, because the actions "are the same for
-/// all transitions".
+/// on the same-state re-indication too, because all transitions run the
+/// same actions.
 #[test]
 fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
     let (mut db, ee_oid, bi_oid) = setup_cos(1, &[1, 0], 0);
 
     // Reference a Notification Class (instance 7) requiring TO_OFFNORMAL ack.
     let mut nc = NotificationClass::new(7, "NC-7").unwrap();
-    nc.ack_required = [true, false, false];
+    nc.ack_required = EventTransitionBits::TO_OFFNORMAL;
     db.add(Box::new(nc)).unwrap();
     db.get_mut(&ee_oid)
         .unwrap()
@@ -292,7 +292,7 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
 
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b111,
+        EventTransitionBits::all(),
         "initial condition: no event of any type has ever occurred (Clause 12.12)"
     );
 
@@ -300,7 +300,7 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b110,
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
         "TO_OFFNORMAL ack owed -> Acked_Transitions bit 0 cleared (13.2.3)"
     );
 
@@ -309,10 +309,13 @@ fn acked_transitions_bit_clears_when_notification_class_requires_ack() {
     // is it does not SET).
     set_monitored(&mut db, &bi_oid, 0);
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
-    assert_eq!(acked_transitions(&db, &ee_oid), 0b110);
+    assert_eq!(
+        acked_transitions(&db, &ee_oid),
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL
+    );
 }
 
-/// The other half of 13.2.3's sentence: "otherwise it is set." With no
+/// Clause 13.2.3 sets the bit when acknowledgment is not required. With no
 /// Notification Class object resolvable, a fired transition leaves the bit at
 /// the acknowledged state; with a class that requires nothing, the same — a
 /// transition is never stranded unacknowledged for want of a class object.
@@ -323,7 +326,7 @@ fn acked_transitions_bit_sets_when_no_ack_required() {
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b111,
+        EventTransitionBits::all(),
         "no Ack_Required available -> the bit is set (13.2.3)"
     );
 
@@ -344,23 +347,27 @@ fn acked_transitions_bit_sets_when_no_ack_required() {
         )
         .unwrap();
         // Internal channel, staging an already-owed TO_NORMAL ack.
-        obj.set_acked_transitions_internal(0x04, false).unwrap();
+        obj.set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
+            .unwrap();
     }
-    assert_eq!(acked_transitions(&db, &ee_oid), 0b011);
+    assert_eq!(
+        acked_transitions(&db, &ee_oid),
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT
+    );
     set_monitored(&mut db, &_bi_oid, 0);
     // Value 0 is not in the alarm list [1]: OFFNORMAL -> NORMAL, TO_NORMAL
     // is not ack-required, so its bit is SET by the transition.
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b111,
+        EventTransitionBits::all(),
         "TO_NORMAL with ack not required -> bit 2 set by the transition action"
     );
 }
 
 /// A cleared `Event_Enable` bit suppresses only distribution — Clause 12.12
-/// scopes the property to "enabling and disabling the distribution of
-/// notifications" — never the same-state transition actions: the transition
+/// uses the property to control whether notifications are distributed,
+/// never the same-state transition actions: the transition
 /// is still emitted (with `distribute == false`) and `Event_State` stored.
 #[test]
 fn event_enable_suppresses_distribution_not_same_state_actions() {
@@ -406,7 +413,7 @@ fn acked_transitions_to_normal_clear_with_ack_required() {
     let (mut db, ee_oid, bi_oid) = setup_cos(1, &[1], 0);
 
     let mut nc = NotificationClass::new(9, "NC-9").unwrap();
-    nc.ack_required = [false, false, true]; // TO_NORMAL
+    nc.ack_required = EventTransitionBits::TO_NORMAL;
     db.add(Box::new(nc)).unwrap();
     db.get_mut(&ee_oid)
         .unwrap()
@@ -420,14 +427,14 @@ fn acked_transitions_to_normal_clear_with_ack_required() {
 
     // NORMAL -> OFFNORMAL (not ack-required): TO_OFFNORMAL bit stays set.
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
-    assert_eq!(acked_transitions(&db, &ee_oid), 0b111);
+    assert_eq!(acked_transitions(&db, &ee_oid), EventTransitionBits::all());
 
     // OFFNORMAL -> NORMAL with TO_NORMAL ack required: bit 2 clears.
     set_monitored(&mut db, &bi_oid, 0);
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b011,
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_FAULT,
         "TO_NORMAL ack owed -> bit 2 cleared (13.2.3 is direction-complete)"
     );
 }
@@ -440,7 +447,7 @@ fn ack_bit_maintenance_is_independent_of_event_enable() {
     let (mut db, ee_oid, _bi_oid) = setup_cos(1, &[1], 0);
 
     let mut nc = NotificationClass::new(11, "NC-11").unwrap();
-    nc.ack_required = [true, false, false];
+    nc.ack_required = EventTransitionBits::TO_OFFNORMAL;
     db.add(Box::new(nc)).unwrap();
     {
         let obj = db.get_mut(&ee_oid).unwrap();
@@ -471,7 +478,7 @@ fn ack_bit_maintenance_is_independent_of_event_enable() {
     );
     assert_eq!(
         acked_transitions(&db, &ee_oid),
-        0b110,
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
         "...while the ack-owed bit STILL clears — Event_Enable never scopes it"
     );
 }

@@ -3,6 +3,7 @@ name = "point-discover"
 version = "0.1.0"
 edition = "2021"
 description = "Discover a BACnet device by Who-Is, enumerate object-list points, exit"
+license.workspace = true
 publish = false
 
 [[bin]]

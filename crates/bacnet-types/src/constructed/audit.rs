@@ -3,11 +3,91 @@
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
 
-use crate::bitstring::AuditOperationFlags;
-use crate::enums::{AuditOperation, ErrorClass, ErrorCode, PropertyIdentifier};
-use crate::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, Time};
+use crate::bitstring::{AuditOperationFlags, LogStatus};
+use crate::enums::{
+    AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
+use crate::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
 
 use super::{BACnetAddress, BACnetRecipient};
+
+/// `BACnetObjectSelector` (Clause 21), used by Audit Reporter Monitored_Objects.
+///
+/// This CHOICE uses application tags, not context tags. NULL is an ignored
+/// entry, not a wildcard; ObjectType includes the repository's extensible values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BACnetObjectSelector {
+    /// Ignore this array entry.
+    None,
+    /// Select exactly one object.
+    Object(ObjectIdentifier),
+    /// Select all objects of this type.
+    ObjectType(ObjectType),
+}
+
+impl BACnetObjectSelector {
+    /// Project to the primitive application-tagged codec representation.
+    pub fn encode_property_value(&self) -> PropertyValue {
+        match self {
+            Self::None => PropertyValue::Null,
+            Self::Object(object) => PropertyValue::ObjectIdentifier(*object),
+            Self::ObjectType(kind) => PropertyValue::Enumerated(kind.to_raw()),
+        }
+    }
+
+    /// Decode one application value, rejecting alternatives outside the CHOICE.
+    pub fn decode_property_value(value: &PropertyValue) -> Result<Self, crate::error::Error> {
+        match value {
+            PropertyValue::Null => Ok(Self::None),
+            PropertyValue::ObjectIdentifier(object) => Ok(Self::Object(*object)),
+            PropertyValue::Enumerated(kind) => Ok(Self::ObjectType(ObjectType::from_raw(*kind))),
+            _ => Err(crate::error::Error::Encoding(
+                "BACnetObjectSelector requires NULL, ObjectIdentifier, or Enumerated".into(),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod selector_tests {
+    use super::*;
+
+    #[test]
+    fn audit_object_selector_preserves_choice_and_extensible_type() {
+        let object = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 42).unwrap();
+        for (selector, value) in [
+            (BACnetObjectSelector::None, PropertyValue::Null),
+            (
+                BACnetObjectSelector::Object(object),
+                PropertyValue::ObjectIdentifier(object),
+            ),
+            (
+                BACnetObjectSelector::ObjectType(ObjectType::BINARY_VALUE),
+                PropertyValue::Enumerated(5),
+            ),
+            (
+                BACnetObjectSelector::ObjectType(ObjectType::from_raw(128)),
+                PropertyValue::Enumerated(128),
+            ),
+        ] {
+            assert_eq!(selector.encode_property_value(), value);
+            assert_eq!(
+                BACnetObjectSelector::decode_property_value(&value).unwrap(),
+                selector
+            );
+        }
+        for invalid in [
+            PropertyValue::Unsigned(5),
+            PropertyValue::Boolean(false),
+            PropertyValue::List(vec![]),
+        ] {
+            assert!(matches!(
+                BACnetObjectSelector::decode_property_value(&invalid),
+                Err(crate::error::Error::Encoding(_))
+            ));
+        }
+    }
+}
 
 /// One audit operation record (`BACnetAuditNotification`, Clause 21).
 #[derive(Debug, Clone, PartialEq)]
@@ -70,8 +150,8 @@ pub struct BACnetAuditLogRecord {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)] // Preserve the existing direct public variant shape.
 pub enum BACnetAuditLogDatum {
-    /// Three-bit BACnetLogStatus: log-disabled, buffer-purged, log-interrupted.
-    LogStatus(u8),
+    /// A status change of the log itself.
+    LogStatus(LogStatus),
     /// A bare BACnetAuditNotification wrapped by choice tag `[1]`.
     AuditNotification(BACnetAuditNotification),
     /// Clock adjustment in seconds, encoded as a four-octet REAL under `[2]`.
@@ -97,8 +177,9 @@ pub enum BACnetAuditLogQueryParameters {
         target_priority: Option<u8>,
         /// Optional operation bit filter.
         operations: Option<AuditOperationFlags>,
-        /// Whether only successful operations match.
-        successful_actions_only: bool,
+        /// Which operation outcomes match: all, successes-only, or
+        /// failures-only (`BACnetSuccessFilter`, Clause 21.6 tags \[7\]/\[4\]).
+        successful_actions_only: BACnetSuccessFilter,
     },
     /// Match operations by source attributes.
     BySource {
@@ -110,8 +191,9 @@ pub enum BACnetAuditLogQueryParameters {
         source_object_identifier: Option<ObjectIdentifier>,
         /// Optional operation bit filter.
         operations: Option<AuditOperationFlags>,
-        /// Whether only successful operations match.
-        successful_actions_only: bool,
+        /// Which operation outcomes match: all, successes-only, or
+        /// failures-only (`BACnetSuccessFilter`, Clause 21.6 tags \[7\]/\[4\]).
+        successful_actions_only: BACnetSuccessFilter,
     },
 }
 
@@ -151,5 +233,18 @@ mod tests {
             },
         };
         assert_eq!(record.clone(), record);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn legacy_bool_helper_maps_old_meaning_to_named_filter() {
+        assert_eq!(
+            BACnetSuccessFilter::from_legacy_bool(true),
+            BACnetSuccessFilter::SUCCESSES_ONLY
+        );
+        assert_eq!(
+            BACnetSuccessFilter::from_legacy_bool(false),
+            BACnetSuccessFilter::ALL
+        );
     }
 }

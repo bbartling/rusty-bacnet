@@ -158,46 +158,54 @@ async fn dispatch(
     client_max_apdu: u16,
     local_max_apdu: u32,
 ) -> (
-    SentFrames,
-    Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    SendLog,
+    Arc<segmented_send::SegmentedSendRegistry>,
     MacAddr,
+    Arc<crate::server::request_tasks::RequestTasks>,
 ) {
-    let sent = SentFrames::default();
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(Arc::clone(
-        &sent,
-    ))));
+    dispatch_with_budget(
+        segmentation,
+        client_accepts_segmented,
+        client_max_apdu,
+        local_max_apdu,
+        GetEventInformationBudget::default(),
+    )
+    .await
+}
+
+async fn dispatch_with_budget(
+    segmentation: Segmentation,
+    client_accepts_segmented: bool,
+    client_max_apdu: u16,
+    local_max_apdu: u32,
+    budget: GetEventInformationBudget,
+) -> (
+    SendLog,
+    Arc<segmented_send::SegmentedSendRegistry>,
+    MacAddr,
+    Arc<crate::server::request_tasks::RequestTasks>,
+) {
+    let (network, sent) = recording_network();
     let db = Arc::new(RwLock::new(database()));
-    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
-    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let cov_in_flight = Arc::new(Semaphore::new(1));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
-    let notification_transactions = NotificationTransactions::new();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
-    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
     let config = ServerConfig {
+        get_event_information_budget: budget,
         max_apdu_length: local_max_apdu,
         segmentation_supported: segmentation,
         ..ServerConfig::default()
     };
     let source_mac = test_mac(41);
+    let request_tasks = Arc::new(crate::server::request_tasks::RequestTasks::default());
 
-    BACnetServer::<RecordingTransport>::handle_confirmed_request(
-        &db,
-        &network,
-        &cov_table,
-        &seg_ack_senders,
-        &seg_send_permits,
-        &cov_in_flight,
-        &server_tsm,
-        &notification_transactions,
+    BACnetServer::<TestTransport>::handle_confirmed_request(
+        &RequestServices {
+            db: Arc::clone(&db),
+            seg_ack_senders: Arc::clone(&seg_ack_senders),
+            ..RequestServices::for_test(Arc::clone(&network), config.clone())
+        },
         &confirmed_request_tracker,
-        &device_bindings,
-        &comm_state,
-        &dcc_timer,
-        &config,
+        &request_tasks.spawner(),
         source_mac.as_slice(),
         None,
         ConfirmedRequestPdu {
@@ -216,21 +224,47 @@ async fn dispatch(
     )
     .await;
 
-    (sent, seg_ack_senders, source_mac)
+    (sent, seg_ack_senders, source_mac, request_tasks)
 }
 
 #[tokio::test]
-async fn first_summary_over_unsegmented_budget_uses_existing_segmentation_abort() {
+async fn first_summary_over_unsegmented_budget_uses_buffer_overflow_abort() {
     assert!(unsegmented_apdu_len(full_service_ack()) > 50);
     for (client_max_apdu, local_max_apdu) in [(50, 1476), (480, 50)] {
-        let (sent, _, _) =
+        let (sent, _, _, _owner) =
             dispatch(Segmentation::NONE, false, client_max_apdu, local_max_apdu).await;
         wait_for_sent_len(&sent, 1).await;
         assert_eq!(sent_count(&sent), 1);
-        assert_eq!(
-            abort_reason(&sent, 0),
-            AbortReason::SEGMENTATION_NOT_SUPPORTED
-        );
+        assert_eq!(abort_reason(&sent, 0), AbortReason::BUFFER_OVERFLOW);
+    }
+}
+
+#[tokio::test]
+async fn get_event_information_configured_abort_independent_of_segmentation() {
+    for segmentation in [Segmentation::NONE, Segmentation::BOTH] {
+        for (budget, expected) in [
+            (
+                GetEventInformationBudget {
+                    max_objects: 1,
+                    ..Default::default()
+                },
+                AbortReason::OUT_OF_RESOURCES,
+            ),
+            (
+                GetEventInformationBudget {
+                    max_service_ack_bytes: 4,
+                    ..Default::default()
+                },
+                AbortReason::BUFFER_OVERFLOW,
+            ),
+        ] {
+            let (sent, _, _, owner) =
+                dispatch_with_budget(segmentation, true, 50, 1476, budget).await;
+            wait_for_sent_len(&sent, 1).await;
+            assert_eq!(abort_reason(&sent, 0), expected);
+            owner.close();
+            while owner.join_next().await.is_some() {}
+        }
     }
 }
 
@@ -238,8 +272,18 @@ async fn first_summary_over_unsegmented_budget_uses_existing_segmentation_abort(
 async fn segmentation_capable_dispatch_retains_the_complete_service_ack() {
     let expected = full_service_ack();
     assert!(unsegmented_apdu_len(expected.clone()) > 50);
-    let (sent, seg_ack_senders, source_mac) = dispatch(Segmentation::BOTH, true, 50, 1476).await;
-    let key = segmented_transaction_key(&source_mac, None, INVOKE_ID);
+    let (sent, seg_ack_senders, source_mac, owner) = tokio::time::timeout(
+        Duration::from_secs(1),
+        dispatch(Segmentation::BOTH, true, 50, 1476),
+    )
+    .await
+    .expect("parent must return without awaiting segmented response ACKs");
+    let key = segmented_transaction_key(
+        &source_mac,
+        None,
+        INVOKE_ID,
+        bacnet_transport::port::TransportProvenance::unverified(),
+    );
     let mut reconstructed = BytesMut::new();
     let mut index = 0usize;
 
@@ -268,4 +312,6 @@ async fn segmentation_capable_dispatch_retains_the_complete_service_ack() {
     }
 
     assert_eq!(reconstructed.freeze(), expected);
+    owner.close();
+    while owner.join_next().await.is_some() {}
 }

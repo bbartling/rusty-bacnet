@@ -305,7 +305,15 @@ fn real_device_and_network_port_overrides_not_createable_or_deleteable() {
     assert!(!device.is_createable(), "Device must not be createable");
     assert!(!device.is_deleteable(), "Device must not be deleteable");
 
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
+    let np = NetworkPortObject::new_non_bip(
+        1,
+        "NP-1",
+        bacnet_types::enums::NetworkType::from_raw(0),
+        0,
+        Default::default(),
+        1476,
+    )
+    .unwrap();
     assert!(!np.is_createable(), "NetworkPort must not be createable");
     assert!(!np.is_deleteable(), "NetworkPort must not be deleteable");
 }
@@ -332,8 +340,8 @@ fn services_match_implementation() {
     assert!(service_names.contains(&"DeleteObject"));
     assert!(service_names.contains(&"WhoIs"));
     assert!(
-        !service_names.contains(&"WriteGroup"),
-        "server PICS must not list unsupported inbound WriteGroup"
+        service_names.contains(&"WriteGroup"),
+        "server PICS lists the WriteGroup it executes on Channels"
     );
 
     // Initiator services
@@ -382,7 +390,7 @@ fn text_output_contains_key_sections() {
     assert!(text.contains("Data Link Layer Support"));
     assert!(text.contains("BACnet/IP (Annex J)"));
     assert!(text.contains("Character Sets Supported"));
-    assert!(text.contains("UTF-8"));
+    assert!(text.contains("ISO 10646 (UTF-8)"));
     assert!(text.contains("Special Functionality"));
     assert!(text.contains("Intrinsic event reporting"));
 }
@@ -519,7 +527,7 @@ fn make_real_objects_db() -> ObjectDatabase {
 }
 
 /// Helper: look up a property's writable flag in a PICS ObjectTypeSupport.
-fn pics_writable<'a>(pics: &'a Pics, object_type: ObjectType, pid: PropertyIdentifier) -> bool {
+fn pics_writable(pics: &Pics, object_type: ObjectType, pid: PropertyIdentifier) -> bool {
     pics.supported_object_types
         .iter()
         .find(|ot| ot.object_type == object_type)
@@ -596,12 +604,12 @@ fn pics_event_properties_writable_on_binary_and_multistate_types() {
 }
 
 #[test]
-fn pics_priority_array_writable_on_commandable_types() {
+fn pics_priority_array_read_only_on_commandable_types() {
     let db = make_real_objects_db();
     let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
 
-    // Commandable types accept PRIORITY_ARRAY (direct) and PRESENT_VALUE
-    // (via the priority array). RELINQUISH_DEFAULT grew a validated write arm
+    // Commandable types accept PRESENT_VALUE commands; PRIORITY_ARRAY is read-only.
+    // RELINQUISH_DEFAULT grew a validated write arm
     // in #270 (the standard permits writability), so the PICS advertises it.
     for ot in [
         ObjectType::ANALOG_OUTPUT,
@@ -612,8 +620,8 @@ fn pics_priority_array_writable_on_commandable_types() {
         ObjectType::MULTI_STATE_VALUE,
     ] {
         assert!(
-            pics_writable(&pics, ot, PropertyIdentifier::PRIORITY_ARRAY),
-            "{ot:?}: PRIORITY_ARRAY should be writable"
+            !pics_writable(&pics, ot, PropertyIdentifier::PRIORITY_ARRAY),
+            "{ot:?}: PRIORITY_ARRAY should be read-only"
         );
         assert!(
             pics_writable(&pics, ot, PropertyIdentifier::PRESENT_VALUE),
@@ -650,19 +658,20 @@ fn pics_input_present_value_writable_only_when_out_of_service() {
 
 #[test]
 fn pics_state_text_writable_on_multistate_types() {
+    use PropertyIdentifier as P;
     let db = make_real_objects_db();
     let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
 
-    // All three multistate types accept STATE_TEXT writes (array-indexed).
+    // All three multistate types accept STATE_TEXT writes, by element or
+    // whole. A whole write sets Number_Of_States (#1443), whose row stays
+    // read-only, since no write naming it is taken.
     for ot in [
         ObjectType::MULTI_STATE_INPUT,
         ObjectType::MULTI_STATE_OUTPUT,
         ObjectType::MULTI_STATE_VALUE,
     ] {
-        assert!(
-            pics_writable(&pics, ot, PropertyIdentifier::STATE_TEXT),
-            "{ot:?}: STATE_TEXT should be writable"
-        );
+        assert!(pics_writable(&pics, ot, P::STATE_TEXT), "{ot:?}");
+        assert!(!pics_writable(&pics, ot, P::NUMBER_OF_STATES), "{ot:?}");
     }
 }
 
@@ -671,8 +680,9 @@ fn pics_fixed_readonly_properties_never_writable() {
     let db = make_real_objects_db();
     let pics = generate_pics(&db, &ServerConfig::default(), &make_pics_config());
 
-    // The universal identifiers below are never writable. Number_Of_States is
-    // likewise fixed on every object type that exposes it.
+    // The universal identifiers below are never writable. Number_Of_States
+    // is likewise never written itself, though a whole State_Text write
+    // resizes it (#1443).
     for ot in pics.supported_object_types.iter() {
         for pid in [
             PropertyIdentifier::OBJECT_IDENTIFIER,
@@ -735,8 +745,8 @@ fn pics_writability_matches_runtime_write_property() {
     // Cross-check: PICS reports LIMIT_ENABLE writable on AnalogInput AND
     // write_property actually accepts it. The old heuristic reported it
     // non-writable (false-negative); the trait override fixes both.
-    use bacnet_objects::event::LimitEnable;
     use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::bitstring::LimitEnable;
 
     let mut ai = AnalogInputObject::new(1, "ai-1", 95).unwrap();
     // PICS (via the trait method) must report it writable.
@@ -745,7 +755,7 @@ fn pics_writability_matches_runtime_write_property() {
         "is_writable_property must report LIMIT_ENABLE writable on AnalogInput"
     );
     // And the runtime write_property must accept it.
-    let bits = LimitEnable::BOTH.to_bits();
+    let bits = LimitEnable::all().to_bacnet();
     let result = ai.write_property(
         PropertyIdentifier::LIMIT_ENABLE,
         None,
@@ -788,8 +798,8 @@ fn executed_services_match_dispatch_table() {
     use bacnet_types::enums::{ServiceSupported, UnconfirmedServiceChoice};
 
     assert!(
-        !crate::server::EXECUTED_UNCONFIRMED.contains(&UnconfirmedServiceChoice::WRITE_GROUP),
-        "inbound WriteGroup has no execution path"
+        crate::server::EXECUTED_UNCONFIRMED.contains(&UnconfirmedServiceChoice::WRITE_GROUP),
+        "inbound WriteGroup runs on the Channel objects"
     );
 
     let mut from_dispatch: Vec<u8> = crate::server::EXECUTED_CONFIRMED

@@ -1,17 +1,24 @@
 //! SC benchmark helpers: cert generation and SC client/server setup.
 
+use std::io;
 use std::sync::Arc;
 
 use rcgen::{date_time_ymd, CertificateParams, Issuer, KeyPair};
+use tokio::net::TcpStream;
 use tokio_rustls::rustls;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use tokio_rustls::TlsConnector;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::handshake::client::Response;
+use tokio_tungstenite::tungstenite::Error as WsError;
+use tokio_tungstenite::WebSocketStream;
 
 use bacnet_transport::sc::ScTransport;
 use bacnet_transport::sc_frame::Vmac;
-use bacnet_transport::sc_hub::ScHub;
-use bacnet_transport::sc_tls::TlsWebSocket;
+use bacnet_transport::sc_hub::{ScHub, ScHubHandshakeTimeouts, ScHubTlsConfig};
+use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
+use bacnet_types::error::Error;
 
 /// Generated certificate material for testing.
 pub struct CertMaterial {
@@ -136,33 +143,6 @@ fn apply_validity(params: &mut CertificateParams, validity: CertValidity) {
     }
 }
 
-/// Build a rustls ServerConfig from cert material.
-pub fn make_server_tls_config(certs: &CertMaterial) -> Arc<rustls::ServerConfig> {
-    try_make_server_tls_config(certs).unwrap()
-}
-
-/// Try to build a rustls ServerConfig from cert material.
-pub fn try_make_server_tls_config(
-    certs: &CertMaterial,
-) -> Result<Arc<rustls::ServerConfig>, String> {
-    let cert_chain: Vec<CertificateDer<'static>> =
-        CertificateDer::pem_slice_iter(certs.server_cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-    if cert_chain.is_empty() {
-        return Err("no server certificates found".into());
-    }
-    let key = PrivateKeyDer::from_pem_slice(certs.server_key_pem.as_bytes())
-        .map_err(|e| e.to_string())?;
-
-    let config = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key)
-        .map_err(|e| e.to_string())?;
-
-    Ok(Arc::new(config))
-}
-
 /// Build a rustls ClientConfig that trusts the test CA.
 pub fn make_client_tls_config(certs: &CertMaterial) -> Arc<rustls::ClientConfig> {
     try_make_client_tls_config(certs).unwrap()
@@ -209,15 +189,15 @@ pub fn make_client_tls12_config(certs: &CertMaterial) -> Arc<rustls::ClientConfi
     Arc::new(config)
 }
 
-/// Build a rustls ServerConfig that requires client certificates (mTLS).
+/// Build a raw rustls ServerConfig that requires client certificates (mTLS).
 ///
-/// Per ASHRAE 135-2020 Annex AB.3, the hub verifies client certificates
-/// against the trusted CA to enforce mutual TLS authentication.
+/// Retained for independent TLS peers and compatibility. Already-mTLS hubs use
+/// [`try_make_hub_tls_config`] instead; this raw helper's contract is unchanged.
 pub fn make_server_tls_config_mtls(certs: &CertMaterial) -> Arc<rustls::ServerConfig> {
     try_make_server_tls_config_mtls(certs).unwrap()
 }
 
-/// Try to build a rustls ServerConfig that requires client certificates (mTLS).
+/// Try to build a raw mTLS ServerConfig for independent TLS peers and compatibility.
 pub fn try_make_server_tls_config_mtls(
     certs: &CertMaterial,
 ) -> Result<Arc<rustls::ServerConfig>, String> {
@@ -257,7 +237,36 @@ pub fn try_make_server_tls_config_mtls(
     Ok(Arc::new(config))
 }
 
-/// Build a rustls ClientConfig that presents a client certificate (mTLS).
+/// Parse in-memory PEM into owned DER and build validated SC hub TLS policy.
+///
+/// Returns configuration errors without binding or performing file/network I/O.
+/// Unlike the raw peer helper, validates every certificate in the hub chain.
+pub fn try_make_hub_tls_config(certs: &CertMaterial) -> Result<ScHubTlsConfig, Error> {
+    let cert_chain = CertificateDer::pem_slice_iter(certs.server_cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::Encoding(format!("failed to parse server certificates: {e}")))?;
+    let key = PrivateKeyDer::from_pem_slice(certs.server_key_pem.as_bytes())
+        .map_err(|e| Error::Encoding(format!("failed to parse server key: {e}")))?;
+    let ca_certs = CertificateDer::pem_slice_iter(certs.ca_cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::Encoding(format!("failed to parse CA certificates: {e}")))?;
+    ScHubTlsConfig::from_der(ca_certs, cert_chain, key)
+}
+
+/// Build the strict local node policy from in-memory PEM, without file/network I/O.
+pub fn try_make_node_tls_config(certs: &CertMaterial) -> Result<ScNodeTlsConfig, Error> {
+    let chain = CertificateDer::pem_slice_iter(certs.client_cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::Encoding(format!("failed to parse client certificates: {e}")))?;
+    let key = PrivateKeyDer::from_pem_slice(certs.client_key_pem.as_bytes())
+        .map_err(|e| Error::Encoding(format!("failed to parse client key: {e}")))?;
+    let ca = CertificateDer::pem_slice_iter(certs.ca_cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Error::Encoding(format!("failed to parse CA certificates: {e}")))?;
+    ScNodeTlsConfig::from_der(ca, chain, key)
+}
+
+/// Build a raw rustls ClientConfig with client credentials for independent peers.
 ///
 /// The client authenticates to the hub by including its certificate chain
 /// and private key, satisfying the hub's client-auth requirement.
@@ -315,48 +324,59 @@ pub fn try_make_client_tls_config_mtls_with_client_identity(
     Ok(Arc::new(config))
 }
 
-/// Start an SC hub on an ephemeral port.
-pub async fn start_sc_hub(certs: &CertMaterial, hub_vmac: Vmac) -> (ScHub, String) {
-    let tls_config = make_server_tls_config(certs);
-    let acceptor = TlsAcceptor::from(tls_config);
-    let hub = ScHub::start("127.0.0.1:0", acceptor, hub_vmac)
-        .await
-        .unwrap();
-    let addr = hub.local_addr().unwrap();
-    let url = format!("wss://localhost:{}", addr.port());
-    (hub, url)
-}
-
-/// Create an SC transport connected to the hub.
-pub async fn make_sc_transport(
-    hub_url: &str,
-    certs: &CertMaterial,
-    vmac: Vmac,
-) -> ScTransport<TlsWebSocket> {
-    let tls_config = make_client_tls_config(certs);
-    let ws = TlsWebSocket::connect(hub_url, tls_config).await.unwrap();
-    ScTransport::new(ws, vmac)
-}
-
 /// Start an SC hub with mTLS (client certificate required).
+/// Uses a fixed TEST-ONLY hub UUID; not provisioning for deployed devices.
 pub async fn start_sc_hub_mtls(certs: &CertMaterial, hub_vmac: Vmac) -> (ScHub, String) {
-    let tls_config = make_server_tls_config_mtls(certs);
-    let acceptor = TlsAcceptor::from(tls_config);
-    let hub = ScHub::start("127.0.0.1:0", acceptor, hub_vmac)
-        .await
-        .unwrap();
+    let tls_config = try_make_hub_tls_config(certs).unwrap();
+    let hub = ScHub::start_with_tls_config(
+        "127.0.0.1:0",
+        tls_config,
+        hub_vmac,
+        [0x48; 16],
+        ScHubHandshakeTimeouts::default(),
+    )
+    .await
+    .unwrap();
     let addr = hub.local_addr().unwrap();
     let url = format!("wss://localhost:{}", addr.port());
     (hub, url)
 }
 
-/// Create an SC transport connected to the hub with mTLS client cert.
+/// A raw client WebSocket over the tokio-rustls stream that [`connect_ws_tls`] dials.
+pub type TlsClientWs = WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
+
+/// Dial a `wss://` request as SC nodes do: TCP, a tokio-rustls handshake with
+/// `tls`, then the WebSocket upgrade. Errors come back as tungstenite's, with
+/// TCP and TLS failures as `Error::Io`, like its own rustls connector's (#944).
+pub async fn connect_ws_tls<R: IntoClientRequest + Unpin>(
+    request: R,
+    tls: Arc<rustls::ClientConfig>,
+) -> Result<(TlsClientWs, Response), WsError> {
+    let request = request.into_client_request()?;
+    let invalid =
+        |what: &str| WsError::Io(io::Error::new(io::ErrorKind::InvalidInput, what.to_owned()));
+    let host = request
+        .uri()
+        .host()
+        .ok_or_else(|| invalid("no host in the URL"))?
+        .to_owned();
+    let port = request.uri().port_u16().unwrap_or(443);
+    let tcp = TcpStream::connect((host.as_str(), port)).await?;
+    let name = ServerName::try_from(host).map_err(|_| invalid("not a TLS server name"))?;
+    let stream = TlsConnector::from(tls).connect(name, tcp).await?;
+    tokio_tungstenite::client_async_with_config(request, stream, None).await
+}
+
+/// Dial a WebSocket to the hub with mTLS, returning an UNSTARTED SC transport.
+/// Identity configuration is still pending: the caller must set an explicit
+/// device UUID before start. Distinct test devices on a hub need distinct UUIDs.
+/// Startup preflight cannot undo the WebSocket dial already performed here.
 pub async fn make_sc_transport_mtls(
     hub_url: &str,
     certs: &CertMaterial,
     vmac: Vmac,
 ) -> ScTransport<TlsWebSocket> {
-    let tls_config = make_client_tls_config_mtls(certs);
+    let tls_config = try_make_node_tls_config(certs).unwrap();
     let ws = TlsWebSocket::connect(hub_url, tls_config).await.unwrap();
     ScTransport::new(ws, vmac)
 }

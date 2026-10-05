@@ -1,18 +1,31 @@
-//! Load Control object (type 28) per ASHRAE 135-2020 Clause 12.
+//! Load Control object (type 28) per ASHRAE 135-2020 Clause 12.28.
 //!
 //! The Load Control object provides a standard interface for demand-response
 //! load shedding. It tracks requested, expected, and actual shed levels.
 
+use bacnet_encoding::constructed::{decode_shed_level, encode_shed_level};
 use bacnet_types::constructed::BACnetShedLevel;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
+use bytes::BytesMut;
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
+mod metadata;
+#[cfg(test)]
+mod tests;
+
 /// BACnet Load Control object — demand-response load shedding.
+///
+/// Requested_Shed_Level, Expected_Shed_Level and Actual_Shed_Level are
+/// [`BACnetShedLevel`] values and go out in that CHOICE's context-tagged form
+/// (Clause 21). The object runs no shed state machine: Start_Time has no write
+/// route (#1092), so Present_Value never leaves SHED_INACTIVE, and while it is
+/// there Clauses 12.28.16 and 12.28.17 pin the expected and actual levels to
+/// the Table 12-33 default of the choice the requested level uses.
 pub struct LoadControlObject {
     oid: ObjectIdentifier,
     name: String,
@@ -26,14 +39,16 @@ pub struct LoadControlObject {
     shed_duration: u64,
     start_time: (Date, Time),
     status_flags: StatusFlags,
-    /// Event_State: 0 = NORMAL.
-    event_state: u32,
-    out_of_service: bool,
-    reliability: u32,
+    /// Event_State.
+    event_state: EventState,
+    reliability: Reliability,
 }
 
 impl LoadControlObject {
     /// Create a new Load Control object with default values.
+    ///
+    /// The three shed levels start at level 0: LEVEL is the one choice every
+    /// Load Control must take (Clause 12.28.10), and 0 is its no-shed default.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::LOAD_CONTROL, instance)?;
         Ok(Self {
@@ -41,9 +56,9 @@ impl LoadControlObject {
             name: name.into(),
             description: String::new(),
             present_value: 0,
-            requested_shed_level: BACnetShedLevel::Percent(0),
-            expected_shed_level: BACnetShedLevel::Percent(0),
-            actual_shed_level: BACnetShedLevel::Percent(0),
+            requested_shed_level: BACnetShedLevel::Level(0),
+            expected_shed_level: BACnetShedLevel::Level(0),
+            actual_shed_level: BACnetShedLevel::Level(0),
             shed_duration: 0,
             start_time: (
                 Date {
@@ -60,33 +75,85 @@ impl LoadControlObject {
                 },
             ),
             status_flags: StatusFlags::empty(),
-            event_state: 0, // NORMAL
-            out_of_service: false,
-            reliability: 0,
+            event_state: EventState::NORMAL,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 
-    /// Set the requested shed level.
-    pub fn set_requested_shed_level(&mut self, level: BACnetShedLevel) {
-        self.requested_shed_level = level;
-    }
-
-    /// Set the actual shed level.
-    pub fn set_actual_shed_level(&mut self, level: BACnetShedLevel) {
-        self.actual_shed_level = level;
-    }
-
-    /// Encode a BACnetShedLevel to a PropertyValue.
-    fn shed_level_to_property(level: &BACnetShedLevel) -> PropertyValue {
+    /// Set Requested_Shed_Level, with the checks and effects of a
+    /// WriteProperty of it.
+    ///
+    /// A shed request asks for less load, so a percent above 100, or an amount
+    /// that is negative or not finite, would ask for more than the baseline
+    /// (Table 12-33) and fails with PROPERTY / VALUE_OUT_OF_RANGE, changing
+    /// nothing. Any level is accepted. As the object stays SHED_INACTIVE,
+    /// Expected_Shed_Level and Actual_Shed_Level then take the default of the
+    /// new level's choice: 100 for a percent, 0 for a level, 0.0 for an amount.
+    pub fn set_requested_shed_level(&mut self, level: BACnetShedLevel) -> Result<(), Error> {
         match level {
-            BACnetShedLevel::Percent(v) => {
-                PropertyValue::List(vec![PropertyValue::Unsigned(*v as u64)])
+            BACnetShedLevel::Percent(percent) if percent > 100 => {
+                return Err(common::value_out_of_range_error());
             }
-            BACnetShedLevel::Level(v) => {
-                PropertyValue::List(vec![PropertyValue::Unsigned(*v as u64)])
+            BACnetShedLevel::Amount(amount) => {
+                common::reject_non_finite(amount)?;
+                if amount < 0.0 {
+                    return Err(common::value_out_of_range_error());
+                }
             }
-            BACnetShedLevel::Amount(v) => PropertyValue::List(vec![PropertyValue::Real(*v)]),
+            _ => {}
         }
+        let default = choice_default(&level);
+        self.expected_shed_level = default.clone();
+        self.actual_shed_level = default;
+        self.requested_shed_level = level;
+        Ok(())
+    }
+
+    /// Set Actual_Shed_Level, the shed the application reports achieving.
+    ///
+    /// It is in Requested_Shed_Level's units (Clause 12.28.17), so a level of
+    /// another choice, or an amount that isn't finite, fails with PROPERTY /
+    /// VALUE_OUT_OF_RANGE and changes nothing.
+    pub fn set_actual_shed_level(&mut self, level: BACnetShedLevel) -> Result<(), Error> {
+        if std::mem::discriminant(&level) != std::mem::discriminant(&self.requested_shed_level) {
+            return Err(common::value_out_of_range_error());
+        }
+        if let BACnetShedLevel::Amount(amount) = level {
+            common::reject_non_finite(amount)?;
+        }
+        self.actual_shed_level = level;
+        Ok(())
+    }
+}
+
+/// The Table 12-33 default for the choice `level` uses, the value that also
+/// cancels a shed request when written.
+fn choice_default(level: &BACnetShedLevel) -> BACnetShedLevel {
+    match level {
+        BACnetShedLevel::Percent(_) => BACnetShedLevel::Percent(100),
+        BACnetShedLevel::Level(_) => BACnetShedLevel::Level(0),
+        BACnetShedLevel::Amount(_) => BACnetShedLevel::Amount(0.0),
+    }
+}
+
+/// A shed level in its Clause 21 CHOICE form.
+fn shed_level_value(level: &BACnetShedLevel) -> PropertyValue {
+    let mut buf = BytesMut::new();
+    encode_shed_level(&mut buf, level);
+    PropertyValue::ApplicationData(buf.to_vec())
+}
+
+/// Decode a Requested_Shed_Level write: exactly one `BACnetShedLevel` CHOICE,
+/// which the WriteProperty decoder passes on as `ApplicationData`. Any other
+/// value, the bare Unsigned or REAL and the one-element list taken before
+/// #1133 included, fails with PROPERTY / INVALID_DATA_TYPE.
+fn decode_shed_level_write(value: PropertyValue) -> Result<BACnetShedLevel, Error> {
+    let PropertyValue::ApplicationData(bytes) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    match decode_shed_level(&bytes, 0) {
+        Ok((level, end)) if end == bytes.len() => Ok(level),
+        _ => Err(common::invalid_data_type_error()),
     }
 }
 
@@ -104,7 +171,11 @@ impl BACnetObject for LoadControlObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Table 12-32 has no Out_Of_Service (#1064), and Clause 12.28 holds the
+        // OUT_OF_SERVICE flag FALSE.
+        if let Some(result) =
+            read_common_properties!(self, property, array_index, no_out_of_service)
+        {
             return result;
         }
         match property {
@@ -115,13 +186,13 @@ impl BACnetObject for LoadControlObject {
                 Ok(PropertyValue::Enumerated(self.present_value))
             }
             p if p == PropertyIdentifier::REQUESTED_SHED_LEVEL => {
-                Ok(Self::shed_level_to_property(&self.requested_shed_level))
+                Ok(shed_level_value(&self.requested_shed_level))
             }
             p if p == PropertyIdentifier::EXPECTED_SHED_LEVEL => {
-                Ok(Self::shed_level_to_property(&self.expected_shed_level))
+                Ok(shed_level_value(&self.expected_shed_level))
             }
             p if p == PropertyIdentifier::ACTUAL_SHED_LEVEL => {
-                Ok(Self::shed_level_to_property(&self.actual_shed_level))
+                Ok(shed_level_value(&self.actual_shed_level))
             }
             p if p == PropertyIdentifier::SHED_DURATION => {
                 Ok(PropertyValue::Unsigned(self.shed_duration))
@@ -131,7 +202,7 @@ impl BACnetObject for LoadControlObject {
                 PropertyValue::Time(self.start_time.1),
             ])),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -144,11 +215,6 @@ impl BACnetObject for LoadControlObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -162,213 +228,27 @@ impl BACnetObject for LoadControlObject {
                 }
             }
             p if p == PropertyIdentifier::REQUESTED_SHED_LEVEL => {
-                // Accept List with a single Unsigned (percent/level) or Real (amount)
-                if let PropertyValue::List(ref items) = value {
-                    if items.len() == 1 {
-                        match &items[0] {
-                            PropertyValue::Unsigned(v) => {
-                                self.requested_shed_level =
-                                    BACnetShedLevel::Percent(common::u64_to_u32(*v)?);
-                                Ok(())
-                            }
-                            PropertyValue::Real(v) => {
-                                common::reject_non_finite(*v)?;
-                                self.requested_shed_level = BACnetShedLevel::Amount(*v);
-                                Ok(())
-                            }
-                            _ => Err(common::invalid_data_type_error()),
-                        }
-                    } else {
-                        Err(common::invalid_data_type_error())
-                    }
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
+                self.set_requested_shed_level(decode_shed_level_write(value)?)
             }
-            _ => Err(common::write_access_denied_error()),
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                _array_index,
+            )),
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::REQUESTED_SHED_LEVEL,
-            PropertyIdentifier::EXPECTED_SHED_LEVEL,
-            PropertyIdentifier::ACTUAL_SHED_LEVEL,
-            PropertyIdentifier::SHED_DURATION,
-            PropertyIdentifier::START_TIME,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn load_control_create_and_read_defaults() {
-        let lc = LoadControlObject::new(1, "LC-1").unwrap();
-        assert_eq!(lc.object_name(), "LC-1");
-        assert_eq!(
-            lc.read_property(PropertyIdentifier::PRESENT_VALUE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(0)
-        );
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
-    #[test]
-    fn load_control_object_type() {
-        let lc = LoadControlObject::new(1, "LC-1").unwrap();
-        assert_eq!(
-            lc.read_property(PropertyIdentifier::OBJECT_TYPE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(ObjectType::LOAD_CONTROL.to_raw())
-        );
-    }
-
-    #[test]
-    fn load_control_read_shed_levels() {
-        let lc = LoadControlObject::new(1, "LC-1").unwrap();
-        // Default is Percent(0)
-        assert_eq!(
-            lc.read_property(PropertyIdentifier::REQUESTED_SHED_LEVEL, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(0)])
-        );
-        assert_eq!(
-            lc.read_property(PropertyIdentifier::EXPECTED_SHED_LEVEL, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(0)])
-        );
-        assert_eq!(
-            lc.read_property(PropertyIdentifier::ACTUAL_SHED_LEVEL, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(0)])
-        );
-    }
-
-    #[test]
-    fn load_control_set_requested_shed_level_amount() {
-        let mut lc = LoadControlObject::new(1, "LC-1").unwrap();
-        lc.set_requested_shed_level(BACnetShedLevel::Amount(42.5));
-        assert_eq!(
-            lc.read_property(PropertyIdentifier::REQUESTED_SHED_LEVEL, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Real(42.5)])
-        );
-    }
-
-    #[test]
-    fn load_control_write_shed_duration() {
-        let mut lc = LoadControlObject::new(1, "LC-1").unwrap();
-        lc.write_property(
-            PropertyIdentifier::SHED_DURATION,
-            None,
-            PropertyValue::Unsigned(3600),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            lc.read_property(PropertyIdentifier::SHED_DURATION, None)
-                .unwrap(),
-            PropertyValue::Unsigned(3600)
-        );
-    }
-
-    #[test]
-    fn load_control_write_requested_shed_level() {
-        let mut lc = LoadControlObject::new(1, "LC-1").unwrap();
-        lc.write_property(
-            PropertyIdentifier::REQUESTED_SHED_LEVEL,
-            None,
-            PropertyValue::List(vec![PropertyValue::Unsigned(50)]),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            lc.read_property(PropertyIdentifier::REQUESTED_SHED_LEVEL, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(50)])
-        );
-    }
-
-    #[test]
-    fn load_control_write_requested_shed_level_amount() {
-        let mut lc = LoadControlObject::new(1, "LC-1").unwrap();
-        lc.write_property(
-            PropertyIdentifier::REQUESTED_SHED_LEVEL,
-            None,
-            PropertyValue::List(vec![PropertyValue::Real(25.5)]),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            lc.read_property(PropertyIdentifier::REQUESTED_SHED_LEVEL, None)
-                .unwrap(),
-            PropertyValue::List(vec![PropertyValue::Real(25.5)])
-        );
-    }
-
-    #[test]
-    fn load_control_write_requested_shed_level_wrong_type() {
-        let mut lc = LoadControlObject::new(1, "LC-1").unwrap();
-        let result = lc.write_property(
-            PropertyIdentifier::REQUESTED_SHED_LEVEL,
-            None,
-            PropertyValue::Unsigned(50),
-            None,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn load_control_read_start_time() {
-        let lc = LoadControlObject::new(1, "LC-1").unwrap();
-        let val = lc
-            .read_property(PropertyIdentifier::START_TIME, None)
-            .unwrap();
-        let unspec_date = Date {
-            year: 0xFF,
-            month: 0xFF,
-            day: 0xFF,
-            day_of_week: 0xFF,
-        };
-        let unspec_time = Time {
-            hour: 0xFF,
-            minute: 0xFF,
-            second: 0xFF,
-            hundredths: 0xFF,
-        };
-        assert_eq!(
-            val,
-            PropertyValue::List(vec![
-                PropertyValue::Date(unspec_date),
-                PropertyValue::Time(unspec_time),
-            ])
-        );
-    }
-
-    #[test]
-    fn load_control_property_list() {
-        let lc = LoadControlObject::new(1, "LC-1").unwrap();
-        let list = lc.property_list();
-        assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
-        assert!(list.contains(&PropertyIdentifier::REQUESTED_SHED_LEVEL));
-        assert!(list.contains(&PropertyIdentifier::EXPECTED_SHED_LEVEL));
-        assert!(list.contains(&PropertyIdentifier::ACTUAL_SHED_LEVEL));
-        assert!(list.contains(&PropertyIdentifier::SHED_DURATION));
-        assert!(list.contains(&PropertyIdentifier::START_TIME));
+    /// Table 13-1 lists Load Control, so it takes SubscribeCOV; the shed
+    /// rows it reports come from the trait default.
+    fn supports_cov(&self) -> bool {
+        true
     }
 }

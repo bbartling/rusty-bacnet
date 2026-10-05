@@ -5,7 +5,7 @@
 //!
 //! A `define_value_object!` macro generates the struct + BACnetObject impl for each type.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;
@@ -15,6 +15,10 @@ use crate::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,
 };
 use crate::traits::BACnetObject;
+use cov_increment::CovIncrement;
+
+mod cov_increment;
+mod metadata;
 
 // ---------------------------------------------------------------------------
 // Macro: define_value_object! (commandable variant)
@@ -26,12 +30,24 @@ use crate::traits::BACnetObject;
 /// non-Copy types (String, Vec, tuples containing Vec) use a Clone-based
 /// inline recalculation.
 ///
-/// `rd_validate` performs any post-extraction validation for a
-/// Relinquish_Default value (#270); `rd_access` selects whether the
-/// `RELINQUISH_DEFAULT` network write arm exists (`writable`) or remains
-/// denied (`readonly` — no current users; kept for a type whose wire form
-/// needs something the service decode cannot deliver). The local
-/// `set_relinquish_default` setter is generated either way.
+/// `rd_validate` performs post-extraction validation for Relinquish_Default.
+/// Every generated type exposes its validated local setter and network write;
+/// required property metadata supplies property presence and writability.
+///
+/// The optional `units: EngineeringUnits` entry gives the type a Units
+/// property (the numeric value types, whose tables require it): a field that
+/// starts at NO_UNITS and reads as Enumerated, a `units` getter and a
+/// validated `set_units` setter. Units has no network write route.
+///
+/// The optional `cov_increment` entry names the COV_Increment datatype of the
+/// numeric value types (`u64` for Unsigned, `f64` for Double). It adds a
+/// writable COV_Increment row starting at 0, a validated `set_cov_increment`
+/// setter, and the `cov_increment` answer the server's COV change detection
+/// compares Present_Value moves against.
+///
+/// Every generated type serves Current_Command_Priority from its priority
+/// array: the 1-based slot Present_Value comes from, or NULL when
+/// Relinquish_Default is in effect.
 macro_rules! define_value_object_commandable {
     (
         name: $struct_name:ident,
@@ -44,9 +60,10 @@ macro_rules! define_value_object_commandable {
         pa_wrap: $pa_wrap:expr,
         rd_wrap: $rd_wrap:expr,
         rd_validate: $rd_validate:expr,
-        rd_access: $rd_access:ident,
-        copy_type: $is_copy:tt
-        $(, property_metadata: $property_metadata:expr)?
+        copy_type: $is_copy:tt,
+        $(units: $units_ty:ty,)?
+        $(cov_increment: $cov_ty:ty,)?
+        property_metadata: $property_metadata:expr
         $(,)?
     ) => {
         #[doc = $doc]
@@ -57,10 +74,15 @@ macro_rules! define_value_object_commandable {
             present_value: $val_type,
             out_of_service: bool,
             status_flags: StatusFlags,
-            reliability: u32,
+            reliability: Reliability,
             /// 16-level priority array. `None` = no command at that level.
             priority_array: [Option<$val_type>; 16],
             relinquish_default: $val_type,
+            $(units: $units_ty,)?
+            $(
+            /// COV_Increment in the table's datatype.
+            cov_increment: $cov_ty,
+            )?
         }
 
         impl $struct_name {
@@ -74,9 +96,11 @@ macro_rules! define_value_object_commandable {
                     present_value: $default,
                     out_of_service: false,
                     status_flags: StatusFlags::empty(),
-                    reliability: 0,
+                    reliability: Reliability::NO_FAULT_DETECTED,
                     priority_array: Default::default(),
                     relinquish_default: $default,
+                    $(units: <$units_ty>::NO_UNITS,)?
+                    $(cov_increment: <$cov_ty as CovIncrement>::ZERO,)?
                 })
             }
 
@@ -100,6 +124,42 @@ macro_rules! define_value_object_commandable {
                 self.recalculate_present_value();
                 Ok(())
             }
+
+            $(
+            /// The engineering units of Present_Value, served as Units.
+            pub fn units(&self) -> $units_ty {
+                self.units
+            }
+
+            /// Set the engineering units of Present_Value. A new object uses
+            /// NO_UNITS.
+            ///
+            /// Units is read-only over the network. A value above 65535,
+            /// outside BACnetEngineeringUnits, is refused with
+            /// VALUE_OUT_OF_RANGE and the property is left unchanged.
+            pub fn set_units(&mut self, units: $units_ty) -> Result<(), Error> {
+                if units.to_raw() > 65_535 {
+                    return Err(common::value_out_of_range_error());
+                }
+                self.units = units;
+                Ok(())
+            }
+            )?
+
+            $(
+            /// Set COV_Increment, the smallest Present_Value change that
+            /// sends a COV notification. A new object uses 0, so any change
+            /// notifies.
+            ///
+            /// WriteProperty goes through the same check. A Large Analog
+            /// Value refuses a negative or non-finite increment with
+            /// VALUE_OUT_OF_RANGE and keeps the old one; every Unsigned value
+            /// is a valid increment.
+            pub fn set_cov_increment(&mut self, increment: $cov_ty) -> Result<(), Error> {
+                self.cov_increment = <$cov_ty as CovIncrement>::validate(increment)?;
+                Ok(())
+            }
+            )?
         }
 
         impl BACnetObject for $struct_name {
@@ -112,7 +172,7 @@ macro_rules! define_value_object_commandable {
             }
 
             fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-                define_value_object_commandable!(@property_metadata $($property_metadata)?)
+                Cow::Borrowed($property_metadata)
             }
 
             fn read_property(
@@ -136,6 +196,19 @@ macro_rules! define_value_object_commandable {
                     p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                         Ok(($rd_wrap)(&self.relinquish_default))
                     }
+                    p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+                        Ok(common::current_command_priority(&self.priority_array))
+                    }
+                    $(
+                    p if p == PropertyIdentifier::UNITS => {
+                        Ok(PropertyValue::Enumerated(<$units_ty>::to_raw(self.units)))
+                    }
+                    )?
+                    $(
+                    p if p == PropertyIdentifier::COV_INCREMENT => {
+                        Ok(<$cov_ty as CovIncrement>::to_property(self.cov_increment))
+                    }
+                    )?
                     _ => Err(common::unknown_property_error()),
                 }
             }
@@ -143,32 +216,10 @@ macro_rules! define_value_object_commandable {
             fn write_property(
                 &mut self,
                 property: PropertyIdentifier,
-                array_index: Option<u32>,
+                _array_index: Option<u32>,
                 value: PropertyValue,
                 priority: Option<u8>,
             ) -> Result<(), Error> {
-                // Handle PRIORITY_ARRAY direct writes. Index validation
-                // follows Clause 12.1.5.1: an omitted index means whole-array
-                // access, and whole-array writes are not supported here, so
-                // it is PROPERTY / WRITE_ACCESS_DENIED (Clause 15.9.1.3).
-                if property == PropertyIdentifier::PRIORITY_ARRAY {
-                    let idx = match array_index {
-                        Some(n) if (1..=16).contains(&n) => (n - 1) as usize,
-                        Some(_) => return Err(common::invalid_array_index_error()),
-                        None => return Err(common::write_access_denied_error()),
-                    };
-                    match value {
-                        PropertyValue::Null => {
-                            self.priority_array[idx] = None;
-                        }
-                        other => {
-                            let extracted = ($prop_to_pv)(other)?;
-                            self.priority_array[idx] = Some(extracted);
-                        }
-                    }
-                    self.recalculate_present_value();
-                    return Ok(());
-                }
                 // Handle PRESENT_VALUE via priority array
                 if property == PropertyIdentifier::PRESENT_VALUE {
                     let prio = priority.unwrap_or(16);
@@ -188,9 +239,17 @@ macro_rules! define_value_object_commandable {
                     self.recalculate_present_value();
                     return Ok(());
                 }
-                // RELINQUISH_DEFAULT — network-writable only for the types
-                // that select `rd_access: writable` (#270).
-                define_value_object_commandable!(@rd_write self, property, value, $prop_to_pv, $rd_access);
+                // Extract through the per-type closure, then validate and recapture.
+                if property == PropertyIdentifier::RELINQUISH_DEFAULT {
+                    let extracted = ($prop_to_pv)(value)?;
+                    return self.set_relinquish_default(extracted);
+                }
+                $(
+                if property == PropertyIdentifier::COV_INCREMENT {
+                    let increment = <$cov_ty as CovIncrement>::from_property(value)?;
+                    return self.set_cov_increment(increment);
+                }
+                )?
                 if let Some(result) =
                     common::write_out_of_service(&mut self.out_of_service, property, &value)
                 {
@@ -206,77 +265,26 @@ macro_rules! define_value_object_commandable {
                 {
                     return result;
                 }
-                Err(common::write_access_denied_error())
+                Err(crate::common::unhandled_write_error(self.property_metadata().as_ref(), property, _array_index))
             }
 
             fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-                static PROPS: &[PropertyIdentifier] = &[
-                    PropertyIdentifier::OBJECT_IDENTIFIER,
-                    PropertyIdentifier::OBJECT_NAME,
-                    PropertyIdentifier::DESCRIPTION,
-                    PropertyIdentifier::OBJECT_TYPE,
-                    PropertyIdentifier::PRESENT_VALUE,
-                    PropertyIdentifier::STATUS_FLAGS,
-                    PropertyIdentifier::OUT_OF_SERVICE,
-                    PropertyIdentifier::RELIABILITY,
-                    PropertyIdentifier::PRIORITY_ARRAY,
-                    PropertyIdentifier::RELINQUISH_DEFAULT,
-                ];
-                let metadata = self.property_metadata();
-                if metadata.is_empty() {
-                    Cow::Borrowed(PROPS)
-                } else {
-                    crate::property_metadata::property_list_from_metadata(metadata.as_ref())
-                }
+                crate::property_metadata::property_list_from_metadata($property_metadata)
             }
 
             fn supports_cov(&self) -> bool {
                 true
             }
 
-            define_value_object_commandable!(@is_writable $rd_access, $($property_metadata)?);
-        }
-    };
+            $(
+            fn cov_increment(&self) -> Option<f64> {
+                Some(<$cov_ty as CovIncrement>::as_f64(self.cov_increment))
+            }
+            )?
 
-    (@property_metadata) => {
-        Cow::Borrowed(&[])
-    };
-    (@property_metadata $metadata:expr) => {
-        Cow::Borrowed($metadata)
-    };
-
-    // RELINQUISH_DEFAULT write arm for `rd_access: writable`: extract through
-    // the shared closure, then reuse the validated setter (#270).
-    (@rd_write $self:ident, $property:ident, $value:ident, $prop_to_pv:expr, writable) => {
-        if $property == PropertyIdentifier::RELINQUISH_DEFAULT {
-            let extracted = ($prop_to_pv)($value)?;
-            return $self.set_relinquish_default(extracted);
-        }
-    };
-    // `rd_access: readonly`: no arm — the default WRITE_ACCESS_DENIED at the
-    // end of write_property stands (no current users).
-    (@rd_write $self:ident, $property:ident, $value:ident, $prop_to_pv:expr, readonly) => {};
-
-    // PICS writability mirrors the arms: common + commandable for every
-    // commandable value type, RELINQUISH_DEFAULT only when the arm exists.
-    (@is_writable writable,) => {
-        fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-            common::is_common_writable(property)
-                || property == PropertyIdentifier::PRESENT_VALUE
-                || property == PropertyIdentifier::PRIORITY_ARRAY
-                || property == PropertyIdentifier::RELINQUISH_DEFAULT
-        }
-    };
-    (@is_writable readonly,) => {
-        fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-            common::is_common_writable(property)
-                || property == PropertyIdentifier::PRESENT_VALUE
-                || property == PropertyIdentifier::PRIORITY_ARRAY
-        }
-    };
-    (@is_writable $rd_access:ident, $metadata:expr) => {
-        fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-            crate::property_metadata::is_writable_in_metadata($metadata, property)
+            fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
+                crate::property_metadata::is_writable_in_metadata($property_metadata, property)
+            }
         }
     };
 
@@ -327,128 +335,6 @@ macro_rules! define_value_object_commandable {
             _ => Err(common::invalid_array_index_error()),
         }
     }};
-}
-
-// ---------------------------------------------------------------------------
-// Macro: define_value_object! (non-commandable variant)
-// ---------------------------------------------------------------------------
-
-/// Generate a non-commandable value object type (simple read/write PV).
-/// Currently unused — all value types are commandable.
-#[allow(unused_macros)]
-macro_rules! define_value_object_simple {
-    (
-        name: $struct_name:ident,
-        doc: $doc:expr,
-        object_type: $obj_type:expr,
-        value_type: $val_type:ty,
-        default_value: $default:expr,
-        pv_to_property: $pv_to_prop:expr,
-        property_to_pv: $prop_to_pv:expr
-        $(,)?
-    ) => {
-        #[doc = $doc]
-        pub struct $struct_name {
-            oid: ObjectIdentifier,
-            name: String,
-            description: String,
-            present_value: $val_type,
-            out_of_service: bool,
-            status_flags: StatusFlags,
-            reliability: u32,
-        }
-
-        impl $struct_name {
-            /// Create a new instance of this value object.
-            pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
-                let oid = ObjectIdentifier::new($obj_type, instance)?;
-                Ok(Self {
-                    oid,
-                    name: name.into(),
-                    description: String::new(),
-                    present_value: $default,
-                    out_of_service: false,
-                    status_flags: StatusFlags::empty(),
-                    reliability: 0,
-                })
-            }
-        }
-
-        impl BACnetObject for $struct_name {
-            fn object_identifier(&self) -> ObjectIdentifier {
-                self.oid
-            }
-
-            fn object_name(&self) -> &str {
-                &self.name
-            }
-
-            fn read_property(
-                &self,
-                property: PropertyIdentifier,
-                array_index: Option<u32>,
-            ) -> Result<PropertyValue, Error> {
-                if let Some(result) = read_common_properties!(self, property, array_index) {
-                    return result;
-                }
-                match property {
-                    p if p == PropertyIdentifier::OBJECT_TYPE => {
-                        Ok(PropertyValue::Enumerated($obj_type.to_raw()))
-                    }
-                    p if p == PropertyIdentifier::PRESENT_VALUE => {
-                        Ok(($pv_to_prop)(&self.present_value))
-                    }
-                    _ => Err(common::unknown_property_error()),
-                }
-            }
-
-            fn write_property(
-                &mut self,
-                property: PropertyIdentifier,
-                _array_index: Option<u32>,
-                value: PropertyValue,
-                _priority: Option<u8>,
-            ) -> Result<(), Error> {
-                if property == PropertyIdentifier::PRESENT_VALUE {
-                    let extracted = ($prop_to_pv)(value)?;
-                    self.present_value = extracted;
-                    return Ok(());
-                }
-                if let Some(result) =
-                    common::write_out_of_service(&mut self.out_of_service, property, &value)
-                {
-                    return result;
-                }
-                if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
-                    return result;
-                }
-                if let Some(result) =
-                    common::write_description(&mut self.description, property, &value)
-                {
-                    return result;
-                }
-                Err(common::write_access_denied_error())
-            }
-
-            fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-                static PROPS: &[PropertyIdentifier] = &[
-                    PropertyIdentifier::OBJECT_IDENTIFIER,
-                    PropertyIdentifier::OBJECT_NAME,
-                    PropertyIdentifier::DESCRIPTION,
-                    PropertyIdentifier::OBJECT_TYPE,
-                    PropertyIdentifier::PRESENT_VALUE,
-                    PropertyIdentifier::STATUS_FLAGS,
-                    PropertyIdentifier::OUT_OF_SERVICE,
-                    PropertyIdentifier::RELIABILITY,
-                ];
-                Cow::Borrowed(PROPS)
-            }
-
-            fn supports_cov(&self) -> bool {
-                true
-            }
-        }
-    };
 }
 
 // ---------------------------------------------------------------------------
@@ -534,8 +420,10 @@ define_value_object_commandable! {
     pa_wrap: PropertyValue::Signed,
     rd_wrap: (|v: &i32| PropertyValue::Signed(*v)),
     rd_validate: (|_: &i32| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: copy,
+    units: EngineeringUnits,
+    cov_increment: u64,
+    property_metadata: metadata::INTEGER_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -552,8 +440,10 @@ define_value_object_commandable! {
     pa_wrap: PropertyValue::Unsigned,
     rd_wrap: (|v: &u64| PropertyValue::Unsigned(*v)),
     rd_validate: (|_: &u64| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: copy,
+    units: EngineeringUnits,
+    cov_increment: u64,
+    property_metadata: metadata::POSITIVE_INTEGER_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -576,8 +466,10 @@ define_value_object_commandable! {
             Err(common::value_out_of_range_error())
         }
     }),
-    rd_access: writable,
     copy_type: copy,
+    units: EngineeringUnits,
+    cov_increment: f64,
+    property_metadata: metadata::LARGE_ANALOG_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -594,8 +486,8 @@ define_value_object_commandable! {
     pa_wrap: clone_string_to_pv,
     rd_wrap: (|v: &String| PropertyValue::CharacterString(v.clone())),
     rd_validate: (|_: &String| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: clone,
+    property_metadata: metadata::CHARACTERSTRING_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -612,8 +504,8 @@ define_value_object_commandable! {
     pa_wrap: clone_octetstring_to_pv,
     rd_wrap: (|v: &Vec<u8>| PropertyValue::OctetString(v.clone())),
     rd_validate: (|_: &Vec<u8>| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: clone,
+    property_metadata: metadata::OCTETSTRING_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -636,8 +528,8 @@ define_value_object_commandable! {
         data: v.1.clone(),
     }),
     rd_validate: (|_: &(u8, Vec<u8>)| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: clone,
+    property_metadata: metadata::BITSTRING_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -651,8 +543,8 @@ define_value_object_commandable! {
     pa_wrap: PropertyValue::Date,
     rd_wrap: (|v: &Date| PropertyValue::Date(*v)),
     rd_validate: (|_: &Date| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::DATE_VALUE_BASE,
 }
 
 const TIME_VALUE_PROPERTY_METADATA: &[PropertyMetadata] = &[
@@ -708,13 +600,19 @@ const TIME_VALUE_PROPERTY_METADATA: &[PropertyMetadata] = &[
         PropertyIdentifier::PRIORITY_ARRAY,
         PropertyConformance::Optional,
         Some(PropertyPresenceCondition::Commandable),
-        PropertyWriteCapability::Always,
+        PropertyWriteCapability::ReadOnly,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::RELINQUISH_DEFAULT,
         PropertyConformance::Optional,
         Some(PropertyPresenceCondition::Commandable),
         PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::Commandable),
+        PropertyWriteCapability::ReadOnly,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::PROPERTY_LIST,
@@ -735,7 +633,6 @@ define_value_object_commandable! {
     pa_wrap: PropertyValue::Time,
     rd_wrap: (|v: &Time| PropertyValue::Time(*v)),
     rd_validate: (|_: &Time| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: copy,
     property_metadata: TIME_VALUE_PROPERTY_METADATA,
 }
@@ -754,8 +651,8 @@ define_value_object_commandable! {
     pa_wrap: datetime_copy_to_pv,
     rd_wrap: (|v: &(Date, Time)| datetime_to_pv(v)),
     rd_validate: (|_: &(Date, Time)| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::DATETIME_VALUE_BASE,
 }
 
 // ---------------------------------------------------------------------------
@@ -773,8 +670,8 @@ define_value_object_commandable! {
     pa_wrap: PropertyValue::Date,
     rd_wrap: (|v: &Date| PropertyValue::Date(*v)),
     rd_validate: (|_: &Date| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::DATEPATTERN_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -788,8 +685,8 @@ define_value_object_commandable! {
     pa_wrap: PropertyValue::Time,
     rd_wrap: (|v: &Time| PropertyValue::Time(*v)),
     rd_validate: (|_: &Time| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::TIMEPATTERN_VALUE_BASE,
 }
 
 define_value_object_commandable! {
@@ -806,8 +703,8 @@ define_value_object_commandable! {
     pa_wrap: datetime_copy_to_pv,
     rd_wrap: (|v: &(Date, Time)| datetime_to_pv(v)),
     rd_validate: (|_: &(Date, Time)| -> Result<(), Error> { Ok(()) }),
-    rd_access: writable,
     copy_type: copy,
+    property_metadata: metadata::DATETIMEPATTERN_VALUE_BASE,
 }
 
 // ---------------------------------------------------------------------------

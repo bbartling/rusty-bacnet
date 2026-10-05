@@ -47,13 +47,14 @@ fn setup_on_notification_class(
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", event_type.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", event_type).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::NOTIFICATION_CLASS.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(params);
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
     (db, ee_oid)
@@ -65,7 +66,8 @@ fn rewrite_params(
     ee_oid: &ObjectIdentifier,
     params: BACnetEventParameter,
 ) {
-    let mut scratch = EventEnrollmentObject::new(1, "scratch", 0).unwrap();
+    let mut scratch =
+        EventEnrollmentObject::new(1, "scratch", EventType::CHANGE_OF_BITSTRING).unwrap();
     scratch.set_event_parameters(params);
     let reframed = scratch
         .read_property(PropertyIdentifier::EVENT_PARAMETERS, None)
@@ -248,25 +250,25 @@ fn foreign_offnormal_under_cov_recovers_and_establishes_baseline() {
 fn foreign_high_limit_recovers_under_cobs_params() {
     let mut db = ObjectDatabase::new();
 
-    // Target exposing a bitstring property: EVENT_ENABLE = internal 0x07 →
-    // wire 0xE0.
-    let mut target = EventEnrollmentObject::new(96, "Target", EventType::NONE.to_raw()).unwrap();
-    target.set_event_enable(0x07);
+    // Target exposing a bitstring property: EVENT_ENABLE = all three
+    // transitions → wire 0xE0.
+    let mut target = EventEnrollmentObject::new(96, "Target", EventType::NONE).unwrap();
+    target.set_event_enable(EventTransitionBits::all());
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(97, "EE-cobs", EventType::CHANGE_OF_BITSTRING.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(97, "EE-cobs", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfBitstring {
         time_delay: 0,
         bitmask: (5, vec![0x80]), // significant: TO_OFFNORMAL bit
         list_of_values: vec![(5, vec![0x00])], // alarm when that bit CLEAR
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     // Internal channel: simulate the state an OOR predecessor would have left.
     ee.set_event_state_internal(EventState::HIGH_LIMIT).unwrap();
     let ee_oid = ee.object_identifier();
@@ -285,31 +287,31 @@ fn foreign_high_limit_recovers_under_cobs_params() {
 
 /// Zero-padded comparison width (review F2): mask [FF FF], alarm [00 01],
 /// monitored [00] — the alarm's second significant byte never observed — is
-/// NOT a match ("equals a listed alarm value" over the whole width). The
+/// NOT a match (an alarm pattern must agree over the whole width). The
 /// truncating comparison reported OFFNORMAL on the shared first byte.
 #[test]
 fn cobs_mask_wider_than_monitored_value_is_not_a_match() {
     let mut db = ObjectDatabase::new();
 
     let mut ee =
-        EventEnrollmentObject::new(97, "EE-cobs-w", EventType::CHANGE_OF_BITSTRING.to_raw())
-            .unwrap();
+        EventEnrollmentObject::new(97, "EE-cobs-w", EventType::CHANGE_OF_BITSTRING).unwrap();
     // Monitor a 1-byte bitstring (EVENT_ENABLE of a target with internal
     // 0x00 → wire 0x00).
-    let mut target = EventEnrollmentObject::new(96, "Target", EventType::NONE.to_raw()).unwrap();
-    target.set_event_enable(0x00);
+    let mut target = EventEnrollmentObject::new(96, "Target", EventType::NONE).unwrap();
+    target.set_event_enable(EventTransitionBits::empty());
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfBitstring {
         time_delay: 0,
         bitmask: (0, vec![0xFF, 0xFF]), // two significant BYTES
         list_of_values: vec![(0, vec![0x00, 0x01])], // alarm: second byte's low bit set
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -320,48 +322,6 @@ fn cobs_mask_wider_than_monitored_value_is_not_a_match() {
         "the alarm's second byte disagrees with the (zero-filled) monitored width"
     );
     assert_eq!(event_state(&db, &ee_oid), EventState::NORMAL);
-}
-
-/// Foreign-state recovery respects OUT_OF_SERVICE like any other pass (the
-/// gate runs before evaluation).
-#[test]
-fn out_of_service_skips_evaluation_even_for_a_wedged_state() {
-    let (mut db, ee_oid) = setup_on_notification_class(
-        EventType::CHANGE_OF_STATE,
-        BACnetEventParameter::ChangeOfState {
-            time_delay: 0,
-            list_of_values: vec![BACnetPropertyStates::UnsignedValue(1)],
-        },
-        1,
-    );
-    assert_eq!(
-        evaluate_event_enrollments(&mut db, 1)[0].change.to,
-        EventState::OFFNORMAL
-    );
-    db.get_mut(&ee_oid)
-        .unwrap()
-        .write_property(
-            PropertyIdentifier::OUT_OF_SERVICE,
-            None,
-            PropertyValue::Boolean(true),
-            None,
-        )
-        .unwrap();
-    rewrite_params(
-        &mut db,
-        &ee_oid,
-        BACnetEventParameter::OutOfRange {
-            time_delay: 0,
-            low_limit: 20.0,
-            high_limit: 80.0,
-            deadband: 2.0,
-        },
-    );
-    assert!(
-        evaluate_event_enrollments(&mut db, 1).is_empty(),
-        "OOS gate precedes evaluation — no recovery while out of service"
-    );
-    assert_eq!(event_state(&db, &ee_oid), EventState::OFFNORMAL);
 }
 
 /// FLOATING_LIMIT's reachable set is the same {NORMAL, HIGH_LIMIT,

@@ -1,5 +1,7 @@
 use super::super::*;
+use bacnet_encoding::constructed::decode_event_notification;
 
+use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogInputObject;
@@ -9,63 +11,42 @@ use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCo
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{AcknowledgeAlarmRequest, EventNotificationRequest};
-use bacnet_transport::port::TransportPort;
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 use bytes::Bytes;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 
 const REQUESTER: &[u8] = &[10, 0, 0, 1, 0xba, 0xc0];
 const UNCONFIRMED_RECIPIENT: &[u8] = &[10, 0, 0, 2, 0xba, 0xc0];
 const CONFIRMED_RECIPIENT: &[u8] = &[10, 0, 0, 3, 0xba, 0xc0];
-type RecordedFrames = StdArc<StdMutex<Vec<(Vec<u8>, Bytes)>>>;
 type FailedPeers = StdArc<StdMutex<Vec<Vec<u8>>>>;
 
-#[derive(Clone, Default)]
-struct RecordingTransport {
-    sends: RecordedFrames,
-    failures: FailedPeers,
-}
-
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sends
-            .lock()
-            .unwrap()
-            .push((mac.to_vec(), Bytes::copy_from_slice(npdu)));
-        if self.failures.lock().unwrap().iter().any(|item| item == mac) {
-            Err(Error::Transport(std::io::Error::other(
-                "injected send failure",
-            )))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.sends
-            .lock()
-            .unwrap()
-            .push((Vec::new(), Bytes::copy_from_slice(npdu)));
-        Ok(())
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xba, 0xc0]
-    }
+/// Records every send; a unicast to a MAC listed in `failures` fails after it
+/// is recorded.
+fn recording_transport(failures: &FailedPeers) -> TestTransport {
+    let failures = StdArc::clone(failures);
+    TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .on_send(move |frame| {
+            let failed = !frame.broadcast
+                && failures
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item.as_slice() == frame.mac.as_slice());
+            async move {
+                if failed {
+                    Err(Error::Transport(std::io::Error::other(
+                        "injected send failure",
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .build()
 }
 
 struct FixedClock;
@@ -97,7 +78,7 @@ fn destination(
     confirmed: bool,
 ) -> BACnetDestination {
     BACnetDestination {
-        valid_days: 0x7f,
+        valid_days: DaysOfWeek::all(),
         from_time: Time {
             hour: 0,
             minute: 0,
@@ -113,7 +94,7 @@ fn destination(
         recipient,
         process_identifier,
         issue_confirmed_notifications: confirmed,
-        transitions: 0x07,
+        transitions: EventTransitionBits::all(),
     }
 }
 
@@ -130,30 +111,34 @@ fn local_recipient(mac: &[u8], process_identifier: u32, confirmed: bool) -> BACn
 
 struct Harness {
     db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     tracker: Arc<ConfirmedRequestTracker>,
     transactions: Arc<NotificationTransactions>,
     bindings: Arc<RwLock<DeviceBindingTable>>,
-    comm_state: Arc<AtomicU8>,
+    comm_state: Arc<CommState>,
     config: ServerConfig,
-    sends: RecordedFrames,
+    sent: SendLog,
     failures: FailedPeers,
     oid: ObjectIdentifier,
     acknowledged_state: EventState,
 }
 
 impl Harness {
-    fn new(destinations: Vec<BACnetDestination>, event_enable: u8, retry_ms: u64) -> Self {
-        let transport = RecordingTransport::default();
-        let sends = StdArc::clone(&transport.sends);
-        let failures = StdArc::clone(&transport.failures);
+    fn new(
+        destinations: Vec<BACnetDestination>,
+        event_enable: EventTransitionBits,
+        retry_ms: u64,
+    ) -> Self {
+        let failures = FailedPeers::default();
+        let transport = recording_transport(&failures);
+        let sent = transport.sent();
         let mut db = ObjectDatabase::new();
         db.set_clock_reader(Some(StdArc::new(FixedClock)));
 
         let mut class = NotificationClass::new(7, "NC-ack").unwrap();
         class.priority = [11, 22, 33];
         for destination in destinations {
-            class.add_destination(destination);
+            class.add_destination(destination).unwrap();
         }
         db.add(Box::new(class)).unwrap();
         db.add(Box::new(
@@ -189,7 +174,7 @@ impl Harness {
                 None,
                 PropertyValue::BitString {
                     unused_bits: 5,
-                    data: vec![bacnet_types::bitstring::pack_octet(event_enable)],
+                    data: vec![event_enable.to_bacnet()],
                 },
                 None,
             )
@@ -215,12 +200,12 @@ impl Harness {
             tracker: Arc::new(ConfirmedRequestTracker::default()),
             transactions: NotificationTransactions::new(),
             bindings: Arc::new(RwLock::new(DeviceBindingTable::new())),
-            comm_state: Arc::new(AtomicU8::new(0)),
+            comm_state: Arc::new(CommState::default()),
             config: ServerConfig {
                 cov_retry_timeout_ms: retry_ms,
                 ..ServerConfig::default()
             },
-            sends,
+            sent,
             failures,
             oid,
             acknowledged_state: EventState::HIGH_LIMIT,
@@ -231,7 +216,7 @@ impl Harness {
         let request = AcknowledgeAlarmRequest {
             acknowledging_process_identifier: 71,
             event_object_identifier: self.oid,
-            event_state_acknowledged: self.acknowledged_state.to_raw(),
+            event_state_acknowledged: self.acknowledged_state,
             timestamp: BACnetTimeStamp::SequenceNumber(42),
             acknowledgment_source: "operator".into(),
             time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(77),
@@ -253,20 +238,16 @@ impl Harness {
     }
 
     async fn dispatch(&self, invoke_id: u8, reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>) {
-        BACnetServer::<RecordingTransport>::handle_confirmed_request(
-            &self.db,
-            &self.network,
-            &Arc::new(RwLock::new(CovSubscriptionTable::new())),
-            &Arc::new(Mutex::new(HashMap::new())),
-            &Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
-            &Arc::new(Semaphore::new(1)),
-            &Arc::new(Mutex::new(ServerTsm::new())),
-            &self.transactions,
+        BACnetServer::<TestTransport>::handle_confirmed_request(
+            &RequestServices {
+                db: Arc::clone(&self.db),
+                notification_transactions: Arc::clone(&self.transactions),
+                device_bindings: Arc::clone(&self.bindings),
+                comm_state: Arc::clone(&self.comm_state),
+                ..RequestServices::for_test(Arc::clone(&self.network), self.config.clone())
+            },
             &self.tracker,
-            &self.bindings,
-            &self.comm_state,
-            &Arc::new(Mutex::new(None::<JoinHandle<()>>)),
-            &self.config,
+            &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
             REQUESTER,
             None,
             self.request(invoke_id),
@@ -288,7 +269,11 @@ impl Harness {
     }
 
     fn frames(&self) -> Vec<(Vec<u8>, Bytes)> {
-        self.sends.lock().unwrap().clone()
+        self.sent
+            .frames()
+            .into_iter()
+            .map(|frame| (frame.mac.to_vec(), frame.npdu))
+            .collect()
     }
 
     async fn acknowledged(&self) -> bool {
@@ -301,7 +286,7 @@ impl Harness {
         else {
             panic!("Acked_Transitions must be a bit string");
         };
-        bacnet_types::bitstring::unpack_octet(&data, 3) & 0x01 != 0
+        EventTransitionBits::from_bacnet(&data).contains(EventTransitionBits::TO_OFFNORMAL)
     }
 }
 
@@ -322,12 +307,12 @@ fn decode_notification(frame: &Bytes) -> (bool, Option<u8>, EventNotificationReq
         Apdu::ConfirmedRequest(request) => (
             true,
             Some(request.invoke_id),
-            EventNotificationRequest::decode(&request.service_request).unwrap(),
+            decode_event_notification(&request.service_request).unwrap(),
         ),
         Apdu::UnconfirmedRequest(request) => (
             false,
             None,
-            EventNotificationRequest::decode(&request.service_request).unwrap(),
+            decode_event_notification(&request.service_request).unwrap(),
         ),
         other => panic!("expected EventNotification request, got {other:?}"),
     }
@@ -337,7 +322,7 @@ fn decode_notification(frame: &Bytes) -> (bool, Option<u8>, EventNotificationReq
 async fn simple_ack_precedes_fresh_exact_unconfirmed_ack_notification() {
     let harness = Harness::new(
         vec![local_recipient(UNCONFIRMED_RECIPIENT, 101, false)],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
 
@@ -353,11 +338,8 @@ async fn simple_ack_precedes_fresh_exact_unconfirmed_ack_notification() {
     assert!(!confirmed);
     assert_eq!(invoke_id, None);
     assert_eq!(notification.process_identifier, 101);
-    assert_eq!(
-        notification.notify_type,
-        NotifyType::ACK_NOTIFICATION.to_raw()
-    );
-    assert_eq!(notification.event_type, EventType::OUT_OF_RANGE.to_raw());
+    assert_eq!(notification.notify_type, NotifyType::ACK_NOTIFICATION);
+    assert_eq!(notification.event_type, EventType::OUT_OF_RANGE);
     assert_eq!(notification.priority, 11);
     assert_eq!(notification.message_text, None);
     assert_eq!(
@@ -379,8 +361,8 @@ async fn simple_ack_precedes_fresh_exact_unconfirmed_ack_notification() {
     );
     assert_ne!(notification.timestamp, BACnetTimeStamp::SequenceNumber(42));
     assert!(!notification.ack_required);
-    assert_eq!(notification.from_state, 0);
-    assert_eq!(notification.to_state, EventState::HIGH_LIMIT.to_raw());
+    assert_eq!(notification.from_state, EventState::NORMAL);
+    assert_eq!(notification.to_state, EventState::HIGH_LIMIT);
     assert!(notification.event_values.is_none());
     assert!(harness.acknowledged().await);
 }
@@ -392,7 +374,7 @@ async fn recipient_policy_selects_confirmed_and_unconfirmed_services_with_proces
             local_recipient(UNCONFIRMED_RECIPIENT, 101, false),
             local_recipient(CONFIRMED_RECIPIENT, 202, true),
         ],
-        0x07,
+        EventTransitionBits::all(),
         60_000,
     );
 
@@ -425,6 +407,7 @@ async fn recipient_policy_selects_confirmed_and_unconfirmed_services_with_proces
     assert!(harness.transactions.admit_terminal(
         CONFIRMED_RECIPIENT,
         None,
+        None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id: confirmed_invoke,
             service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
@@ -437,17 +420,17 @@ async fn event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_wi
     let cases = [
         Harness::new(
             vec![local_recipient(UNCONFIRMED_RECIPIENT, 1, false)],
-            0x06,
+            EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
             1_000,
         ),
-        Harness::new(Vec::new(), 0x07, 1_000),
+        Harness::new(Vec::new(), EventTransitionBits::all(), 1_000),
         Harness::new(
             vec![destination(
                 BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 999).unwrap()),
                 2,
                 false,
             )],
-            0x07,
+            EventTransitionBits::all(),
             1_000,
         ),
     ];
@@ -461,18 +444,25 @@ async fn event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_wi
             0x40 + index as u8,
         );
         assert!(harness.acknowledged().await);
-        assert!(
-            harness.frames().is_empty(),
-            "case {index} must not fall back"
-        );
+        // The unresolved Device is looked for with a Who-Is (#1368), which
+        // is no notification.
+        let (who_is, notifications): (Vec<_>, Vec<_>) = harness
+            .sent
+            .frames()
+            .into_iter()
+            .partition(super::event_recipient_routing_tests::is_who_is);
+        assert!(notifications.is_empty(), "case {index} must not fall back");
+        assert_eq!(who_is.len(), usize::from(index == 2));
     }
 
     let disable_initiation = Harness::new(
         vec![local_recipient(UNCONFIRMED_RECIPIENT, 3, false)],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
-    disable_initiation.comm_state.store(2, Ordering::Release);
+    disable_initiation
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     assert_ack(
         disable_initiation.dispatch_with_reply(0x43).await.unwrap(),
         0x43,
@@ -482,27 +472,13 @@ async fn event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_wi
 }
 
 #[tokio::test]
-async fn full_dcc_disable_drops_acknowledgment_before_response_or_mutation() {
-    let full_disable = Harness::new(
-        vec![local_recipient(UNCONFIRMED_RECIPIENT, 3, false)],
-        0x07,
-        1_000,
-    );
-    full_disable.comm_state.store(1, Ordering::Release);
-
-    assert!(full_disable.dispatch_with_reply(0x44).await.is_err());
-    assert!(!full_disable.acknowledged().await);
-    assert!(full_disable.frames().is_empty());
-}
-
-#[tokio::test]
 async fn recipient_send_and_reservation_failures_do_not_retract_ack_or_block_other_recipients() {
     let send_failure = Harness::new(
         vec![
             local_recipient(UNCONFIRMED_RECIPIENT, 1, false),
             local_recipient(CONFIRMED_RECIPIENT, 2, false),
         ],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
     send_failure
@@ -520,7 +496,7 @@ async fn recipient_send_and_reservation_failures_do_not_retract_ack_or_block_oth
 
     let reservation_failure = Harness::new(
         vec![local_recipient(CONFIRMED_RECIPIENT, 9, true)],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
     let mut leases = Vec::new();
@@ -546,22 +522,40 @@ async fn recipient_send_and_reservation_failures_do_not_retract_ack_or_block_oth
 // Keep the worker's 20 ms retry deadline ahead of the 30 ms observation without
 // depending on platform timer granularity or a fixed number of scheduler yields.
 #[tokio::test(start_paused = true)]
-async fn duplicate_is_silent_new_invoke_notifies_again_and_confirmed_retry_is_immutable() {
+async fn pending_duplicate_is_silent_post_issuance_reuse_notifies_and_retry_is_immutable() {
     let duplicate = Harness::new(
         vec![local_recipient(UNCONFIRMED_RECIPIENT, 17, false)],
-        0x07,
+        EventTransitionBits::all(),
         1_000,
     );
-    assert_ack(duplicate.dispatch_with_reply(0x60).await.unwrap(), 0x60);
-    assert_eq!(duplicate.frames().len(), 1);
+    // Poll the real handler into its database wait. Before response issuance,
+    // an exact duplicate neither acknowledges nor starts another notification.
+    let gate = duplicate.db.write().await;
+    let first = duplicate.dispatch_with_reply(0x60);
+    tokio::pin!(first);
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(first.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
     assert!(duplicate.dispatch_with_reply(0x60).await.is_err());
+    assert!(duplicate.frames().is_empty());
+    drop(gate);
+    assert_ack(first.await.unwrap(), 0x60);
     assert_eq!(duplicate.frames().len(), 1);
-    assert_ack(duplicate.dispatch_with_reply(0x61).await.unwrap(), 0x61);
+    assert!(duplicate.acknowledged().await);
+    // After reply handoff, reusing the Invoke ID matches the existing new-ID
+    // behavior: idempotent acknowledgment state, but another ACK_NOTIFICATION.
+    assert_ack(duplicate.dispatch_with_reply(0x60).await.unwrap(), 0x60);
     assert_eq!(duplicate.frames().len(), 2);
+    assert!(duplicate.acknowledged().await);
+    assert_ack(duplicate.dispatch_with_reply(0x61).await.unwrap(), 0x61);
+    assert_eq!(duplicate.frames().len(), 3);
+    assert!(duplicate.acknowledged().await);
 
     let retry = Harness::new(
         vec![local_recipient(CONFIRMED_RECIPIENT, 18, true)],
-        0x07,
+        EventTransitionBits::all(),
         20,
     );
     assert_ack(retry.dispatch_with_reply(0x62).await.unwrap(), 0x62);
@@ -579,6 +573,7 @@ async fn duplicate_is_silent_new_invoke_notifies_again_and_confirmed_retry_is_im
     let invoke_id = invoke_id.unwrap();
     assert!(retry.transactions.admit_terminal(
         CONFIRMED_RECIPIENT,
+        None,
         None,
         &Apdu::SimpleAck(SimpleAck {
             invoke_id,

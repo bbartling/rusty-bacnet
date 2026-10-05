@@ -11,14 +11,16 @@ use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
 
 mod final_segment;
-pub(crate) use final_segment::{
-    FinalSegmentIssue, FinalSegmentSendToken, TerminalResponseAdmission,
-};
+#[cfg(test)]
+pub(crate) use final_segment::TerminalResponseAdmission;
+pub(crate) use final_segment::{FinalSegmentIssue, FinalSegmentSendToken};
 mod segmented_response;
 pub(crate) use segmented_response::SegmentedResponseAdmission;
 mod completion;
 mod coordinated;
-pub(crate) use coordinated::{CoordinatedCompletion, CoordinatedTerminalPhase};
+pub(crate) use coordinated::{
+    CoordinatedCompletion, CoordinatedTerminalPhase, SegmentedAckArrival,
+};
 use coordinated::{PendingLease, PendingRelease};
 
 /// TSM configuration.
@@ -52,18 +54,49 @@ pub enum TsmResponse {
     /// SimpleACK — confirmed service completed with no return data.
     SimpleAck,
     /// ComplexACK — confirmed service returned data.
-    ComplexAck { service_data: Bytes },
+    ComplexAck {
+        /// Encoded service ACK parameters, without the APDU header.
+        service_data: Bytes,
+    },
     /// Error PDU.
-    Error { class: u32, code: u32 },
+    Error {
+        /// Raw BACnetErrorClass enumeration value.
+        class: u32,
+        /// Raw BACnetErrorCode enumeration value.
+        code: u32,
+        /// What the PDU's structured Clause 21 body adds to the class and
+        /// code (ChangeList-Error, CreateObject-Error, WPM-Error and the
+        /// others); `None` for a plain error.
+        detail: Option<bacnet_types::error::ErrorDetail>,
+    },
     /// Reject PDU.
-    Reject { reason: u8 },
+    Reject {
+        /// Raw BACnetRejectReason value.
+        reason: u8,
+    },
     /// Abort PDU.
-    Abort { reason: u8 },
+    Abort {
+        /// Raw BACnetAbortReason value.
+        reason: u8,
+    },
     /// A router rejected the active message as too long for its routed path.
     NetworkPathTooLong {
         /// Destination network named by the network-layer rejection.
         dnet: u16,
     },
+}
+
+impl TsmResponse {
+    /// The completion an Error PDU produces. A structured body keeps its
+    /// detail, such as a ChangeList-Error's First Failed Element Number or
+    /// WritePropertyMultiple's first failed write attempt.
+    pub(crate) fn from_error_pdu(pdu: &bacnet_encoding::apdu::ErrorPdu) -> Self {
+        Self::Error {
+            class: pdu.error_class.to_raw() as u32,
+            code: pdu.error_code.to_raw() as u32,
+            detail: bacnet_services::structured_error::detail(pdu),
+        }
+    }
 }
 
 /// Invoke ID allocator scoped to a single destination MAC.
@@ -200,11 +233,9 @@ struct PendingTransaction {
     /// newer segment activity acquired the TSM lock.
     segment_generation: u64,
     /// The service this request asked for. Clause 20.1.4.2 and 20.1.5.6 both
-    /// require an acknowledgment's service-ack-choice to "contain the value of
-    /// the BACnetConfirmedServiceChoice corresponding to the service contained
-    /// in the previous BACnet-Confirmed-Service-Request that has resulted in
-    /// this acknowledgment", so anything else is not this transaction's
-    /// response.
+    /// require service-ack-choice to match the BACnetConfirmedServiceChoice
+    /// of the request being acknowledged. A different choice therefore
+    /// cannot identify this transaction's response.
     expected_service_choice: ConfirmedServiceChoice,
     lease: PendingLease,
 }
@@ -222,6 +253,7 @@ pub struct Tsm {
 }
 
 impl Tsm {
+    /// Create a transaction state machine with the given timing and retry configuration.
     pub fn new(config: TsmConfig) -> Self {
         Self {
             config,
@@ -231,6 +263,7 @@ impl Tsm {
         }
     }
 
+    /// Timing and retry configuration in force.
     pub fn config(&self) -> &TsmConfig {
         &self.config
     }
@@ -292,6 +325,7 @@ impl Tsm {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn register_segmented_transaction_with_progress(
         &mut self,
         destination_mac: MacAddr,
@@ -457,6 +491,7 @@ impl Tsm {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn admit_terminal_response(
         &mut self,
         source_mac: &[u8],
@@ -477,15 +512,12 @@ impl Tsm {
                 sent_all_segments: false
             }
         ) {
-            if let Some(issue) = pending
+            if pending
                 .final_segment_issue
                 .as_ref()
-                .filter(|issue| issue.is_polling())
+                .is_some_and(|issue| issue.is_polling())
             {
-                return TerminalResponseAdmission::FinalSegmentSendPolling {
-                    owner: current_owner,
-                    issue: issue.clone(),
-                };
+                return TerminalResponseAdmission::FinalSegmentSendPolling;
             }
             self.abort_invalid_apdu_in_current_state(source_mac, invoke_id, &current_owner);
             return TerminalResponseAdmission::PrematureSegmentedRequestAborted;
@@ -713,8 +745,15 @@ impl Tsm {
         }
     }
 
+    /// Number of confirmed transactions currently awaiting a response.
     pub fn pending_count(&self) -> usize {
         self.pending.len()
+    }
+
+    /// Whether a transaction keyed to `tsm_mac` with `invoke_id` is pending.
+    pub(crate) fn has_transaction(&self, tsm_mac: &[u8], invoke_id: u8) -> bool {
+        self.pending
+            .contains_key(&(MacAddr::from_slice(tsm_mac), invoke_id))
     }
 }
 

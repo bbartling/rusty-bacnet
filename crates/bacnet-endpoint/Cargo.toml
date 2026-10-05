@@ -1,0 +1,45 @@
+[package]
+name = "bacnet-endpoint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "BACnet endpoint that owns one transport and runs client and server roles through it"
+keywords = ["bacnet", "building-automation", "client", "server", "async"]
+categories = ["network-programming"]
+
+[dependencies]
+bacnet-types.workspace = true
+bacnet-encoding.workspace = true
+bacnet-services.workspace = true
+bacnet-transport.workspace = true
+bacnet-network.workspace = true
+bacnet-endpoint-core.workspace = true
+bacnet-client.workspace = true
+bacnet-objects.workspace = true
+bacnet-server.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net"] }
+tokio-rustls = { workspace = true, optional = true }
+
+[features]
+sc-tls = [
+    "bacnet-transport/sc-tls",
+    "bacnet-client/sc-tls",
+    "bacnet-server/sc-tls",
+    "dep:tokio-rustls",
+]
+
+[dev-dependencies]
+socket2.workspace = true
+tokio-tungstenite.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util", "net"] }
+rcgen.workspace = true
+futures-util.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+
+[lints]
+workspace = true

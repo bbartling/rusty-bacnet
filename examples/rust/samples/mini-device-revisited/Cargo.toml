@@ -3,6 +3,7 @@ name = "mini-device-revisited"
 version = "0.1.0"
 edition = "2021"
 description = "Rusty-BACnet port of BACpypes3 mini-device-revisited.py"
+license.workspace = true
 publish = false
 default-run = "mini-device-revisited"
 

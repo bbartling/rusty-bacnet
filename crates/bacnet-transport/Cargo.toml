@@ -20,6 +20,7 @@ tokio-tungstenite = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
+aws-lc-rs = { version = "1.17", default-features = false, optional = true }
 tokio-serial = { version = "5", optional = true }
 gpiocdev = { version = "0.8", optional = true }
 libc = { workspace = true }
@@ -28,6 +29,8 @@ getrandom = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
     "Win32_System_IO",
 ] }
@@ -35,9 +38,15 @@ windows-sys = { version = "0.61", features = [
 [features]
 default = []
 ipv6 = []
-sc-tls = ["tokio-tungstenite", "tokio-rustls", "rustls", "futures-util"]
-serial = ["tokio-serial", "tokio/io-util"]
-serial-gpio = ["serial", "gpiocdev"]
+sc-tls = [
+    "dep:tokio-tungstenite",
+    "dep:tokio-rustls",
+    "dep:rustls",
+    "dep:futures-util",
+    "dep:aws-lc-rs",
+]
+serial = ["dep:tokio-serial", "tokio/io-util"]
+serial-gpio = ["serial", "dep:gpiocdev"]
 ethernet = []
 
 [dev-dependencies]

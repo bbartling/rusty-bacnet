@@ -25,6 +25,8 @@ pub enum ScWebSocketErrorKind {
     WebSocketHandshake,
     /// The hub did not accept the BACnet/SC hub subprotocol.
     HubSubprotocol,
+    /// The direct peer did not accept the BACnet/SC direct subprotocol.
+    DirectSubprotocol,
     /// Sending a WebSocket frame failed.
     Send,
     /// Receiving a WebSocket frame failed.
@@ -44,9 +46,10 @@ impl ScWebSocketErrorKind {
                 io::ErrorKind::InvalidInput
             }
             Self::TcpDial => io::ErrorKind::ConnectionRefused,
-            Self::TlsHandshake | Self::WebSocketHandshake | Self::HubSubprotocol => {
-                io::ErrorKind::InvalidData
-            }
+            Self::TlsHandshake
+            | Self::WebSocketHandshake
+            | Self::HubSubprotocol
+            | Self::DirectSubprotocol => io::ErrorKind::InvalidData,
             Self::Send
             | Self::Receive
             | Self::Closed
@@ -66,6 +69,7 @@ impl fmt::Display for ScWebSocketErrorKind {
             Self::TlsHandshake => "tls-handshake",
             Self::WebSocketHandshake => "websocket-handshake",
             Self::HubSubprotocol => "hub-subprotocol",
+            Self::DirectSubprotocol => "direct-subprotocol",
             Self::Send => "send",
             Self::Receive => "receive",
             Self::Closed => "closed",
@@ -100,9 +104,9 @@ pub enum ScConnectError {
     /// The hub rejected the Connect-Request with a BVLC-Result NAK.
     #[non_exhaustive]
     HandshakeNak {
-        /// BVLC function for which this Result was sent.
+        /// Function code of the BVLC message this Result answers.
         result_for: ScFunction,
-        /// Header marker that caused the error, or 0 when unrelated to a header option.
+        /// Marker of the header option at fault, or 0 when no header option was involved.
         error_header_marker: u8,
         /// BACnet Error Class value carried by the NAK.
         error_class: u16,
@@ -124,7 +128,7 @@ pub enum ScConnectError {
     /// A BVLC-Result ACK was received where Connect-Accept was required.
     #[non_exhaustive]
     UnexpectedResultAck {
-        /// BVLC function for which this Result was sent.
+        /// Function code of the BVLC message this Result answers.
         result_for: ScFunction,
     },
     /// Connect-Accept did not match the pending Connect-Request.

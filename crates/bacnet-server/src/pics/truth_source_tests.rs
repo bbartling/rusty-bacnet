@@ -4,10 +4,10 @@
 //! the workspace's 700-LOC file cap. They verify the central invariant of the
 //! shared-truth-source design: for every core I/O/V object type, the
 //! `BACnetObject::is_writable_property` override and the runtime
-//! `write_property` match arms must agree — if the override reports a property
-//! writable, `write_property` must accept it, and if it reports it read-only,
-//! `write_property` must reject it. This is the regression guard that prevents
-//! an override and its `write_property` arms from drifting apart (the exact
+//! `write_property_from` match arms must agree — if the override reports a property
+//! writable, `write_property_from` must accept it, and if it reports it read-only,
+//! `write_property_from` must reject it. This is the regression guard that prevents
+//! an override and its `write_property_from` arms from drifting apart (the exact
 //! false-negative class issue #115 eliminates).
 
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
@@ -23,19 +23,19 @@ use super::{PicsConfig, PicsGenerator};
 use crate::server::ServerConfig;
 
 /// Cross-check the central truth-source invariant: for every core I/O/V type,
-/// `is_writable_property` and `write_property` must agree. If the override
-/// reports a property writable, `write_property` must accept it; if it reports
-/// it read-only, `write_property` must reject it. This guards against the
-/// override and the `write_property` match arms drifting apart — the exact
+/// `is_writable_property` and `write_property_from` must agree. If the override
+/// reports a property writable, `write_property_from` must accept it; if it reports
+/// it read-only, `write_property_from` must reject it. This guards against the
+/// override and the `write_property_from` match arms drifting apart — the exact
 /// false-negative class issue #115 is meant to eliminate.
 ///
-/// Sample values are chosen to satisfy `write_property`'s validation so a true
+/// Sample values are chosen to satisfy `write_property_from`'s validation so a true
 /// agreement is tested (not a rejection on bad input). Input types (AI, BI,
 /// MSI) require `out_of_service` before PRESENT_VALUE is accepted, so those
 /// objects are pre-flipped where needed.
 #[test]
 fn is_writable_property_matches_write_property_on_all_core_types() {
-    use bacnet_objects::event::LimitEnable;
+    use bacnet_types::bitstring::LimitEnable;
 
     // A read-only property every type rejects — used as a universal negative.
     const READ_ONLY: PropertyIdentifier = PropertyIdentifier::STATUS_FLAGS;
@@ -51,10 +51,16 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
             obj.is_writable_property(pid),
             "{label}: is_writable_property must report {pid:?} writable"
         );
-        let result = obj.write_property(pid, None, value, None);
+        let result = obj.write_property_from(
+            pid,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        );
         assert!(
             result.is_ok(),
-            "{label}: write_property must accept {pid:?}, got: {result:?}"
+            "{label}: source-aware write must accept {pid:?}, got: {result:?}"
         );
     }
 
@@ -64,15 +70,20 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
             !obj.is_writable_property(pid),
             "{label}: is_writable_property must report {pid:?} NOT writable"
         );
-        let result = obj.write_property(pid, None, PropertyValue::Null, None);
+        let result = obj.write_property_from(
+            pid,
+            None,
+            PropertyValue::Null,
+            None,
+            &crate::command_source::test_origin(),
+        );
         assert!(
             result.is_err(),
-            "{label}: write_property must reject {pid:?}, got: {result:?}"
+            "{label}: source-aware write must reject {pid:?}, got: {result:?}"
         );
     }
 
-    // Helper: like assert_accepts but supplies an array_index (PRIORITY_ARRAY
-    // requires Some(1..=16); STATE_TEXT similarly takes an element index).
+    // Helper: like assert_accepts but supplies an array_index for STATE_TEXT.
     fn assert_accepts_indexed(
         obj: &mut dyn BACnetObject,
         pid: PropertyIdentifier,
@@ -84,10 +95,16 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
             obj.is_writable_property(pid),
             "{label}: is_writable_property must report {pid:?} writable"
         );
-        let result = obj.write_property(pid, Some(index), value, None);
+        let result = obj.write_property_from(
+            pid,
+            Some(index),
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        );
         assert!(
             result.is_ok(),
-            "{label}: write_property must accept {pid:?}[{index}], got: {result:?}"
+            "{label}: source-aware write must accept {pid:?}[{index}], got: {result:?}"
         );
     }
 
@@ -123,13 +140,13 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyIdentifier::LIMIT_ENABLE,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         "AI",
     );
     assert_rejects(&mut ai, READ_ONLY, "AI");
 
-    // AnalogOutput — commandable: PRIORITY_ARRAY + PRESENT_VALUE + event set.
+    // AnalogOutput — commandable Present_Value with a read-only Priority_Array.
     let mut ao = AnalogOutputObject::new(1, "ao", 95).unwrap();
     ao.write_property(
         PropertyIdentifier::OUT_OF_SERVICE,
@@ -144,13 +161,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Real(50.0),
         "AO",
     );
-    assert_accepts_indexed(
-        &mut ao,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "AO",
-    );
+    assert_rejects(&mut ao, PropertyIdentifier::PRIORITY_ARRAY, "AO");
     assert_accepts(
         &mut ao,
         PropertyIdentifier::COV_INCREMENT,
@@ -186,13 +197,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Real(50.0),
         "AV",
     );
-    assert_accepts_indexed(
-        &mut av,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "AV",
-    );
+    assert_rejects(&mut av, PropertyIdentifier::PRIORITY_ARRAY, "AV");
     assert_accepts(
         &mut av,
         PropertyIdentifier::COV_INCREMENT,
@@ -262,13 +267,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Enumerated(1),
         "BO",
     );
-    assert_accepts_indexed(
-        &mut bo,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "BO",
-    );
+    assert_rejects(&mut bo, PropertyIdentifier::PRIORITY_ARRAY, "BO");
     assert_accepts(
         &mut bo,
         PropertyIdentifier::ACTIVE_TEXT,
@@ -292,13 +291,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Enumerated(1),
         "BV",
     );
-    assert_accepts_indexed(
-        &mut bv,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "BV",
-    );
+    assert_rejects(&mut bv, PropertyIdentifier::PRIORITY_ARRAY, "BV");
     assert_accepts(
         &mut bv,
         PropertyIdentifier::ACTIVE_TEXT,
@@ -357,13 +350,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Unsigned(1),
         "MSO",
     );
-    assert_accepts_indexed(
-        &mut mso,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "MSO",
-    );
+    assert_rejects(&mut mso, PropertyIdentifier::PRIORITY_ARRAY, "MSO");
     assert_accepts_indexed(
         &mut mso,
         PropertyIdentifier::STATE_TEXT,
@@ -381,13 +368,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
         PropertyValue::Unsigned(1),
         "MSV",
     );
-    assert_accepts_indexed(
-        &mut msv,
-        PropertyIdentifier::PRIORITY_ARRAY,
-        1,
-        PropertyValue::Null,
-        "MSV",
-    );
+    assert_rejects(&mut msv, PropertyIdentifier::PRIORITY_ARRAY, "MSV");
     assert_accepts_indexed(
         &mut msv,
         PropertyIdentifier::STATE_TEXT,
@@ -404,7 +385,7 @@ fn is_writable_property_matches_write_property_on_all_core_types() {
     assert_rejects(&mut msv, READ_ONLY, "MSV");
 }
 
-/// The per-object `write_property` arms and the `is_writable_property`
+/// The per-object `write_property_from` arms and the `is_writable_property`
 /// override must agree on the two objects hardened in the #182 review round:
 /// Pulse Converter (whose historical default advertised INPUT_REFERENCE
 /// read-only while the arm accepted it — and OBJECT_NAME writable while no
@@ -418,7 +399,6 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
     use bacnet_objects::averaging::AveragingObject;
     use bacnet_objects::database::ObjectDatabase;
     use bacnet_types::enums::ObjectType;
-    use bacnet_types::primitives::ObjectIdentifier;
 
     fn assert_exactly(
         obj: &mut dyn BACnetObject,
@@ -432,7 +412,14 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 "{label}: {pid:?} must be advertised writable"
             );
             assert!(
-                obj.write_property(pid, None, value, None).is_ok(),
+                obj.write_property_from(
+                    pid,
+                    None,
+                    value,
+                    None,
+                    &crate::command_source::test_origin()
+                )
+                .is_ok(),
                 "{label}: {pid:?} advertised writable but the arm rejected a good value"
             );
         }
@@ -442,20 +429,26 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 "{label}: {pid:?} must NOT be advertised writable"
             );
             assert!(
-                obj.write_property(pid, None, value, None).is_err(),
+                obj.write_property_from(
+                    pid,
+                    None,
+                    value,
+                    None,
+                    &crate::command_source::test_origin()
+                )
+                .is_err(),
                 "{label}: {pid:?} not advertised but the arm accepted a write"
             );
         }
     }
 
-    let reference_value = PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(
-            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 5).unwrap(),
-        ),
-        PropertyValue::Enumerated(PropertyIdentifier::PRESENT_VALUE.to_raw()),
-    ]);
+    // [0] analog-input 5, [1] present-value: the Clause 21 members (#1312).
+    let reference_value =
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x05, 0x19, 0x55]);
 
     let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    // Count must cover the adjustment below: 2.0 / 1.5 takes one pulse off.
+    pc.add_pulses(1).unwrap();
     assert_exactly(
         &mut pc,
         "PC",
@@ -465,10 +458,15 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 PropertyValue::Boolean(true),
             ),
             (PropertyIdentifier::PRESENT_VALUE, PropertyValue::Real(10.0)),
+            // Out of service, as above (Clause 12.23.10, #1341).
+            (
+                PropertyIdentifier::RELIABILITY,
+                PropertyValue::Enumerated(0),
+            ),
             (PropertyIdentifier::SCALE_FACTOR, PropertyValue::Real(1.5)),
             (PropertyIdentifier::ADJUST_VALUE, PropertyValue::Real(2.0)),
             (PropertyIdentifier::COV_INCREMENT, PropertyValue::Real(0.5)),
-            (PropertyIdentifier::INPUT_REFERENCE, reference_value.clone()),
+            (PropertyIdentifier::INPUT_REFERENCE, reference_value),
             (
                 PropertyIdentifier::DESCRIPTION,
                 PropertyValue::CharacterString("d".into()),
@@ -480,10 +478,6 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 PropertyValue::CharacterString("renamed".into()),
             ),
             (PropertyIdentifier::UNITS, PropertyValue::Enumerated(95)),
-            (
-                PropertyIdentifier::RELIABILITY,
-                PropertyValue::Enumerated(0),
-            ),
             (
                 PropertyIdentifier::EVENT_STATE,
                 PropertyValue::Enumerated(0),
@@ -517,15 +511,25 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
         &[
             (
                 PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
-                reference_value,
+                // The Clause 21 form Averaging serves (#1182).
+                PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x05, 0x19, 0x55]),
             ),
             (
                 PropertyIdentifier::DESCRIPTION,
                 PropertyValue::CharacterString("d".into()),
             ),
+            // The window rows and the Attempted_Samples reset (#1092).
             (
-                PropertyIdentifier::OUT_OF_SERVICE,
-                PropertyValue::Boolean(true),
+                PropertyIdentifier::WINDOW_INTERVAL,
+                PropertyValue::Unsigned(60),
+            ),
+            (
+                PropertyIdentifier::WINDOW_SAMPLES,
+                PropertyValue::Unsigned(30),
+            ),
+            (
+                PropertyIdentifier::ATTEMPTED_SAMPLES,
+                PropertyValue::Unsigned(0),
             ),
         ],
         &[
@@ -533,11 +537,16 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 PropertyIdentifier::OBJECT_NAME,
                 PropertyValue::CharacterString("renamed".into()),
             ),
+            // Table 12-5 has no Out_Of_Service or Present_Value (#1064).
+            (
+                PropertyIdentifier::OUT_OF_SERVICE,
+                PropertyValue::Boolean(true),
+            ),
             (PropertyIdentifier::PRESENT_VALUE, PropertyValue::Real(1.0)),
             (PropertyIdentifier::MINIMUM_VALUE, PropertyValue::Real(1.0)),
             (
-                PropertyIdentifier::WINDOW_INTERVAL,
-                PropertyValue::Unsigned(60),
+                PropertyIdentifier::VALID_SAMPLES,
+                PropertyValue::Unsigned(0),
             ),
             (
                 PropertyIdentifier::RELIABILITY,
@@ -568,14 +577,16 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
 
     let cases = [
         (
+            // Table 12-31 has no Log_Interval or Out_Of_Service (#1064).
             ObjectType::EVENT_LOG,
             &[
                 PropertyIdentifier::LOG_ENABLE,
-                PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
-                PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::DESCRIPTION,
+                // The window (#1353).
+                PropertyIdentifier::START_TIME,
+                PropertyIdentifier::STOP_TIME,
             ][..],
         ),
         (
@@ -585,8 +596,16 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
-                PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::DESCRIPTION,
+                PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
+                // Logging_Type, the window, alignment and Trigger (#1353,
+                // #1354).
+                PropertyIdentifier::LOGGING_TYPE,
+                PropertyIdentifier::START_TIME,
+                PropertyIdentifier::STOP_TIME,
+                PropertyIdentifier::ALIGN_INTERVALS,
+                PropertyIdentifier::INTERVAL_OFFSET,
+                PropertyIdentifier::TRIGGER,
             ][..],
         ),
         (
@@ -597,6 +616,14 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
                 PropertyIdentifier::DESCRIPTION,
+                PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
+                // Logging_Type, the window, alignment and Trigger (#1235).
+                PropertyIdentifier::LOGGING_TYPE,
+                PropertyIdentifier::START_TIME,
+                PropertyIdentifier::STOP_TIME,
+                PropertyIdentifier::ALIGN_INTERVALS,
+                PropertyIdentifier::INTERVAL_OFFSET,
+                PropertyIdentifier::TRIGGER,
             ][..],
         ),
     ];
@@ -612,15 +639,87 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
             .filter(|property| property.access.writable)
             .map(|property| property.property_id)
             .collect::<Vec<_>>();
-        assert_eq!(writable.len(), expected.len(), "{object_type:?}");
-        for property in expected {
+        // Each log's BUFFER_READY configuration is writable too (#1347),
+        // as are the message texts and the inhibit pair (#1329).
+        let reporting = [
+            PropertyIdentifier::NOTIFICATION_THRESHOLD,
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        ];
+        let options = [
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
+        ];
+        assert_eq!(
+            writable.len(),
+            expected.len() + reporting.len() + options.len(),
+            "{object_type:?}"
+        );
+        for property in expected.iter().chain(&reporting).chain(&options) {
             assert!(writable.contains(property), "{object_type:?} {property:?}");
+        }
+        // A Trend Log samples a BACnet property, so Table 12-29 footnotes 1
+        // and 8 require its window, Log_Interval and Log_DeviceObjectProperty
+        // (#1481). Table 12-35 requires the last two outright, and neither it
+        // nor Table 12-31 requires a window.
+        let optional = |property| {
+            support
+                .supported_properties
+                .iter()
+                .find(|row| row.property_id == property)
+                .map(|row| row.access.optional)
+        };
+        let trend = object_type == ObjectType::TREND_LOG;
+        for property in [
+            PropertyIdentifier::START_TIME,
+            PropertyIdentifier::STOP_TIME,
+        ] {
+            assert_eq!(
+                optional(property),
+                Some(!trend),
+                "{object_type:?} {property:?}"
+            );
+        }
+        if object_type != ObjectType::EVENT_LOG {
+            for property in [
+                PropertyIdentifier::LOG_INTERVAL,
+                PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
+            ] {
+                assert_eq!(
+                    optional(property),
+                    Some(false),
+                    "{object_type:?} {property:?}"
+                );
+            }
+        }
+        // The three tables require every BUFFER_READY row of a log that
+        // reports intrinsically, as these do, but Event_Message_Texts,
+        // which they only permit (#1485).
+        let read_only = [
+            PropertyIdentifier::RECORDS_SINCE_NOTIFICATION,
+            PropertyIdentifier::LAST_NOTIFY_RECORD,
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+        ];
+        for property in reporting.iter().chain(&read_only) {
+            assert_eq!(
+                optional(*property),
+                Some(false),
+                "{object_type:?} {property:?}"
+            );
+        }
+        let texts = PropertyIdentifier::EVENT_MESSAGE_TEXTS;
+        for property in options.iter().chain([&texts]) {
+            assert_eq!(optional(*property), Some(true), "{object_type:?}");
         }
     }
 }
 
 #[test]
-fn pics_file_resize_writability_uses_the_isolated_representative() {
+fn pics_file_resize_writability_matches_single_instance_metadata() {
     use bacnet_objects::database::ObjectDatabase;
     use bacnet_objects::file::FileObject;
     use bacnet_types::enums::FileAccessMethod;

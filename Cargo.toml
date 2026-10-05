@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/bacnet-types",
     "crates/bacnet-encoding",
@@ -10,23 +10,24 @@ members = [
     "crates/bacnet-client",
     "crates/bacnet-objects",
     "crates/bacnet-server",
+    "crates/bacnet-endpoint",
     "crates/bacnet-integration-tests",
     "crates/rusty-bacnet",
     "crates/bacnet-cli",
     "benchmarks",
-]
-exclude = [
-    "examples/rust/samples/mini-device-revisited",
-    "examples/rust/samples/whois-scan",
-    "examples/rust/samples/point-discover",
+    # The sample programs (publish = false), which share this Cargo.lock (#1450).
+    # Listed one by one: with a glob, a leftover directory there without a
+    # Cargo.toml would break every cargo command in the workspace.
     "examples/rust/samples/bacnet-write",
+    "examples/rust/samples/mini-device-revisited",
+    "examples/rust/samples/point-discover",
     "examples/rust/samples/rpm-read",
+    "examples/rust/samples/whois-scan",
 ]
-# rusty-bacnet is a cdylib — `cargo test` can't link it without Python.
+# rusty-bacnet's tests link libpython, so they need a Python with its shared library.
 # bacnet-cli has heavy deps (rustyline, clap) — excluded from default builds.
-# Use `cargo check -p rusty-bacnet --tests`.
-# BTL test harness now lives at https://github.com/jscott3201/rusty-bacnet-btl-harness
-# HTTP/MCP gateway now lives at https://github.com/jscott3201/rusty-bacnet-mcp
+# Use `cargo nextest run -p rusty-bacnet`. The samples are left out too:
+# `--workspace` runs build them, and `-p <sample>` picks one.
 default-members = [
     "crates/bacnet-types",
     "crates/bacnet-encoding",
@@ -37,12 +38,13 @@ default-members = [
     "crates/bacnet-client",
     "crates/bacnet-objects",
     "crates/bacnet-server",
+    "crates/bacnet-endpoint",
     "crates/bacnet-integration-tests",
     "benchmarks",
 ]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.12.0"
 edition = "2021"
 rust-version = "1.93"
 license = "MIT"
@@ -53,27 +55,32 @@ keywords = ["bacnet", "building-automation", "ashrae", "iot", "protocol"]
 categories = ["network-programming", "embedded"]
 
 [workspace.dependencies]
-bacnet-types = { version = "0.11.0", path = "crates/bacnet-types" }
-bacnet-encoding = { version = "0.11.0", path = "crates/bacnet-encoding" }
-bacnet-services = { version = "0.11.0", path = "crates/bacnet-services" }
-bacnet-transport = { version = "0.11.0", path = "crates/bacnet-transport" }
-bacnet-network = { version = "0.11.0", path = "crates/bacnet-network" }
-bacnet-endpoint-core = { version = "0.11.0", path = "crates/bacnet-endpoint-core" }
-bacnet-client = { version = "0.11.0", path = "crates/bacnet-client" }
-bacnet-objects = { version = "0.11.0", path = "crates/bacnet-objects" }
-bacnet-server = { version = "0.11.0", path = "crates/bacnet-server" }
+bacnet-types = { version = "0.12.0", path = "crates/bacnet-types" }
+bacnet-encoding = { version = "0.12.0", path = "crates/bacnet-encoding" }
+bacnet-services = { version = "0.12.0", path = "crates/bacnet-services" }
+bacnet-transport = { version = "0.12.0", path = "crates/bacnet-transport" }
+bacnet-network = { version = "0.12.0", path = "crates/bacnet-network" }
+bacnet-endpoint-core = { version = "0.12.0", path = "crates/bacnet-endpoint-core" }
+bacnet-client = { version = "0.12.0", path = "crates/bacnet-client" }
+bacnet-objects = { version = "0.12.0", path = "crates/bacnet-objects" }
+bacnet-server = { version = "0.12.0", path = "crates/bacnet-server" }
+bacnet-endpoint = { version = "0.12.0", path = "crates/bacnet-endpoint" }
 thiserror = "2"
 bitflags = "2"
 bytes = "1"
 tracing = "0.1"
 tokio = "1"
 socket2 = "0.6"
-pyo3 = { version = "0.29", features = ["extension-module", "multiple-pymethods"] }
-pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+# maturin turns on extension-module for wheel builds (crates/rusty-bacnet/pyproject.toml);
+# without it, cargo links libpython so the crate's own tests can run (#919).
+pyo3 = { version = "0.29", features = ["multiple-pymethods"] }
+# No TLS features: BACnet/SC runs its own tokio-rustls handshake against the
+# configured trust anchors and hands tungstenite the TLS stream. A tungstenite
+# TLS feature would add native root loading, which links Apple's Security
+# framework on macOS and so stops the zig cross-build of the release (#944).
+tokio-tungstenite = "0.29"
 tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "std"] }
-rustls-native-certs = "0.8"
 futures-util = "0.3"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 smallvec = "1"
@@ -89,15 +96,14 @@ getrandom = "0.3"
 # carries `#[allow(unsafe_code)]` and a `// SAFETY:` comment, so this
 # stays `deny` everywhere.
 unsafe_code = "deny"
-# Surface missing pub-item docs in CI logs. Counts (2026-05-08): 3,335
-# warnings across the workspace. Per-crate ratchet to `deny` planned
-# for 0.9.x once each crate drops below ~25.
-missing_docs = "warn"
+# Every public item is documented (#902); bacnet-benchmarks (publish = false)
+# opts out in its lib.rs.
+missing_docs = "deny"
 unused_must_use = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 todo = "deny"
 dbg_macro = "deny"
-print_stderr = "warn"
-print_stdout = "warn"
+print_stderr = "deny"
+print_stdout = "deny"

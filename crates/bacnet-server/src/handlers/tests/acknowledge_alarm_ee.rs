@@ -10,6 +10,7 @@ use bacnet_objects::binary::BinaryInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_services::alarm_event::{AcknowledgeAlarmRequest, GetEventInformationRequest};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
 };
@@ -26,23 +27,23 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
     let bi_oid = bi.object_identifier();
     db.add(Box::new(bi)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(7, "EE-COS", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(7, "EE-COS", EventType::CHANGE_OF_STATE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 0,
         list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     ee.set_notification_class(7);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
     let mut nc = NotificationClass::new(7, "NC-7").unwrap();
-    nc.ack_required = [true, false, false]; // TO_OFFNORMAL requires ack
+    nc.ack_required = EventTransitionBits::TO_OFFNORMAL; // TO_OFFNORMAL requires ack
     db.add(Box::new(nc)).unwrap();
     db.add(Box::new(NotificationClass::new(0, "NC-0").unwrap()))
         .unwrap();
@@ -52,7 +53,7 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
 
 fn ack_request(
     ee_oid: ObjectIdentifier,
-    event_state: u32,
+    event_state: EventState,
     timestamp: BACnetTimeStamp,
 ) -> bytes::BytesMut {
     let request = AcknowledgeAlarmRequest {
@@ -68,7 +69,7 @@ fn ack_request(
     buf
 }
 
-fn gei_summary_acked(db: &ObjectDatabase, ee_oid: ObjectIdentifier) -> u8 {
+fn gei_summary_acked(db: &ObjectDatabase, ee_oid: ObjectIdentifier) -> EventTransitionBits {
     let request = GetEventInformationRequest {
         last_received_object_identifier: None,
     };
@@ -88,7 +89,7 @@ fn gei_summary_acked(db: &ObjectDatabase, ee_oid: ObjectIdentifier) -> u8 {
 /// The full loop: ack-required transition fires -> GEI shows the
 /// TO_OFFNORMAL bit cleared (ack owed) -> AcknowledgeAlarm succeeds -> the
 /// bit is set -> GEI shows it set. A duplicate ack is idempotent per Clause
-/// 13.2.3's unconditional "is set".
+/// 13.2.3's unconditional assignment of the acknowledged value.
 #[test]
 fn ee_acknowledge_alarm_round_trip_over_services() {
     let (mut db, ee_oid) = make_db_with_ack_required_ee();
@@ -99,8 +100,8 @@ fn ee_acknowledge_alarm_round_trip_over_services() {
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::OFFNORMAL);
     assert_eq!(
-        gei_summary_acked(&db, ee_oid) & 0x01,
-        0,
+        gei_summary_acked(&db, ee_oid) & EventTransitionBits::TO_OFFNORMAL,
+        EventTransitionBits::empty(),
         "TO_OFFNORMAL ack owed: GEI shows the bit cleared"
     );
 
@@ -110,14 +111,14 @@ fn ee_acknowledge_alarm_round_trip_over_services() {
         &mut db,
         &ack_request(
             ee_oid,
-            EventState::OFFNORMAL.to_raw(),
+            EventState::OFFNORMAL,
             BACnetTimeStamp::SequenceNumber(0),
         ),
     )
     .unwrap();
     assert_eq!(
-        gei_summary_acked(&db, ee_oid) & 0x01,
-        0x01,
+        gei_summary_acked(&db, ee_oid) & EventTransitionBits::TO_OFFNORMAL,
+        EventTransitionBits::TO_OFFNORMAL,
         "after the ack the bit is set"
     );
 
@@ -127,12 +128,12 @@ fn ee_acknowledge_alarm_round_trip_over_services() {
         &mut db,
         &ack_request(
             ee_oid,
-            EventState::OFFNORMAL.to_raw(),
+            EventState::OFFNORMAL,
             BACnetTimeStamp::SequenceNumber(0),
         ),
     )
     .unwrap();
-    assert_eq!(gei_summary_acked(&db, ee_oid), 0b111);
+    assert_eq!(gei_summary_acked(&db, ee_oid), EventTransitionBits::all());
 }
 
 /// A TO_NORMAL ack on an EE is equally serviceable (13.9's state matching:
@@ -170,7 +171,7 @@ fn ee_acknowledge_to_normal_bit() {
         &mut db,
         &ack_request(
             ee_oid,
-            EventState::NORMAL.to_raw(),
+            EventState::NORMAL,
             BACnetTimeStamp::SequenceNumber(2),
         ),
     )
@@ -182,14 +183,17 @@ fn ee_acknowledge_to_normal_bit() {
         .unwrap()
     {
         PropertyValue::BitString { data, .. } => {
-            assert_eq!(bacnet_types::bitstring::unpack_octet(&data, 3), 0b111)
+            assert_eq!(
+                EventTransitionBits::from_bacnet(&data),
+                EventTransitionBits::all()
+            )
         }
         other => panic!("expected BitString, got {other:?}"),
     }
 }
 
-/// Table 13-10: an EE with `Event_Detection_Enable` FALSE "does not support
-/// or is not configured for event generation" — the ack fails
+/// Table 13-10: an EE with `Event_Detection_Enable` FALSE falls under the
+/// existing-object case lacking event-generation configuration — the ack fails
 /// OBJECT / NO_ALARM_CONFIGURED, and the initial-condition
 /// `Acked_Transitions` it must hold (Clause 12.12) is untouched.
 #[test]
@@ -209,7 +213,7 @@ fn ee_acknowledge_alarm_detection_disabled_refused() {
         &mut db,
         &ack_request(
             ee_oid,
-            EventState::OFFNORMAL.to_raw(),
+            EventState::OFFNORMAL,
             BACnetTimeStamp::SequenceNumber(1),
         ),
     )
@@ -228,8 +232,8 @@ fn ee_acknowledge_alarm_detection_disabled_refused() {
         .unwrap()
     {
         PropertyValue::BitString { data, .. } => assert_eq!(
-            bacnet_types::bitstring::unpack_octet(&data, 3),
-            0b111,
+            EventTransitionBits::from_bacnet(&data),
+            EventTransitionBits::all(),
             "the refused ack must not disturb the initial condition"
         ),
         other => panic!("expected BitString, got {other:?}"),

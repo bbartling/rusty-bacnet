@@ -3,7 +3,8 @@
 use std::time::Duration;
 
 use bacnet_benchmarks::sc_helpers::{
-    generate_test_certs, make_client_tls_config, make_sc_transport, start_sc_hub, CertMaterial,
+    connect_ws_tls, generate_test_certs, make_client_tls_config_mtls, make_sc_transport_mtls,
+    start_sc_hub_mtls, CertMaterial, TlsClientWs,
 };
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::ScConnectionState;
@@ -14,26 +15,22 @@ use bacnet_transport::sc_frame::{
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::tungstenite::ClientRequestBuilder;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-type ClientWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type ClientWs = TlsClientWs;
 
 #[tokio::test]
 async fn sc_websocket_hub_subprotocol_handshake_succeeds() {
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x10; 6]).await;
 
     let request = ClientRequestBuilder::new(url.parse().unwrap())
         .with_sub_protocol(BACNET_SC_HUB_SUBPROTOCOL);
-    let connector = tokio_tungstenite::Connector::Rustls(make_client_tls_config(&certs));
-    let (_ws, response) =
-        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
-            .await
-            .unwrap();
+    let (_ws, response) = connect_ws_tls(request, make_client_tls_config_mtls(&certs))
+        .await
+        .unwrap();
 
     let selected = response
         .headers()
@@ -47,30 +44,24 @@ async fn sc_websocket_hub_subprotocol_handshake_succeeds() {
 #[tokio::test]
 async fn sc_websocket_hub_rejects_missing_or_wrong_subprotocol() {
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub(&certs, [0x20; 6]).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x20; 6]).await;
 
     let missing_request = ClientRequestBuilder::new(url.parse().unwrap());
-    let missing_connector = tokio_tungstenite::Connector::Rustls(make_client_tls_config(&certs));
-    let missing_result = tokio_tungstenite::connect_async_tls_with_config(
-        missing_request,
-        None,
-        false,
-        Some(missing_connector),
-    )
-    .await;
-    assert!(missing_result.is_err());
+    let missing_result = connect_ws_tls(missing_request, make_client_tls_config_mtls(&certs)).await;
+    assert!(
+        matches!(missing_result, Err(tokio_tungstenite::tungstenite::Error::Http(ref response))
+        if response.status() == 400),
+        "expected HTTP subprotocol refusal after mTLS: {missing_result:?}"
+    );
 
     let wrong_request =
         ClientRequestBuilder::new(url.parse().unwrap()).with_sub_protocol("dc.bsc.bacnet.org");
-    let wrong_connector = tokio_tungstenite::Connector::Rustls(make_client_tls_config(&certs));
-    let wrong_result = tokio_tungstenite::connect_async_tls_with_config(
-        wrong_request,
-        None,
-        false,
-        Some(wrong_connector),
-    )
-    .await;
-    assert!(wrong_result.is_err());
+    let wrong_result = connect_ws_tls(wrong_request, make_client_tls_config_mtls(&certs)).await;
+    assert!(
+        matches!(wrong_result, Err(tokio_tungstenite::tungstenite::Error::Http(ref response))
+        if response.status() == 400),
+        "expected HTTP subprotocol refusal after mTLS: {wrong_result:?}"
+    );
 
     hub.stop().await;
 }
@@ -78,15 +69,13 @@ async fn sc_websocket_hub_rejects_missing_or_wrong_subprotocol() {
 #[tokio::test]
 async fn sc_websocket_text_frame_closes_with_unsupported_data() {
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub(&certs, [0x30; 6]).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x30; 6]).await;
 
     let request = ClientRequestBuilder::new(url.parse().unwrap())
         .with_sub_protocol(BACNET_SC_HUB_SUBPROTOCOL);
-    let connector = tokio_tungstenite::Connector::Rustls(make_client_tls_config(&certs));
-    let (mut ws, _response) =
-        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
-            .await
-            .unwrap();
+    let (mut ws, _response) = connect_ws_tls(request, make_client_tls_config_mtls(&certs))
+        .await
+        .unwrap();
 
     ws.send(Message::Text("not a BVLC-SC binary frame".into()))
         .await
@@ -108,7 +97,7 @@ async fn sc_websocket_text_frame_closes_with_unsupported_data() {
 #[tokio::test]
 async fn sc_websocket_hub_relays_unicast_unknown_and_broadcast_with_vmac_rules() {
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x10; 6]).await;
 
     let vmac_a = [0xA1; 6];
     let vmac_b = [0xB2; 6];
@@ -185,12 +174,14 @@ async fn sc_websocket_hub_relays_unicast_unknown_and_broadcast_with_vmac_rules()
 #[tokio::test]
 async fn sc_websocket_routes_destination_option_nak_to_originating_node() {
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x10; 6]).await;
 
     let vmac_a = [0xA5; 6];
     let vmac_b = [0xB5; 6];
     let mut ws_a = connect_sc_client(&url, &certs, vmac_a).await;
-    let mut transport_b = make_sc_transport(&url, &certs, vmac_b).await;
+    let mut transport_b = make_sc_transport_mtls(&url, &certs, vmac_b)
+        .await
+        .with_device_uuid([2; 16]);
     let mut rx_b = transport_b.start().await.unwrap();
 
     let request = ScMessage {
@@ -235,7 +226,7 @@ async fn sc_websocket_routes_destination_option_nak_to_originating_node() {
         .await
         .is_err());
     assert_eq!(
-        transport_b.connection().unwrap().lock().await.state,
+        *transport_b.connection_state_changes().borrow(),
         ScConnectionState::Connected
     );
 
@@ -246,7 +237,7 @@ async fn sc_websocket_routes_destination_option_nak_to_originating_node() {
 #[tokio::test]
 async fn sc_websocket_hub_drops_peer_result_for_other_function() {
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x10; 6]).await;
 
     let vmac_a = [0xA6; 6];
     let mut ws_a = connect_sc_client(&url, &certs, vmac_a).await;
@@ -271,7 +262,7 @@ async fn sc_websocket_hub_drops_peer_result_for_other_function() {
 #[tokio::test]
 async fn sc_websocket_hub_preserves_large_minimum_size_option_chains() {
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x10; 6]).await;
 
     let vmac_a = [0xA9; 6];
     let vmac_b = [0xB9; 6];
@@ -306,7 +297,7 @@ async fn sc_websocket_hub_preserves_large_minimum_size_option_chains() {
 #[tokio::test]
 async fn sc_websocket_hub_naks_direct_address_resolution_as_unsupported() {
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x10; 6]).await;
 
     let mut ws = connect_sc_client(&url, &certs, [0xAD; 6]).await;
     let address_resolution = ScMessage {
@@ -341,7 +332,7 @@ async fn sc_websocket_hub_naks_direct_address_resolution_as_unsupported() {
 #[tokio::test]
 async fn sc_websocket_hub_replaces_known_device_uuid_connection() {
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x10; 6]).await;
 
     let device_uuid = [0x44; 16];
     let old_vmac = [0xA4; 6];
@@ -396,7 +387,7 @@ async fn sc_websocket_hub_replaces_known_device_uuid_connection() {
 #[tokio::test]
 async fn sc_websocket_hub_closes_connected_client_on_second_connect_request() {
     let certs = generate_test_certs();
-    let (mut hub, url) = start_sc_hub(&certs, [0x10; 6]).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, [0x10; 6]).await;
 
     let uuid_a = [0xA7; 16];
     let uuid_b = [0xB7; 16];
@@ -463,7 +454,7 @@ async fn sc_websocket_hub_closes_connected_client_on_second_connect_request() {
 async fn sc_websocket_hub_rejects_vmac_collisions_with_result_nak() {
     let certs = generate_test_certs();
     let hub_vmac = [0x10; 6];
-    let (mut hub, url) = start_sc_hub(&certs, hub_vmac).await;
+    let (mut hub, url) = start_sc_hub_mtls(&certs, hub_vmac).await;
 
     let existing_vmac = [0xA8; 6];
     let mut existing_ws =
@@ -527,11 +518,9 @@ async fn connect_sc_client_with_uuid(
 async fn open_sc_websocket(url: &str, certs: &CertMaterial) -> ClientWs {
     let request = ClientRequestBuilder::new(url.parse().unwrap())
         .with_sub_protocol(BACNET_SC_HUB_SUBPROTOCOL);
-    let connector = tokio_tungstenite::Connector::Rustls(make_client_tls_config(certs));
-    let (ws, _response) =
-        tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
-            .await
-            .unwrap();
+    let (ws, _response) = connect_ws_tls(request, make_client_tls_config_mtls(certs))
+        .await
+        .unwrap();
 
     ws
 }

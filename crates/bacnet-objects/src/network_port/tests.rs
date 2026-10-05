@@ -1,490 +1,349 @@
 use super::*;
+use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 
-#[test]
-fn object_type_is_network_port() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    assert_eq!(
-        np.object_identifier().object_type(),
-        ObjectType::NETWORK_PORT
+// Independent Clause12.56 profile oracle, not copied from production metadata.
+const ALL: &[P] = &[
+    P::OBJECT_IDENTIFIER,
+    P::OBJECT_NAME,
+    P::DESCRIPTION,
+    P::OBJECT_TYPE,
+    P::STATUS_FLAGS,
+    P::OUT_OF_SERVICE,
+    P::RELIABILITY,
+    P::NETWORK_TYPE,
+    P::PROTOCOL_LEVEL,
+    P::NETWORK_NUMBER,
+    P::NETWORK_NUMBER_QUALITY,
+    P::MAC_ADDRESS,
+    P::APDU_LENGTH,
+    P::LINK_SPEED,
+    P::CHANGES_PENDING,
+    P::BACNET_IP_MODE,
+    P::IP_ADDRESS,
+    P::IP_DEFAULT_GATEWAY,
+    P::IP_SUBNET_MASK,
+    P::BACNET_IP_UDP_PORT,
+    P::IP_DNS_SERVER,
+];
+fn bip(config: BipPortConfig) -> NetworkPortObject {
+    NetworkPortObject::new_bip(1, "NP", config).unwrap()
+}
+fn error(result: Result<PropertyValue, Error>, expected: ErrorCode) {
+    assert!(
+        matches!(result, Err(Error::Protocol { class, code }) if class == ErrorClass::PROPERTY.to_raw() as u32 && code == expected.to_raw() as u32),
+        "{result:?}"
     );
-    assert_eq!(np.object_identifier().instance_number(), 1);
 }
 
 #[test]
-fn read_object_name() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::OBJECT_NAME, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::CharacterString("NP-1".to_string()));
+fn configured_bip_contract_requires_application_properties() {
+    let object = bip(Default::default());
+    for (p, expected) in [
+        (P::NETWORK_TYPE, PropertyValue::Enumerated(5)),
+        (P::PROTOCOL_LEVEL, PropertyValue::Enumerated(2)),
+        (P::BACNET_IP_MODE, PropertyValue::Enumerated(0)),
+        (P::APDU_LENGTH, PropertyValue::Unsigned(1476)),
+        (P::NETWORK_NUMBER_QUALITY, PropertyValue::Enumerated(0)),
+        (P::LINK_SPEED, PropertyValue::Real(0.0)),
+        (P::CHANGES_PENDING, PropertyValue::Boolean(false)),
+    ] {
+        assert_eq!(object.read_property(p, None).unwrap(), expected);
+    }
+    for p in [P::IP_ADDRESS, P::IP_SUBNET_MASK, P::IP_DEFAULT_GATEWAY] {
+        assert_eq!(
+            object.read_property(p, None).unwrap(),
+            PropertyValue::OctetString(vec![0; 4])
+        );
+    }
+    for p in [P::MAX_APDU_LENGTH_ACCEPTED, P::COMMAND_NP, P::EVENT_STATE] {
+        error(object.read_property(p, None), ErrorCode::UNKNOWN_PROPERTY);
+    }
 }
 
 #[test]
-fn read_object_type() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::OBJECT_TYPE, None)
-        .unwrap();
+fn configured_bip_metadata_exact_sets_and_indexed_list() {
+    let object = bip(Default::default());
+    assert_eq!(object.property_list().as_ref(), ALL);
+    let metadata = object.property_metadata();
+    assert_eq!(metadata.len(), ALL.len() + 1);
+    let required: Vec<_> = ALL
+        .iter()
+        .copied()
+        .filter(|p| !matches!(*p, P::DESCRIPTION | P::LINK_SPEED))
+        .collect();
+    let actual: Vec<_> = object
+        .required_properties()
+        .iter()
+        .copied()
+        .filter(|p| *p != P::PROPERTY_LIST)
+        .collect();
+    assert_eq!(actual, required);
+    for row in metadata.iter() {
+        assert_eq!(
+            row.conformance,
+            if matches!(row.property_identifier, P::DESCRIPTION | P::LINK_SPEED) {
+                PropertyConformance::Optional
+            } else {
+                PropertyConformance::RequiredRead
+            }
+        );
+        assert_eq!(
+            row.write_capability,
+            if matches!(row.property_identifier, P::DESCRIPTION | P::OUT_OF_SERVICE) {
+                PropertyWriteCapability::Always
+            } else {
+                PropertyWriteCapability::ReadOnly
+            }
+        );
+        object.read_property(row.property_identifier, None).unwrap();
+    }
+    let listed: Vec<_> = ALL
+        .iter()
+        .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
+        .map(|p| PropertyValue::Enumerated(p.to_raw()))
+        .collect();
     assert_eq!(
-        val,
-        PropertyValue::Enumerated(ObjectType::NETWORK_PORT.to_raw())
+        object.read_property(P::PROPERTY_LIST, None).unwrap(),
+        PropertyValue::List(listed.clone())
     );
+    assert_eq!(
+        object.read_property(P::PROPERTY_LIST, Some(0)).unwrap(),
+        PropertyValue::Unsigned(18)
+    );
+    for (i, v) in listed.into_iter().enumerate() {
+        assert_eq!(
+            object
+                .read_property(P::PROPERTY_LIST, Some(i as u32 + 1))
+                .unwrap(),
+            v
+        );
+    }
+    error(
+        object.read_property(P::PROPERTY_LIST, Some(19)),
+        ErrorCode::INVALID_ARRAY_INDEX,
+    );
+    assert!(!object.is_createable());
+    assert!(!object.is_deleteable());
 }
 
 #[test]
-fn read_network_type() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::NETWORK_TYPE, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Enumerated(0)); // IPv4
-}
-
-#[test]
-fn read_network_number_default() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::NETWORK_NUMBER, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(0));
-}
-
-#[test]
-fn read_max_apdu_length() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(1476));
-}
-
-#[test]
-fn read_link_speed_default() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::LINK_SPEED, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Real(0.0));
-}
-
-#[test]
-fn read_changes_pending_default() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::CHANGES_PENDING, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Boolean(false));
-}
-
-#[test]
-fn read_command_default() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::COMMAND_NP, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Enumerated(0)); // idle
-}
-
-#[test]
-fn read_ip_address_default() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::IP_ADDRESS, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::OctetString(vec![0, 0, 0, 0]));
-}
-
-#[test]
-fn read_ip_default_gateway_default() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::IP_DEFAULT_GATEWAY, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::OctetString(vec![0, 0, 0, 0]));
-}
-
-#[test]
-fn read_ip_subnet_mask_default() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::IP_SUBNET_MASK, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::OctetString(vec![255, 255, 255, 0]));
-}
-
-#[test]
-fn read_udp_port_default() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::BACNET_IP_UDP_PORT, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Unsigned(0xBAC0));
-}
-
-#[test]
-fn write_command() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    np.write_property(
-        PropertyIdentifier::COMMAND_NP,
-        None,
-        PropertyValue::Enumerated(1), // discardChanges
-        None,
+fn configured_bip_numeric_boundaries_and_quality() {
+    for instance in [1, 255] {
+        NetworkPortObject::new_bip(instance, "NP", Default::default()).unwrap();
+    }
+    for instance in [0, 256, 4_194_303, u32::MAX] {
+        assert!(NetworkPortObject::new_bip(instance, "NP", Default::default()).is_err());
+    }
+    for (number, quality) in [(0, 0), (1, 3), (65534, 3)] {
+        let object = bip(BipPortConfig {
+            network_number: number,
+            ..Default::default()
+        });
+        assert_eq!(
+            object.read_property(P::NETWORK_NUMBER, None).unwrap(),
+            PropertyValue::Unsigned(number.into())
+        );
+        assert_eq!(
+            object
+                .read_property(P::NETWORK_NUMBER_QUALITY, None)
+                .unwrap(),
+            PropertyValue::Enumerated(quality)
+        );
+    }
+    assert!(NetworkPortObject::new_bip(
+        1,
+        "NP",
+        BipPortConfig {
+            network_number: 65535,
+            ..Default::default()
+        }
     )
-    .unwrap();
-    let val = np
-        .read_property(PropertyIdentifier::COMMAND_NP, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Enumerated(1));
+    .is_err());
+    for length in [50, 51, 1497, u32::MAX] {
+        let object = bip(BipPortConfig {
+            apdu_length: length,
+            ..Default::default()
+        });
+        assert_eq!(
+            object.read_property(P::APDU_LENGTH, None).unwrap(),
+            PropertyValue::Unsigned(length.into())
+        );
+    }
+    for length in [0, 49] {
+        assert!(NetworkPortObject::new_bip(
+            1,
+            "NP",
+            BipPortConfig {
+                apdu_length: length,
+                ..Default::default()
+            }
+        )
+        .is_err());
+    }
 }
 
 #[test]
-fn write_command_wrong_type() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let result = np.write_property(
-        PropertyIdentifier::COMMAND_NP,
-        None,
-        PropertyValue::Unsigned(1),
-        None,
-    );
-    assert!(result.is_err());
+fn configured_bip_dns_array_and_derived_mac() {
+    for (ip, udp) in [
+        ([0; 4], 0),
+        ([192, 0, 2, 1], 47808),
+        ([127, 0, 0, 1], 65535),
+    ] {
+        let object = bip(BipPortConfig {
+            ip_address: ip,
+            udp_port: udp,
+            ..Default::default()
+        });
+        let mut mac = ip.to_vec();
+        mac.extend_from_slice(&udp.to_be_bytes());
+        assert_eq!(
+            object.read_property(P::MAC_ADDRESS, None).unwrap(),
+            PropertyValue::OctetString(mac)
+        );
+    }
+    for dns in [vec![[0; 4]], vec![[192, 0, 2, 53], [198, 51, 100, 53]]] {
+        let object = bip(BipPortConfig {
+            dns_servers: dns.clone(),
+            ..Default::default()
+        });
+        assert!(object.is_array_property(P::IP_DNS_SERVER));
+        assert_eq!(
+            object.read_property(P::IP_DNS_SERVER, Some(0)).unwrap(),
+            PropertyValue::Unsigned(dns.len() as u64)
+        );
+        assert_eq!(
+            object.read_property(P::IP_DNS_SERVER, None).unwrap(),
+            PropertyValue::List(
+                dns.iter()
+                    .map(|ip| PropertyValue::OctetString(ip.to_vec()))
+                    .collect()
+            )
+        );
+        for (i, ip) in dns.iter().enumerate() {
+            assert_eq!(
+                object
+                    .read_property(P::IP_DNS_SERVER, Some(i as u32 + 1))
+                    .unwrap(),
+                PropertyValue::OctetString(ip.to_vec())
+            );
+        }
+        for index in [dns.len() as u32 + 1, u32::MAX] {
+            error(
+                object.read_property(P::IP_DNS_SERVER, Some(index)),
+                ErrorCode::INVALID_ARRAY_INDEX,
+            );
+        }
+    }
+    assert!(NetworkPortObject::new_bip(
+        1,
+        "NP",
+        BipPortConfig {
+            dns_servers: vec![],
+            ..Default::default()
+        }
+    )
+    .is_err());
 }
 
 #[test]
-fn write_ip_address_sets_changes_pending() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
+fn configured_snapshot_refuses_activation_writes_without_state_change() {
+    let mut object = bip(Default::default());
+    for &p in ALL {
+        let before = object.read_property(p, None).unwrap();
+        let result = object.write_property(p, None, before.clone(), None);
+        if matches!(p, P::DESCRIPTION | P::OUT_OF_SERVICE) {
+            result.unwrap();
+        } else {
+            assert!(
+                matches!(result,Err(Error::Protocol {code,..}) if code==ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32),
+                "{p:?}"
+            );
+        }
+        assert_eq!(object.read_property(p, None).unwrap(), before);
+    }
+    for p in [P::COMMAND_NP, P::MAX_APDU_LENGTH_ACCEPTED] {
+        assert!(
+            matches!(object.write_property(p,None,PropertyValue::Unsigned(1),None),Err(Error::Protocol {code,..}) if code==ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32)
+        );
+    }
     assert_eq!(
-        np.read_property(PropertyIdentifier::CHANGES_PENDING, None)
-            .unwrap(),
+        object.read_property(P::CHANGES_PENDING, None).unwrap(),
         PropertyValue::Boolean(false)
     );
-
-    np.write_property(
-        PropertyIdentifier::IP_ADDRESS,
-        None,
-        PropertyValue::OctetString(vec![192, 168, 1, 100]),
-        None,
-    )
-    .unwrap();
-
-    assert_eq!(
-        np.read_property(PropertyIdentifier::IP_ADDRESS, None)
-            .unwrap(),
-        PropertyValue::OctetString(vec![192, 168, 1, 100])
-    );
-    assert_eq!(
-        np.read_property(PropertyIdentifier::CHANGES_PENDING, None)
-            .unwrap(),
-        PropertyValue::Boolean(true)
-    );
+    assert!(object
+        .write_property(P::DESCRIPTION, None, PropertyValue::Unsigned(1), None)
+        .is_err());
+    assert!(object
+        .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Unsigned(1), None)
+        .is_err());
 }
 
 #[test]
-fn write_ip_default_gateway_sets_changes_pending() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    np.write_property(
-        PropertyIdentifier::IP_DEFAULT_GATEWAY,
-        None,
-        PropertyValue::OctetString(vec![192, 168, 1, 1]),
-        None,
-    )
-    .unwrap();
-
-    assert_eq!(
-        np.read_property(PropertyIdentifier::IP_DEFAULT_GATEWAY, None)
-            .unwrap(),
-        PropertyValue::OctetString(vec![192, 168, 1, 1])
-    );
-    assert_eq!(
-        np.read_property(PropertyIdentifier::CHANGES_PENDING, None)
-            .unwrap(),
-        PropertyValue::Boolean(true)
-    );
-}
-
-#[test]
-fn write_ip_subnet_mask_sets_changes_pending() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    np.write_property(
-        PropertyIdentifier::IP_SUBNET_MASK,
-        None,
-        PropertyValue::OctetString(vec![255, 255, 0, 0]),
-        None,
-    )
-    .unwrap();
-
-    assert_eq!(
-        np.read_property(PropertyIdentifier::IP_SUBNET_MASK, None)
-            .unwrap(),
-        PropertyValue::OctetString(vec![255, 255, 0, 0])
-    );
-    assert_eq!(
-        np.read_property(PropertyIdentifier::CHANGES_PENDING, None)
-            .unwrap(),
-        PropertyValue::Boolean(true)
-    );
-}
-
-#[test]
-fn write_udp_port_sets_changes_pending() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    np.write_property(
-        PropertyIdentifier::BACNET_IP_UDP_PORT,
-        None,
-        PropertyValue::Unsigned(47809),
-        None,
-    )
-    .unwrap();
-
-    assert_eq!(
-        np.read_property(PropertyIdentifier::BACNET_IP_UDP_PORT, None)
-            .unwrap(),
-        PropertyValue::Unsigned(47809)
-    );
-    assert_eq!(
-        np.read_property(PropertyIdentifier::CHANGES_PENDING, None)
-            .unwrap(),
-        PropertyValue::Boolean(true)
-    );
-}
-
-#[test]
-fn write_udp_port_out_of_range() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let result = np.write_property(
-        PropertyIdentifier::BACNET_IP_UDP_PORT,
-        None,
-        PropertyValue::Unsigned(70000),
-        None,
-    );
-    assert!(result.is_err());
-}
-
-#[test]
-fn write_udp_port_wrong_type() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let result = np.write_property(
-        PropertyIdentifier::BACNET_IP_UDP_PORT,
-        None,
-        PropertyValue::Real(47808.0),
-        None,
-    );
-    assert!(result.is_err());
-}
-
-#[test]
-fn write_network_number() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    np.write_property(
-        PropertyIdentifier::NETWORK_NUMBER,
-        None,
-        PropertyValue::Unsigned(5),
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        np.read_property(PropertyIdentifier::NETWORK_NUMBER, None)
-            .unwrap(),
-        PropertyValue::Unsigned(5)
-    );
-}
-
-#[test]
-fn write_mac_address() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let mac = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01];
-    np.write_property(
-        PropertyIdentifier::MAC_ADDRESS,
-        None,
-        PropertyValue::OctetString(mac.clone()),
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        np.read_property(PropertyIdentifier::MAC_ADDRESS, None)
-            .unwrap(),
-        PropertyValue::OctetString(mac)
-    );
-}
-
-#[test]
-fn write_out_of_service() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    np.write_property(
-        PropertyIdentifier::OUT_OF_SERVICE,
-        None,
-        PropertyValue::Boolean(true),
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        np.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
-            .unwrap(),
-        PropertyValue::Boolean(true)
-    );
-}
-
-#[test]
-fn write_description() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    np.write_property(
-        PropertyIdentifier::DESCRIPTION,
-        None,
-        PropertyValue::CharacterString("Main Ethernet port".to_string()),
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        np.read_property(PropertyIdentifier::DESCRIPTION, None)
-            .unwrap(),
-        PropertyValue::CharacterString("Main Ethernet port".to_string())
-    );
-}
-
-#[test]
-fn write_read_only_property_denied() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    // LINK_SPEED is read-only
-    let result = np.write_property(
-        PropertyIdentifier::LINK_SPEED,
-        None,
-        PropertyValue::Real(100_000_000.0),
-        None,
-    );
-    assert!(result.is_err());
-}
-
-#[test]
-fn read_unknown_property() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let result = np.read_property(PropertyIdentifier::PRESENT_VALUE, None);
-    assert!(result.is_err());
-}
-
-#[test]
-fn property_list_complete() {
-    let np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    let props = np.property_list();
-    assert!(props.contains(&PropertyIdentifier::OBJECT_IDENTIFIER));
-    assert!(props.contains(&PropertyIdentifier::OBJECT_NAME));
-    assert!(props.contains(&PropertyIdentifier::OBJECT_TYPE));
-    assert!(props.contains(&PropertyIdentifier::NETWORK_TYPE));
-    assert!(props.contains(&PropertyIdentifier::NETWORK_NUMBER));
-    assert!(props.contains(&PropertyIdentifier::MAC_ADDRESS));
-    assert!(props.contains(&PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED));
-    assert!(props.contains(&PropertyIdentifier::LINK_SPEED));
-    assert!(props.contains(&PropertyIdentifier::CHANGES_PENDING));
-    assert!(props.contains(&PropertyIdentifier::COMMAND_NP));
-    assert!(props.contains(&PropertyIdentifier::IP_ADDRESS));
-    assert!(props.contains(&PropertyIdentifier::IP_DEFAULT_GATEWAY));
-    assert!(props.contains(&PropertyIdentifier::IP_SUBNET_MASK));
-    assert!(props.contains(&PropertyIdentifier::BACNET_IP_UDP_PORT));
-}
-
-#[test]
-fn setter_methods_work() {
-    let mut np = NetworkPortObject::new(1, "NP-1", 0).unwrap();
-    np.set_ip_address(vec![10, 0, 0, 1]);
-    np.set_ip_default_gateway(vec![10, 0, 0, 254]);
-    np.set_ip_subnet_mask(vec![255, 255, 255, 0]);
-    np.set_mac_address(MacAddr::from_slice(&[0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E]));
-    np.set_network_number(7);
-    np.set_link_speed(100_000_000.0);
-    np.set_udp_port(47808);
-    np.set_description("Test port");
-
-    assert_eq!(
-        np.read_property(PropertyIdentifier::IP_ADDRESS, None)
-            .unwrap(),
-        PropertyValue::OctetString(vec![10, 0, 0, 1])
-    );
-    assert_eq!(
-        np.read_property(PropertyIdentifier::IP_DEFAULT_GATEWAY, None)
-            .unwrap(),
-        PropertyValue::OctetString(vec![10, 0, 0, 254])
-    );
-    assert_eq!(
-        np.read_property(PropertyIdentifier::NETWORK_NUMBER, None)
-            .unwrap(),
-        PropertyValue::Unsigned(7)
-    );
-    assert_eq!(
-        np.read_property(PropertyIdentifier::LINK_SPEED, None)
-            .unwrap(),
-        PropertyValue::Real(100_000_000.0)
-    );
-    assert_eq!(
-        np.read_property(PropertyIdentifier::BACNET_IP_UDP_PORT, None)
-            .unwrap(),
-        PropertyValue::Unsigned(47808)
-    );
-}
-
-#[test]
-fn mstp_network_type() {
-    let np = NetworkPortObject::new(2, "NP-MSTP", 2).unwrap();
-    assert_eq!(
-        np.read_property(PropertyIdentifier::NETWORK_TYPE, None)
-            .unwrap(),
-        PropertyValue::Enumerated(2) // MS/TP
-    );
-}
-
-#[test]
-fn full_network_config_scenario() {
-    let mut np = NetworkPortObject::new(1, "Ethernet-1", 0).unwrap();
-
-    // Configure the port
-    np.set_ip_address(vec![192, 168, 1, 100]);
-    np.set_ip_default_gateway(vec![192, 168, 1, 1]);
-    np.set_ip_subnet_mask(vec![255, 255, 255, 0]);
-    np.set_mac_address(MacAddr::from_slice(&[0x00, 0x50, 0x56, 0xAB, 0xCD, 0xEF]));
-    np.set_network_number(1);
-    np.set_link_speed(1_000_000_000.0); // 1 Gbps
-    np.set_udp_port(0xBAC0);
-
-    // Verify all reads
-    assert_eq!(np.object_name(), "Ethernet-1");
-    assert_eq!(
-        np.read_property(PropertyIdentifier::IP_ADDRESS, None)
-            .unwrap(),
-        PropertyValue::OctetString(vec![192, 168, 1, 100])
-    );
-    assert_eq!(
-        np.read_property(PropertyIdentifier::LINK_SPEED, None)
-            .unwrap(),
-        PropertyValue::Real(1_000_000_000.0)
-    );
-    assert_eq!(
-        np.read_property(PropertyIdentifier::MAC_ADDRESS, None)
-            .unwrap(),
-        PropertyValue::OctetString(vec![0x00, 0x50, 0x56, 0xAB, 0xCD, 0xEF])
-    );
-
-    // Write IP via property write (triggers changes_pending)
-    np.write_property(
-        PropertyIdentifier::IP_ADDRESS,
-        None,
-        PropertyValue::OctetString(vec![10, 0, 0, 50]),
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        np.read_property(PropertyIdentifier::CHANGES_PENDING, None)
-            .unwrap(),
-        PropertyValue::Boolean(true)
-    );
-
-    // Discard changes via command
-    np.write_property(
-        PropertyIdentifier::COMMAND_NP,
-        None,
-        PropertyValue::Enumerated(1), // discardChanges
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        np.read_property(PropertyIdentifier::COMMAND_NP, None)
-            .unwrap(),
-        PropertyValue::Enumerated(1)
+fn non_bip_application_rows_do_not_claim_ipv4_fields() {
+    for kind in [NetworkType::ETHERNET, NetworkType::VIRTUAL] {
+        // B/IP-only instance policy does not constrain other profiles.
+        let mut object = NetworkPortObject::new_non_bip(
+            0,
+            "other",
+            kind,
+            12,
+            MacAddr::from_slice(&[1, 2, 3, 4, 5, 6]),
+            51,
+        )
+        .unwrap();
+        let expected: Vec<_> = ALL
+            .iter()
+            .copied()
+            .filter(|p| {
+                !matches!(
+                    *p,
+                    P::BACNET_IP_MODE
+                        | P::IP_ADDRESS
+                        | P::IP_DEFAULT_GATEWAY
+                        | P::IP_SUBNET_MASK
+                        | P::BACNET_IP_UDP_PORT
+                        | P::IP_DNS_SERVER
+                )
+            })
+            .collect();
+        assert_eq!(object.property_list().as_ref(), expected);
+        for row in object.property_metadata().iter() {
+            object.read_property(row.property_identifier, None).unwrap();
+        }
+        assert_eq!(
+            object.read_property(P::PROTOCOL_LEVEL, None).unwrap(),
+            PropertyValue::Enumerated(2)
+        );
+        assert_eq!(
+            object.read_property(P::APDU_LENGTH, None).unwrap(),
+            PropertyValue::Unsigned(51)
+        );
+        for p in [
+            P::BACNET_IP_MODE,
+            P::IP_ADDRESS,
+            P::IP_DEFAULT_GATEWAY,
+            P::IP_SUBNET_MASK,
+            P::BACNET_IP_UDP_PORT,
+            P::IP_DNS_SERVER,
+            P::COMMAND_NP,
+            P::MAX_APDU_LENGTH_ACCEPTED,
+        ] {
+            error(object.read_property(p, None), ErrorCode::UNKNOWN_PROPERTY);
+            assert!(object
+                .write_property(p, None, PropertyValue::Unsigned(1), None)
+                .is_err());
+        }
+        // The classification follows the datatype, not this object's rows:
+        // IP_DNS_SERVER is an array the non-B/IP port doesn't hold.
+        assert!(object.is_array_property(P::IP_DNS_SERVER));
+        error(
+            object.read_property(P::IP_DNS_SERVER, Some(1)),
+            ErrorCode::UNKNOWN_PROPERTY,
+        );
+    }
+    assert!(
+        NetworkPortObject::new_non_bip(1, "bad", NetworkType::IPV4, 0, MacAddr::new(), 1476)
+            .is_err()
     );
 }

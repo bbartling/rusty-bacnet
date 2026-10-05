@@ -89,6 +89,7 @@ async fn loopback_shared_runtime_routes_same_invoke_id_by_admitted_role() {
         terminal_or_segment: mut terminal_rx,
         policy_outcomes: mut policy_rx,
         egress,
+        ..
     } = endpoint.start().await.unwrap();
     assert!(endpoint.start().await.is_err());
 
@@ -142,8 +143,11 @@ async fn loopback_shared_runtime_routes_same_invoke_id_by_admitted_role() {
                 .await
                 .unwrap()
                 .expect("terminal route closed");
-            let peer =
-                CanonicalPeer::from_source(&received.source_mac, received.source_network.as_ref());
+            let peer = CanonicalPeer::from_source(
+                &received.source_mac,
+                received.source_network.as_ref(),
+                None,
+            );
             let decoded = decode_apdu(received.apdu.clone()).unwrap();
             admit_calls.fetch_add(1, Ordering::SeqCst);
             match coordinator.admit(&peer, &decoded).unwrap() {
@@ -153,7 +157,7 @@ async fn loopback_shared_runtime_routes_same_invoke_id_by_admitted_role() {
                             .complete_pre_admitted(admission, decoded, received)
                             .await
                     }
-                    LeaseOwner::ServerNotification => {
+                    LeaseOwner::Notification => {
                         notification_transactions.complete_pre_admitted(admission, &decoded)
                     }
                 },

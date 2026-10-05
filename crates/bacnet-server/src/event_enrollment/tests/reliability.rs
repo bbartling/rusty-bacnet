@@ -7,7 +7,7 @@ use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
     FaultParameters,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
+use bacnet_types::enums::{ErrorClass, ErrorCode, LifeSafetyState, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
 use std::borrow::Cow;
 use std::sync::atomic::Ordering;
@@ -69,6 +69,15 @@ impl BACnetObject for OptionalReliabilityTarget {
     }
 }
 
+/// Point `enrollment` at `target`'s Present_Value, in this device.
+fn monitor_present_value(enrollment: &mut EventEnrollmentObject, target: ObjectIdentifier) {
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            target,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
+}
 fn setup(
     present_value: f32,
     fault_parameters: FaultParameters,
@@ -88,11 +97,8 @@ fn setup(
     db.add(Box::new(target)).unwrap();
 
     let mut enrollment =
-        EventEnrollmentObject::new(301, "EE-fault", EventType::OUT_OF_RANGE.to_raw()).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        target_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+        EventEnrollmentObject::new(301, "EE-fault", EventType::OUT_OF_RANGE).unwrap();
+    monitor_present_value(&mut enrollment, target_oid);
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
@@ -100,7 +106,7 @@ fn setup(
         deadband: 2.0,
     });
     enrollment.set_fault_parameters(Some(fault_parameters));
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
     (db, enrollment_oid, target_oid)
@@ -114,7 +120,13 @@ fn write_target(
 ) {
     db.get_mut(&target_oid)
         .unwrap()
-        .write_property(property, None, value, None)
+        .write_property_from(
+            property,
+            None,
+            value,
+            None,
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
 }
 
@@ -171,7 +183,7 @@ fn configuration_precedes_monitored_reliability_and_monitored_precedes_algorithm
         PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
     );
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(report.reliability_results.len(), 1);
     assert_eq!(
         report.reliability_results[0].new_reliability,
@@ -202,7 +214,7 @@ fn configuration_precedes_monitored_reliability_and_monitored_precedes_algorithm
             None,
         )
         .unwrap();
-    let recovery = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let recovery = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(recovery.reliability_results.len(), 1);
     assert_eq!(
         recovery.reliability_results[0].new_reliability,
@@ -231,7 +243,7 @@ fn configuration_precedes_monitored_reliability_and_monitored_precedes_algorithm
         PropertyIdentifier::RELIABILITY,
         PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
     );
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(
         report.reliability_results[0].new_reliability,
         Reliability::MONITORED_OBJECT_FAULT
@@ -247,7 +259,7 @@ fn configuration_precedes_monitored_reliability_and_monitored_precedes_algorithm
         PropertyIdentifier::RELIABILITY,
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
     );
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(report.reliability_results.len(), 1);
     assert_eq!(
         report.reliability_results[0].new_reliability,
@@ -279,8 +291,8 @@ fn every_deferred_fault_alternative_commits_configuration_error() {
             parameters: vec![0x21, 0x03],
         },
         FaultParameters::FaultLifeSafety {
-            fault_values: vec![1],
-            mode_for_reference: reference.clone(),
+            fault_values: vec![LifeSafetyState::PRE_ALARM],
+            mode_property_reference: reference.clone(),
         },
         FaultParameters::FaultState {
             fault_values: vec![BACnetPropertyStates::BooleanValue(true)],
@@ -290,7 +302,7 @@ fn every_deferred_fault_alternative_commits_configuration_error() {
 
     for parameters in alternatives {
         let (mut db, enrollment_oid, _) = setup(50.0, parameters);
-        let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+        let report = evaluate_event_enrollments_report(&mut db, 1);
 
         assert_eq!(report.reliability_results.len(), 1);
         assert_eq!(
@@ -309,7 +321,7 @@ fn every_deferred_fault_alternative_commits_configuration_error() {
 fn fault_none_falls_through_to_the_normal_event_algorithm() {
     let (mut db, enrollment_oid, _) = setup(90.0, FaultParameters::FaultNone);
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
 
     assert!(report.reliability_results.is_empty());
     assert_eq!(report.transitions.len(), 1);
@@ -325,11 +337,12 @@ fn absent_optional_fault_parameters_preserves_custom_normal_event_evaluation() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(321, "AV-no-fault-parameters", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -348,7 +361,7 @@ fn absent_optional_fault_parameters_preserves_custom_normal_event_evaluation() {
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
 
     assert!(report.reliability_results.is_empty());
     assert_eq!(report.transitions.len(), 1);
@@ -370,15 +383,10 @@ fn absent_optional_target_reliability_falls_through_but_malformed_type_is_config
         let mut enrollment = EventEnrollmentObject::new(
             320 + u32::from(malformed),
             "EE-optional-reliability",
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
         )
         .unwrap();
-        enrollment.set_object_property_reference(Some(
-            BACnetDeviceObjectPropertyReference::new_local(
-                target_oid,
-                PropertyIdentifier::PRESENT_VALUE.to_raw(),
-            ),
-        ));
+        monitor_present_value(&mut enrollment, target_oid);
         enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
             time_delay: 0,
             low_limit: 20.0,
@@ -389,7 +397,7 @@ fn absent_optional_target_reliability_falls_through_but_malformed_type_is_config
         let enrollment_oid = enrollment.object_identifier();
         db.add(Box::new(enrollment)).unwrap();
 
-        let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+        let report = evaluate_event_enrollments_report(&mut db, 1);
         if malformed {
             assert_eq!(
                 report.reliability_results[0].new_reliability,
@@ -435,7 +443,7 @@ fn local_status_flags_fault_enters_member_fault_and_recovers() {
     );
     db.add(Box::new(status_source)).unwrap();
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(
         report.reliability_results[0].new_reliability,
         Reliability::MEMBER_FAULT
@@ -448,7 +456,7 @@ fn local_status_flags_fault_enters_member_fault_and_recovers() {
         PropertyIdentifier::RELIABILITY,
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
     );
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(
         report.reliability_results[0].new_reliability,
         Reliability::NO_FAULT_DETECTED
@@ -466,7 +474,7 @@ fn normalized_out_of_range_holds_reindicates_changed_cause_and_recovers() {
         },
     );
 
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(
         report.reliability_results[0].new_reliability,
         Reliability::UNDER_RANGE
@@ -475,7 +483,7 @@ fn normalized_out_of_range_holds_reindicates_changed_cause_and_recovers() {
         timestamp_at(&db, enrollment_oid, 2),
         BACnetTimeStamp::SequenceNumber(0)
     );
-    assert!(evaluate_event_enrollments_detailed_report(&mut db, 1)
+    assert!(evaluate_event_enrollments_report(&mut db, 1)
         .reliability_results
         .is_empty());
     assert_eq!(db.reserve_event_sequence_number().number(), 1);
@@ -486,7 +494,7 @@ fn normalized_out_of_range_holds_reindicates_changed_cause_and_recovers() {
         PropertyIdentifier::PRESENT_VALUE,
         PropertyValue::Real(11.0),
     );
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(
         report.reliability_results[0].state_change,
         Some(EventStateChange {
@@ -509,7 +517,7 @@ fn normalized_out_of_range_holds_reindicates_changed_cause_and_recovers() {
         PropertyIdentifier::PRESENT_VALUE,
         PropertyValue::Real(5.0),
     );
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(
         report.reliability_results[0].new_reliability,
         Reliability::NO_FAULT_DETECTED
@@ -525,11 +533,8 @@ fn missing_target_is_observation_unavailable_without_public_transition() {
     let mut db = ObjectDatabase::new();
     let missing_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 999).unwrap();
     let mut enrollment =
-        EventEnrollmentObject::new(303, "EE-missing", EventType::OUT_OF_RANGE.to_raw()).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        missing_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+        EventEnrollmentObject::new(303, "EE-missing", EventType::OUT_OF_RANGE).unwrap();
+    monitor_present_value(&mut enrollment, missing_oid);
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 0.0,
@@ -541,16 +546,16 @@ fn missing_target_is_observation_unavailable_without_public_transition() {
     db.add(Box::new(enrollment)).unwrap();
 
     let before_timestamp = timestamp_at(&db, enrollment_oid, 2);
-    let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let report = evaluate_event_enrollments_report(&mut db, 1);
 
     assert!(report.reliability_results.is_empty());
     assert!(report.transitions.is_empty());
     assert!(report
         .diagnostics
-        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
+        .contains(&EventEnrollmentEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentDetailedEvaluationStage::Reliability,
-            outcome: EventEnrollmentDetailedEvaluationOutcome::ObservationUnavailable,
+            stage: EventEnrollmentEvaluationStage::Reliability,
+            outcome: EventEnrollmentEvaluationOutcome::ObservationUnavailable,
         }));
     assert_eq!(
         reliability(&db, enrollment_oid),
@@ -565,11 +570,12 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(304, "AV-recovery", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -579,7 +585,7 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
     let state_writes = enrollment.state_write_count.clone();
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
-    assert!(evaluate_event_enrollments_detailed_report(&mut db, 1)
+    assert!(evaluate_event_enrollments_report(&mut db, 1)
         .transitions
         .is_empty());
 
@@ -596,8 +602,7 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
         PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
     );
     assert_eq!(
-        evaluate_event_enrollments_detailed_report(&mut db, 1).reliability_results[0]
-            .new_reliability,
+        evaluate_event_enrollments_report(&mut db, 1).reliability_results[0].new_reliability,
         Reliability::MONITORED_OBJECT_FAULT
     );
 
@@ -608,7 +613,7 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
     );
     state_writes.store(0, Ordering::SeqCst);
-    let recovery = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let recovery = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(recovery.reliability_results.len(), 1);
     assert_eq!(state_writes.load(Ordering::SeqCst), 1);
     assert!(db
@@ -619,7 +624,7 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
         .pending
         .is_none());
 
-    let next = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let next = evaluate_event_enrollments_report(&mut db, 1);
     assert!(next.transitions.is_empty());
     assert!(next.reliability_results.is_empty());
     assert_eq!(
@@ -640,11 +645,12 @@ fn rejected_and_mutating_custom_hooks_do_not_escape_tokens_or_consume_sequences(
         let mut db = ObjectDatabase::new();
         let mut target = AnalogValueObject::new(305, "AV-hook", 62).unwrap();
         target
-            .write_property(
+            .write_property_from(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 PropertyValue::Real(90.0),
                 Some(1),
+                &crate::command_source::test_origin(),
             )
             .unwrap();
         target
@@ -673,18 +679,18 @@ fn rejected_and_mutating_custom_hooks_do_not_escape_tokens_or_consume_sequences(
         let enrollment_oid = enrollment.object_identifier();
         db.add(Box::new(enrollment)).unwrap();
 
-        let report = evaluate_event_enrollments_detailed_report(&mut db, 1);
+        let report = evaluate_event_enrollments_report(&mut db, 1);
         assert!(report.reliability_results.is_empty());
         assert!(report.transitions.is_empty());
         assert!(report
             .diagnostics
-            .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
+            .contains(&EventEnrollmentEvaluationDiagnostic {
                 enrollment_oid,
-                stage: EventEnrollmentDetailedEvaluationStage::Reliability,
+                stage: EventEnrollmentEvaluationStage::Reliability,
                 outcome: if mutate_then_error {
-                    EventEnrollmentDetailedEvaluationOutcome::LandedAfterError
+                    EventEnrollmentEvaluationOutcome::LandedAfterError
                 } else {
-                    EventEnrollmentDetailedEvaluationOutcome::Rejected
+                    EventEnrollmentEvaluationOutcome::Rejected
                 },
             }));
         assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
@@ -697,11 +703,12 @@ fn held_configuration_error_clears_landed_after_error_invalidation_once() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(306, "AV-held-config", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(50.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -718,13 +725,13 @@ fn held_configuration_error_clears_landed_after_error_invalidation_once() {
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
-    let first = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let first = evaluate_event_enrollments_report(&mut db, 1);
     assert!(first
         .diagnostics
-        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
+        .contains(&EventEnrollmentEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentDetailedEvaluationStage::Reliability,
-            outcome: EventEnrollmentDetailedEvaluationOutcome::LandedAfterError,
+            stage: EventEnrollmentEvaluationStage::Reliability,
+            outcome: EventEnrollmentEvaluationOutcome::LandedAfterError,
         }));
     assert!(db.enrollment_eval_state_invalidated(&enrollment_oid));
     assert_eq!(
@@ -734,12 +741,12 @@ fn held_configuration_error_clears_landed_after_error_invalidation_once() {
     assert_eq!(event_state(&db, enrollment_oid), EventState::FAULT);
 
     state_writes.store(0, Ordering::SeqCst);
-    let held = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let held = evaluate_event_enrollments_report(&mut db, 1);
     assert!(held.reliability_results.is_empty());
     assert_eq!(state_writes.load(Ordering::SeqCst), 1);
     assert!(!db.enrollment_eval_state_invalidated(&enrollment_oid));
 
-    let held_again = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let held_again = evaluate_event_enrollments_report(&mut db, 1);
     assert!(held_again.reliability_results.is_empty());
     assert_eq!(state_writes.load(Ordering::SeqCst), 1);
     assert!(!db.enrollment_eval_state_invalidated(&enrollment_oid));

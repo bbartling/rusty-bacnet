@@ -33,7 +33,8 @@ fn snapshot(object: &EventEnrollmentObject) -> (PropertyValue, PropertyValue, Pr
 
 #[test]
 fn stock_enrollment_atomically_commits_state_ack_and_exact_history_coordinate() {
-    let mut object = EventEnrollmentObject::new(1, "EE-atomic", 0).unwrap();
+    let mut object =
+        EventEnrollmentObject::new(1, "EE-atomic", EventType::CHANGE_OF_BITSTRING).unwrap();
 
     object
         .commit_event_transition_internal(EventTransitionCommit {
@@ -114,7 +115,8 @@ fn stock_enrollment_atomically_commits_state_ack_and_exact_history_coordinate() 
 
 #[test]
 fn rejected_stock_commit_changes_none_of_the_three_properties() {
-    let mut object = EventEnrollmentObject::new(2, "EE-reject", 0).unwrap();
+    let mut object =
+        EventEnrollmentObject::new(2, "EE-reject", EventType::CHANGE_OF_BITSTRING).unwrap();
     let before = snapshot(&object);
 
     assert_eq!(

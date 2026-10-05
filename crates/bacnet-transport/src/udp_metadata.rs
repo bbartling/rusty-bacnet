@@ -61,6 +61,9 @@ pub(crate) struct ReceivedDatagram {
     pub len: usize,
     pub peer: SocketAddr,
     pub destination: IpAddr,
+    /// IPv6 packet-info arrival interface; zero is not a selected-link owner.
+    #[cfg_attr(not(feature = "ipv6"), allow(dead_code))]
+    pub arrival_index: Option<u32>,
     pub os_group_delivery: Option<bool>,
 }
 
@@ -123,11 +126,12 @@ impl DestinationReceiver {
 
         let peer = unsafe { unix_socket_addr(&peer_storage) }
             .ok_or_else(|| invalid_metadata("missing or invalid UDP peer address"))?;
-        let destination = unsafe { unix_destination(&message, self.version) }?;
+        let (destination, arrival_index) = unsafe { unix_destination(&message, self.version) }?;
         Ok(ReceivedDatagram {
             len: received as usize,
             peer,
             destination,
+            arrival_index,
             os_group_delivery: None,
         })
     }
@@ -183,9 +187,12 @@ impl DestinationReceiver {
             return Err(invalid_metadata("truncated UDP payload or packet metadata"));
         }
 
+        if message.Control.len as usize > std::mem::size_of_val(&control) {
+            return Err(invalid_metadata("oversized Windows UDP control buffer"));
+        }
         let peer = unsafe { windows_socket_addr(&peer_storage) }
             .ok_or_else(|| invalid_metadata("missing or invalid UDP peer address"))?;
-        let destination = unsafe {
+        let (destination, arrival_index) = unsafe {
             windows_destination(
                 std::slice::from_raw_parts(
                     control.as_ptr().cast::<u8>(),
@@ -198,6 +205,7 @@ impl DestinationReceiver {
             len: received as usize,
             peer,
             destination,
+            arrival_index,
             os_group_delivery: Some(message.dwFlags & (MSG_BCAST | MSG_MCAST) != 0),
         })
     }
@@ -340,7 +348,7 @@ unsafe fn unix_socket_addr(storage: &libc::sockaddr_storage) -> Option<SocketAdd
 }
 
 supported_unix_item! {
-unsafe fn unix_destination(message: &libc::msghdr, version: IpVersion) -> io::Result<IpAddr> {
+unsafe fn unix_destination(message: &libc::msghdr, version: IpVersion) -> io::Result<(IpAddr, Option<u32>)> {
     let mut destination = None;
     let mut header = unsafe { libc::CMSG_FIRSTHDR(message) };
     while !header.is_null() {
@@ -361,10 +369,10 @@ supported_unix_item! {
 unsafe fn unix_destination_cmsg(
     header: &libc::cmsghdr,
     version: IpVersion,
-) -> io::Result<Option<IpAddr>> {
+) -> io::Result<Option<(IpAddr, Option<u32>)>> {
     match version {
         IpVersion::V4 => unsafe {
-            unix_ipv4_destination_cmsg(header).map(|address| address.map(IpAddr::V4))
+            unix_ipv4_destination_cmsg(header).map(|address| address.map(|address| (IpAddr::V4(address), None)))
         },
         IpVersion::V6
             if header.cmsg_level == libc::IPPROTO_IPV6
@@ -374,7 +382,7 @@ unsafe fn unix_destination_cmsg(
                 return Err(invalid_metadata("short IPv6 destination metadata"));
             }
             let info = unsafe { &*(libc::CMSG_DATA(header) as *const libc::in6_pktinfo) };
-            Ok(Some(IpAddr::V6(Ipv6Addr::from(info.ipi6_addr.s6_addr))))
+            Ok(Some((IpAddr::V6(Ipv6Addr::from(info.ipi6_addr.s6_addr)), Some(info.ipi6_ifindex))))
         }
         _ => Ok(None),
     }
@@ -384,7 +392,9 @@ unsafe fn unix_destination_cmsg(
 supported_unix_item! {
 fn unix_cmsg_has_payload<T>(header: &libc::cmsghdr) -> bool {
     let required = unsafe { libc::CMSG_LEN(std::mem::size_of::<T>() as _) } as usize;
-    header.cmsg_len as usize >= required
+    #[allow(clippy::unnecessary_cast)] // cmsg_len is usize on Linux but u32 on macOS and the BSDs
+    let len = header.cmsg_len as usize;
+    len >= required
 }
 }
 
@@ -515,7 +525,10 @@ unsafe fn windows_socket_addr(
 }
 
 #[cfg(windows)]
-unsafe fn windows_destination(control: &[u8], version: IpVersion) -> io::Result<IpAddr> {
+unsafe fn windows_destination(
+    control: &[u8],
+    version: IpVersion,
+) -> io::Result<(IpAddr, Option<u32>)> {
     use std::mem::size_of;
     use windows_sys::Win32::Networking::WinSock::*;
 
@@ -538,7 +551,7 @@ unsafe fn windows_destination(control: &[u8], version: IpVersion) -> io::Result<
             {
                 let info: IN_PKTINFO = unsafe { std::ptr::read_unaligned(data.cast()) };
                 let bytes = unsafe { info.ipi_addr.S_un.S_addr.to_ne_bytes() };
-                Some(IpAddr::V4(Ipv4Addr::from(bytes)))
+                Some((IpAddr::V4(Ipv4Addr::from(bytes)), None))
             }
             IpVersion::V6
                 if header.cmsg_level == IPPROTO_IPV6
@@ -546,7 +559,10 @@ unsafe fn windows_destination(control: &[u8], version: IpVersion) -> io::Result<
                     && header.cmsg_len >= data_offset + size_of::<IN6_PKTINFO>() =>
             {
                 let info: IN6_PKTINFO = unsafe { std::ptr::read_unaligned(data.cast()) };
-                Some(IpAddr::V6(Ipv6Addr::from(unsafe { info.ipi6_addr.u.Byte })))
+                Some((
+                    IpAddr::V6(Ipv6Addr::from(unsafe { info.ipi6_addr.u.Byte })),
+                    Some(info.ipi6_ifindex),
+                ))
             }
             _ => None,
         };
@@ -583,6 +599,7 @@ mod tests {
         let received = receiver.recv_from(&socket, &mut buf).await.unwrap();
         assert_eq!(&buf[..received.len], b"v4");
         assert_eq!(received.destination, IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(received.arrival_index, None);
     }
 
     #[tokio::test]
@@ -605,6 +622,7 @@ mod tests {
         let received = receiver.recv_from(&socket, &mut buf).await.unwrap();
         assert_eq!(&buf[..received.len], b"v6");
         assert_eq!(received.destination, IpAddr::V6(Ipv6Addr::LOCALHOST));
+        assert!(received.arrival_index.is_some_and(|index| index != 0));
     }
 
     #[tokio::test]
@@ -655,3 +673,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "udp_metadata_ipv6_tests.rs"]
+mod ipv6_tests;

@@ -1,23 +1,97 @@
 //! Life Safety Point (type 21) and Life Safety Zone (type 22) objects
 //! per ASHRAE 135-2020 Clauses 12.15 and 12.16.
+//!
+//! R1 matrix (PR-0803 sub-slice 1) — Event_State / Status_Flags post-state for
+//! each LifeSafetyOperation on Point and Zone. Verdict: outcome (b), pins only
+//! with zero state change. The Standard keeps Event_State purely intrinsic —
+//! driven by the object's event algorithm off the monitored LifeSafetyState,
+//! mode changes, delays, and re-alert — and no service clause mandates an
+//! LSO-driven Event_State or Status_Flags transition:
+//!
+//! | Operation         | Point Event_State | Point IN_ALARM | Zone Event_State | Zone IN_ALARM |
+//! |-------------------|-------------------|----------------|------------------|---------------|
+//! | SILENCE           | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | SILENCE_AUDIBLE   | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | SILENCE_VISUAL    | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | UNSILENCE         | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | UNSILENCE_AUDIBLE | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | UNSILENCE_VISUAL  | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | RESET             | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | RESET_ALARM       | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//! | RESET_FAULT       | NORMAL (0)        | FALSE          | NORMAL (0)       | FALSE         |
+//!
+//! Rationale (paraphrased; see cited pages, never normative text): the object
+//! clauses describe Event_State as read-only, mirroring the event algorithm
+//! only when intrinsic reporting is supported and otherwise staying NORMAL —
+//! and this crate implements no intrinsic reporting, so NORMAL is the
+//! spec-correct value. The IN_ALARM flag mirrors a non-NORMAL Event_State.
+//! Present_Value latching until reset and Tracking_Value continuous tracking
+//! are local matters; Silenced records whether the latest audible/visual
+//! transition was silenced via service request or local means, and
+//! Operation_Expected names the next operation the local situation calls for.
+//! The LifeSafetyOperation service clause only silences/resets/unsilences the
+//! addressed (or all applicable) objects and answers Result(+/-), rejecting a
+//! reset the object is not ready for; it carries no Event_State/Status_Flags
+//! rows. The CHANGE_OF_LIFE_SAFETY algorithm keys transitions off the
+//! monitored state versus the alarm lists (plus mode/delay/re-alert) while
+//! Operation_Expected and Status_Flags travel as notification inputs only.
+//! Page cites in the local licensed PDF (`_spec/2020_ASHRAE_...pdf`):
+//! object clauses printed pp. 245-256 (PDF pp. 247-258), LifeSafetyOperation
+//! service printed pp. 701-702 (PDF pp. 703-704), CHANGE_OF_LIFE_SAFETY
+//! printed pp. 657-658 (PDF pp. 659-660). Refs #177 (no claim change here).
+//!
+//! Point and Zone both serve Tracking_Value (Clauses 12.15.5 and 12.16.5): the
+//! application keeps it current through `set_tracking_value` or a reset
+//! commit, and both objects offer it for property COV. While Out_Of_Service is
+//! TRUE a client may write Tracking_Value and Reliability instead (#1108); see
+//! `out_of_service.rs` for how the simulated values interact with the rest of
+//! the object. Once a server holds the object, the application reaches
+//! Present_Value and Tracking_Value through `set_present_value_internal` and
+//! `set_tracking_value_internal` (#1123); `application.rs` records how that
+//! route meets latching, Silenced, the reset executor and Out_Of_Service.
+//!
+//! Accepted_Modes (Clauses 12.15.13 and 12.16.13) is the configured set of
+//! modes a network write of Mode may select. It starts as every standard
+//! LifeSafetyMode and an application narrows it with `set_accepted_modes`. A
+//! Mode write naming any other value fails with PROPERTY / VALUE_OUT_OF_RANGE
+//! and leaves the object unchanged. The local `set_mode` ignores the list,
+//! because the object's own logic may move Mode outside it.
 
+use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, LifeSafetyOperation, ObjectType, PropertyIdentifier, SilencedState,
+    ErrorClass, ErrorCode, EventState, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
+    ObjectType, PropertyIdentifier, Reliability, SilencedState,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
+use crate::device_reference::reference_list;
 use crate::traits::{BACnetObject, LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 
+mod application;
+mod membership;
+mod metadata;
+mod out_of_service;
 mod reset;
+
+use out_of_service::{DeviceValues, Simulation};
 
 pub use reset::{
     LifeSafetyPointResetCommit, LifeSafetyPointResetContext, LifeSafetyPointResetExecutor,
     LifeSafetyResetError, LifeSafetyZoneResetCommit, LifeSafetyZoneResetContext,
     LifeSafetyZoneResetExecutor,
 };
+
+/// Whether a state is one BACnetLifeSafetyState defines or one from the
+/// proprietary range 256..=65535 (Clause 21).
+fn valid_life_safety_state(state: LifeSafetyState) -> bool {
+    LifeSafetyState::ALL_NAMED
+        .iter()
+        .any(|&(_, named)| named == state)
+        || (256..=65_535).contains(&state.to_raw())
+}
 
 fn life_safety_error(code: ErrorCode) -> Error {
     Error::Protocol {
@@ -27,11 +101,14 @@ fn life_safety_error(code: ErrorCode) -> Error {
 }
 
 fn apply_silenced_operation(
-    silenced: &mut u32,
-    operation_expected: &mut u32,
+    silenced: &mut SilencedState,
+    operation_expected: &mut LifeSafetyOperation,
     operation: LifeSafetyOperation,
 ) -> Result<LifeSafetyOperationEffect, Error> {
-    let current = *silenced;
+    // The four standard SilencedState values form a two-bit audible/visible
+    // set, so the partial operations are bit operations on the wire value. A
+    // reserved or proprietary state has no such decomposition and is refused.
+    let current = silenced.to_raw();
     if current > SilencedState::ALL_SILENCED.to_raw() {
         return Err(life_safety_error(
             ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
@@ -39,33 +116,35 @@ fn apply_silenced_operation(
     }
 
     let desired = if operation == LifeSafetyOperation::SILENCE {
-        SilencedState::ALL_SILENCED.to_raw()
+        SilencedState::ALL_SILENCED
     } else if operation == LifeSafetyOperation::SILENCE_AUDIBLE {
-        current | SilencedState::AUDIBLE_SILENCED.to_raw()
+        SilencedState::from_raw(current | SilencedState::AUDIBLE_SILENCED.to_raw())
     } else if operation == LifeSafetyOperation::SILENCE_VISUAL {
-        current | SilencedState::VISIBLE_SILENCED.to_raw()
+        SilencedState::from_raw(current | SilencedState::VISIBLE_SILENCED.to_raw())
     } else if operation == LifeSafetyOperation::UNSILENCE {
-        SilencedState::UNSILENCED.to_raw()
+        SilencedState::UNSILENCED
     } else if operation == LifeSafetyOperation::UNSILENCE_AUDIBLE {
-        current & !SilencedState::AUDIBLE_SILENCED.to_raw()
+        SilencedState::from_raw(current & !SilencedState::AUDIBLE_SILENCED.to_raw())
     } else if operation == LifeSafetyOperation::UNSILENCE_VISUAL {
-        current & !SilencedState::VISIBLE_SILENCED.to_raw()
+        SilencedState::from_raw(current & !SilencedState::VISIBLE_SILENCED.to_raw())
     } else {
         return Err(life_safety_error(ErrorCode::VALUE_OUT_OF_RANGE));
     };
 
-    if *operation_expected != operation.to_raw() {
+    if *operation_expected != operation {
         return Err(life_safety_error(
             ErrorCode::INVALID_OPERATION_IN_THIS_STATE,
         ));
     }
 
     *silenced = desired;
-    *operation_expected = LifeSafetyOperation::NONE.to_raw();
+    *operation_expected = LifeSafetyOperation::NONE;
     Ok(LifeSafetyOperationEffect::Applied)
 }
 
-const POINT_COV_PROPERTIES: [PropertyIdentifier; 5] = [
+/// Properties a Point or Zone offers for property COV, in the order an
+/// operation outcome reports their deltas.
+const COV_PROPERTIES: [PropertyIdentifier; 5] = [
     PropertyIdentifier::PRESENT_VALUE,
     PropertyIdentifier::TRACKING_VALUE,
     PropertyIdentifier::SILENCED,
@@ -73,12 +152,52 @@ const POINT_COV_PROPERTIES: [PropertyIdentifier; 5] = [
     PropertyIdentifier::STATUS_FLAGS,
 ];
 
-const ZONE_COV_PROPERTIES: [PropertyIdentifier; 4] = [
-    PropertyIdentifier::PRESENT_VALUE,
-    PropertyIdentifier::SILENCED,
-    PropertyIdentifier::OPERATION_EXPECTED,
-    PropertyIdentifier::STATUS_FLAGS,
-];
+/// The Accepted_Modes a new Point or Zone starts with: every standard mode.
+fn standard_life_safety_modes() -> Vec<LifeSafetyMode> {
+    LifeSafetyMode::ALL_NAMED
+        .iter()
+        .map(|&(_, mode)| mode)
+        .collect()
+}
+
+/// Keep each mode once, in the caller's order.
+fn distinct_modes(modes: impl IntoIterator<Item = LifeSafetyMode>) -> Vec<LifeSafetyMode> {
+    let mut distinct = Vec::new();
+    for mode in modes {
+        if !distinct.contains(&mode) {
+            distinct.push(mode);
+        }
+    }
+    distinct
+}
+
+fn read_accepted_modes(accepted_modes: &[LifeSafetyMode]) -> PropertyValue {
+    PropertyValue::List(
+        accepted_modes
+            .iter()
+            .map(|mode| PropertyValue::Enumerated(mode.to_raw()))
+            .collect(),
+    )
+}
+
+/// Apply a network write of Mode. A mode missing from Accepted_Modes is
+/// refused with PROPERTY / VALUE_OUT_OF_RANGE (Clauses 12.15.13 and 12.16.13)
+/// and Mode keeps its value.
+fn write_mode(
+    mode: &mut LifeSafetyMode,
+    accepted_modes: &[LifeSafetyMode],
+    value: &PropertyValue,
+) -> Result<(), Error> {
+    let PropertyValue::Enumerated(raw) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    let requested = LifeSafetyMode::from_raw(*raw);
+    if !accepted_modes.contains(&requested) {
+        return Err(common::value_out_of_range_error());
+    }
+    *mode = requested;
+    Ok(())
+}
 
 fn operation_outcome(
     object: &dyn BACnetObject,
@@ -108,33 +227,39 @@ fn operation_outcome(
 ///
 /// Represents a single life-safety sensor or detector (e.g. smoke detector,
 /// pull station). Present_Value is an enumerated LifeSafetyState, set by the
-/// application via [`set_present_value`](Self::set_present_value).
+/// application via [`set_present_value`](Self::set_present_value), or through
+/// [`BACnetObject::set_present_value_internal`] once a server holds the point.
 pub struct LifeSafetyPointObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// Present value — LifeSafetyState enumeration (read-only via protocol).
-    present_value: u32,
-    /// Operating mode — LifeSafetyMode enumeration.
-    mode: u32,
-    /// Silenced state — SilencedState enumeration.
-    silenced: u32,
-    /// Expected operation — LifeSafetyOperation enumeration.
-    operation_expected: u32,
-    /// Tracking value — LifeSafetyState enumeration.
-    tracking_value: u32,
-    /// Zones this point belongs to.
-    member_of: Vec<ObjectIdentifier>,
+    /// Present value (read-only via protocol).
+    present_value: LifeSafetyState,
+    /// Operating mode.
+    mode: LifeSafetyMode,
+    /// Modes a network write of Mode may select.
+    accepted_modes: Vec<LifeSafetyMode>,
+    /// Silenced state.
+    silenced: SilencedState,
+    /// Expected operation.
+    operation_expected: LifeSafetyOperation,
+    /// Tracking value.
+    tracking_value: LifeSafetyState,
+    /// Zones this point belongs to (Member_Of).
+    member_of: Vec<BACnetDeviceObjectReference>,
     /// Raw sensor reading.
     direct_reading: f32,
     /// Whether maintenance is required.
     maintenance_required: bool,
-    /// Event state (0 = NORMAL).
-    event_state: u32,
+    /// Event_State.
+    event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
-    /// Reliability (0 = NO_FAULT_DETECTED).
-    reliability: u32,
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
+    reliability: Reliability,
+    /// The application's Tracking_Value and Reliability while a client
+    /// simulates them.
+    device_values: DeviceValues,
     /// Application-owned physical reset integration, configured before insertion.
     reset_executor: Option<LifeSafetyPointResetExecutor>,
 }
@@ -142,53 +267,77 @@ pub struct LifeSafetyPointObject {
 impl LifeSafetyPointObject {
     /// Create a new Life Safety Point object.
     ///
-    /// Defaults: present_value = QUIET (0), mode = OFF (0), silenced = UNSILENCED (0),
-    /// operation_expected = NONE (0), tracking_value = QUIET (0).
+    /// Defaults: present_value = QUIET, mode = OFF, accepted_modes = every
+    /// standard mode, silenced = UNSILENCED, operation_expected = NONE,
+    /// tracking_value = QUIET.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, instance)?;
         Ok(Self {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0,      // QUIET
-            mode: 0,               // OFF
-            silenced: 0,           // UNSILENCED
-            operation_expected: 0, // NONE
-            tracking_value: 0,     // QUIET
+            present_value: LifeSafetyState::QUIET,
+            mode: LifeSafetyMode::OFF,
+            accepted_modes: standard_life_safety_modes(),
+            silenced: SilencedState::UNSILENCED,
+            operation_expected: LifeSafetyOperation::NONE,
+            tracking_value: LifeSafetyState::QUIET,
             member_of: Vec::new(),
             direct_reading: 0.0,
             maintenance_required: false,
-            event_state: 0, // NORMAL
+            event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
+            device_values: DeviceValues::default(),
             reset_executor: None,
         })
     }
 
-    /// Set the present value (LifeSafetyState enumeration).
-    pub fn set_present_value(&mut self, state: u32) {
+    /// Set the present value.
+    pub fn set_present_value(&mut self, state: LifeSafetyState) {
         self.present_value = state;
     }
 
-    /// Set the operating mode (LifeSafetyMode enumeration).
-    pub fn set_mode(&mut self, mode: u32) {
+    /// Set the operating mode from local logic, which Accepted_Modes does not
+    /// constrain.
+    pub fn set_mode(&mut self, mode: LifeSafetyMode) {
         self.mode = mode;
     }
 
-    /// Set the tracking value (LifeSafetyState enumeration).
-    pub fn set_tracking_value(&mut self, state: u32) {
-        self.tracking_value = state;
+    /// Configure Accepted_Modes, the modes a network write of Mode may select.
+    ///
+    /// A repeated mode is kept once. The current Mode stays as it is even when
+    /// the new list leaves it out.
+    pub fn set_accepted_modes(&mut self, modes: impl IntoIterator<Item = LifeSafetyMode>) {
+        self.accepted_modes = distinct_modes(modes);
+    }
+
+    /// Set the tracking value the device reports.
+    ///
+    /// While Out_Of_Service is TRUE a client's simulated value keeps being
+    /// served, and this one takes over on the return to service.
+    pub fn set_tracking_value(&mut self, state: LifeSafetyState) {
+        self.simulation().track(state);
+    }
+
+    fn simulation(&mut self) -> Simulation<'_> {
+        Simulation {
+            out_of_service: &mut self.out_of_service,
+            reliability: &mut self.reliability,
+            tracking_value: &mut self.tracking_value,
+            device_values: &mut self.device_values,
+        }
     }
 
     /// Set the locally determined silenced state.
     pub fn set_silenced(&mut self, state: SilencedState) {
-        self.silenced = state.to_raw();
+        self.silenced = state;
     }
 
     /// Set the next LifeSafetyOperation expected by local device logic.
     pub fn set_operation_expected(&mut self, operation: LifeSafetyOperation) {
-        self.operation_expected = operation.to_raw();
+        self.operation_expected = operation;
     }
 
     /// Configure the application-owned reset executor before database insertion.
@@ -215,9 +364,17 @@ impl LifeSafetyPointObject {
         self.description = desc.into();
     }
 
-    /// Add a zone membership (ObjectIdentifier of a LifeSafetyZone).
-    pub fn add_member(&mut self, zone_oid: ObjectIdentifier) {
-        self.member_of.push(zone_oid);
+    /// Add a zone to Member_Of: a Life Safety Zone, in this device (an
+    /// `ObjectIdentifier` converts) or in the device the reference names.
+    ///
+    /// A zone already listed stays listed once. Any other object type, or a
+    /// Device member that isn't a Device identifier, fails with PROPERTY /
+    /// VALUE_OUT_OF_RANGE and changes nothing.
+    pub fn add_member(
+        &mut self,
+        zone: impl Into<BACnetDeviceObjectReference>,
+    ) -> Result<(), Error> {
+        membership::add(&mut self.member_of, zone.into(), membership::ZONES)
     }
 }
 
@@ -243,22 +400,22 @@ impl BACnetObject for LifeSafetyPointObject {
                 ObjectType::LIFE_SAFETY_POINT.to_raw(),
             )),
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
+                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
-            p if p == PropertyIdentifier::MODE => Ok(PropertyValue::Enumerated(self.mode)),
-            p if p == PropertyIdentifier::SILENCED => Ok(PropertyValue::Enumerated(self.silenced)),
+            p if p == PropertyIdentifier::MODE => Ok(PropertyValue::Enumerated(self.mode.to_raw())),
+            p if p == PropertyIdentifier::ACCEPTED_MODES => {
+                Ok(read_accepted_modes(&self.accepted_modes))
+            }
+            p if p == PropertyIdentifier::SILENCED => {
+                Ok(PropertyValue::Enumerated(self.silenced.to_raw()))
+            }
             p if p == PropertyIdentifier::OPERATION_EXPECTED => {
-                Ok(PropertyValue::Enumerated(self.operation_expected))
+                Ok(PropertyValue::Enumerated(self.operation_expected.to_raw()))
             }
             p if p == PropertyIdentifier::TRACKING_VALUE => {
-                Ok(PropertyValue::Enumerated(self.tracking_value))
+                Ok(PropertyValue::Enumerated(self.tracking_value.to_raw()))
             }
-            p if p == PropertyIdentifier::MEMBER_OF => Ok(PropertyValue::List(
-                self.member_of
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::MEMBER_OF => Ok(reference_list(&self.member_of)),
             p if p == PropertyIdentifier::DIRECT_READING => {
                 Ok(PropertyValue::Real(self.direct_reading))
             }
@@ -266,7 +423,7 @@ impl BACnetObject for LifeSafetyPointObject {
                 Ok(PropertyValue::Boolean(self.maintenance_required))
             }
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -284,11 +441,7 @@ impl BACnetObject for LifeSafetyPointObject {
             return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::MODE {
-            if let PropertyValue::Enumerated(v) = value {
-                self.mode = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            return write_mode(&mut self.mode, &self.accepted_modes, &value);
         }
         if property == PropertyIdentifier::SILENCED
             || property == PropertyIdentifier::OPERATION_EXPECTED
@@ -310,37 +463,25 @@ impl BACnetObject for LifeSafetyPointObject {
             }
             return Err(common::invalid_data_type_error());
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        if let Some(result) = self.simulation().write(property, &value) {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        Err(common::write_access_denied_error())
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            _array_index,
+        ))
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_point(self)
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::MODE,
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::OPERATION_EXPECTED,
-            PropertyIdentifier::TRACKING_VALUE,
-            PropertyIdentifier::MEMBER_OF,
-            PropertyIdentifier::DIRECT_READING,
-            PropertyIdentifier::MAINTENANCE_REQUIRED,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {
@@ -348,36 +489,14 @@ impl BACnetObject for LifeSafetyPointObject {
     }
 
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        POINT_COV_PROPERTIES.contains(&property)
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::MODE
-                | PropertyIdentifier::DIRECT_READING
-                | PropertyIdentifier::MAINTENANCE_REQUIRED
-                | PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::OUT_OF_SERVICE
-        )
+        COV_PROPERTIES.contains(&property)
     }
 
     fn apply_life_safety_operation(
         &mut self,
         operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationEffect, Error> {
-        if reset::is_reset_operation(operation) {
-            self.apply_reset_operation(operation)
-        } else {
-            apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
-        }
-    }
-
-    fn apply_life_safety_operation_detailed(
-        &mut self,
-        operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationOutcome, Error> {
-        let before = POINT_COV_PROPERTIES
+        let before = COV_PROPERTIES
             .into_iter()
             .filter_map(|property| {
                 self.read_property(property, None)
@@ -385,7 +504,11 @@ impl BACnetObject for LifeSafetyPointObject {
                     .map(|value| (property, value))
             })
             .collect();
-        let effect = self.apply_life_safety_operation(operation)?;
+        let effect = if reset::is_reset_operation(operation) {
+            self.apply_reset_operation(operation)?
+        } else {
+            apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)?
+        };
         Ok(operation_outcome(self, before, effect))
     }
 
@@ -394,6 +517,21 @@ impl BACnetObject for LifeSafetyPointObject {
         operation: LifeSafetyOperation,
     ) -> Result<(), Error> {
         self.set_operation_expected(operation);
+        Ok(())
+    }
+
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+        self.simulation().set_reliability(reliability)
+    }
+
+    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        self.present_value = application::life_safety_state(&value)?;
+        Ok(())
+    }
+
+    fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        let state = application::life_safety_state(&value)?;
+        self.set_tracking_value(state);
         Ok(())
     }
 }
@@ -406,27 +544,38 @@ impl BACnetObject for LifeSafetyPointObject {
 ///
 /// Aggregates one or more Life Safety Point objects into a zone.
 /// Present_Value is an enumerated LifeSafetyState, set by the application
-/// (typically the worst-case state among zone members).
+/// (typically the worst-case state among zone members) via
+/// [`set_present_value`](Self::set_present_value), or through
+/// [`BACnetObject::set_present_value_internal`] once a server holds the zone.
 pub struct LifeSafetyZoneObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// Present value — LifeSafetyState enumeration (read-only via protocol).
-    present_value: u32,
-    /// Operating mode — LifeSafetyMode enumeration.
-    mode: u32,
-    /// Silenced state — SilencedState enumeration.
-    silenced: u32,
-    /// Expected operation — LifeSafetyOperation enumeration.
-    operation_expected: u32,
-    /// Points belonging to this zone.
-    zone_members: Vec<ObjectIdentifier>,
-    /// Event state (0 = NORMAL).
-    event_state: u32,
+    /// Present value (read-only via protocol).
+    present_value: LifeSafetyState,
+    /// Operating mode.
+    mode: LifeSafetyMode,
+    /// Modes a network write of Mode may select.
+    accepted_modes: Vec<LifeSafetyMode>,
+    /// Silenced state.
+    silenced: SilencedState,
+    /// Expected operation.
+    operation_expected: LifeSafetyOperation,
+    /// Tracking value.
+    tracking_value: LifeSafetyState,
+    /// Points and zones belonging to this zone (Zone_Members).
+    zone_members: Vec<BACnetDeviceObjectReference>,
+    /// Zones this zone belongs to (Member_Of).
+    member_of: Vec<BACnetDeviceObjectReference>,
+    /// Event_State.
+    event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
-    /// Reliability (0 = NO_FAULT_DETECTED).
-    reliability: u32,
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
+    reliability: Reliability,
+    /// The application's Tracking_Value and Reliability while a client
+    /// simulates them.
+    device_values: DeviceValues,
     /// Application-owned physical reset integration, configured before insertion.
     reset_executor: Option<LifeSafetyZoneResetExecutor>,
 }
@@ -434,45 +583,76 @@ pub struct LifeSafetyZoneObject {
 impl LifeSafetyZoneObject {
     /// Create a new Life Safety Zone object.
     ///
-    /// Defaults: present_value = QUIET (0), mode = OFF (0), silenced = UNSILENCED (0),
-    /// operation_expected = NONE (0).
+    /// Defaults: present_value = QUIET, mode = OFF, accepted_modes = every
+    /// standard mode, silenced = UNSILENCED, operation_expected = NONE,
+    /// tracking_value = QUIET.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, instance)?;
         Ok(Self {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0,      // QUIET
-            mode: 0,               // OFF
-            silenced: 0,           // UNSILENCED
-            operation_expected: 0, // NONE
+            present_value: LifeSafetyState::QUIET,
+            mode: LifeSafetyMode::OFF,
+            accepted_modes: standard_life_safety_modes(),
+            silenced: SilencedState::UNSILENCED,
+            operation_expected: LifeSafetyOperation::NONE,
+            tracking_value: LifeSafetyState::QUIET,
             zone_members: Vec::new(),
-            event_state: 0, // NORMAL
+            member_of: Vec::new(),
+            event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
+            device_values: DeviceValues::default(),
             reset_executor: None,
         })
     }
 
-    /// Set the present value (LifeSafetyState enumeration).
-    pub fn set_present_value(&mut self, state: u32) {
+    /// Set the present value.
+    pub fn set_present_value(&mut self, state: LifeSafetyState) {
         self.present_value = state;
     }
 
-    /// Set the operating mode (LifeSafetyMode enumeration).
-    pub fn set_mode(&mut self, mode: u32) {
+    /// Set the operating mode from local logic, which Accepted_Modes does not
+    /// constrain.
+    pub fn set_mode(&mut self, mode: LifeSafetyMode) {
         self.mode = mode;
+    }
+
+    /// Configure Accepted_Modes, the modes a network write of Mode may select.
+    ///
+    /// A repeated mode is kept once. The current Mode stays as it is even when
+    /// the new list leaves it out.
+    pub fn set_accepted_modes(&mut self, modes: impl IntoIterator<Item = LifeSafetyMode>) {
+        self.accepted_modes = distinct_modes(modes);
+    }
+
+    /// Set the tracking value the device reports.
+    ///
+    /// While Out_Of_Service is TRUE a client's simulated value keeps being
+    /// served, and this one takes over on the return to service.
+    pub fn set_tracking_value(&mut self, state: LifeSafetyState) {
+        self.simulation().track(state);
+    }
+
+    fn simulation(&mut self) -> Simulation<'_> {
+        Simulation {
+            out_of_service: &mut self.out_of_service,
+            reliability: &mut self.reliability,
+            tracking_value: &mut self.tracking_value,
+            device_values: &mut self.device_values,
+        }
     }
 
     /// Set the locally determined silenced state.
     pub fn set_silenced(&mut self, state: SilencedState) {
-        self.silenced = state.to_raw();
+        self.silenced = state;
     }
 
     /// Set the next LifeSafetyOperation expected by local device logic.
     pub fn set_operation_expected(&mut self, operation: LifeSafetyOperation) {
-        self.operation_expected = operation.to_raw();
+        self.operation_expected = operation;
     }
 
     /// Configure the application-owned reset executor before database insertion.
@@ -494,9 +674,31 @@ impl LifeSafetyZoneObject {
         self.description = desc.into();
     }
 
-    /// Add a point to this zone (ObjectIdentifier of a LifeSafetyPoint).
-    pub fn add_zone_member(&mut self, point_oid: ObjectIdentifier) {
-        self.zone_members.push(point_oid);
+    /// Add a member to Zone_Members: a Life Safety Point or Zone, in this
+    /// device (an `ObjectIdentifier` converts) or in the device the reference
+    /// names.
+    ///
+    /// A member already listed stays listed once. Any other object type, or a
+    /// Device member that isn't a Device identifier, fails with PROPERTY /
+    /// VALUE_OUT_OF_RANGE and changes nothing.
+    pub fn add_zone_member(
+        &mut self,
+        member: impl Into<BACnetDeviceObjectReference>,
+    ) -> Result<(), Error> {
+        membership::add(
+            &mut self.zone_members,
+            member.into(),
+            membership::ZONE_MEMBERS,
+        )
+    }
+
+    /// Add a zone to Member_Of: a Life Safety Zone this zone belongs to, with
+    /// the same refusals as [`add_zone_member`](Self::add_zone_member).
+    pub fn add_member(
+        &mut self,
+        zone: impl Into<BACnetDeviceObjectReference>,
+    ) -> Result<(), Error> {
+        membership::add(&mut self.member_of, zone.into(), membership::ZONES)
     }
 }
 
@@ -522,21 +724,25 @@ impl BACnetObject for LifeSafetyZoneObject {
                 ObjectType::LIFE_SAFETY_ZONE.to_raw(),
             )),
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
+                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
-            p if p == PropertyIdentifier::MODE => Ok(PropertyValue::Enumerated(self.mode)),
-            p if p == PropertyIdentifier::SILENCED => Ok(PropertyValue::Enumerated(self.silenced)),
+            p if p == PropertyIdentifier::MODE => Ok(PropertyValue::Enumerated(self.mode.to_raw())),
+            p if p == PropertyIdentifier::ACCEPTED_MODES => {
+                Ok(read_accepted_modes(&self.accepted_modes))
+            }
+            p if p == PropertyIdentifier::SILENCED => {
+                Ok(PropertyValue::Enumerated(self.silenced.to_raw()))
+            }
             p if p == PropertyIdentifier::OPERATION_EXPECTED => {
-                Ok(PropertyValue::Enumerated(self.operation_expected))
+                Ok(PropertyValue::Enumerated(self.operation_expected.to_raw()))
             }
-            p if p == PropertyIdentifier::ZONE_MEMBERS => Ok(PropertyValue::List(
-                self.zone_members
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::TRACKING_VALUE => {
+                Ok(PropertyValue::Enumerated(self.tracking_value.to_raw()))
+            }
+            p if p == PropertyIdentifier::ZONE_MEMBERS => Ok(reference_list(&self.zone_members)),
+            p if p == PropertyIdentifier::MEMBER_OF => Ok(reference_list(&self.member_of)),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -554,45 +760,32 @@ impl BACnetObject for LifeSafetyZoneObject {
             return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::MODE {
-            if let PropertyValue::Enumerated(v) = value {
-                self.mode = v;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            return write_mode(&mut self.mode, &self.accepted_modes, &value);
         }
         if property == PropertyIdentifier::SILENCED
             || property == PropertyIdentifier::OPERATION_EXPECTED
         {
             return Err(common::write_access_denied_error());
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        if let Some(result) = self.simulation().write(property, &value) {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        Err(common::write_access_denied_error())
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            _array_index,
+        ))
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_zone(self)
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::MODE,
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::OPERATION_EXPECTED,
-            PropertyIdentifier::ZONE_MEMBERS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn supports_cov(&self) -> bool {
@@ -600,34 +793,14 @@ impl BACnetObject for LifeSafetyZoneObject {
     }
 
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        ZONE_COV_PROPERTIES.contains(&property)
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::MODE
-                | PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::OUT_OF_SERVICE
-        )
+        COV_PROPERTIES.contains(&property)
     }
 
     fn apply_life_safety_operation(
         &mut self,
         operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationEffect, Error> {
-        if reset::is_reset_operation(operation) {
-            self.apply_reset_operation(operation)
-        } else {
-            apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)
-        }
-    }
-
-    fn apply_life_safety_operation_detailed(
-        &mut self,
-        operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationOutcome, Error> {
-        let before = ZONE_COV_PROPERTIES
+        let before = COV_PROPERTIES
             .into_iter()
             .filter_map(|property| {
                 self.read_property(property, None)
@@ -635,7 +808,11 @@ impl BACnetObject for LifeSafetyZoneObject {
                     .map(|value| (property, value))
             })
             .collect();
-        let effect = self.apply_life_safety_operation(operation)?;
+        let effect = if reset::is_reset_operation(operation) {
+            self.apply_reset_operation(operation)?
+        } else {
+            apply_silenced_operation(&mut self.silenced, &mut self.operation_expected, operation)?
+        };
         Ok(operation_outcome(self, before, effect))
     }
 
@@ -644,6 +821,21 @@ impl BACnetObject for LifeSafetyZoneObject {
         operation: LifeSafetyOperation,
     ) -> Result<(), Error> {
         self.set_operation_expected(operation);
+        Ok(())
+    }
+
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
+        self.simulation().set_reliability(reliability)
+    }
+
+    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        self.present_value = application::life_safety_state(&value)?;
+        Ok(())
+    }
+
+    fn set_tracking_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        let state = application::life_safety_state(&value)?;
+        self.set_tracking_value(state);
         Ok(())
     }
 }
@@ -657,3 +849,18 @@ mod tests;
 
 #[cfg(test)]
 mod reset_tests;
+
+#[cfg(test)]
+mod event_state_tests;
+
+#[cfg(test)]
+mod accepted_modes_tests;
+
+#[cfg(test)]
+mod out_of_service_tests;
+
+#[cfg(test)]
+mod application_tests;
+
+#[cfg(test)]
+mod membership_tests;

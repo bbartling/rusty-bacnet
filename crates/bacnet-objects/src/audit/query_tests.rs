@@ -1,11 +1,13 @@
 use std::sync::{Arc, Mutex};
 
-use bacnet_types::bitstring::AuditOperationFlags;
+use bacnet_types::bitstring::{AuditOperationFlags, LogStatus};
 use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAddress, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetRecipient,
 };
-use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bacnet_types::MacAddr;
@@ -118,7 +120,7 @@ fn log_with_records(records: Vec<BACnetAuditLogRecordResult>) -> AuditLogObject 
 fn query(
     log: &AuditLogObject,
     parameters: &BACnetAuditLogQueryParameters,
-    start: Option<u32>,
+    start: Option<u64>,
     count: u16,
 ) -> super::AuditLogQueryPage {
     BACnetObject::audit_log_storage_internal(log)
@@ -137,7 +139,7 @@ fn target_query() -> BACnetAuditLogQueryParameters {
         target_array_index: Some(3),
         target_priority: Some(8),
         operations: Some(operations),
-        successful_actions_only: true,
+        successful_actions_only: BACnetSuccessFilter::SUCCESSES_ONLY,
     }
 }
 
@@ -152,7 +154,7 @@ fn target_filter_matches_every_field_and_device_identifier_or_address() {
         BACnetRecipient::Address(address(7, &[0x22])),
     );
     let log = log_with_records(vec![
-        record(1, BACnetAuditLogDatum::LogStatus(0)),
+        record(1, BACnetAuditLogDatum::LogStatus(LogStatus::empty())),
         record(2, BACnetAuditLogDatum::TimeChange(1.5)),
         record(3, BACnetAuditLogDatum::AuditNotification(by_identifier)),
         record(4, BACnetAuditLogDatum::AuditNotification(by_address)),
@@ -179,7 +181,7 @@ fn target_filter_matches_every_field_and_device_identifier_or_address() {
         target_array_index: Some(3),
         target_priority: None,
         operations: None,
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
     assert_eq!(
         query(&log, &index_without_property, None, 10).records.len(),
@@ -289,13 +291,13 @@ fn target_optional_values_are_wildcards_and_absent_record_priority_matches() {
         target_array_index: None,
         target_priority: Some(16),
         operations: None,
-        successful_actions_only: true,
+        successful_actions_only: BACnetSuccessFilter::SUCCESSES_ONLY,
     };
     assert_eq!(query(&log, &wildcard, None, 1).records.len(), 1);
 }
 
 #[test]
-fn source_filter_and_success_boolean_follow_the_wire_contract() {
+fn source_filter_and_success_filter_follow_the_wire_contract() {
     let source_address = address(5, &[0x11]);
     let success = notification(
         BACnetRecipient::Address(source_address.clone()),
@@ -310,36 +312,47 @@ fn source_filter_and_success_boolean_follow_the_wire_contract() {
     let mut operations = AuditOperationFlags::empty();
     assert!(operations.insert(AuditOperation::WRITE));
 
-    let query_parameters = |successful_actions_only| BACnetAuditLogQueryParameters::BySource {
+    let query_parameters = |success_filter| BACnetAuditLogQueryParameters::BySource {
         source_device_identifier: device(99),
         source_device_address: Some(source_address.clone()),
         source_object_identifier: Some(object(ObjectType::ANALOG_INPUT, 10)),
         operations: Some(operations),
-        successful_actions_only,
+        successful_actions_only: success_filter,
     };
-    assert_eq!(
-        query(&log, &query_parameters(true), None, 10)
-            .records
-            .iter()
-            .map(|entry| entry.sequence_number)
-            .collect::<Vec<_>>(),
-        vec![1]
-    );
-    assert_eq!(
-        query(&log, &query_parameters(false), None, 10)
-            .records
-            .iter()
-            .map(|entry| entry.sequence_number)
-            .collect::<Vec<_>>(),
-        vec![2, 1]
-    );
+    // Corrected-baseline three-state filtering (RB-20): each filter selects
+    // its outcome on the same success+failure log, newest-first.
+    for (filter, expected) in [
+        (BACnetSuccessFilter::SUCCESSES_ONLY, vec![1]),
+        (BACnetSuccessFilter::FAILURES_ONLY, vec![2]),
+        (BACnetSuccessFilter::ALL, vec![2, 1]),
+    ] {
+        assert_eq!(
+            query(&log, &query_parameters(filter), None, 10)
+                .records
+                .iter()
+                .map(|entry| entry.sequence_number)
+                .collect::<Vec<_>>(),
+            expected,
+            "filter {} must select {expected:?}",
+            filter.to_raw()
+        );
+    }
+    // The reserved raw domain matches nothing rather than widening the query.
+    assert!(query(
+        &log,
+        &query_parameters(BACnetSuccessFilter::from_raw(3)),
+        None,
+        10
+    )
+    .records
+    .is_empty());
 
     let wrong_source = BACnetAuditLogQueryParameters::BySource {
         source_device_identifier: device(98),
         source_device_address: Some(address(6, &[0x66])),
         source_object_identifier: None,
         operations: None,
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
     assert!(query(&log, &wrong_source, None, 10).records.is_empty());
 
@@ -348,7 +361,7 @@ fn source_filter_and_success_boolean_follow_the_wire_contract() {
         source_device_address: Some(source_address),
         source_object_identifier: Some(object(ObjectType::ANALOG_INPUT, 99)),
         operations: Some(operations),
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
     assert!(query(&log, &wrong_source_object, None, 10)
         .records
@@ -376,7 +389,7 @@ fn query_uses_insertion_order_literal_start_and_complete_scan_for_no_more_items(
         target_array_index: None,
         target_priority: None,
         operations: None,
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
 
     let all = query(&log, &query_parameters, None, 10);
@@ -434,7 +447,7 @@ fn query_observes_retained_ring_eviction_and_newest_first_order() {
         source_device_address: None,
         source_object_identifier: None,
         operations: None,
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
     let page = query(&log, &query_parameters, None, 10);
 
@@ -468,7 +481,7 @@ fn query_never_returns_more_than_the_retained_storage_cap() {
         source_device_address: None,
         source_object_identifier: None,
         operations: None,
-        successful_actions_only: false,
+        successful_actions_only: BACnetSuccessFilter::ALL,
     };
 
     let page = query(&log, &query_parameters, None, u16::MAX);
@@ -476,6 +489,143 @@ fn query_never_returns_more_than_the_retained_storage_cap() {
     assert_eq!(page.records[0].sequence_number, MAX_AUDIT_RECORDS as u64);
     assert_eq!(page.records.last().unwrap().sequence_number, 1);
     assert!(page.no_more_items);
+}
+
+#[test]
+fn query_cursor_covers_u64_identities_above_u32() {
+    // Corrected-baseline Unsigned64 cursor (RB-20, Errata 2024-04-29 item 8):
+    // identities above u32::MAX page literally, newest-first.
+    let base = u64::from(u32::MAX) + 1;
+    let audit = notification(
+        BACnetRecipient::Device(device(1)),
+        BACnetRecipient::Device(device(2)),
+    );
+    let log = log_with_records(vec![
+        record(base, BACnetAuditLogDatum::AuditNotification(audit.clone())),
+        record(
+            base + 1,
+            BACnetAuditLogDatum::AuditNotification(audit.clone()),
+        ),
+        record(base + 2, BACnetAuditLogDatum::AuditNotification(audit)),
+    ]);
+    let query_parameters = BACnetAuditLogQueryParameters::ByTarget {
+        target_device_identifier: device(2),
+        target_device_address: None,
+        target_object_identifier: None,
+        target_property_identifier: None,
+        target_array_index: None,
+        target_priority: None,
+        operations: None,
+        successful_actions_only: BACnetSuccessFilter::ALL,
+    };
+
+    let page = query(&log, &query_parameters, Some(base + 2), 10);
+    assert_eq!(
+        page.records
+            .iter()
+            .map(|entry| entry.sequence_number)
+            .collect::<Vec<_>>(),
+        vec![base + 1, base]
+    );
+    assert!(page.no_more_items);
+
+    // Continuation across the u32 boundary omits nothing and duplicates
+    // nothing: chained count=1 pages cover the full log exactly once.
+    let mut collected = Vec::new();
+    let mut start = None;
+    for _ in 0..4 {
+        let page = query(&log, &query_parameters, start, 1);
+        if page.records.is_empty() {
+            assert!(page.no_more_items);
+            break;
+        }
+        start = Some(page.records[0].sequence_number);
+        collected.push(page.records[0].sequence_number);
+    }
+    assert_eq!(collected, vec![base + 2, base + 1, base]);
+    let exhausted = query(&log, &query_parameters, start, 1);
+    assert!(exhausted.records.is_empty());
+    assert!(exhausted.no_more_items);
+}
+
+#[test]
+fn unknown_target_object_returns_empty_with_honest_no_more_items() {
+    // A target-object filter that names no retained record is an empty result,
+    // not an object-database lookup rejection: the query never consults the
+    // object database for the filter value.
+    let audit = notification(
+        BACnetRecipient::Device(device(1)),
+        BACnetRecipient::Device(device(2)),
+    );
+    let log = log_with_records(vec![record(
+        1,
+        BACnetAuditLogDatum::AuditNotification(audit),
+    )]);
+    let query_parameters = BACnetAuditLogQueryParameters::ByTarget {
+        target_device_identifier: device(2),
+        target_device_address: None,
+        target_object_identifier: Some(object(ObjectType::ANALOG_VALUE, 999_999)),
+        target_property_identifier: None,
+        target_array_index: None,
+        target_priority: None,
+        operations: None,
+        successful_actions_only: BACnetSuccessFilter::ALL,
+    };
+    let page = query(&log, &query_parameters, None, 10);
+    assert!(page.records.is_empty());
+    assert!(page.no_more_items);
+}
+
+#[test]
+fn records_appended_during_paging_cause_no_omission_or_duplication() {
+    let audit = notification(
+        BACnetRecipient::Device(device(1)),
+        BACnetRecipient::Device(device(2)),
+    );
+    let mut log = {
+        let records = vec![
+            record(1, BACnetAuditLogDatum::AuditNotification(audit.clone())),
+            record(2, BACnetAuditLogDatum::AuditNotification(audit.clone())),
+            record(3, BACnetAuditLogDatum::AuditNotification(audit.clone())),
+        ];
+        // Spare ring capacity so the concurrent append below cannot evict a
+        // record the continuation cursor still owes the reader.
+        let persistence = Arc::new(MemoryPersistence::with_snapshot(AuditLogSnapshot {
+            object_identifier: object(ObjectType::AUDIT_LOG, 1),
+            generation: 1,
+            capacity: 4,
+            log_enable: true,
+            total_record_count: 3,
+            records,
+            completed_receipts: Vec::new(),
+        }));
+        AuditLogObject::new(1, "Audit-1", 4, persistence).unwrap()
+    };
+    let query_parameters = BACnetAuditLogQueryParameters::BySource {
+        source_device_identifier: device(1),
+        source_device_address: None,
+        source_object_identifier: None,
+        operations: None,
+        successful_actions_only: BACnetSuccessFilter::ALL,
+    };
+
+    let first = query(&log, &query_parameters, None, 1);
+    assert_eq!(first.records[0].sequence_number, 3);
+    assert!(!first.no_more_items);
+
+    // A concurrent append lands above the continuation cursor, so the next
+    // page still returns exactly the older retained records.
+    let appended = record(4, BACnetAuditLogDatum::AuditNotification(audit)).record;
+    assert_eq!(log.add_record(appended).unwrap(), Some(4));
+    let rest = query(&log, &query_parameters, Some(3), 10);
+    assert_eq!(
+        rest.records
+            .iter()
+            .map(|entry| entry.sequence_number)
+            .collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+    assert!(rest.no_more_items);
 }
 
 #[test]

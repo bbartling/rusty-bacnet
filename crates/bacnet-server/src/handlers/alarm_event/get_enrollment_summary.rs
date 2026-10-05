@@ -7,7 +7,8 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_services::enrollment_summary::{
     EnrollmentSummaryEntry, GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest,
 };
-use bacnet_types::enums::EnrollmentSummaryEventStateFilter;
+use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::enums::{AcknowledgmentFilter, EnrollmentSummaryEventStateFilter};
 
 /// Handle the deprecated GetEnrollmentSummary interoperability service.
 ///
@@ -19,9 +20,68 @@ pub fn handle_get_enrollment_summary(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    let request = GetEnrollmentSummaryRequest::decode(service_data)?;
-
+    let request =
+        GetEnrollmentSummaryRequest::decode(service_data).map_err(Error::into_request_reject)?;
     let mut entries = Vec::new();
+    visit_entries::<Error>(db, &request, |entry| {
+        entries.push(entry);
+        Ok(())
+    })?;
+    GetEnrollmentSummaryAck { entries }.encode(buf);
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(crate) enum EnrollmentSummaryFailure {
+    Work,
+    Bytes,
+    Service(Error),
+}
+
+impl From<Error> for EnrollmentSummaryFailure {
+    fn from(error: Error) -> Self {
+        Self::Service(error)
+    }
+}
+
+/// Complete logical service ACK, transactional under the caller's database view.
+pub(crate) fn handle_get_enrollment_summary_budgeted(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    budget: crate::server::GetEnrollmentSummaryBudget,
+) -> Result<(), EnrollmentSummaryFailure> {
+    // Preserve decoder errors even when the database cannot be admitted.
+    let request =
+        GetEnrollmentSummaryRequest::decode(service_data).map_err(Error::into_request_reject)?;
+    if db.len() > budget.max_objects {
+        return Err(EnrollmentSummaryFailure::Work);
+    }
+    let mut scratch = BytesMut::new();
+    let mut entry_buf = BytesMut::new();
+    visit_entries::<EnrollmentSummaryFailure>(db, &request, |entry| {
+        entry_buf.clear();
+        // The ACK is a bare sequence: concatenated singleton encodings retain
+        // the complete-service wire shape without retaining all entries.
+        GetEnrollmentSummaryAck {
+            entries: vec![entry],
+        }
+        .encode(&mut entry_buf);
+        if entry_buf.len() > budget.max_service_ack_bytes - scratch.len() {
+            return Err(EnrollmentSummaryFailure::Bytes);
+        }
+        scratch.extend_from_slice(&entry_buf);
+        Ok(())
+    })?;
+    buf.extend_from_slice(&scratch);
+    Ok(())
+}
+
+fn visit_entries<E: From<Error>>(
+    db: &ObjectDatabase,
+    request: &GetEnrollmentSummaryRequest,
+    mut emit: impl FnMut(EnrollmentSummaryEntry) -> Result<(), E>,
+) -> Result<(), E> {
     for (_oid, object) in db.iter_objects() {
         let Some(capability) = object.enrollment_summary_capability_internal() else {
             continue;
@@ -41,7 +101,8 @@ pub fn handle_get_enrollment_summary(
                     return Err(operational_problem(
                         object_identifier,
                         "Event_Detection_Enable is not Boolean",
-                    ))
+                    )
+                    .into())
                 }
             }
         }
@@ -88,29 +149,28 @@ pub fn handle_get_enrollment_summary(
             continue;
         }
 
-        entries.push(EnrollmentSummaryEntry {
+        emit(EnrollmentSummaryEntry {
             object_identifier,
             event_type: capability.event_type,
             event_state,
             priority: class_projection.priority,
             notification_class: Some(notification_class),
-        });
+        })?;
     }
 
-    GetEnrollmentSummaryAck { entries }.encode(buf);
     Ok(())
 }
 
 fn latest_transition(
     capability: EnrollmentSummaryCapability,
     event_state: EventState,
-    acknowledged_transitions: u8,
+    acknowledged_transitions: EventTransitionBits,
     object_identifier: ObjectIdentifier,
 ) -> Result<EventTransition, Error> {
     if let Some(transition) = capability.last_transition {
         return Ok(transition);
     }
-    if event_state == EventState::NORMAL && acknowledged_transitions == 0b111 {
+    if event_state == EventState::NORMAL && acknowledged_transitions.is_all() {
         return Ok(EventTransition::ToNormal);
     }
     Err(operational_problem(
@@ -119,11 +179,14 @@ fn latest_transition(
     ))
 }
 
-fn acknowledgment_matches(filter: u32, acknowledged_transitions: u8) -> bool {
+fn acknowledgment_matches(
+    filter: AcknowledgmentFilter,
+    acknowledged_transitions: EventTransitionBits,
+) -> bool {
     match filter {
-        0 => true,
-        1 => acknowledged_transitions == 0b111,
-        2 => acknowledged_transitions != 0b111,
+        AcknowledgmentFilter::ALL => true,
+        AcknowledgmentFilter::ACKED => acknowledged_transitions.is_all(),
+        AcknowledgmentFilter::NOT_ACKED => !acknowledged_transitions.is_all(),
         _ => unreachable!("request decoder rejects undefined acknowledgment filters"),
     }
 }
@@ -180,7 +243,7 @@ fn read_event_state(
 fn read_acknowledged_transitions(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,
-) -> Result<u8, Error> {
+) -> Result<EventTransitionBits, Error> {
     match read_required(
         object,
         object_identifier,
@@ -189,7 +252,7 @@ fn read_acknowledged_transitions(
         PropertyValue::BitString { unused_bits, data }
             if unused_bits == 5 && data.len() == 1 && data[0] & 0x1f == 0 =>
         {
-            Ok(bacnet_types::bitstring::unpack_octet(&data, 3))
+            Ok(EventTransitionBits::from_bacnet(&data))
         }
         _ => Err(operational_problem(
             object_identifier,

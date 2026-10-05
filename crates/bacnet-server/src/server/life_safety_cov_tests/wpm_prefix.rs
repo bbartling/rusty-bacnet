@@ -3,6 +3,7 @@ use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::wpm::WritePropertyMultipleError;
+use bacnet_types::enums::EventType;
 
 fn malformed_indexed_value_after_description(oid: ObjectIdentifier, description: &str) -> BytesMut {
     let mut encoded_description = BytesMut::new();
@@ -23,7 +24,7 @@ fn malformed_indexed_value_after_description(oid: ObjectIdentifier, description:
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
     assert_eq!(encoded.last(), Some(&0x1f));
     encoded.truncate(encoded.len() - 1);
     bacnet_encoding::primitives::encode_ctx_unsigned(
@@ -38,7 +39,7 @@ fn malformed_indexed_value_after_description(oid: ObjectIdentifier, description:
 #[tokio::test]
 async fn event_enrollment_prefix_commit_returns_exact_error_through_server_dispatch() {
     let mut db = clocked_test_database();
-    let object = EventEnrollmentObject::new(7, "dispatch-ee", 5).unwrap();
+    let object = EventEnrollmentObject::new(7, "dispatch-ee", EventType::OUT_OF_RANGE).unwrap();
     let oid = object.object_identifier();
     db.add(Box::new(object)).unwrap();
     let fixture = DispatchFixture::new(db, std::iter::empty()).await;
@@ -78,7 +79,7 @@ async fn event_enrollment_prefix_commit_returns_exact_error_through_server_dispa
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
 
     fixture
         .dispatch(
@@ -218,7 +219,7 @@ async fn failed_wpm_sends_formal_error_before_committed_prefix_cov() {
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
 
     fixture
         .dispatch(
@@ -282,7 +283,7 @@ async fn failed_wpm_sends_generic_cov_for_non_life_safety_prefix_only() {
             monitored_object_identifier: oid,
             issue_confirmed_notifications: false,
             expires_at: None,
-            last_notified_value: None,
+            last_notified_observation: None,
             monitored_property: None,
             monitored_property_array_index: None,
             cov_increment: None,
@@ -314,7 +315,7 @@ async fn failed_wpm_sends_generic_cov_for_non_life_safety_prefix_only() {
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
 
     fixture
         .dispatch(

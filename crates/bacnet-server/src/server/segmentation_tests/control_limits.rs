@@ -24,43 +24,45 @@ async fn non_rung_request_header_conservatively_bounds_server_response() {
         other => panic!("expected ConfirmedRequest, got {other:?}"),
     };
 
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (network, sent) = recording_network();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let source_mac = test_mac(9);
 
-    BACnetServer::<RecordingTransport>::send_segmented_complex_ack(
-        &network,
-        &seg_ack_senders,
-        &seg_send_permits,
-        source_mac.as_slice(),
-        None,
-        0x49,
-        ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+    BACnetServer::<TestTransport>::send_segmented_complex_ack(
+        SegmentedSendResources {
+            network: &network,
+            seg_ack_senders: &seg_ack_senders,
+            seg_send_permits: &seg_send_permits,
+        },
+        ResponseTarget {
+            source_mac: source_mac.as_slice(),
+            source_network: None,
+            route: &bacnet_network::response_route::ResponseRoute::unverified(),
+        },
+        ComplexAckParams {
+            invoke_id: 0x49,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            client_max_apdu: 50,
+            client_max_segments,
+        },
         &[0xA5; 256],
-        50,
-        client_max_segments,
+        None,
     )
     .await;
 
     assert_eq!(sent_count(&sent), 1);
     assert_eq!(abort_reason(&sent, 0), AbortReason::BUFFER_OVERFLOW);
-    assert!(seg_ack_senders.lock().await.is_empty());
+    assert!(seg_ack_senders.lock().is_empty());
 }
 
 #[tokio::test]
 async fn client_abort_routed_by_dispatch_terminates_segmented_complex_ack() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (network, sent) = recording_network();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(10);
     let invoke_id = 0x4A;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = spawn_segmented_complex_ack_with_options(
         Arc::clone(&network),
         Arc::clone(&seg_ack_senders),
@@ -96,22 +98,15 @@ async fn client_abort_routed_by_dispatch_terminates_segmented_complex_ack() {
         "server must not send a timeout Abort after client Abort"
     );
     assert!(
-        !seg_ack_senders.lock().await.contains_key(&key),
+        !seg_ack_senders.lock().contains_key(&key),
         "SegmentAck sender entry should be removed after client Abort"
     );
 }
 
 #[tokio::test]
 async fn dispatch_accepts_segment_ack_before_send_future_returns() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let first_send_started = Arc::new(Notify::new());
-    let release_first_send = Arc::new(Notify::new());
-    let network = Arc::new(NetworkLayer::new(BlockingSendTransport::new(
-        StdArc::clone(&sent),
-        Arc::clone(&first_send_started),
-        Arc::clone(&release_first_send),
-    )));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (network, sent, first_send) = blocking_first_send_network();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let source_mac = test_mac(13);
     let invoke_id = 0x4D;
@@ -121,27 +116,35 @@ async fn dispatch_accepts_segment_ack_before_send_future_returns() {
         let seg_send_permits = Arc::clone(&seg_send_permits);
         let source_mac = source_mac.clone();
         tokio::spawn(async move {
-            BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                source_mac.as_slice(),
-                None,
-                invoke_id,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            BACnetServer::<TestTransport>::send_segmented_complex_ack_with_options(
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: source_mac.as_slice(),
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &[0xF2; 128],
-                50,
-                None,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
                 },
+                None,
             )
             .await;
         })
     };
 
-    tokio::time::timeout(Duration::from_secs(1), first_send_started.notified())
+    tokio::time::timeout(Duration::from_secs(1), first_send.wait_blocked())
         .await
         .expect("first segment send should start");
     dispatch_test_apdu(
@@ -151,7 +154,7 @@ async fn dispatch_accepts_segment_ack_before_send_future_returns() {
         Apdu::SegmentAck(segment_ack(invoke_id, false, 0)),
     )
     .await;
-    release_first_send.notify_waiters();
+    first_send.release_sends(1);
 
     wait_for_sent_len(&sent, 2).await;
     assert_eq!(complex_ack_sequence(&sent, 1), 1);
@@ -162,46 +165,47 @@ async fn dispatch_accepts_segment_ack_before_send_future_returns() {
 
 #[tokio::test]
 async fn client_abort_is_prioritized_over_queued_segment_ack() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let first_send_started = Arc::new(Notify::new());
-    let release_first_send = Arc::new(Notify::new());
-    let network = Arc::new(NetworkLayer::new(BlockingSendTransport::new(
-        StdArc::clone(&sent),
-        Arc::clone(&first_send_started),
-        Arc::clone(&release_first_send),
-    )));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (network, sent, first_send) = blocking_first_send_network();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let source_mac = test_mac(14);
     let invoke_id = 0x4E;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let handle = {
         let network = Arc::clone(&network);
         let seg_ack_senders = Arc::clone(&seg_ack_senders);
         let seg_send_permits = Arc::clone(&seg_send_permits);
         let source_mac = source_mac.clone();
         tokio::spawn(async move {
-            BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                source_mac.as_slice(),
-                None,
-                invoke_id,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            BACnetServer::<TestTransport>::send_segmented_complex_ack_with_options(
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: source_mac.as_slice(),
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &[0xF3; 128],
-                50,
-                None,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
                 },
+                None,
             )
             .await;
         })
     };
 
-    tokio::time::timeout(Duration::from_secs(1), first_send_started.notified())
+    tokio::time::timeout(Duration::from_secs(1), first_send.wait_blocked())
         .await
         .expect("first segment send should start");
     dispatch_test_apdu(
@@ -222,7 +226,7 @@ async fn client_abort_is_prioritized_over_queued_segment_ack() {
         }),
     )
     .await;
-    release_first_send.notify_waiters();
+    first_send.release_sends(1);
 
     tokio::time::timeout(Duration::from_secs(1), handle)
         .await
@@ -234,22 +238,15 @@ async fn client_abort_is_prioritized_over_queued_segment_ack() {
         "queued SegmentACK must not advance after client Abort"
     );
     assert!(
-        !seg_ack_senders.lock().await.contains_key(&key),
+        !seg_ack_senders.lock().contains_key(&key),
         "SegmentAck sender entry should be removed after prioritized client Abort"
     );
 }
 
 #[tokio::test]
 async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let first_send_started = Arc::new(Notify::new());
-    let release_first_send = Arc::new(Notify::new());
-    let network = Arc::new(NetworkLayer::new(BlockingSendTransport::new(
-        StdArc::clone(&sent),
-        Arc::clone(&first_send_started),
-        Arc::clone(&release_first_send),
-    )));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (network, sent, first_send) = blocking_first_send_network();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let source_mac = test_mac(15);
     let invoke_id = 0x4F;
@@ -259,27 +256,35 @@ async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
         let seg_send_permits = Arc::clone(&seg_send_permits);
         let source_mac = source_mac.clone();
         tokio::spawn(async move {
-            BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                source_mac.as_slice(),
-                None,
-                invoke_id,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            BACnetServer::<TestTransport>::send_segmented_complex_ack_with_options(
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: source_mac.as_slice(),
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &[0xF4; 128],
-                50,
-                None,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
                 },
+                None,
             )
             .await;
         })
     };
 
-    tokio::time::timeout(Duration::from_secs(1), first_send_started.notified())
+    tokio::time::timeout(Duration::from_secs(1), first_send.wait_blocked())
         .await
         .expect("first segment send should start");
     dispatch_test_apdu(
@@ -296,28 +301,36 @@ async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
         let seg_send_permits = Arc::clone(&seg_send_permits);
         let source_mac = source_mac.clone();
         tokio::spawn(async move {
-            BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                source_mac.as_slice(),
-                None,
-                invoke_id,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            BACnetServer::<TestTransport>::send_segmented_complex_ack_with_options(
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: source_mac.as_slice(),
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &[0xF5; 128],
-                50,
-                None,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
                 },
+                None,
             )
             .await;
         })
     };
 
     wait_for_sent_len(&sent, 2).await;
-    release_first_send.notify_waiters();
+    first_send.release_sends(1);
     tokio::time::timeout(Duration::from_secs(1), first)
         .await
         .expect("older segmented sender should be cancelled")
@@ -334,19 +347,12 @@ async fn same_key_cancel_is_prioritized_over_queued_segment_ack() {
 
 #[tokio::test]
 async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let first_send_started = Arc::new(Notify::new());
-    let release_first_send = Arc::new(Notify::new());
-    let network = Arc::new(NetworkLayer::new(BlockingSendTransport::new(
-        StdArc::clone(&sent),
-        Arc::clone(&first_send_started),
-        Arc::clone(&release_first_send),
-    )));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (network, sent, first_send) = blocking_first_send_network();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(1));
     let source_mac = test_mac(16);
     let invoke_id = 0x50;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
 
     let first = {
         let network = Arc::clone(&network);
@@ -354,52 +360,68 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
         let seg_send_permits = Arc::clone(&seg_send_permits);
         let source_mac = source_mac.clone();
         tokio::spawn(async move {
-            BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                source_mac.as_slice(),
-                None,
-                invoke_id,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            BACnetServer::<TestTransport>::send_segmented_complex_ack_with_options(
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: source_mac.as_slice(),
+                    source_network: None,
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &[0xF8; 128],
-                50,
-                None,
                 SegmentedSendOptions {
                     segment_timeout: Duration::from_millis(500),
                     max_retries: 0,
                 },
+                None,
             )
             .await;
         })
     };
 
-    tokio::time::timeout(Duration::from_secs(1), first_send_started.notified())
+    tokio::time::timeout(Duration::from_secs(1), first_send.wait_blocked())
         .await
         .expect("first segment send should start");
 
-    BACnetServer::<BlockingSendTransport>::send_segmented_complex_ack_with_options(
-        &network,
-        &seg_ack_senders,
-        &seg_send_permits,
-        source_mac.as_slice(),
-        None,
-        invoke_id,
-        ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+    BACnetServer::<TestTransport>::send_segmented_complex_ack_with_options(
+        SegmentedSendResources {
+            network: &network,
+            seg_ack_senders: &seg_ack_senders,
+            seg_send_permits: &seg_send_permits,
+        },
+        ResponseTarget {
+            source_mac: source_mac.as_slice(),
+            source_network: None,
+            route: &bacnet_network::response_route::ResponseRoute::unverified(),
+        },
+        ComplexAckParams {
+            invoke_id,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            client_max_apdu: 50,
+            client_max_segments: None,
+        },
         &[0xF9; 128],
-        50,
-        None,
         SegmentedSendOptions {
             segment_timeout: Duration::from_millis(500),
             max_retries: 0,
         },
+        None,
     )
     .await;
 
     assert_eq!(sent_count(&sent), 2);
     assert_eq!(abort_reason(&sent, 1), AbortReason::BUFFER_OVERFLOW);
     assert!(
-        seg_ack_senders.lock().await.contains_key(&key),
+        seg_ack_senders.lock().contains_key(&key),
         "rejected replacement must leave the original sender registered"
     );
 
@@ -414,71 +436,73 @@ async fn same_key_replacement_is_rejected_when_live_sender_permits_are_exhausted
         }),
     )
     .await;
-    release_first_send.notify_waiters();
+    first_send.release_sends(1);
     tokio::time::timeout(Duration::from_secs(1), first)
         .await
         .expect("original sender should terminate after client Abort")
         .expect("original sender should not panic");
     assert!(
-        !seg_ack_senders.lock().await.contains_key(&key),
+        !seg_ack_senders.lock().contains_key(&key),
         "original sender should clean up after client Abort"
     );
 }
 
 #[tokio::test]
 async fn segmented_complex_ack_rejects_new_sender_when_active_sender_limit_reached() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (network, sent) = recording_network();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
 
     {
-        let mut senders = seg_ack_senders.lock().await;
+        let mut senders = seg_ack_senders.lock();
         for idx in 0..MAX_SEG_SENDERS {
             let (handle, _segment_rx, _control_rx) = fake_segmented_send_handle(1, 2, 0);
-            senders.insert((test_mac(idx as u8), None, idx as u8), handle);
+            senders.insert((test_mac(idx as u8), None, idx as u8, None), handle);
         }
     }
 
     let source_mac = test_mac(200);
     let invoke_id = 0x60;
-    BACnetServer::<RecordingTransport>::send_segmented_complex_ack(
-        &network,
-        &seg_ack_senders,
-        &seg_send_permits,
-        source_mac.as_slice(),
-        None,
-        invoke_id,
-        ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+    BACnetServer::<TestTransport>::send_segmented_complex_ack(
+        SegmentedSendResources {
+            network: &network,
+            seg_ack_senders: &seg_ack_senders,
+            seg_send_permits: &seg_send_permits,
+        },
+        ResponseTarget {
+            source_mac: source_mac.as_slice(),
+            source_network: None,
+            route: &bacnet_network::response_route::ResponseRoute::unverified(),
+        },
+        ComplexAckParams {
+            invoke_id,
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            client_max_apdu: 50,
+            client_max_segments: None,
+        },
         &[0xF6; 128],
-        50,
         None,
     )
     .await;
 
     assert_eq!(sent_count(&sent), 1);
     assert_eq!(abort_reason(&sent, 0), AbortReason::BUFFER_OVERFLOW);
-    assert_eq!(seg_ack_senders.lock().await.len(), MAX_SEG_SENDERS);
+    assert_eq!(seg_ack_senders.lock().len(), MAX_SEG_SENDERS);
 }
 
 #[tokio::test]
 async fn dispatch_returns_when_segment_ack_queue_is_full() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (network, _sent) = recording_network();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(13);
     let invoke_id = 0x4D;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let (handle, _rx, _control_rx) = fake_segmented_send_handle(1, 2, 0);
     handle
         .segment_ack_tx
         .try_send(segment_ack(invoke_id, false, 0))
         .expect("test queue should accept one SegmentACK");
-    seg_ack_senders.lock().await.insert(key, handle);
+    seg_ack_senders.lock().insert(key, handle);
 
     tokio::time::timeout(
         Duration::from_millis(50),
@@ -495,20 +519,17 @@ async fn dispatch_returns_when_segment_ack_queue_is_full() {
 
 #[tokio::test]
 async fn dispatch_client_abort_not_blocked_by_full_segment_ack_queue() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (network, _sent) = recording_network();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(14);
     let invoke_id = 0x4E;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let (handle, _rx, mut control_rx) = fake_segmented_send_handle(1, 2, 0);
     handle
         .segment_ack_tx
         .try_send(segment_ack(invoke_id, false, 0))
         .expect("test queue should accept one SegmentACK");
-    seg_ack_senders.lock().await.insert(key, handle);
+    seg_ack_senders.lock().insert(key, handle);
 
     tokio::time::timeout(
         Duration::from_millis(50),
@@ -542,20 +563,17 @@ async fn dispatch_client_abort_not_blocked_by_full_segment_ack_queue() {
 
 #[tokio::test]
 async fn same_key_replacement_does_not_wait_for_full_old_queue() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (network, sent) = recording_network();
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let source_mac = test_mac(15);
     let invoke_id = 0x4F;
-    let key: SegKey = (source_mac.clone(), None, invoke_id);
+    let key: SegKey = (source_mac.clone(), None, invoke_id, None);
     let (old_handle, _old_rx, mut old_control_rx) = fake_segmented_send_handle(1, 2, 0);
     old_handle
         .segment_ack_tx
         .try_send(segment_ack(invoke_id, false, 0))
         .expect("test queue should accept one SegmentACK");
-    seg_ack_senders.lock().await.insert(key, old_handle);
+    seg_ack_senders.lock().insert(key, old_handle);
 
     let replacement = spawn_segmented_complex_ack_with_options(
         Arc::clone(&network),

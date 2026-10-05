@@ -93,12 +93,12 @@ async fn hub_drops_npdu_above_own_capacity_before_relay() {
 async fn node_and_hub_advertise_distinct_full_message_and_npdu_capacities() {
     use crate::port::TransportPort;
     let (mut server, node) = initiating_pair().await;
-    let mut transport = crate::sc::ScTransport::new(node, [0x22; 6]);
+    let mut transport = crate::sc::ScTransport::new(node, [0x22; 6]).with_device_uuid([1; 16]);
     let accept = async {
         let Message::Binary(wire) = server.next().await.unwrap().unwrap() else {
             panic!("expected ConnectRequest")
         };
-        assert_eq!(&wire[26..30], &[0x16, 0x49, 0x05, 0xc4]); // 5705 full BVLC, 1476 NPDU
+        assert_eq!(&wire[26..30], &[0x16, 0x49, 0x05, 0xc6]); // 5705 full BVLC, 1478 NPDU
         let mut reply = wire.to_vec();
         reply[0] = 7;
         reply[4..10].fill(0x10);
@@ -132,7 +132,7 @@ async fn initiating_runtime_limits_remain_mutable_below_adapter_ceiling() {
     use crate::port::TransportPort;
     use std::time::Duration;
     let (mut server, node) = initiating_pair().await;
-    let mut transport = crate::sc::ScTransport::new(node, [0x22; 6]);
+    let mut transport = crate::sc::ScTransport::new(node, [0x22; 6]).with_device_uuid([1; 16]);
     let accept = async {
         let Message::Binary(wire) = server.next().await.unwrap().unwrap() else {
             panic!("expected ConnectRequest")

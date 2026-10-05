@@ -1,11 +1,15 @@
-//! Explicit, synchronous persistence for one AuditLog object.
+//! Explicit persistence for one AuditLog object. The object calls it from its
+//! writer thread, never under the database guard ([`crate::durable`]).
 
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
 use bacnet_encoding::constructed::{decode_audit_log_record, encode_audit_log_record};
-use bacnet_types::constructed::BACnetAuditLogRecordResult;
+use bacnet_types::bitstring::LogStatus;
+use bacnet_types::constructed::{
+    BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
@@ -19,7 +23,12 @@ pub const MAX_AUDIT_RECORDS: u32 = 10_000;
 
 const MAGIC: &[u8; 8] = b"RBALOG01";
 const SCHEMA_VERSION_V1: u16 = 1;
-const SCHEMA_VERSION: u16 = 2;
+/// Adds completed receipts. Like v1, it holds log-status records in the
+/// reversed bit order of releases up to 0.11.0.
+const SCHEMA_VERSION_V2: u16 = 2;
+/// Holds log-status records in the bit0-first order of every BACnet bit
+/// string.
+const SCHEMA_VERSION: u16 = 3;
 const HEADER_LEN: usize = 8 + 2 + 4 + 8 + 4;
 const TRAILER_LEN: usize = 4;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
@@ -32,7 +41,8 @@ pub struct AuditLogSnapshot {
     pub object_identifier: ObjectIdentifier,
     /// Nonzero two-slot snapshot generation.
     pub generation: u64,
-    /// Persisted ring-buffer capacity.
+    /// Persisted ring-buffer capacity: Buffer_Size, as configured or last
+    /// written.
     pub capacity: u32,
     /// Persisted Enable policy.
     pub log_enable: bool,
@@ -45,6 +55,10 @@ pub struct AuditLogSnapshot {
 }
 
 /// Application-owned persistence port for one AuditLog object.
+///
+/// The object calls it from its writer thread, one call at a time. A commit
+/// lands in storage a moment before the log serves it: see [storage leads
+/// the served state](crate::durable#storage-leads-the-served-state).
 pub trait AuditLogPersistence: Send + Sync {
     /// Load the newest valid compatible snapshot, or `None` if neither slot exists.
     fn load(&self, expected_object: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error>;
@@ -55,9 +69,11 @@ pub trait AuditLogPersistence: Send + Sync {
 
 /// Two-slot, versioned and checksummed file snapshot backend.
 ///
-/// Each commit fully writes and synchronizes one slot. This protects the
-/// previous valid slot from a failed commit, but does not provide multi-process
-/// coordination or stronger portable power-loss guarantees than `sync_all`.
+/// Each commit fully writes and synchronizes one slot, and the first commit to
+/// a slot also synchronizes its directory (on Unix; see
+/// [`durable`](crate::durable)). This protects the previous valid slot from a
+/// failed commit, but does not provide multi-process coordination or stronger
+/// portable power-loss guarantees than `sync_all`.
 #[derive(Clone, Debug)]
 pub struct FileAuditLogPersistence {
     slot_paths: [PathBuf; 2],
@@ -119,11 +135,12 @@ impl AuditLogPersistence for FileAuditLogPersistence {
             std::fs::create_dir_all(parent)?;
         }
 
-        let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                OpenOptions::new().write(true).truncate(true).open(path)?
-            }
+        let (mut file, created) = match OpenOptions::new().write(true).create_new(true).open(path) {
+            Ok(file) => (file, true),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => (
+                OpenOptions::new().write(true).truncate(true).open(path)?,
+                false,
+            ),
             Err(error) => return Err(error.into()),
         };
         if let Err(error) = file.write_all(&bytes) {
@@ -133,6 +150,12 @@ impl AuditLogPersistence for FileAuditLogPersistence {
         if let Err(error) = file.sync_all() {
             invalidate_failed_slot(&file);
             return Err(error.into());
+        }
+        // A slot this commit created exists only once its directory entry is
+        // durable too. The commit has landed by now, so a sync that fails is
+        // logged rather than failing it.
+        if created {
+            crate::durable::sync_parent_dir(path);
         }
         Ok(())
     }
@@ -238,7 +261,10 @@ fn read_slot_inner(
 
     verify_snapshot_integrity(&data).map_err(SlotReadFailure::Recoverable)?;
     let version = u16::from_be_bytes(data[8..10].try_into().unwrap());
-    if !matches!(version, SCHEMA_VERSION_V1 | SCHEMA_VERSION) {
+    if !matches!(
+        version,
+        SCHEMA_VERSION_V1 | SCHEMA_VERSION_V2 | SCHEMA_VERSION
+    ) {
         return Err(SlotReadFailure::Fatal(Error::Encoding(format!(
             "AuditLog snapshot schema version {version} is unsupported"
         ))));
@@ -302,6 +328,14 @@ pub(super) fn encode_snapshot_v1(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>,
     encode_snapshot_for_version(snapshot, SCHEMA_VERSION_V1)
 }
 
+/// Encode `snapshot` under the schema-v2 header. The records are encoded as
+/// today's codec does, so a test reproduces a 0.11.0 file by handing it the
+/// log statuses that encode to the old octets.
+#[cfg(test)]
+pub(super) fn encode_snapshot_v2(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
+    encode_snapshot_for_version(snapshot, SCHEMA_VERSION_V2)
+}
+
 fn encode_snapshot_for_version(
     snapshot: &AuditLogSnapshot,
     version: u16,
@@ -336,7 +370,7 @@ fn encode_snapshot_for_version(
         payload.extend_from_slice(&(record.len() as u32).to_be_bytes());
         payload.extend_from_slice(&record);
     }
-    if version == SCHEMA_VERSION {
+    if version != SCHEMA_VERSION_V1 {
         receipt_codec::encode(&snapshot.completed_receipts, &mut payload)?;
     }
     let total_len = HEADER_LEN
@@ -407,9 +441,13 @@ fn decode_verified_snapshot(
             )));
         }
         let record_data = take(payload, &mut offset, record_len, "record")?;
+        let mut record = decode_audit_log_record(record_data)?;
+        if version != SCHEMA_VERSION {
+            restore_pre_v3_log_status(&mut record);
+        }
         records.push(BACnetAuditLogRecordResult {
             sequence_number,
-            record: decode_audit_log_record(record_data)?,
+            record,
         });
     }
     let completed_receipts = if version == SCHEMA_VERSION_V1 {
@@ -436,6 +474,20 @@ fn decode_verified_snapshot(
     Ok(snapshot)
 }
 
+/// Recover the log status a v1 or v2 snapshot meant to store.
+///
+/// Up to 0.11.0 the encoder shifted the three status bits up by five, so
+/// log-disabled (bit 0) landed on the `0x20` bit that belongs to
+/// log-interrupted, and log-interrupted on `0x80`. Today's decoder reads
+/// that octet bit0-first, which yields the intended three bits in reverse
+/// order: reversing them once more restores the record. Other records are
+/// left as they are.
+fn restore_pre_v3_log_status(record: &mut BACnetAuditLogRecord) {
+    if let BACnetAuditLogDatum::LogStatus(status) = &mut record.datum {
+        *status = LogStatus::from_bits_truncate(status.bits().reverse_bits() >> 5);
+    }
+}
+
 pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error> {
     if snapshot.generation == 0 {
         return Err(Error::OutOfRange(
@@ -456,10 +508,9 @@ pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error
         )));
     }
     receipt::validate_receipts(&snapshot.completed_receipts)?;
+    // A counted log may hold no records: one grown from Buffer_Size 0 keeps
+    // its count with an empty ring (#1238).
     if (snapshot.total_record_count == 0 && !snapshot.records.is_empty())
-        || (snapshot.total_record_count != 0
-            && snapshot.capacity != 0
-            && snapshot.records.is_empty())
         || snapshot
             .records
             .last()
@@ -506,7 +557,7 @@ pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error
             )));
         }
     }
-    // An empty ledger contributes no projected bytes here so every valid
+    // An empty receipt list contributes no projected bytes here so every valid
     // schema-v1 snapshot remains loadable. The v2 encoder's final concrete
     // length check still includes its four-byte zero count.
     let receipt_len = if snapshot.completed_receipts.is_empty() {

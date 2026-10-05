@@ -2,8 +2,8 @@ use super::device_bindings::{
     DeviceBindingTable, ObservationOutcome, MAX_DEVICE_BINDINGS, OBSERVED_BINDING_TTL,
 };
 use super::event_recipient_routing_tests::{
-    destination_for, distribute_from_database_with_bindings, npdu_destination,
-    LITERAL_BROADCAST_MAC,
+    destination_for, distribute_counted, distribute_from_database_with_bindings, npdu_destination,
+    split_who_is, LITERAL_BROADCAST_MAC,
 };
 use super::*;
 use bacnet_objects::analog::AnalogInputObject;
@@ -22,10 +22,12 @@ fn binding_database(recipients: &[(ObjectIdentifier, bool)]) -> ObjectDatabase {
     let mut db = clocked_test_database();
     let mut class = NotificationClass::new(0, "NC-0").unwrap();
     for (identifier, confirmed) in recipients {
-        class.add_destination(destination_for(
-            BACnetRecipient::Device(*identifier),
-            *confirmed,
-        ));
+        class
+            .add_destination(destination_for(
+                BACnetRecipient::Device(*identifier),
+                *confirmed,
+            ))
+            .unwrap();
     }
     db.add(Box::new(class)).unwrap();
     db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))
@@ -138,18 +140,32 @@ async fn unknown_stale_invalid_and_capacity_rejected_devices_emit_zero_frames() 
         ObservationOutcome::Refreshed
     );
 
-    let (broadcasts, unicasts) = distribute(
-        &[
+    let (broadcasts, unicasts, counters) = distribute_counted(
+        binding_database(&[
             (unknown, false),
             (stale, false),
             (invalid, false),
             (rejected, false),
-        ],
-        table,
+        ]),
+        Arc::new(RwLock::new(table)),
+        DccState::Enable,
     )
     .await;
+    // The three unbound Devices are looked for, each with one Who-Is
+    // (#1368); none answers, and no notification goes anywhere.
+    let (who_is, broadcasts) = split_who_is(broadcasts);
+    assert_eq!(who_is.len(), 3);
     assert!(broadcasts.is_empty());
     assert!(unicasts.is_empty());
+    // A Device the full table refused is as unbound as one never seen (#1160).
+    assert_eq!(
+        counters,
+        EventNotificationCounters {
+            device_recipient_unbound: 3,
+            recipient_unroutable: 1,
+            ..Default::default()
+        }
+    );
 }
 
 #[tokio::test]
@@ -160,6 +176,9 @@ async fn mixed_valid_and_unresolved_device_recipients_preserve_valid_delivery() 
         .insert_configured(DeviceBinding::local(valid, LOCAL_PEER).unwrap(), |_| false)
         .unwrap();
     let (broadcasts, unicasts) = distribute(&[(device(51), false), (valid, false)], table).await;
+    // Device 51 is looked for with one Who-Is (#1368).
+    let (who_is, broadcasts) = split_who_is(broadcasts);
+    assert_eq!(who_is.len(), 1);
     assert!(broadcasts.is_empty());
     assert_eq!(unicasts.len(), 1);
     assert_eq!(unicasts[0].0.as_slice(), LOCAL_PEER);

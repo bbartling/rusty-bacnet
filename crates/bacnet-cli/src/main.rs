@@ -1,7 +1,10 @@
 //! BACnet command-line tool.
 //!
 //! Running `bacnet` with no arguments or with the `shell` subcommand launches
-//! an interactive REPL. Subcommands can also be used directly for scripting.
+//! an interactive REPL, and `bacnet tui` opens the full-screen terminal UI
+//! (with the opt-in `tui` feature).
+//! Subcommands can also be used directly for scripting.
+#![allow(clippy::print_stdout, clippy::print_stderr)] // a command-line tool prints its results
 
 use std::{io::IsTerminal, net::Ipv4Addr};
 
@@ -11,6 +14,7 @@ use clap::Parser;
 
 mod args;
 mod commands;
+mod core;
 #[allow(dead_code)] // Public API consumed by capture command handler (Task 4).
 mod decode;
 mod output;
@@ -20,11 +24,14 @@ mod session;
 mod shell;
 mod timestamp;
 mod transport;
+#[cfg(feature = "tui")]
+mod tui;
 
+use crate::core::range::parse_discover_range;
 use args::{Cli, Command};
 use output::OutputFormat;
 
-fn setup_tracing(verbosity: u8) {
+fn setup_tracing(verbosity: u8, sc: bool) {
     use tracing_subscriber::EnvFilter;
     let filter = match verbosity {
         0 => "warn",
@@ -32,10 +39,15 @@ fn setup_tracing(verbosity: u8) {
         2 => "debug",
         _ => "trace",
     };
-    tracing_subscriber::fmt()
+    let subscriber = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(filter))
-        .with_target(false)
-        .init();
+        .with_target(false);
+    if sc {
+        // SC close/handshake diagnostics must not corrupt a JSON result.
+        subscriber.with_writer(std::io::stderr).init();
+    } else {
+        subscriber.init();
+    }
 }
 
 fn resolve_format(cli: &Cli) -> OutputFormat {
@@ -88,7 +100,7 @@ async fn execute_command<T: TransportPort + 'static>(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
-        Command::Shell => unreachable!(),
+        Command::Shell | Command::Tui { .. } => unreachable!(),
         Command::Discover {
             range,
             wait,
@@ -102,7 +114,7 @@ async fn execute_command<T: TransportPort + 'static>(
                     "--bbmd requires BACnet/IP transport (do not use --sc or --ipv6)".into(),
                 );
             }
-            let (low, high) = parse_discover_range(range.as_deref())?;
+            let range = parse_discover_range(range.as_deref())?;
             if let Some(target_str) = target {
                 let mac = resolve::parse_target(target_str)
                     .and_then(|t| match t {
@@ -110,13 +122,12 @@ async fn execute_command<T: TransportPort + 'static>(
                         _ => Err("--target requires an IP address, not a device instance or routed address".into()),
                     })
                     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-                commands::discover::discover_directed(client, &mac, low, high, *wait, format)
-                    .await?;
+                commands::discover::discover_directed(client, &mac, range, *wait, format).await?;
             } else if let Some(network) = dnet {
-                commands::discover::discover_network(client, *network, low, high, *wait, format)
+                commands::discover::discover_network(client, *network, range, *wait, format)
                     .await?;
             } else {
-                commands::discover::discover(client, low, high, *wait, format).await?;
+                commands::discover::discover(client, range, *wait, format).await?;
             }
         }
         Command::Find { name, wait } => match name {
@@ -165,12 +176,14 @@ async fn execute_command<T: TransportPort + 'static>(
             commands::write::write_property_cmd(
                 client,
                 &mac,
-                object_type,
-                instance,
-                prop,
-                index,
-                val,
-                pri,
+                commands::write::WritePropertyArgs {
+                    object_type,
+                    instance,
+                    property: prop,
+                    index,
+                    value: val,
+                    priority: pri,
+                },
                 format,
             )
             .await?;
@@ -236,10 +249,12 @@ async fn execute_command<T: TransportPort + 'static>(
                 client,
                 &mac,
                 *file_instance,
-                *access,
-                *start,
-                *count,
-                output.as_deref(),
+                commands::file::FileReadOptions {
+                    access: *access,
+                    start_position: *start,
+                    count: *count,
+                    output_path: output.as_deref(),
+                },
                 format,
             )
             .await?;
@@ -279,12 +294,14 @@ async fn execute_command<T: TransportPort + 'static>(
             commands::device::acknowledge_alarm_cmd(
                 client,
                 &mac,
-                object_type,
-                instance,
-                *state,
-                source,
-                timestamp.clone(),
-                ack_time.clone(),
+                commands::device::AcknowledgeAlarmArgs {
+                    object_type,
+                    instance,
+                    event_state: bacnet_types::enums::EventState::from_raw(*state),
+                    source,
+                    timestamp: timestamp.clone(),
+                    time_of_acknowledgment: ack_time.clone(),
+                },
                 format,
             )
             .await?;
@@ -297,7 +314,7 @@ async fn execute_command<T: TransportPort + 'static>(
             let mac = resolve_target_mac(client, target).await?;
             let (object_type, instance) = parse::parse_object_specifier(object)?;
             let (prop, index) = parse::parse_property(property)?;
-            commands::read::read_range_cmd(
+            commands::read_range::read_range_cmd(
                 client,
                 &mac,
                 object_type,
@@ -331,30 +348,6 @@ async fn execute_command<T: TransportPort + 'static>(
     Ok(())
 }
 
-/// Parse a discover range string like "1000-2000" into (low, high).
-fn parse_discover_range(
-    range: Option<&str>,
-) -> Result<(Option<u32>, Option<u32>), Box<dyn std::error::Error>> {
-    if let Some(r) = range {
-        if let Some((lo, hi)) = r.split_once('-') {
-            let low = lo
-                .parse::<u32>()
-                .map_err(|_| format!("invalid range low: '{lo}'"))?;
-            let high = hi
-                .parse::<u32>()
-                .map_err(|_| format!("invalid range high: '{hi}'"))?;
-            if low > high {
-                return Err(format!("invalid range: low ({low}) > high ({high})").into());
-            }
-            Ok((Some(low), Some(high)))
-        } else {
-            Err(format!("invalid range format: '{r}', expected 'low-high'").into())
-        }
-    } else {
-        Ok((None, None))
-    }
-}
-
 /// Try to execute a BIP-specific BBMD management command.
 /// Returns `Ok(true)` if handled, `Ok(false)` if not a BIP-specific command.
 async fn execute_bip_command(
@@ -381,7 +374,7 @@ async fn execute_bip_command(
             eprintln!("Registered as foreign device with BBMD: {result:?}");
             // Brief pause to allow registration to propagate.
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            let (low, high) = parse_discover_range(range.as_deref())?;
+            let range = parse_discover_range(range.as_deref())?;
             if let Some(target_str) = target {
                 let mac = resolve::parse_target(target_str)
                     .and_then(|t| match t {
@@ -389,13 +382,12 @@ async fn execute_bip_command(
                         _ => Err("--target requires an IP address, not a device instance or routed address".into()),
                     })
                     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-                commands::discover::discover_directed(client, &mac, low, high, *wait, format)
-                    .await?;
+                commands::discover::discover_directed(client, &mac, range, *wait, format).await?;
             } else if let Some(network) = dnet {
-                commands::discover::discover_network(client, *network, low, high, *wait, format)
+                commands::discover::discover_network(client, *network, range, *wait, format)
                     .await?;
             } else {
-                commands::discover::discover(client, low, high, *wait, format).await?;
+                commands::discover::discover(client, range, *wait, format).await?;
             }
         }
         Command::Bdt { target } => {
@@ -440,20 +432,66 @@ async fn run<T: TransportPort + 'static>(
 mod interface;
 use interface::pick_interface;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
-    setup_tracing(cli.verbose);
+type CliResult = Result<(), Box<dyn std::error::Error>>;
+
+// The CLI's futures are polled on the main thread, whose stack is 1 MiB on
+// Windows (8 MiB on Linux and macOS), and a debug build overflowed it on its
+// first SC command (#950). So `cli_main`'s state lives on the heap. While it
+// runs, the main thread's stack holds the box pointer, block_on's frames, and
+// the poll frames of the futures and whatever they call. This builds the
+// runtime `#[tokio::main]` would (multi-thread, every driver), without the
+// attribute's temporary of the whole future in main's own frame.
+//
+// Clap's derived parser needed more than all of that: in a debug build,
+// `Cli::parse()` took about 860 KiB of the main thread's stack on macOS, most
+// of it one 620 KiB frame (`Command::augment_subcommands`, which builds every
+// subcommand's arguments inline). So the command line is parsed on a thread of
+// its own (#953). A read or a discover then needs about 240 KiB of the main
+// thread's stack in a debug build, where it needed 860 KiB before.
+fn main() -> CliResult {
+    let cli = parse_on_large_stack(Cli::parse);
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime")
+        .block_on(boxed_cli_main(cli))
+}
+
+/// Stack for the thread that parses the command line; see `main`.
+const PARSE_STACK_BYTES: usize = 8 << 20;
+
+/// Run a clap parse on a thread with a stack of [`PARSE_STACK_BYTES`].
+///
+/// A parse that fails with `Cli::parse` prints its error or the help text and
+/// exits the process from that thread, as it would on the main thread.
+fn parse_on_large_stack<T: Send + 'static>(parse: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .name("bacnet-args".into())
+        .stack_size(PARSE_STACK_BYTES)
+        .spawn(parse)
+        .expect("spawn the command-line parser thread")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+/// Create `cli_main`'s future and move it to the heap. The full-size temporary
+/// that creating it takes is in this frame, which returns before polling
+/// starts.
+#[inline(never)]
+fn boxed_cli_main(cli: Cli) -> std::pin::Pin<Box<impl std::future::Future<Output = CliResult>>> {
+    Box::pin(cli_main(cli))
+}
+
+async fn cli_main(cli: Cli) -> CliResult {
+    if matches!(cli.command, Some(Command::Tui { .. })) {
+        // The TUI sets up its own tracing: nothing may write to the terminal
+        // while it is in raw mode. Boxed so its state stays out of this future.
+        return Box::pin(run_tui(cli)).await;
+    }
+    setup_tracing(cli.verbose, cli.sc);
     let format = resolve_format(&cli);
 
-    let ipv6_interface = cli
-        .ipv6_interface
-        .as_deref()
-        .map(|s| {
-            s.parse::<std::net::Ipv6Addr>()
-                .map_err(|e| format!("invalid --ipv6-interface address '{s}': {e}"))
-        })
-        .transpose()?;
+    let mut args = transport::TransportArgs::from_cli(&cli, Ipv4Addr::UNSPECIFIED, cli.broadcast)?;
 
     // Determine interface and broadcast address.
     // If --interface was explicitly given, use it (with the given or default broadcast).
@@ -467,22 +505,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         (Ipv4Addr::UNSPECIFIED, cli.broadcast)
     };
-
-    let args = transport::TransportArgs {
-        interface,
-        port: cli.port,
-        broadcast,
-        timeout_ms: cli.timeout,
-        sc: cli.sc,
-        sc_url: cli.sc_url.clone(),
-        sc_cert: cli.sc_cert.clone(),
-        sc_key: cli.sc_key.clone(),
-        sc_vmac: cli.sc_vmac,
-        sc_device_uuid: cli.sc_device_uuid,
-        ipv6: cli.ipv6,
-        ipv6_interface,
-        device_instance: cli.device_instance,
-    };
+    args.interface = interface;
+    args.broadcast = broadcast;
 
     // Handle capture command separately — no BACnet client needed
     if let Some(Command::Capture {
@@ -550,4 +574,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// `bacnet tui`, or the rebuild advice when the `tui` feature is off.
+async fn run_tui(cli: Cli) -> CliResult {
+    #[cfg(feature = "tui")]
+    {
+        tui::run(cli).await
+    }
+    #[cfg(not(feature = "tui"))]
+    {
+        let _ = cli;
+        eprintln!("Error: The terminal UI requires the 'tui' feature. Rebuild with:\n  cargo install bacnet-cli --features tui");
+        std::process::exit(1);
+    }
 }

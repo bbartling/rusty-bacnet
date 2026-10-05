@@ -33,13 +33,25 @@ fn read_state_text(object: &dyn BACnetObject) -> Vec<PropertyValue> {
 
 fn write_bool(object: &mut dyn BACnetObject, property: PropertyIdentifier, value: bool) {
     object
-        .write_property(property, None, PropertyValue::Boolean(value), None)
+        .write_property_from(
+            property,
+            None,
+            PropertyValue::Boolean(value),
+            None,
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
 }
 
 fn write_unsigned(object: &mut dyn BACnetObject, property: PropertyIdentifier, value: u64) {
     object
-        .write_property(property, None, PropertyValue::Unsigned(value), None)
+        .write_property_from(
+            property,
+            None,
+            PropertyValue::Unsigned(value),
+            None,
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
 }
 
@@ -136,6 +148,8 @@ macro_rules! assert_number_of_states_policy {
                 None,
             )
             .is_err());
+        // A whole State_Text write changes it (#1443), but no write naming it
+        // is taken, so it doesn't count as writable.
         assert!(!object.is_writable_property(PropertyIdentifier::NUMBER_OF_STATES));
         assert_eq!(
             read_unsigned(&object, PropertyIdentifier::NUMBER_OF_STATES),
@@ -188,19 +202,21 @@ fn msi_recomputes_range_reliability_synchronously_and_recovers() {
 fn mso_configuration_sources_are_scanned_and_dominate_invalid_present_value() {
     let mut priority = MultiStateOutputObject::new(1, "MSO-priority", 3).unwrap();
     priority
-        .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(16),
-            PropertyValue::Unsigned(3),
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(3),
+            Some(16),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     priority
-        .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(8),
-            PropertyValue::Unsigned(1),
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(1),
+            Some(8),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     priority.set_number_of_states(2).unwrap();
@@ -210,11 +226,12 @@ fn mso_configuration_sources_are_scanned_and_dominate_invalid_present_value() {
         "an invalid inactive priority slot is still a configuration error"
     );
     priority
-        .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(16),
-            PropertyValue::Unsigned(2),
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(2),
+            Some(16),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     assert_eq!(
@@ -225,11 +242,12 @@ fn mso_configuration_sources_are_scanned_and_dominate_invalid_present_value() {
     let mut default = MultiStateOutputObject::new(2, "MSO-default", 3).unwrap();
     default.set_relinquish_default(3).unwrap();
     default
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(1),
             Some(8),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     default.set_number_of_states(2).unwrap();
@@ -279,19 +297,21 @@ fn mso_configuration_sources_are_scanned_and_dominate_invalid_present_value() {
 fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent() {
     let mut priority = MultiStateValueObject::new(1, "MSV-priority", 3).unwrap();
     priority
-        .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(16),
-            PropertyValue::Unsigned(3),
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(3),
+            Some(16),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     priority
-        .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(8),
-            PropertyValue::Unsigned(1),
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(1),
+            Some(8),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     priority.set_number_of_states(2).unwrap();
@@ -300,11 +320,12 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
         Reliability::CONFIGURATION_ERROR.to_raw()
     );
     priority
-        .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(16),
-            PropertyValue::Unsigned(2),
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Unsigned(2),
+            Some(16),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     assert_eq!(
@@ -315,11 +336,12 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
     let mut default = MultiStateValueObject::new(2, "MSV-default", 3).unwrap();
     default.set_relinquish_default(3).unwrap();
     default
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Unsigned(1),
             Some(8),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     default.set_number_of_states(2).unwrap();
@@ -344,23 +366,33 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
         read_reliability(&alarms),
         Reliability::CONFIGURATION_ERROR.to_raw()
     );
-    alarms.set_alarm_values(vec![2]);
+    // The list write route funnels through the same synchronous setter: an
+    // in-range list clears the fault at once. A state past the count is
+    // refused there (#1429), so only a local change makes the fault.
+    alarms
+        .write_property(
+            PropertyIdentifier::ALARM_VALUES,
+            None,
+            PropertyValue::List(vec![PropertyValue::Unsigned(2)]),
+            None,
+        )
+        .unwrap();
     assert_eq!(
         read_reliability(&alarms),
-        Reliability::NO_FAULT_DETECTED.to_raw()
+        Reliability::NO_FAULT_DETECTED.to_raw(),
+        "the list write route must funnel through the same synchronous setter"
     );
-    alarms
+    assert!(alarms
         .write_property(
             PropertyIdentifier::ALARM_VALUES,
             None,
             PropertyValue::List(vec![PropertyValue::Unsigned(4)]),
             None,
         )
-        .unwrap();
+        .is_err());
     assert_eq!(
         read_reliability(&alarms),
-        Reliability::CONFIGURATION_ERROR.to_raw(),
-        "the list write route must funnel through the same synchronous setter"
+        Reliability::NO_FAULT_DETECTED.to_raw()
     );
 
     assert_unknown_property(alarms.read_property(PropertyIdentifier::FAULT_VALUES, None));
@@ -373,12 +405,12 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
 #[test]
 fn multistate_evaluator_recovers_only_faults_it_owns() {
     let mut msi = MultiStateInputObject::new(1, "MSI-owner", 2).unwrap();
-    msi.set_reliability_internal(Reliability::NO_SENSOR.to_raw())
+    msi.set_reliability_internal(Reliability::NO_SENSOR)
         .unwrap();
     msi.set_present_value(3);
     assert_eq!(read_reliability(&msi), Reliability::NO_SENSOR.to_raw());
 
-    msi.set_reliability_internal(Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw())
+    msi.set_reliability_internal(Reliability::MULTI_STATE_OUT_OF_RANGE)
         .unwrap();
     msi.set_present_value(3);
     msi.set_present_value(1);
@@ -388,7 +420,7 @@ fn multistate_evaluator_recovers_only_faults_it_owns() {
         "an equal numeric Reliability without ownership must not be claimed or cleared"
     );
 
-    msi.set_reliability_internal(Reliability::NO_FAULT_DETECTED.to_raw())
+    msi.set_reliability_internal(Reliability::NO_FAULT_DETECTED)
         .unwrap();
     msi.set_present_value(3);
     assert_eq!(
@@ -449,11 +481,12 @@ fn oos_and_inhibit_suppress_mutations_then_release_current_state_synchronously()
         PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
         true,
     );
-    oos.write_property(
+    oos.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Unsigned(3),
         None,
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     oos.set_number_of_states(1).unwrap();

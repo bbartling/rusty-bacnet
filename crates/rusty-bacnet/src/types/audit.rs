@@ -7,17 +7,18 @@ use bacnet_services::audit::{
 use bacnet_services::common::MAX_DECODED_ITEMS;
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
-use bacnet_types::enums::AuditOperation;
+use bacnet_types::enums::{AuditOperation, BACnetSuccessFilter};
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBool, PyBytes, PyInt, PyList, PyMapping, PyString, PyTuple};
+use pyo3::types::{PyAny, PyBool, PyList, PyMapping, PyTuple};
 
-use super::{
-    PyAuditOperation, PyBACnetTimeStamp, PyErrorClass, PyErrorCode, PyObjectIdentifier,
-    PyPropertyIdentifier,
+use super::mapping::{
+    bytes, discriminator, fixed_integer, mapping, object_identifier, optional_item, ranged_integer,
+    required_item, string, validate_keys,
 };
+use super::{PyAuditOperation, PyBACnetTimeStamp, PyErrorClass, PyErrorCode, PyPropertyIdentifier};
 
 const NOTIFICATION_REQUIRED: &[&str] = &["source_device", "operation", "target_device"];
 const NOTIFICATION_OPTIONAL: &[&str] = &[
@@ -37,127 +38,7 @@ const NOTIFICATION_OPTIONAL: &[&str] = &[
     "result",
 ];
 
-fn mapping<'a, 'py>(
-    value: &'a Bound<'py, PyAny>,
-    name: &str,
-) -> PyResult<&'a Bound<'py, PyMapping>> {
-    value
-        .cast::<PyMapping>()
-        .map_err(|_| PyTypeError::new_err(format!("{name} must be a mapping")))
-}
-
-fn validate_keys(
-    value: &Bound<'_, PyMapping>,
-    name: &str,
-    required: &[&str],
-    optional: &[&str],
-) -> PyResult<()> {
-    for key in value.keys()?.iter() {
-        if key.cast::<PyString>().is_err() {
-            return Err(PyTypeError::new_err(format!(
-                "{name} mapping keys must be strings"
-            )));
-        }
-        let key = key.extract::<String>()?;
-        if !required.contains(&key.as_str()) && !optional.contains(&key.as_str()) {
-            return Err(PyValueError::new_err(format!(
-                "{name} contains unknown key '{key}'"
-            )));
-        }
-    }
-    for &key in required {
-        if !value.contains(key)? {
-            return Err(PyValueError::new_err(format!(
-                "{name} is missing required key '{key}'"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn required_item<'py>(
-    value: &Bound<'py, PyMapping>,
-    name: &str,
-    key: &str,
-) -> PyResult<Bound<'py, PyAny>> {
-    if !value.contains(key)? {
-        return Err(PyValueError::new_err(format!(
-            "{name} is missing required key '{key}'"
-        )));
-    }
-    value.get_item(key)
-}
-
-fn optional_item<'py>(
-    value: &Bound<'py, PyMapping>,
-    key: &str,
-) -> PyResult<Option<Bound<'py, PyAny>>> {
-    if !value.contains(key)? {
-        return Ok(None);
-    }
-    let item = value.get_item(key)?;
-    Ok((!item.is_none()).then_some(item))
-}
-
-fn discriminator(value: &Bound<'_, PyMapping>, name: &str) -> PyResult<String> {
-    required_item(value, name, "kind")?
-        .extract::<String>()
-        .map_err(|_| PyValueError::new_err(format!("{name}.kind must be a valid discriminator")))
-}
-
-fn integer(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i128> {
-    if value.is_instance_of::<PyBool>() || value.cast::<PyInt>().is_err() {
-        return Err(PyTypeError::new_err(format!("{name} must be an integer")));
-    }
-    value.extract::<i128>().map_err(|_| {
-        PyValueError::new_err(format!("{name} is outside the supported integer range"))
-    })
-}
-
-fn ranged_integer(
-    value: &Bound<'_, PyAny>,
-    name: &str,
-    minimum: u64,
-    maximum: u64,
-) -> PyResult<u64> {
-    let value = integer(value, name)?;
-    if value < i128::from(minimum) || value > i128::from(maximum) {
-        return Err(PyValueError::new_err(format!(
-            "{name} must be {minimum}..={maximum}, got {value}"
-        )));
-    }
-    Ok(value as u64)
-}
-
-fn boolean(value: &Bound<'_, PyAny>, name: &str) -> PyResult<bool> {
-    if !value.is_instance_of::<PyBool>() {
-        return Err(PyTypeError::new_err(format!("{name} must be a bool")));
-    }
-    value.extract::<bool>()
-}
-
-fn string(value: &Bound<'_, PyAny>, name: &str) -> PyResult<String> {
-    if value.cast::<PyString>().is_err() {
-        return Err(PyTypeError::new_err(format!("{name} must be a str")));
-    }
-    value.extract::<String>()
-}
-
-fn bytes(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<u8>> {
-    value
-        .cast::<PyBytes>()
-        .map(|value| value.as_bytes().to_vec())
-        .map_err(|_| PyTypeError::new_err(format!("{name} must be bytes")))
-}
-
-fn object_identifier(value: &Bound<'_, PyAny>, name: &str) -> PyResult<ObjectIdentifier> {
-    value
-        .extract::<PyObjectIdentifier>()
-        .map(|value| value.to_rust())
-        .map_err(|_| PyTypeError::new_err(format!("{name} must be an ObjectIdentifier")))
-}
-
-fn recipient(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetRecipient> {
+pub(crate) fn recipient(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetRecipient> {
     let value = mapping(value, name)?;
     match discriminator(value, name)?.as_str() {
         "device" => {
@@ -182,12 +63,10 @@ fn address_mapping(value: &Bound<'_, PyMapping>, name: &str) -> PyResult<BACnetA
             "{name}.kind must be 'address', got '{kind}'"
         )));
     }
-    let network_number = ranged_integer(
+    let network_number = fixed_integer::<u16>(
         &required_item(value, name, "network_number")?,
         &format!("{name}.network_number"),
-        0,
-        u16::MAX.into(),
-    )? as u16;
+    )?;
     let mac_address = bytes(
         &required_item(value, name, "mac_address")?,
         &format!("{name}.mac_address"),
@@ -227,7 +106,7 @@ fn property_reference(value: &Bound<'_, PyAny>, name: &str) -> PyResult<AuditPro
             ))
         })?;
     let property_array_index = optional_item(value, "property_array_index")?
-        .map(|value| ranged_integer(&value, &format!("{name}.property_array_index"), 0, u64::MAX))
+        .map(|value| fixed_integer(&value, &format!("{name}.property_array_index")))
         .transpose()?;
     Ok(AuditPropertyReference {
         property_identifier,
@@ -303,16 +182,15 @@ fn notification(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAuditNot
             .map(|item| string(&item, &format!("{name}.{key}")))
             .transpose()
     };
-    let optional_unsigned = |key: &str, maximum: u64| -> PyResult<Option<u64>> {
+    let optional_u8 = |key: &str| -> PyResult<Option<u8>> {
         optional_item(value, key)?
-            .map(|item| ranged_integer(&item, &format!("{name}.{key}"), 0, maximum))
+            .map(|item| fixed_integer(&item, &format!("{name}.{key}")))
             .transpose()
     };
 
     let target_priority = optional_item(value, "target_priority")?
-        .map(|item| ranged_integer(&item, &format!("{name}.target_priority"), 1, 16))
-        .transpose()?
-        .map(|value| value as u8);
+        .map(|item| ranged_integer::<u8>(&item, &format!("{name}.target_priority"), 1..=16))
+        .transpose()?;
 
     Ok(BACnetAuditNotification {
         source_timestamp: timestamp("source_timestamp")?,
@@ -328,11 +206,11 @@ fn notification(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAuditNot
         )?,
         source_comment: optional_string("source_comment")?,
         target_comment: optional_string("target_comment")?,
-        invoke_id: optional_unsigned("invoke_id", u8::MAX.into())?.map(|value| value as u8),
-        source_user_id: optional_unsigned("source_user_id", u16::MAX.into())?
-            .map(|value| value as u16),
-        source_user_role: optional_unsigned("source_user_role", u8::MAX.into())?
-            .map(|value| value as u8),
+        invoke_id: optional_u8("invoke_id")?,
+        source_user_id: optional_item(value, "source_user_id")?
+            .map(|item| fixed_integer::<u16>(&item, &format!("{name}.source_user_id")))
+            .transpose()?,
+        source_user_role: optional_u8("source_user_role")?,
         target_device: recipient(
             &required_item(value, name, "target_device")?,
             &format!("{name}.target_device"),
@@ -379,9 +257,41 @@ pub(crate) fn audit_notification_request_from_py(
 }
 
 fn operation_flags(value: &Bound<'_, PyAny>, name: &str) -> PyResult<AuditOperationFlags> {
-    let bits = ranged_integer(value, name, 0, u64::MAX)?;
+    let bits = fixed_integer::<u64>(value, name)?;
     AuditOperationFlags::from_bits(bits)
         .map_err(|error| PyValueError::new_err(format!("{name}: {error}")))
+}
+
+/// Parse the corrected-baseline three-state success filter (RB-02, RB-20).
+///
+/// The mapping accepts the raw `BACnetSuccessFilter` values 0 (all), 1
+/// (successes-only), and 2 (failures-only) as an integer. The pre-RB-02
+/// Boolean `successful-actions-only` meaning is not accepted here: `True`
+/// used to mean successes-only and `False` meant all (see
+/// `BACnetSuccessFilter::from_legacy_bool`). Pass 1 for the old `True` and 0
+/// for the old `False`. In particular a `bool` is never accepted as an
+/// arbitrary enum integer: it raises `TypeError`, while an out-of-range
+/// integer raises `ValueError`.
+fn success_filter(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetSuccessFilter> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{name} must be 0 (all), 1 (successes-only), or 2 (failures-only) as an integer; the deprecated Boolean successful-actions-only field is not accepted (use 1 for True, 0 for False)"
+        )));
+    }
+    let raw = ranged_integer::<u8>(value, name, 0..=2).map_err(|error| {
+        if error.is_instance_of::<PyValueError>(value.py()) {
+            PyValueError::new_err(format!(
+                "{name} must be 0 (all), 1 (successes-only), or 2 (failures-only), got {}",
+                value
+                    .extract::<i128>()
+                    .map(|raw| raw.to_string())
+                    .unwrap_or_else(|_| "<non-integer>".into())
+            ))
+        } else {
+            error
+        }
+    })?;
+    Ok(BACnetSuccessFilter::from_raw(raw as u32))
 }
 
 fn query_parameters(
@@ -435,18 +345,17 @@ fn query_parameters(
                     .transpose()?,
                 target_property_identifier,
                 target_array_index: optional_item(value, "target_array_index")?
-                    .map(|item| {
-                        ranged_integer(&item, &format!("{name}.target_array_index"), 0, u64::MAX)
-                    })
+                    .map(|item| fixed_integer(&item, &format!("{name}.target_array_index")))
                     .transpose()?,
                 target_priority: optional_item(value, "target_priority")?
-                    .map(|item| ranged_integer(&item, &format!("{name}.target_priority"), 1, 16))
-                    .transpose()?
-                    .map(|value| value as u8),
+                    .map(|item| {
+                        ranged_integer::<u8>(&item, &format!("{name}.target_priority"), 1..=16)
+                    })
+                    .transpose()?,
                 operations: optional_item(value, "operations")?
                     .map(|item| operation_flags(&item, &format!("{name}.operations")))
                     .transpose()?,
-                successful_actions_only: boolean(
+                successful_actions_only: success_filter(
                     &required_item(value, name, "successful_actions_only")?,
                     &format!("{name}.successful_actions_only"),
                 )?,
@@ -484,7 +393,7 @@ fn query_parameters(
                 operations: optional_item(value, "operations")?
                     .map(|item| operation_flags(&item, &format!("{name}.operations")))
                     .transpose()?,
-                successful_actions_only: boolean(
+                successful_actions_only: success_filter(
                     &required_item(value, name, "successful_actions_only")?,
                     &format!("{name}.successful_actions_only"),
                 )?,
@@ -517,22 +426,12 @@ pub(crate) fn audit_log_query_request_from_py(
             "request.query_parameters",
         )?,
         start_at_sequence_number: optional_item(value, "start_at_sequence_number")?
-            .map(|item| {
-                ranged_integer(
-                    &item,
-                    "request.start_at_sequence_number",
-                    0,
-                    u32::MAX.into(),
-                )
-            })
-            .transpose()?
-            .map(|value| value as u32),
-        requested_count: ranged_integer(
+            .map(|item| fixed_integer(&item, "request.start_at_sequence_number"))
+            .transpose()?,
+        requested_count: fixed_integer::<u16>(
             &required_item(value, "request", "requested_count")?,
             "request.requested_count",
-            0,
-            u16::MAX.into(),
-        )? as u16,
+        )?,
     })
 }
 

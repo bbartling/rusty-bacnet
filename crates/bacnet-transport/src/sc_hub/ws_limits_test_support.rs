@@ -76,12 +76,14 @@ pub(super) async fn heartbeat(ws: &mut ClientWs, id: u16) {
     );
 }
 
-pub(super) async fn initiating_pair() -> (WebSocketStream<TlsStream>, crate::sc_tls::TlsWebSocket) {
+/// A TLS WebSocket the hub side accepted, and the node end as a [`TlsWebSocket`](crate::sc_tls::TlsWebSocket).
+pub(crate) async fn initiating_pair() -> (WebSocketStream<TlsStream>, crate::sc_tls::TlsWebSocket) {
     let tls = TestTls::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let accept = async {
         let (tcp, _) = listener.accept().await.unwrap();
+        crate::sc_tls::disable_nagle(&tcp); // as the hub's accept does
         let stream = tls.acceptor.accept(tcp).await.unwrap();
         #[allow(clippy::result_large_err)]
         tokio_tungstenite::accept_hdr_async(
@@ -100,7 +102,7 @@ pub(super) async fn initiating_pair() -> (WebSocketStream<TlsStream>, crate::sc_
     let url = format!("wss://localhost:{}", address.port());
     let (server, node) = tokio::join!(
         accept,
-        crate::sc_tls::TlsWebSocket::connect(&url, tls.client.clone())
+        crate::sc_tls::TlsWebSocket::connect(&url, tls.node.clone())
     );
     (server, node.unwrap())
 }

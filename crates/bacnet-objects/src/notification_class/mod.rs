@@ -1,44 +1,59 @@
-//! NotificationClass object per ASHRAE 135-2020 Clause 12.31.
+//! NotificationClass object: priorities, acknowledgment requirements, and recipients.
 //!
 //! # Recipient-list day/time convention
 //!
-//! `RECIPIENT_LIST` entries are `BACnetDestination` (Clause 12.15.5). The
-//! `valid_days` field is a `BACnetDaysOfWeek` bit string defined as
-//! `BIT STRING { monday(0), tuesday(1), ..., sunday(6) }` (Clause 21): **bit 0
-//! is Monday and bit 6 is Sunday** in the in-memory `u8`. Callers must build
-//! `today_bit` with the same convention (`1 << dow` where `dow = 0` on
-//! Monday). On the wire both bit strings are packed MSB-first per Clause
-//! 20.2.10 — monday(0) at `0x80` of the `valid_days` octet (`unused_bits: 1`),
-//! to-offnormal(0) at `0x80` of the `transitions` octet (`unused_bits: 5`) —
-//! via [`bacnet_types::bitstring::pack_octet`]/[`unpack_octet`], which reverse
-//! the in-memory bit0-first byte.
-//!
-//! [`unpack_octet`]: bacnet_types::bitstring::unpack_octet
+//! `RECIPIENT_LIST` entries are `BACnetDestination` notification destinations.
+//! Their `valid_days` is a [`DaysOfWeek`] (Monday first, Clause 21) and their
+//! `transitions` an [`EventTransitionBits`]. The recipient filters take the
+//! current day as a `DaysOfWeek` flag, which [`local_day_and_time`] derives.
+//! Both bit strings convert to their MSB-first Clause 20.2.10 wire octets
+//! through `to_bacnet`/`from_bacnet`.
 //!
 //! `from_time`/`to_time` are BACnet `Time` values interpreted in the device's
 //! *local* time, derived from the wall clock plus the Device object's
 //! `UTC_Offset` property (signed minutes) at the sender. A window with
 //! `to_time < from_time` (e.g. 22:00–02:00) crosses midnight and is active
-//! outside the `[from, to]` interval; see [`time_in_window`].
+//! outside the `[from, to]` interval; see `time_in_window`.
+//!
+//! # Restarts
+//!
+//! Clause 12.21.8 asks for the Recipient_List to survive a restart. A class
+//! built with [`NotificationClass::with_persistence`] saves a written list in
+//! a [`NotificationClassPersistence`] before serving it, and restores it when
+//! built again; one built with [`NotificationClass::new`] keeps the list in
+//! memory only. A written, saved list wins over the destinations the
+//! application configures with [`add_destination`], which are never saved.
+//! See the `saving` module for when saves run.
+//!
+//! [`add_destination`]: NotificationClass::add_destination
 
-use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
+use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags, Time};
-use bacnet_types::MacAddr;
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::database::ObjectDatabase;
+use crate::durable::DurableWrites;
 use crate::event::EventTransition;
 use crate::traits::BACnetObject;
 
 mod enrollment_summary;
+mod metadata;
+mod persistence;
+pub(crate) mod recipient_list;
+mod saving;
 #[doc(hidden)]
 pub use enrollment_summary::{
     resolve_enrollment_summary_class_internal, EnrollmentSummaryClassProjection,
     EnrollmentSummaryClassProjectionError,
 };
+pub use persistence::{
+    FileNotificationClassPersistence, NotificationClassPersistence, NotificationClassSnapshot,
+};
+pub use recipient_list::MAX_RECIPIENT_LIST_DESTINATIONS;
 
 /// BACnet NotificationClass object.
 ///
@@ -50,20 +65,28 @@ pub struct NotificationClass {
     name: String,
     description: String,
     status_flags: StatusFlags,
-    out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     /// The notification class number.
     pub notification_class: u32,
     /// Priority: [TO_OFFNORMAL, TO_FAULT, TO_NORMAL]. Default [255, 255, 255].
     pub priority: [u8; 3],
-    /// Ack required: [TO_OFFNORMAL, TO_FAULT, TO_NORMAL]. Default [false, false, false].
-    pub ack_required: [bool; 3],
-    /// Recipient list.
-    pub recipient_list: Vec<BACnetDestination>,
+    /// Transitions whose notifications require acknowledgment. Default empty.
+    pub ack_required: EventTransitionBits,
+    /// Recipient list, at most [`MAX_RECIPIENT_LIST_DESTINATIONS`] long.
+    recipient_list: Vec<BACnetDestination>,
+    /// Where a written Recipient_List is saved, with persistence.
+    storage: Option<saving::Storage>,
+    /// Recipient_List writes taken, so a staged write can tell whether
+    /// another came between.
+    list_writes: u64,
+    /// A write set Recipient_List, now or before a restart, so storage keeps
+    /// it and configured destinations no longer apply.
+    recipient_list_written: bool,
 }
 
 impl NotificationClass {
-    /// Create a new NotificationClass object.
+    /// Create a new NotificationClass object. Its Recipient_List is kept in
+    /// memory only; see [`with_persistence`](Self::with_persistence).
     ///
     /// The `notification_class` number defaults to the instance number.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
@@ -73,12 +96,14 @@ impl NotificationClass {
             name: name.into(),
             description: String::new(),
             status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             notification_class: instance,
             priority: [255, 255, 255],
-            ack_required: [false, false, false],
+            ack_required: EventTransitionBits::empty(),
             recipient_list: Vec::new(),
+            storage: None,
+            list_writes: 0,
+            recipient_list_written: false,
         })
     }
 
@@ -88,8 +113,39 @@ impl NotificationClass {
     }
 
     /// Add a destination to the recipient list.
-    pub fn add_destination(&mut self, dest: BACnetDestination) {
+    ///
+    /// Refuses, as a network write would, an address recipient whose MAC is
+    /// longer than [`BACnetAddress::MAX_MAC_LEN`] octets (PROPERTY /
+    /// INVALID_DATA_TYPE, #1124) and a destination past the
+    /// [`MAX_RECIPIENT_LIST_DESTINATIONS`] cap (RESOURCES /
+    /// NO_SPACE_TO_WRITE_PROPERTY).
+    ///
+    /// This configures the list the application starts with; it is not
+    /// saved. On a class [`with_persistence`](Self::with_persistence) whose
+    /// storage holds a written Recipient_List
+    /// ([`recipient_list_saved`](Self::recipient_list_saved)), the saved list
+    /// wins: the destination is checked but not added.
+    ///
+    /// [`BACnetAddress::MAX_MAC_LEN`]: bacnet_types::constructed::BACnetAddress::MAX_MAC_LEN
+    pub fn add_destination(&mut self, dest: BACnetDestination) -> Result<(), Error> {
+        recipient_list::check_added(&dest)?;
+        if self.recipient_list_saved() {
+            tracing::debug!(
+                class = %self.oid,
+                "Saved Recipient_List kept over a configured destination"
+            );
+            return Ok(());
+        }
+        if self.recipient_list.len() >= MAX_RECIPIENT_LIST_DESTINATIONS {
+            return Err(recipient_list::no_space_error());
+        }
         self.recipient_list.push(dest);
+        Ok(())
+    }
+
+    /// The Recipient_List destinations, in list order.
+    pub fn recipient_list(&self) -> &[BACnetDestination] {
+        &self.recipient_list
     }
 }
 
@@ -107,7 +163,11 @@ impl BACnetObject for NotificationClass {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Table 12-24 has no Out_Of_Service (#1064), and Clause 12.21 holds the
+        // OUT_OF_SERVICE flag FALSE.
+        if let Some(result) =
+            read_common_properties!(self, property, array_index, no_out_of_service)
+        {
             return result;
         }
         match property {
@@ -115,7 +175,7 @@ impl BACnetObject for NotificationClass {
                 ObjectType::NOTIFICATION_CLASS.to_raw(),
             )),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(0)) // normal
+                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
             }
             p if p == PropertyIdentifier::NOTIFICATION_CLASS => {
                 Ok(PropertyValue::Unsigned(self.notification_class as u64))
@@ -132,23 +192,10 @@ impl BACnetObject for NotificationClass {
                 ])),
                 _ => Err(common::invalid_array_index_error()),
             },
-            p if p == PropertyIdentifier::ACK_REQUIRED => {
-                // 3-bit bitstring: bit 0=TO_OFFNORMAL, bit 1=TO_FAULT, bit 2=TO_NORMAL
-                let mut byte: u8 = 0;
-                if self.ack_required[0] {
-                    byte |= 0x80;
-                } // bit 0 in MSB
-                if self.ack_required[1] {
-                    byte |= 0x40;
-                } // bit 1
-                if self.ack_required[2] {
-                    byte |= 0x20;
-                } // bit 2
-                Ok(PropertyValue::BitString {
-                    unused_bits: 5,
-                    data: vec![byte],
-                })
-            }
+            p if p == PropertyIdentifier::ACK_REQUIRED => Ok(PropertyValue::BitString {
+                unused_bits: 5,
+                data: vec![self.ack_required.to_bacnet()],
+            }),
             p if p == PropertyIdentifier::RECIPIENT_LIST => {
                 // Full ASN.1 framing: BACnetLIST of BACnetDestination — each
                 // entry a 7-element application-tagged SEQUENCE with the
@@ -158,7 +205,7 @@ impl BACnetObject for NotificationClass {
                 bacnet_encoding::constructed::encode_destination_list(
                     &mut buf,
                     &self.recipient_list,
-                );
+                )?;
                 Ok(PropertyValue::ApplicationData(buf.to_vec()))
             }
             _ => Err(common::unknown_property_error()),
@@ -189,62 +236,33 @@ impl BACnetObject for NotificationClass {
             if array_index.is_some() {
                 return Err(common::property_is_not_an_array_error());
             }
-            self.recipient_list = match &value {
-                // Framed wire form (Clause 12.21 BACnetLIST of
-                // BACnetDestination): strict — one malformed entry rejects
-                // the whole write.
-                PropertyValue::ApplicationData(bytes) => {
-                    match bacnet_encoding::constructed::decode_destination_list(bytes) {
-                        Ok(list) => list,
-                        Err(_) => return Err(common::invalid_data_type_error()),
-                    }
-                }
-                // Legacy flat application-tagged form (pre-#152 layout):
-                // still accepted so older internal clients keep working.
-                PropertyValue::List(entries) => {
-                    let mut new_list = Vec::with_capacity(entries.len());
-                    for entry in entries {
-                        let PropertyValue::List(fields) = entry else {
-                            return Err(common::invalid_data_type_error());
-                        };
-                        match destination_from_flat_fields(fields) {
-                            Some(dest) => new_list.push(dest),
-                            None => return Err(common::invalid_data_type_error()),
-                        }
-                    }
-                    new_list
-                }
-                _ => return Err(common::invalid_data_type_error()),
-            };
-            return Ok(());
-        }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
+            return self.write_recipient_list(value);
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        Err(common::write_access_denied_error())
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            array_index,
+        ))
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::PRIORITY,
-            PropertyIdentifier::ACK_REQUIRED,
-            PropertyIdentifier::RECIPIENT_LIST,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.expire_staged_write(now);
+        false
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
+        Some(self)
     }
 }
 
@@ -296,21 +314,20 @@ fn time_in_window(current: &Time, from: &Time, to: &Time) -> bool {
     }
 }
 
-/// Derive the local day-of-week bit and time-of-day for recipient filtering.
+/// Derive the local day of the week and time of day for recipient filtering.
 ///
 /// `utc_secs` is seconds since the Unix epoch (1970-01-01, a Thursday).
 /// `utc_offset_minutes` is the Device object's `UTC_Offset` (signed minutes
-/// west of UTC); 0 keeps UTC. The day-of-week follows
-/// `BACnetDaysOfWeek` (monday(0)..sunday(6), Clause 21): the `+3` makes
-/// Monday=0 because the epoch was a Thursday, and `today_bit = 1 << dow`
-/// uses the same convention as `valid_days`. The returned `Time` is the
-/// local time of day (hundredths are supplied by the caller via `subsec`).
-pub fn local_day_and_time(utc_secs: u64, utc_offset_minutes: i32) -> (u8, Time) {
+/// west of UTC); 0 keeps UTC. The day comes back as the single matching
+/// [`DaysOfWeek`] flag: the `+3` makes Monday day 0 because the epoch was a
+/// Thursday. The returned `Time` is the local time of day (hundredths are
+/// supplied by the caller via `subsec`).
+pub fn local_day_and_time(utc_secs: u64, utc_offset_minutes: i32) -> (DaysOfWeek, Time) {
     // BACnet UTC_Offset is signed minutes west of UTC, so local standard time
     // subtracts it. Saturation only affects values close to the Unix epoch.
     let local_secs = utc_secs.saturating_add_signed(-i64::from(utc_offset_minutes) * 60);
-    let dow = ((local_secs / 86400 + 3) % 7) as u8;
-    let today_bit = 1u8 << dow;
+    let dow = (local_secs / 86400 + 3) % 7;
+    let today = DaysOfWeek::from_bits_truncate(1 << dow);
     let day_secs = (local_secs % 86400) as u32;
     let current_time = Time {
         hour: (day_secs / 3600) as u8,
@@ -318,7 +335,7 @@ pub fn local_day_and_time(utc_secs: u64, utc_offset_minutes: i32) -> (u8, Time) 
         second: (day_secs % 60) as u8,
         hundredths: 0,
     };
-    (today_bit, current_time)
+    (today, current_time)
 }
 
 /// Resolve the NotificationClass object whose `Notification_Class` property
@@ -358,12 +375,14 @@ fn find_notification_class(
 /// Resolve the per-transition `Priority` and `Ack_Required` for an event
 /// notification from the referenced NotificationClass.
 ///
-/// Per ASHRAE 135-2020 Clause 13.2.1, the `Priority` and `Ack_Required`
+/// Per ASHRAE 135-2020 Clause 12.21, the `Priority` and `Ack_Required`
 /// projected into an `EventNotification` come from the NotificationClass
 /// referenced by the event-generating object's `Notification_Class` property,
 /// selected by the transition coordinate (TO_OFFNORMAL, TO_FAULT, or
-/// TO_NORMAL). Both properties are 3-element arrays ordered
-/// `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`.
+/// TO_NORMAL). `Priority` is a 3-element array ordered
+/// `[TO_OFFNORMAL, TO_FAULT, TO_NORMAL]`, indexed by [`EventTransition::index`];
+/// `Ack_Required` is a `BACnetEventTransitionBits` string, tested with
+/// [`EventTransition::bit_mask`].
 ///
 /// When no NotificationClass matches the given number (the object's
 /// `Notification_Class` was never configured or points at a missing class),
@@ -397,17 +416,12 @@ pub fn resolve_transition_priority_ack(
         })
         .unwrap_or(255);
 
-    // ACK_REQUIRED is a 3-bit bitstring: bit 0 (0x80) = TO_OFFNORMAL,
-    // bit 1 (0x40) = TO_FAULT, bit 2 (0x20) = TO_NORMAL.
-    let ack_required = nc
-        .read_property(PropertyIdentifier::ACK_REQUIRED, None)
-        .ok()
-        .and_then(|v| match v {
-            PropertyValue::BitString { data, .. } => data.first().copied(),
-            _ => None,
-        })
-        .map(|byte| byte & (0x80 >> idx) != 0)
-        .unwrap_or(false);
+    let ack_required = match nc.read_property(PropertyIdentifier::ACK_REQUIRED, None) {
+        Ok(PropertyValue::BitString { data, .. }) => {
+            EventTransitionBits::from_bacnet(&data).intersects(transition.bit_mask())
+        }
+        _ => false,
+    };
 
     (priority, ack_required)
 }
@@ -426,6 +440,11 @@ pub enum RecipientLookupOutcome {
     RecipientListUnavailable,
     /// The complete recipient-list value could not be decoded.
     RecipientListInvalid,
+    /// The class serves more than [`MAX_RECIPIENT_LIST_DESTINATIONS`]
+    /// destinations, which only a custom Notification Class object can do.
+    /// No destination is selected: a transition never reaches only part of a
+    /// list (#1124).
+    RecipientListTooLong,
     /// The class contains a valid list with zero configured destinations.
     NoConfiguredDestinations,
     /// Destinations are configured, but none is eligible for this selection.
@@ -438,18 +457,21 @@ pub enum RecipientLookupOutcome {
 ///
 /// This is the canonical recipient lookup API and distinguishes configuration
 /// failures from valid empty or ineligible configuration. Selection uses the
-/// configured destination's day mask, local time window, and transition mask.
-/// `today_bit` uses bit 0 for Monday through bit 6 for Sunday.
+/// configured destination's valid days, local time window, and transitions.
+/// `today` is the current local day, as [`local_day_and_time`] returns it.
 ///
 /// A malformed complete list returns
 /// [`RecipientListInvalid`](RecipientLookupOutcome::RecipientListInvalid);
-/// no decodable prefix is selected. Every non-matched outcome is fail-closed
-/// and names no implicit destination.
+/// no decodable prefix is selected. A list longer than
+/// [`MAX_RECIPIENT_LIST_DESTINATIONS`] returns
+/// [`RecipientListTooLong`](RecipientLookupOutcome::RecipientListTooLong)
+/// without decoding the destinations past the cap. Every non-matched outcome
+/// is fail-closed and names no implicit destination.
 pub fn lookup_notification_recipients(
     db: &ObjectDatabase,
     notification_class: u32,
     transition: EventTransition,
-    today_bit: u8,
+    today: DaysOfWeek,
     current_time: &Time,
 ) -> RecipientLookupOutcome {
     let Some(nc) = find_notification_class(db, notification_class) else {
@@ -459,14 +481,15 @@ pub fn lookup_notification_recipients(
     else {
         return RecipientLookupOutcome::RecipientListUnavailable;
     };
-    let Ok(destinations) = decode_destination_list_pv(&recipient_list_value) else {
-        return RecipientLookupOutcome::RecipientListInvalid;
+    let destinations = match routed_destinations(&recipient_list_value) {
+        Ok(destinations) => destinations,
+        Err(outcome) => return outcome,
     };
     if destinations.is_empty() {
         return RecipientLookupOutcome::NoConfiguredDestinations;
     }
 
-    let recipients = filter_destinations(destinations, transition, today_bit, current_time);
+    let recipients = filter_destinations(destinations, transition, today, current_time);
     if recipients.is_empty() {
         RecipientLookupOutcome::NoMatchingDestinations
     } else {
@@ -483,20 +506,15 @@ pub fn get_notification_recipients(
     db: &ObjectDatabase,
     notification_class: u32,
     transition: EventTransition,
-    today_bit: u8,
+    today: DaysOfWeek,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
-    match lookup_notification_recipients(
-        db,
-        notification_class,
-        transition,
-        today_bit,
-        current_time,
-    ) {
+    match lookup_notification_recipients(db, notification_class, transition, today, current_time) {
         RecipientLookupOutcome::Matched(recipients) => recipients,
         RecipientLookupOutcome::NotificationClassMissing
         | RecipientLookupOutcome::RecipientListUnavailable
         | RecipientLookupOutcome::RecipientListInvalid
+        | RecipientLookupOutcome::RecipientListTooLong
         | RecipientLookupOutcome::NoConfiguredDestinations
         | RecipientLookupOutcome::NoMatchingDestinations => Vec::new(),
     }
@@ -506,24 +524,19 @@ pub fn get_notification_recipients(
 ///
 /// This source-compatible wrapper delegates to
 /// [`lookup_notification_recipients`]. It preserves `None` for an invalid or
-/// undecodable complete list and `Some([])` for missing class, property-read
-/// failure, configured empty, and no-match outcomes. Successful matches return
-/// `Some(recipients)`.
+/// undecodable complete list, and a list past the cap, and `Some([])` for
+/// missing class, property-read failure, configured empty, and no-match
+/// outcomes. Successful matches return `Some(recipients)`.
 pub fn get_notification_recipients_strict(
     db: &ObjectDatabase,
     notification_class: u32,
     transition: EventTransition,
-    today_bit: u8,
+    today: DaysOfWeek,
     current_time: &Time,
 ) -> Option<Vec<(BACnetRecipient, u32, bool)>> {
-    match lookup_notification_recipients(
-        db,
-        notification_class,
-        transition,
-        today_bit,
-        current_time,
-    ) {
-        RecipientLookupOutcome::RecipientListInvalid => None,
+    match lookup_notification_recipients(db, notification_class, transition, today, current_time) {
+        RecipientLookupOutcome::RecipientListInvalid
+        | RecipientLookupOutcome::RecipientListTooLong => None,
         RecipientLookupOutcome::Matched(recipients) => Some(recipients),
         RecipientLookupOutcome::NotificationClassMissing
         | RecipientLookupOutcome::RecipientListUnavailable
@@ -532,91 +545,17 @@ pub fn get_notification_recipients_strict(
     }
 }
 
-/// Decode ONE legacy flat `Recipient_List` entry (the pre-#152
-/// application-tagged layout: seven `PropertyValue` fields in declaration
-/// order, the address recipient as
-/// `List[Unsigned network_number, OctetString mac]`).
-///
-/// Shared by the write path (where `None` aborts the whole write) and the
-/// recipient filter (where a malformed entry is skipped): the two must not
-/// grow apart again.
-fn destination_from_flat_fields(fields: &[PropertyValue]) -> Option<BACnetDestination> {
-    if fields.len() < 7 {
-        return None;
-    }
-    // [0] valid_days: BitString (7 bits, 1 unused)
-    let valid_days = match &fields[0] {
-        PropertyValue::BitString { data, .. } if !data.is_empty() => {
-            bacnet_types::bitstring::unpack_octet(data, 7)
-        }
-        _ => return None,
-    };
-    // [1] from_time
-    let from_time = match fields[1] {
-        PropertyValue::Time(t) => t,
-        _ => return None,
-    };
-    // [2] to_time
-    let to_time = match fields[2] {
-        PropertyValue::Time(t) => t,
-        _ => return None,
-    };
-    // [3] recipient: Device (ObjectIdentifier) or Address
-    // (List[Unsigned network_number, OctetString mac]).
-    let recipient = match &fields[3] {
-        PropertyValue::ObjectIdentifier(oid) => BACnetRecipient::Device(*oid),
-        PropertyValue::List(items) if items.len() == 2 => {
-            let network_number = match &items[0] {
-                PropertyValue::Unsigned(v) => *v as u16,
-                _ => return None,
-            };
-            let mac_address = match &items[1] {
-                PropertyValue::OctetString(mac) => MacAddr::from_slice(mac),
-                _ => return None,
-            };
-            BACnetRecipient::Address(BACnetAddress {
-                network_number,
-                mac_address,
-            })
-        }
-        _ => return None,
-    };
-    // [4] process_identifier
-    let process_identifier = match fields[4] {
-        PropertyValue::Unsigned(v) => u32::try_from(v).ok()?,
-        _ => return None,
-    };
-    // [5] issue_confirmed_notifications
-    let issue_confirmed_notifications = match fields[5] {
-        PropertyValue::Boolean(b) => b,
-        _ => return None,
-    };
-    // [6] transitions: BitString (3 bits, 5 unused)
-    let transitions = match &fields[6] {
-        PropertyValue::BitString { data, .. } if !data.is_empty() => {
-            bacnet_types::bitstring::unpack_octet(data, 3)
-        }
-        _ => return None,
-    };
-    Some(BACnetDestination {
-        valid_days,
-        from_time,
-        to_time,
-        recipient,
-        process_identifier,
-        issue_confirmed_notifications,
-        transitions,
-    })
-}
-
 /// Strictly decode a `RECIPIENT_LIST` property value into its destinations.
 ///
-/// Framed wire form ([`PropertyValue::ApplicationData`]): the strict
-/// `BACnetLIST of BACnetDestination` codec. Legacy flat form
-/// ([`PropertyValue::List`]): [`destination_from_flat_fields`]. Either way,
-/// the FIRST malformed destination (or trailing bytes) fails the whole
-/// decode — a prefix-tolerant walk would silently route notifications to
-/// only a subset of the configured recipients (review blocker).
+/// Only the framed wire form ([`PropertyValue::ApplicationData`]) is a
+/// Recipient_List value (#1125). The FIRST malformed destination (or trailing
+/// bytes) fails the whole decode: a prefix-tolerant walk would silently route
+/// notifications to only a subset of the configured recipients.
+///
+/// This applies no cap beyond the codec's own item limit. GetEnrollmentSummary
+/// reads membership from the list as configured; routing goes through
+/// [`routed_destinations`], which holds every class to
+/// [`MAX_RECIPIENT_LIST_DESTINATIONS`].
 pub(super) fn decode_destination_list_pv(
     value: &PropertyValue,
 ) -> Result<Vec<BACnetDestination>, Error> {
@@ -624,22 +563,28 @@ pub(super) fn decode_destination_list_pv(
         PropertyValue::ApplicationData(bytes) => {
             bacnet_encoding::constructed::decode_destination_list(bytes)
         }
-        PropertyValue::List(entries) => entries
-            .iter()
-            .map(|entry| match entry {
-                PropertyValue::List(fields) => destination_from_flat_fields(fields)
-                    .ok_or_else(|| Error::decoding(0, "Recipient_List: malformed legacy entry")),
-                _ => Err(Error::decoding(
-                    0,
-                    "Recipient_List: entry is not a field list",
-                )),
-            })
-            .collect(),
         _ => Err(Error::decoding(
             0,
-            "Recipient_List: expected framed application data or a legacy list",
+            "Recipient_List: expected framed application data",
         )),
     }
+}
+
+/// Decode a `RECIPIENT_LIST` value for routing: the framed form only, at most
+/// [`MAX_RECIPIENT_LIST_DESTINATIONS`] destinations, all or nothing (#1124).
+/// The error is the lookup outcome that names why nothing is routed.
+fn routed_destinations(
+    value: &PropertyValue,
+) -> Result<Vec<BACnetDestination>, RecipientLookupOutcome> {
+    let PropertyValue::ApplicationData(bytes) = value else {
+        return Err(RecipientLookupOutcome::RecipientListInvalid);
+    };
+    recipient_list::decode_capped(bytes).map_err(|error| match error {
+        recipient_list::CappedListError::Malformed => RecipientLookupOutcome::RecipientListInvalid,
+        recipient_list::CappedListError::PastTheCap(_) => {
+            RecipientLookupOutcome::RecipientListTooLong
+        }
+    })
 }
 
 /// Filter decoded destinations by day, time, and transition — the shared
@@ -648,15 +593,15 @@ pub(super) fn decode_destination_list_pv(
 fn filter_destinations(
     destinations: Vec<BACnetDestination>,
     transition: EventTransition,
-    today_bit: u8,
+    today: DaysOfWeek,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
     let transition_mask = transition.bit_mask();
     destinations
         .into_iter()
-        .filter(|dest| dest.valid_days & today_bit != 0)
+        .filter(|dest| dest.valid_days.intersects(today))
         .filter(|dest| time_in_window(current_time, &dest.from_time, &dest.to_time))
-        .filter(|dest| dest.transitions & transition_mask != 0)
+        .filter(|dest| dest.transitions.intersects(transition_mask))
         .map(|dest| {
             (
                 dest.recipient,
@@ -669,22 +614,22 @@ fn filter_destinations(
 
 /// Filter an encoded `RECIPIENT_LIST` property value by day, time, and transition.
 ///
-/// Parses the value as returned by `read_property(RECIPIENT_LIST)` — the
-/// framed `BACnetLIST of BACnetDestination` form, or the legacy flat form —
-/// and returns only those recipients matching the given filters. A list
-/// that fails to decode (even partially) yields NO recipients: routing
-/// fails closed rather than notifying a silently-truncated prefix of the
-/// configured destinations.
+/// Parses the value as returned by `read_property(RECIPIENT_LIST)`, the
+/// framed `BACnetLIST of BACnetDestination` form, and returns only those
+/// recipients matching the given filters. A list that fails to decode (even
+/// partially), or holds more than [`MAX_RECIPIENT_LIST_DESTINATIONS`]
+/// destinations, yields NO recipients: routing fails closed rather than
+/// notifying a silently-truncated prefix of the configured destinations.
 pub fn filter_recipient_list(
     recipient_list_value: &PropertyValue,
     transition: EventTransition,
-    today_bit: u8,
+    today: DaysOfWeek,
     current_time: &Time,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
-    let Ok(destinations) = decode_destination_list_pv(recipient_list_value) else {
+    let Ok(destinations) = routed_destinations(recipient_list_value) else {
         return Vec::new();
     };
-    filter_destinations(destinations, transition, today_bit, current_time)
+    filter_destinations(destinations, transition, today, current_time)
 }
 
 #[cfg(test)]

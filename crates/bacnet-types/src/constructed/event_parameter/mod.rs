@@ -1,5 +1,4 @@
-//! `BACnetEventParameter` — structured `Event_Parameters` CHOICE
-//! (ASHRAE 135-2020 Clause 13.5).
+//! `BACnetEventParameter` — structured `Event_Parameters` algorithm choice.
 //!
 //! See the [`BACnetEventParameter`] type for details.
 
@@ -19,31 +18,30 @@ use crate::primitives::PropertyValue;
 
 /// Algorithm tag constants for the [`BACnetEventParameter`] CHOICE.
 ///
-/// These mirror the context-tag numbers in the ASHRAE 135-2020
-/// `BACnetEventParameter ::= CHOICE` definition (Clause 13.5) and are used as
+/// These identify the `BACnetEventParameter` alternatives and are used as
 /// the leading element of the flat [`PropertyValue::List`] encoding so that an
 /// enrollment's parameters survive a complete property round trip without
 /// requiring ASN.1 context-tagged framing.
 pub mod event_parameter_tag {
-    /// `change-of-bitstring [0]`.
+    /// Tag 0: the change-of-bitstring algorithm.
     pub const CHANGE_OF_BITSTRING: u8 = 0;
-    /// `change-of-state [1]`.
+    /// Tag 1: the change-of-state algorithm.
     pub const CHANGE_OF_STATE: u8 = 1;
-    /// `change-of-value [2]`.
+    /// Tag 2: the change-of-value algorithm.
     pub const CHANGE_OF_VALUE: u8 = 2;
-    /// `command-failure [3]` (not modeled as a structured variant).
+    /// Tag 3: the command-failure algorithm, which has no structured variant.
     pub const COMMAND_FAILURE: u8 = 3;
-    /// `floating-limit [4]`.
+    /// Tag 4: the floating-limit algorithm.
     pub const FLOATING_LIMIT: u8 = 4;
-    /// `out-of-range [5]`.
+    /// Tag 5: the out-of-range algorithm.
     pub const OUT_OF_RANGE: u8 = 5;
-    /// `extended [9]`.
+    /// Tag 9: a vendor-defined algorithm (the `extended` alternative).
     pub const EXTENDED: u8 = 9;
 }
 
 /// The `cov-criteria [1] CHOICE` nested inside `change-of-value`.
 ///
-/// Per Clause 13.5 the change-of-value algorithm monitors either a bitmask or
+/// The change-of-value algorithm monitors either a bitmask or
 /// a referenced-property increment; this preserves which alternative is in
 /// use along with its payload.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,7 +60,7 @@ pub enum ChangeOfValueCriteria {
 /// Structured `Event_Parameters` for an EventEnrollment object.
 ///
 /// Models the evaluated algorithm alternatives of the `BACnetEventParameter`
-/// `CHOICE` (ASHRAE 135-2020 Clause 13.5) that this library can evaluate.
+/// `CHOICE` that this library can evaluate.
 /// Unknown or vendor-defined alternatives are preserved verbatim via
 /// [`BACnetEventParameter::Opaque`] so that values written by a remote client
 /// are never silently discarded.
@@ -84,7 +82,7 @@ pub enum BACnetEventParameter {
         time_delay: u32,
         /// `bitmask [1] BIT STRING` — bits of interest.
         bitmask: (u8, Vec<u8>),
-        /// `list-of-bitstring-values [2] SEQUENCE OF BIT STRING` — alarm values.
+        /// `list-of-bitstring-values [2]`, a list of bit strings — alarm values.
         list_of_values: Vec<(u8, Vec<u8>)>,
     },
     /// `change-of-state [1]`: report when the monitored value matches a
@@ -92,7 +90,7 @@ pub enum BACnetEventParameter {
     ChangeOfState {
         /// `time-delay [0] Unsigned` — debounce seconds.
         time_delay: u32,
-        /// `list-of-values [1] SEQUENCE OF BACnetPropertyStates` — alarm values.
+        /// `list-of-values [1]`, a list of [`BACnetPropertyStates`] — alarm values.
         list_of_values: Vec<BACnetPropertyStates>,
     },
     /// `change-of-value [2]`: report on a bitmask or increment change.
@@ -107,13 +105,16 @@ pub enum BACnetEventParameter {
     FloatingLimit {
         /// `time-delay [0] Unsigned` — debounce seconds.
         time_delay: u32,
-        /// `setpoint-reference [1] BACnetDeviceObjectPropertyReference`.
+        /// `setpoint-reference [1] BACnetDeviceObjectPropertyReference` — where
+        /// the moving setpoint is read.
         setpoint_reference: BACnetDeviceObjectPropertyReference,
-        /// `low-diff-limit [2] REAL`.
+        /// `low-diff-limit [2] REAL` — how far below the setpoint the value may
+        /// fall.
         low_diff_limit: f32,
-        /// `high-diff-limit [3] REAL`.
+        /// `high-diff-limit [3] REAL` — how far above the setpoint the value may
+        /// rise.
         high_diff_limit: f32,
-        /// `deadband [4] REAL`.
+        /// `deadband [4] REAL` — hysteresis applied on the return to normal.
         deadband: f32,
     },
     /// `out-of-range [5]`: report when the value leaves a fixed band.
@@ -133,7 +134,7 @@ pub enum BACnetEventParameter {
         vendor_id: u16,
         /// `extended-event-type [1] Unsigned`.
         extended_event_type: u32,
-        /// Encoded `parameters [2] SEQUENCE OF CHOICE` items, without the
+        /// Encoded `parameters [2]` list items (each a CHOICE), without the
         /// enclosing tag pair.
         parameters: Vec<u8>,
     },

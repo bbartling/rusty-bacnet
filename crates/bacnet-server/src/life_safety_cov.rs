@@ -5,16 +5,10 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-const POINT_PROPERTIES: [PropertyIdentifier; 5] = [
+/// The COV surface a Point and a Zone share, Tracking_Value included.
+const PROPERTIES: [PropertyIdentifier; 5] = [
     PropertyIdentifier::PRESENT_VALUE,
     PropertyIdentifier::TRACKING_VALUE,
-    PropertyIdentifier::SILENCED,
-    PropertyIdentifier::OPERATION_EXPECTED,
-    PropertyIdentifier::STATUS_FLAGS,
-];
-
-const ZONE_PROPERTIES: [PropertyIdentifier; 4] = [
-    PropertyIdentifier::PRESENT_VALUE,
     PropertyIdentifier::SILENCED,
     PropertyIdentifier::OPERATION_EXPECTED,
     PropertyIdentifier::STATUS_FLAGS,
@@ -48,6 +42,7 @@ struct ObjectSnapshot {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LifeSafetyCovSnapshots {
     objects: Vec<ObjectSnapshot>,
+    held: std::collections::HashSet<ObjectIdentifier>,
 }
 
 pub(crate) fn is_life_safety_object(object_identifier: ObjectIdentifier) -> bool {
@@ -58,11 +53,7 @@ pub(crate) fn is_life_safety_object(object_identifier: ObjectIdentifier) -> bool
 }
 
 fn properties_for(object_identifier: ObjectIdentifier) -> Option<&'static [PropertyIdentifier]> {
-    match object_identifier.object_type() {
-        ObjectType::LIFE_SAFETY_POINT => Some(&POINT_PROPERTIES),
-        ObjectType::LIFE_SAFETY_ZONE => Some(&ZONE_PROPERTIES),
-        _ => None,
-    }
+    is_life_safety_object(object_identifier).then_some(&PROPERTIES)
 }
 
 impl LifeSafetyCovSnapshots {
@@ -123,34 +114,37 @@ impl LifeSafetyCovSnapshots {
         db: &ObjectDatabase,
         object_identifiers: impl IntoIterator<Item = ObjectIdentifier>,
     ) -> Self {
-        let mut objects = Vec::new();
+        let mut snapshots = Self::default();
         for object_identifier in object_identifiers {
-            if objects
-                .iter()
-                .any(|snapshot: &ObjectSnapshot| snapshot.object_identifier == object_identifier)
-            {
-                continue;
-            }
-            let Some(properties) = properties_for(object_identifier) else {
-                continue;
-            };
-            let Some(object) = db.get(&object_identifier) else {
-                continue;
-            };
-            let values = properties
-                .iter()
-                .filter_map(|property| {
-                    object
-                        .read_property(*property, None)
-                        .ok()
-                        .map(|value| (*property, value))
-                })
-                .collect();
-            objects.push(ObjectSnapshot {
-                object_identifier,
-                values,
-            });
+            snapshots.capture(db, object_identifier);
         }
-        Self { objects }
+        snapshots
+    }
+
+    /// Add one object's pre-mutation state unless it is already held or is not
+    /// a Life Safety object.
+    pub(crate) fn capture(&mut self, db: &ObjectDatabase, object_identifier: ObjectIdentifier) {
+        let Some(properties) = properties_for(object_identifier) else {
+            return;
+        };
+        let Some(object) = db.get(&object_identifier) else {
+            return;
+        };
+        if !self.held.insert(object_identifier) {
+            return;
+        }
+        let values = properties
+            .iter()
+            .filter_map(|property| {
+                object
+                    .read_property(*property, None)
+                    .ok()
+                    .map(|value| (*property, value))
+            })
+            .collect();
+        self.objects.push(ObjectSnapshot {
+            object_identifier,
+            values,
+        });
     }
 }

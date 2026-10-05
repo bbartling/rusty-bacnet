@@ -6,7 +6,7 @@
 >
 > **Software:** macOS 26.4 | Rust 1.94.0 | Release mode | TLS provider: aws-lc-rs
 >
-> Historical localhost benchmark report. Raw current-revision artifacts are not tracked in this repository; rerun the benchmark commands below before using these numbers as evidence.
+> Historical localhost benchmark report. Raw current-revision artifacts are not tracked in this repository. The server-auth-only SC mode is retired and cannot be reproduced by current targets; retained numbers are not current performance qualification. Other commands below require fresh measurements before their results can be used as evidence.
 
 ---
 
@@ -60,9 +60,10 @@
 
 ### 1.4 BACnet/SC — TLS WebSocket (Server Auth Only)
 
-Server-auth-only SC measurements are retained as a benchmark comparison mode.
-They are not BACnet/SC mTLS conformance evidence; secure Annex AB deployments
-use TLS 1.3 with mutual TLS as shown in the mTLS benchmarks.
+Historical server-auth-only SC measurements are retained, but the `sc_latency`
+and `sc_throughput` targets and their one-way hub helpers are retired. All public
+hub startup now requires explicit trust and mutual TLS 1.3 policy. These numbers
+are neither currently reproducible comparison-mode results nor mTLS conformance evidence.
 
 #### Latency
 
@@ -80,6 +81,16 @@ use TLS 1.3 with mutual TLS as shown in the mTLS benchmarks.
 | WriteProperty | 468 µs | 4.71 ms | 47.3 ms | **~21.1 K/s** |
 
 ### 1.5 BACnet/SC — Mutual TLS (mTLS)
+
+The original `sc_mtls_latency` and `sc_mtls_throughput` targets remain unchanged.
+Strict hub/node migration checks compile them, not measure them. Node helpers now
+use `ScNodeTlsConfig` with explicit trust and matching operational credentials;
+normal TLS resumption is preserved. This local policy does not prove an arbitrary
+remote hub requests/verifies a certificate (no-request handshakes can complete,
+and resumed connections may not retransmit certificates). The known all-zero
+node UUID collision in other default-based setups remains unfixed; this is not
+full benchmark runtime or performance qualification. The numeric results below
+are historical, including SC comparisons and takeaways elsewhere in this report.
 
 #### Latency
 
@@ -223,6 +234,12 @@ SC mTLS adds negligible overhead vs server-auth-only SC — the TLS handshake do
 ## 4. Docker Cross-Network Tests
 
 > Platform: Alpine (aarch64 musl) | Docker Desktop | Static release binaries
+
+These results are historical, not performance evidence for the current secure
+Docker configuration. The standalone SC hub/device now require caller-provided
+CA/operational PEM files and explicit device VMAC/UUID; insecure flags are
+retired. Follow [Secure Docker setup](examples/docker/README.md) before starting
+the topology. Nothing automatically generates or renews credentials.
 
 ### 4.1 Topology
 
@@ -477,14 +494,12 @@ local artifacts into tracked history.
 ## 8. How to Reproduce
 
 ```bash
-# Criterion benchmarks (all 9 suites — run sequentially for accurate results)
+# Current Criterion targets (7 suites; run sequentially; SC limits above apply)
 cargo bench -p bacnet-benchmarks --bench encoding
 cargo bench -p bacnet-benchmarks --bench bip_latency
 cargo bench -p bacnet-benchmarks --bench bip_throughput
 cargo bench -p bacnet-benchmarks --bench bip6_latency
 cargo bench -p bacnet-benchmarks --bench bip6_throughput
-cargo bench -p bacnet-benchmarks --bench sc_latency
-cargo bench -p bacnet-benchmarks --bench sc_throughput
 cargo bench -p bacnet-benchmarks --bench sc_mtls_latency
 cargo bench -p bacnet-benchmarks --bench sc_mtls_throughput
 
@@ -501,7 +516,8 @@ cargo run --release -p bacnet-benchmarks --bin stress-test -- router --steps 1,3
 cargo run --release -p bacnet-benchmarks --bin stress-test -- bbmd --steps 1,3 --duration 5
 cargo run --release -p bacnet-benchmarks --bin stress-test -- whois --steps 3,10,25 --duration 5
 
-# Docker cross-network (requires Docker)
+# Docker cross-network (requires Docker and manually provisioned SC credentials;
+# see examples/docker/README.md; these commands start the FULL topology)
 cd examples/docker
 docker compose build && docker compose up -d
 docker compose exec orchestrator stress-orchestrator --duration 5

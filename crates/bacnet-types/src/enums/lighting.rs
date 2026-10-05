@@ -50,3 +50,26 @@ bacnet_enum! {
     const FADE = 1;
     const RAMP = 2;
 }
+
+// ===========================================================================
+// Color enums (Addendum 135-2020ca)
+// ===========================================================================
+
+bacnet_enum! {
+    /// BACnet colour operation: the `operation` of a `BACnetColorCommand`
+    /// (Addendum 135-2020ca, Clause 21).
+    ///
+    /// A Color object takes FADE_TO_COLOR and STOP; a Color Temperature
+    /// object takes the four CCT operations and STOP. The addendum doesn't
+    /// open the enumeration to vendors, so neither object takes any other
+    /// value.
+    pub struct ColorOperation(u32);
+
+    const NONE = 0;
+    const FADE_TO_COLOR = 1;
+    const FADE_TO_CCT = 2;
+    const RAMP_TO_CCT = 3;
+    const STEP_UP_CCT = 4;
+    const STEP_DOWN_CCT = 5;
+    const STOP = 6;
+}

@@ -136,13 +136,16 @@ async fn sc_builder_rejects_broadcast_binding_before_tls_prerequisites() {
     let identifier = ObjectIdentifier::new(ObjectType::DEVICE, 46).unwrap();
     let binding =
         DeviceBinding::local(identifier, bacnet_transport::sc_frame::BROADCAST_VMAC).unwrap();
-    let builder = BACnetServer::sc_builder().device_binding(binding).unwrap();
+    let builder = BACnetServer::sc_builder()
+        .device_uuid(super::sc_builder::TEST_DEVICE_UUID)
+        .device_binding(binding)
+        .unwrap();
 
     let Err(error) = builder.build().await else {
         panic!("invalid SC binding unexpectedly started a server");
     };
     assert!(
-        error.to_string().contains("broadcast address"),
+        error.to_string().contains("broadcast or group address"),
         "binding validation must precede TLS prerequisites: {error}"
     );
 }
@@ -251,18 +254,19 @@ async fn server_enrollment_task_evaluates_at_startup_on_its_configured_interval(
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 0.0,
         high_limit: 100.0,
         deadband: 1.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(bacnet_types::bitstring::EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -360,9 +364,9 @@ async fn server_runs_fault_detection_without_enrollment() {
 }
 
 #[tokio::test]
-async fn server_rejects_invalid_max_apdu_length() {
+async fn server_rejects_below_minimum_local_apdu_capacity() {
     let config = ServerConfig {
-        max_apdu_length: 1000,
+        max_apdu_length: 49,
         ..ServerConfig::default()
     };
     let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
@@ -371,145 +375,18 @@ async fn server_rejects_invalid_max_apdu_length() {
     assert!(result.is_err());
 }
 
-// -----------------------------------------------------------------------
-// ServerTsm unit tests
-// -----------------------------------------------------------------------
-
 fn test_mac(byte: u8) -> MacAddr {
     MacAddr::from_slice(&[127, 0, 0, byte, 0xBA, 0xC0])
-}
-
-fn test_peer(byte: u8) -> TsmPeer {
-    (test_mac(byte), None)
-}
-
-#[test]
-fn server_tsm_allocate_increments() {
-    let mut tsm = ServerTsm::new();
-    let peer = test_peer(1);
-    assert_eq!(tsm.allocate(peer.clone()).unwrap().0, 0);
-    assert_eq!(tsm.allocate(peer.clone()).unwrap().0, 1);
-    assert_eq!(tsm.allocate(peer).unwrap().0, 2);
-}
-
-#[test]
-fn server_tsm_allocate_wraps_at_255() {
-    let mut tsm = ServerTsm::new();
-    let peer = test_peer(1);
-    tsm.next_invoke_id = 255;
-    assert_eq!(tsm.allocate(peer.clone()).unwrap().0, 255);
-    assert_eq!(tsm.allocate(peer).unwrap().0, 0); // wraps
-}
-
-#[test]
-fn server_tsm_allocate_wrap_skips_active_invoke_id() {
-    let mut tsm = ServerTsm::new();
-    let peer = test_peer(1);
-
-    let (id0, _rx0) = tsm.allocate(peer.clone()).unwrap();
-    assert_eq!(id0, 0);
-
-    tsm.next_invoke_id = 0;
-    let (id1, _rx1) = tsm.allocate(peer).unwrap();
-    assert_eq!(id1, 1);
-}
-
-#[test]
-fn server_tsm_record_and_take_ack() {
-    let mut tsm = ServerTsm::new();
-    let peer = test_peer(1);
-    let (id, rx) = tsm.allocate(peer.clone()).unwrap();
-    assert!(tsm.record_result(&peer.0, peer.1.as_ref(), id, CovAckResult::Ack));
-    // Result should be delivered via the oneshot channel
-    assert_eq!(rx.blocking_recv(), Ok(CovAckResult::Ack));
-}
-
-#[test]
-fn server_tsm_record_and_take_error() {
-    let mut tsm = ServerTsm::new();
-    let peer = test_peer(1);
-    let (id, rx) = tsm.allocate(peer.clone()).unwrap();
-    assert!(tsm.record_result(&peer.0, peer.1.as_ref(), id, CovAckResult::Error));
-    // Oneshot delivers immediately
-    assert_eq!(rx.blocking_recv(), Ok(CovAckResult::Error));
-}
-
-#[test]
-fn server_tsm_record_nonexistent_is_noop() {
-    let mut tsm = ServerTsm::new();
-    // Recording a result for an ID with no receiver is a no-op
-    assert!(!tsm.record_result(&test_mac(1), None, 99, CovAckResult::Ack));
-    assert!(tsm.pending.is_empty());
-}
-
-#[test]
-fn server_tsm_remove_cleans_up() {
-    let mut tsm = ServerTsm::new();
-    let peer = test_peer(1);
-    let (id, _rx) = tsm.allocate(peer.clone()).unwrap();
-    tsm.remove(&peer, id);
-    assert!(!tsm.pending.contains_key(&(peer.0, peer.1, id)));
-}
-
-#[test]
-fn server_tsm_multiple_pending() {
-    let mut tsm = ServerTsm::new();
-    let peer = test_peer(1);
-    let (id1, rx1) = tsm.allocate(peer.clone()).unwrap();
-    let (id2, rx2) = tsm.allocate(peer.clone()).unwrap();
-    let (id3, rx3) = tsm.allocate(peer.clone()).unwrap();
-
-    assert!(tsm.record_result(&peer.0, peer.1.as_ref(), id2, CovAckResult::Error));
-    assert!(tsm.record_result(&peer.0, peer.1.as_ref(), id1, CovAckResult::Ack));
-    assert!(tsm.record_result(&peer.0, peer.1.as_ref(), id3, CovAckResult::Ack));
-
-    assert_eq!(rx2.blocking_recv(), Ok(CovAckResult::Error));
-    assert_eq!(rx1.blocking_recv(), Ok(CovAckResult::Ack));
-    assert_eq!(rx3.blocking_recv(), Ok(CovAckResult::Ack));
-}
-
-#[test]
-fn server_tsm_keys_results_by_peer() {
-    let mut tsm = ServerTsm::new();
-    let peer_a = test_peer(1);
-    let peer_b = test_peer(2);
-
-    let rx_a = tsm.register(peer_a.clone(), 7);
-    let rx_b = tsm.register(peer_b.clone(), 7);
-
-    assert!(tsm.record_result(&peer_b.0, peer_b.1.as_ref(), 7, CovAckResult::Error));
-    assert_eq!(rx_b.blocking_recv(), Ok(CovAckResult::Error));
-    assert_eq!(tsm.pending.len(), 1);
-
-    assert!(tsm.record_result(&peer_a.0, peer_a.1.as_ref(), 7, CovAckResult::Ack));
-    assert_eq!(rx_a.blocking_recv(), Ok(CovAckResult::Ack));
-    assert!(tsm.pending.is_empty());
-}
-
-#[tokio::test]
-async fn server_tsm_timeout_cleanup_removes_pending() {
-    let tsm = Arc::new(Mutex::new(ServerTsm::new()));
-    let peer = test_peer(1);
-    let (id, rx) = {
-        let mut tsm = tsm.lock().await;
-        tsm.allocate(peer.clone()).unwrap()
-    };
-
-    assert!(tokio::time::timeout(Duration::from_millis(1), rx)
-        .await
-        .is_err());
-    {
-        let mut tsm = tsm.lock().await;
-        tsm.remove(&peer, id);
-        assert!(tsm.pending.is_empty());
-    }
 }
 
 #[test]
 fn cov_ack_result_debug_and_eq() {
     // Ensure derived traits work.
     assert_eq!(CovAckResult::Ack, CovAckResult::Ack);
-    assert_ne!(CovAckResult::Ack, CovAckResult::Error);
+    assert_ne!(
+        CovAckResult::Ack,
+        CovAckResult::Error(Refusal::Abort(AbortReason::OTHER))
+    );
     let _debug = format!("{:?}", CovAckResult::Ack);
 }
 
@@ -540,30 +417,73 @@ fn segmented_transaction_key_identity_matrix() {
         mac_address: remote_a.mac_address.clone(),
     };
 
-    let routed_a = segmented_transaction_key(&router_a, Some(&remote_a), 7);
+    let routed_a = segmented_transaction_key(
+        &router_a,
+        Some(&remote_a),
+        7,
+        bacnet_transport::port::TransportProvenance::unverified(),
+    );
     assert_eq!(
         routed_a,
-        segmented_transaction_key(&router_b, Some(&remote_a), 7)
+        segmented_transaction_key(
+            &router_b,
+            Some(&remote_a),
+            7,
+            bacnet_transport::port::TransportProvenance::unverified()
+        )
     );
     assert_eq!(routed_a.0, MacAddr::new());
     assert_ne!(
         routed_a,
-        segmented_transaction_key(&router_a, Some(&remote_b), 7)
+        segmented_transaction_key(
+            &router_a,
+            Some(&remote_b),
+            7,
+            bacnet_transport::port::TransportProvenance::unverified()
+        )
     );
     assert_ne!(
         routed_a,
-        segmented_transaction_key(&router_a, Some(&other_network), 7)
+        segmented_transaction_key(
+            &router_a,
+            Some(&other_network),
+            7,
+            bacnet_transport::port::TransportProvenance::unverified()
+        )
     );
     assert_ne!(
         routed_a,
-        segmented_transaction_key(&router_a, Some(&remote_a), 8)
+        segmented_transaction_key(
+            &router_a,
+            Some(&remote_a),
+            8,
+            bacnet_transport::port::TransportProvenance::unverified()
+        )
     );
 
-    let local_a = segmented_transaction_key(&router_a, None, 7);
-    let local_b = segmented_transaction_key(&router_b, None, 7);
+    let local_a = segmented_transaction_key(
+        &router_a,
+        None,
+        7,
+        bacnet_transport::port::TransportProvenance::unverified(),
+    );
+    let local_b = segmented_transaction_key(
+        &router_b,
+        None,
+        7,
+        bacnet_transport::port::TransportProvenance::unverified(),
+    );
     assert_ne!(local_a, local_b);
     assert_ne!(local_a, routed_a);
-    assert_ne!(local_a, segmented_transaction_key(&router_a, None, 8));
+    assert_ne!(
+        local_a,
+        segmented_transaction_key(
+            &router_a,
+            None,
+            8,
+            bacnet_transport::port::TransportProvenance::unverified()
+        )
+    );
 
     for invalid in [
         NpduAddress {
@@ -579,8 +499,18 @@ fn segmented_transaction_key_identity_matrix() {
             mac_address: MacAddr::new(),
         },
     ] {
-        let key_a = segmented_transaction_key(&router_a, Some(&invalid), 7);
-        let key_b = segmented_transaction_key(&router_b, Some(&invalid), 7);
+        let key_a = segmented_transaction_key(
+            &router_a,
+            Some(&invalid),
+            7,
+            bacnet_transport::port::TransportProvenance::unverified(),
+        );
+        let key_b = segmented_transaction_key(
+            &router_b,
+            Some(&invalid),
+            7,
+            bacnet_transport::port::TransportProvenance::unverified(),
+        );
         assert_ne!(key_a, key_b);
         assert_eq!(key_a.0, router_a);
         assert_eq!(key_a.1.as_ref(), Some(&invalid));
@@ -615,17 +545,7 @@ async fn reply_tx_response_preserves_routed_npdu_destination() {
         0,
         Ipv4Addr::BROADCAST,
     )));
-    let db = Arc::new(RwLock::new(ObjectDatabase::new()));
-    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
-    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let cov_in_flight = Arc::new(Semaphore::new(1));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
-    let notification_transactions = NotificationTransactions::new();
     let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
-    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
     let config = ServerConfig::default();
     let source_mac = test_mac(1);
     let routed_source = NpduAddress {
@@ -647,19 +567,11 @@ async fn reply_tx_response_preserves_routed_npdu_destination() {
     let (tx, rx) = oneshot::channel();
 
     BACnetServer::<BipTransport>::handle_confirmed_request(
-        &db,
-        &network,
-        &cov_table,
-        &seg_ack_senders,
-        &seg_send_permits,
-        &cov_in_flight,
-        &server_tsm,
-        &notification_transactions,
+        &RequestServices {
+            ..RequestServices::for_test(Arc::clone(&network), config.clone())
+        },
         &confirmed_request_tracker,
-        &device_bindings,
-        &comm_state,
-        &dcc_timer,
-        &config,
+        &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         &source_mac,
         Some(routed_source.clone()),
         req,

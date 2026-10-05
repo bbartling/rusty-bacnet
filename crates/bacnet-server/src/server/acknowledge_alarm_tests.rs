@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::bitstring::EventTransitionBits;
 
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
@@ -17,14 +18,13 @@ fn request(oid: ObjectIdentifier, state: EventState) -> AcknowledgeAlarmRequest 
     AcknowledgeAlarmRequest {
         acknowledging_process_identifier: 71,
         event_object_identifier: oid,
-        event_state_acknowledged: state.to_raw(),
+        event_state_acknowledged: state,
         timestamp: BACnetTimeStamp::SequenceNumber(42),
         acknowledgment_source: "operator".into(),
         time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(77),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn dispatch(
     db: &Arc<RwLock<ObjectDatabase>>,
     tracker: &Arc<ConfirmedRequestTracker>,
@@ -38,14 +38,6 @@ async fn dispatch(
         0,
         Ipv4Addr::BROADCAST,
     )));
-    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
-    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let cov_in_flight = Arc::new(Semaphore::new(1));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
-    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
     let mut service_request = BytesMut::new();
     request.encode(&mut service_request).unwrap();
     let confirmed = ConfirmedRequestPdu {
@@ -63,19 +55,13 @@ async fn dispatch(
     let (tx, rx) = oneshot::channel();
 
     BACnetServer::<BipTransport>::handle_confirmed_request(
-        db,
-        &network,
-        &cov_table,
-        &seg_ack_senders,
-        &seg_send_permits,
-        &cov_in_flight,
-        &server_tsm,
-        notification_transactions,
+        &RequestServices {
+            db: Arc::clone(db),
+            notification_transactions: Arc::clone(notification_transactions),
+            ..RequestServices::for_test(Arc::clone(&network), ServerConfig::default())
+        },
         tracker,
-        &device_bindings,
-        &comm_state,
-        &dcc_timer,
-        &ServerConfig::default(),
+        &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         source_mac,
         None,
         confirmed,
@@ -89,7 +75,7 @@ async fn dispatch(
     })
 }
 
-fn acked(db: &ObjectDatabase, oid: ObjectIdentifier) -> u8 {
+fn acked(db: &ObjectDatabase, oid: ObjectIdentifier) -> EventTransitionBits {
     let PropertyValue::BitString { data, .. } = db
         .get(&oid)
         .unwrap()
@@ -98,7 +84,7 @@ fn acked(db: &ObjectDatabase, oid: ObjectIdentifier) -> u8 {
     else {
         panic!("Acked_Transitions must be a bit string");
     };
-    bacnet_types::bitstring::unpack_octet(&data, 3)
+    EventTransitionBits::from_bacnet(&data)
 }
 
 fn assert_simple_ack(apdu: Apdu, invoke_id: u8) {
@@ -171,13 +157,13 @@ async fn binary_and_multistate_families_return_simple_ack() {
         .await
         .unwrap();
         assert_simple_ack(response, invoke_id);
-        assert_eq!(acked(&*db.read().await, oid), 0b111);
+        assert_eq!(acked(&*db.read().await, oid), EventTransitionBits::all());
     }
     assert_eq!(notification_transactions.active_count(), 0);
 }
 
 #[tokio::test]
-async fn exact_duplicate_is_silent_and_new_invoke_id_is_idempotent_success() {
+async fn post_issuance_reused_and_new_invoke_ids_are_idempotent_success() {
     let mut ai = AnalogInputObject::new(1, "AI-ack", 62).unwrap();
     let oid = ai.object_identifier();
     ai.commit_event_transition_internal(EventTransitionCommit {
@@ -210,10 +196,10 @@ async fn exact_duplicate_is_silent_and_new_invoke_id_is_idempotent_success() {
     .await
     .unwrap();
     assert_simple_ack(first, 0x51);
-    assert_eq!(acked(&*db.read().await, oid), 0b111);
+    assert_eq!(acked(&*db.read().await, oid), EventTransitionBits::all());
     assert_eq!(notification_transactions.active_count(), 0);
 
-    assert!(dispatch(
+    let reused = dispatch(
         &db,
         &tracker,
         &notification_transactions,
@@ -222,8 +208,9 @@ async fn exact_duplicate_is_silent_and_new_invoke_id_is_idempotent_success() {
         &request,
     )
     .await
-    .is_err());
-    assert_eq!(acked(&*db.read().await, oid), 0b111);
+    .unwrap();
+    assert_simple_ack(reused, 0x51);
+    assert_eq!(acked(&*db.read().await, oid), EventTransitionBits::all());
 
     let new_transaction = dispatch(
         &db,
@@ -236,7 +223,7 @@ async fn exact_duplicate_is_silent_and_new_invoke_id_is_idempotent_success() {
     .await
     .unwrap();
     assert_simple_ack(new_transaction, 0x52);
-    assert_eq!(acked(&*db.read().await, oid), 0b111);
+    assert_eq!(acked(&*db.read().await, oid), EventTransitionBits::all());
     assert_eq!(notification_transactions.active_count(), 0);
 }
 

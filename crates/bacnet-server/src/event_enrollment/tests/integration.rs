@@ -30,34 +30,34 @@ fn evaluates_multiple_enrollments() {
     db.add(Box::new(ai2)).unwrap();
 
     // Two enrollments
-    let mut ee1 =
-        EventEnrollmentObject::new(80, "EE-80", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee1 = EventEnrollmentObject::new(80, "EE-80", EventType::OUT_OF_RANGE).unwrap();
     ee1.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai1_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee1.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee1.set_event_enable(0x07);
+    ee1.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee1)).unwrap();
 
-    let mut ee2 =
-        EventEnrollmentObject::new(81, "EE-81", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee2 = EventEnrollmentObject::new(81, "EE-81", EventType::OUT_OF_RANGE).unwrap();
     ee2.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai2_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee2.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee2.set_event_enable(0x07);
+    ee2.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee2)).unwrap();
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
@@ -71,19 +71,19 @@ fn missing_monitored_object_is_skipped() {
     let mut db = ObjectDatabase::new();
 
     let fake_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 999).unwrap();
-    let mut ee =
-        EventEnrollmentObject::new(90, "EE-miss", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(90, "EE-miss", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         fake_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
 
     // Should not panic or return transitions
@@ -113,19 +113,20 @@ pub(super) fn setup_qualified_reference(
 
     let reference_device_oid =
         ObjectIdentifier::new(ObjectType::DEVICE, reference_device_instance).unwrap();
-    let mut ee = EventEnrollmentObject::new(3, "EE-3", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(3, "EE-3", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_remote(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
         reference_device_oid,
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -154,27 +155,32 @@ fn foreign_reference_does_not_evaluate_same_numbered_local_object() {
             .unwrap(),
         PropertyValue::Enumerated(EventState::NORMAL.to_raw())
     );
-    let PropertyValue::List(reference) = db
-        .get(&ee_oid)
-        .unwrap()
-        .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
-        .unwrap()
-    else {
-        panic!("expected object property reference list");
-    };
+    let reference = super::super::decode_reference_value(
+        &db.get(&ee_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+            .unwrap(),
+    )
+    .expect("one framed reference");
     assert_eq!(
-        reference[3],
-        PropertyValue::ObjectIdentifier(ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap())
+        reference.device_identifier,
+        Some(ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap())
     );
 }
 
 #[test]
-fn qualified_reference_requires_one_containing_device() {
+fn qualified_reference_names_the_selected_device() {
     let (mut missing, _, _) = setup_qualified_reference(&[], 100);
     assert!(evaluate_event_enrollments(&mut missing, 1).is_empty());
 
-    let (mut ambiguous, _, _) = setup_qualified_reference(&[100, 200], 100);
-    assert!(evaluate_event_enrollments(&mut ambiguous, 1).is_empty());
+    // With two Devices the lower one is this device, as discovery and
+    // notifications already present it (#1184).
+    let (mut selected, _, ai_oid) = setup_qualified_reference(&[200, 100], 100);
+    let transitions = evaluate_event_enrollments(&mut selected, 1);
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].monitored_oid, ai_oid);
+    let (mut other, _, _) = setup_qualified_reference(&[100, 200], 200);
+    assert!(evaluate_event_enrollments(&mut other, 1).is_empty());
 
     let (mut wildcard, _, _) = setup_qualified_reference(
         &[ObjectIdentifier::WILDCARD_INSTANCE],
@@ -208,15 +214,14 @@ impl ReferenceValueObject {
         reference: Option<PropertyValue>,
         event_type: EventType,
     ) -> Self {
-        let mut inner =
-            EventEnrollmentObject::new(999, "reference-value", event_type.to_raw()).unwrap();
+        let mut inner = EventEnrollmentObject::new(999, "reference-value", event_type).unwrap();
         inner.set_event_parameters(BACnetEventParameter::OutOfRange {
             time_delay: 2,
             low_limit: 20.0,
             high_limit: 80.0,
             deadband: 2.0,
         });
-        inner.set_event_enable(0x07);
+        inner.set_event_enable(EventTransitionBits::all());
         Self {
             inner,
             reference,
@@ -282,8 +287,13 @@ impl BACnetObject for ReferenceValueObject {
             self.reference = Some(value);
             Ok(())
         } else {
-            self.inner
-                .write_property(property, array_index, value, priority)
+            self.inner.write_property_from(
+                property,
+                array_index,
+                value,
+                priority,
+                &crate::command_source::test_origin(),
+            )
         }
     }
 
@@ -350,7 +360,7 @@ impl BACnetObject for ReferenceValueObject {
 
     fn set_acked_transitions_internal(
         &mut self,
-        transition_bit: u8,
+        transition_bit: EventTransitionBits,
         acknowledged: bool,
     ) -> Result<(), bacnet_types::error::Error> {
         self.inner
@@ -390,11 +400,33 @@ impl BACnetObject for ReferenceValueObject {
 }
 
 pub(super) fn indexed_reference_value(target: ObjectIdentifier, index: u32) -> PropertyValue {
-    PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target),
-        PropertyValue::Unsigned(PropertyIdentifier::PRIORITY_ARRAY.to_raw() as u64),
-        PropertyValue::Unsigned(index as u64),
-    ])
+    reference_value(
+        target,
+        PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
+        Some(index),
+        None,
+    )
+}
+
+/// A reference as an Event Enrollment read serves it: the Clause 21
+/// encoding of a BACnetDeviceObjectPropertyReference (#1182).
+pub(super) fn reference_value(
+    target: ObjectIdentifier,
+    property: u32,
+    index: Option<u32>,
+    device: Option<ObjectIdentifier>,
+) -> PropertyValue {
+    let mut encoded = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_device_object_property_reference(
+        &mut encoded,
+        &BACnetDeviceObjectPropertyReference {
+            object_identifier: target,
+            property_identifier: property,
+            property_array_index: index,
+            device_identifier: device,
+        },
+    );
+    PropertyValue::ApplicationData(encoded.to_vec())
 }
 
 #[test]
@@ -402,11 +434,12 @@ fn failed_source_write_does_not_persist_dependent_state() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(99, "AV-failed-source", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -433,11 +466,12 @@ fn source_write_failure_still_allows_an_immediate_stateless_transition() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(100, "AV-immediate-source", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -471,19 +505,21 @@ fn failed_state_reset_clears_source_ownership() {
     let mut db = ObjectDatabase::new();
     let mut target = AnalogValueObject::new(101, "AV-state-reset", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(10.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(2),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -535,58 +571,59 @@ fn malformed_reference_shapes_do_not_become_local() {
     let target = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
     let foreign_device = ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap();
     let property = PropertyIdentifier::PRESENT_VALUE;
+    let PropertyValue::ApplicationData(good) =
+        reference_value(target, property.to_raw(), None, Some(foreign_device))
+    else {
+        unreachable!()
+    };
     let malformed = [
-        vec![
+        // The flat application-tagged form reads used to serve.
+        PropertyValue::List(vec![
             PropertyValue::ObjectIdentifier(target),
             PropertyValue::Unsigned(property.to_raw() as u64),
             PropertyValue::ObjectIdentifier(foreign_device),
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target),
-            PropertyValue::Unsigned(property.to_raw() as u64),
-            PropertyValue::Null,
-            PropertyValue::Null,
-            PropertyValue::ObjectIdentifier(foreign_device),
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target),
-            PropertyValue::Unsigned(property.to_raw() as u64),
-            PropertyValue::Boolean(false),
-            PropertyValue::Null,
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target),
-            PropertyValue::Unsigned(4_194_304),
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target),
-            PropertyValue::Unsigned(u32::MAX as u64 + 1 + property.to_raw() as u64),
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target),
-            PropertyValue::Unsigned(property.to_raw() as u64),
-            PropertyValue::Unsigned(u32::MAX as u64 + 1),
-        ],
+        ]),
+        PropertyValue::Null,
+        // The unset form an enrollment without a reference reads as (#1417):
+        // analog-input 4194303, and a reference naming Device 4194303.
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55]),
+        PropertyValue::ApplicationData([&good[..7], &[0x3C, 0x02, 0x3F, 0xFF, 0xFF][..]].concat()),
+        // Cut inside the Device member.
+        PropertyValue::ApplicationData(good[..good.len() - 1].to_vec()),
+        // A context tag [4] after the reference.
+        PropertyValue::ApplicationData([good.clone(), vec![0x49, 0x01]].concat()),
+        // Two references.
+        PropertyValue::ApplicationData([good.clone(), good.clone()].concat()),
+        // A property identifier past u32.
+        PropertyValue::ApplicationData(vec![
+            0x0C, 0x00, 0x00, 0x00, 0x03, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x55,
+        ]),
+        // An array index past u32.
+        PropertyValue::ApplicationData(vec![
+            0x0C, 0x00, 0x00, 0x00, 0x03, 0x19, 0x55, 0x2D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00,
+        ]),
     ];
 
-    for items in malformed {
-        let enrollment = ReferenceValueObject::new(Some(PropertyValue::List(items)));
+    for value in malformed {
+        let enrollment = ReferenceValueObject::new(Some(value));
         assert!(matches!(
             super::super::read_object_property_ref(&enrollment),
             Err(super::super::LocalConfigurationReadError::Malformed)
         ));
     }
 
-    let legacy = ReferenceValueObject::new(Some(PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target),
-        PropertyValue::Unsigned(property.to_raw() as u64),
-    ])));
-    assert_eq!(
-        super::super::read_object_property_ref(&legacy),
-        Ok(super::super::MonitoredReference::local(
-            target, property, None
-        ))
-    );
+    // ASHRAE assigns property identifiers above 4194303 too, such as
+    // Default_Color_Temperature (#887).
+    for property in [property, PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE] {
+        let framed =
+            ReferenceValueObject::new(Some(reference_value(target, property.to_raw(), None, None)));
+        assert_eq!(
+            super::super::read_object_property_ref(&framed),
+            Ok(super::super::MonitoredReference::local(
+                target, property, None
+            ))
+        );
+    }
 }
 
 fn stale_eval_state() -> bacnet_objects::event_enrollment::EventEnrollmentEvalState {
@@ -611,10 +648,7 @@ fn malformed_retarget_does_not_resume_stale_countdown() {
     db.add(Box::new(ai)).unwrap();
 
     let property = PropertyIdentifier::PRESENT_VALUE;
-    let valid = PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target),
-        PropertyValue::Unsigned(property.to_raw() as u64),
-    ]);
+    let valid = reference_value(target, property.to_raw(), None, None);
     let enrollment = ReferenceValueObject::new(Some(valid.clone()));
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
@@ -666,10 +700,18 @@ fn malformed_retarget_does_not_resume_stale_countdown() {
 #[test]
 fn invalid_reference_clears_before_other_property_failure() {
     let target = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
-    let mut enrollment = ReferenceValueObject::new(Some(PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target),
-        PropertyValue::Unsigned(4_194_304),
-    ])));
+    let PropertyValue::ApplicationData(good) = reference_value(
+        target,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        None,
+        None,
+    ) else {
+        unreachable!()
+    };
+    // The reference cut inside its property identifier.
+    let mut enrollment = ReferenceValueObject::new(Some(PropertyValue::ApplicationData(
+        good[..good.len() - 1].to_vec(),
+    )));
     enrollment
         .event_parameters_readable
         .store(false, Ordering::SeqCst);

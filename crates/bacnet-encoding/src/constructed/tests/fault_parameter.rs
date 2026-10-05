@@ -3,6 +3,7 @@
 
 use super::*;
 use bacnet_types::constructed::FaultParameters;
+use bacnet_types::enums::LifeSafetyState;
 
 fn round_trip(value: &FaultParameters) {
     let mut buf = BytesMut::new();
@@ -227,8 +228,12 @@ fn fault_extended_rejects_malformed_application_forms_atomically() {
 #[test]
 fn fault_life_safety_golden() {
     let value = FaultParameters::FaultLifeSafety {
-        fault_values: vec![1, 2, 3],
-        mode_for_reference: dopr_ai(1, 85),
+        fault_values: vec![
+            LifeSafetyState::PRE_ALARM,
+            LifeSafetyState::ALARM,
+            LifeSafetyState::FAULT,
+        ],
+        mode_property_reference: dopr_ai(1, 85),
     };
     let mut buf = BytesMut::new();
     encode_fault_parameters(&mut buf, &value).unwrap();
@@ -315,7 +320,7 @@ fn fault_out_of_range_alternative_tag_forms_accepted() {
         v.extend_from_slice(&[0x1F, 0x6F]);
         v
     }
-    let mut enc = |f: &dyn Fn(&mut BytesMut)| {
+    let enc = |f: &dyn Fn(&mut BytesMut)| {
         let mut b = BytesMut::new();
         f(&mut b);
         b.to_vec()
@@ -354,8 +359,13 @@ fn fault_all_modeled_alternatives_round_trip() {
         parameters: Vec::new(),
     });
     round_trip(&FaultParameters::FaultLifeSafety {
-        fault_values: vec![0, 8],
-        mode_for_reference: dopr_ai(9, 85),
+        fault_values: vec![LifeSafetyState::QUIET, LifeSafetyState::TAMPER],
+        mode_property_reference: dopr_ai(9, 85),
+    });
+    // A proprietary life-safety state survives the round trip unchanged.
+    round_trip(&FaultParameters::FaultLifeSafety {
+        fault_values: vec![LifeSafetyState::from_raw(u32::MAX)],
+        mode_property_reference: dopr_ai(9, 85),
     });
     round_trip(&FaultParameters::FaultState {
         fault_values: vec![BACnetPropertyStates::LifeSafetyState(2)],
@@ -398,4 +408,32 @@ fn fault_truncated_and_unbalanced_rejected() {
     assert!(decode_fault_parameters(&[], 0).is_err());
     // Application-tagged value where the CHOICE tag belongs.
     assert!(decode_fault_parameters(&[0x21, 0x00], 0).is_err());
+}
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    for value in [
+        FaultParameters::FaultOutOfRange {
+            min_normal: 10.0,
+            max_normal: 20.0,
+        },
+        FaultParameters::FaultState {
+            fault_values: vec![
+                BACnetPropertyStates::BooleanValue(false),
+                BACnetPropertyStates::UnsignedValue(3),
+            ],
+        },
+        FaultParameters::FaultExtended {
+            vendor_id: 42,
+            extended_fault_type: 7,
+            parameters: vec![0x61, 0x2F],
+        },
+    ] {
+        let mut octets = BytesMut::new();
+        encode_fault_parameters(&mut octets, &value).unwrap();
+        let framed = assert_members_cut_short("BACnetFaultParameter", &octets, |data| {
+            decode_fault_parameters(data, 0)
+        });
+        assert!(framed > 0, "{value:?}");
+    }
 }

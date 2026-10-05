@@ -17,6 +17,7 @@ use super::*;
 pub(super) struct MemoryPersistence {
     pub(super) snapshot: StdMutex<Option<AuditLogSnapshot>>,
     pub(super) fail: AtomicBool,
+    pub(super) commits: std::sync::atomic::AtomicUsize,
 }
 
 impl AuditLogPersistence for MemoryPersistence {
@@ -31,6 +32,7 @@ impl AuditLogPersistence for MemoryPersistence {
             )));
         }
         *self.snapshot.lock().unwrap() = Some(snapshot.clone());
+        self.commits.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 }
@@ -172,30 +174,14 @@ pub(super) async fn dispatch_confirmed(
         0,
         Ipv4Addr::BROADCAST,
     )));
-    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
-    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let cov_in_flight = Arc::new(Semaphore::new(1));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
-    let notification_transactions = NotificationTransactions::new();
-    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
     let (tx, rx) = oneshot::channel();
     BACnetServer::<BipTransport>::handle_confirmed_request(
-        db,
-        &network,
-        &cov_table,
-        &seg_ack_senders,
-        &seg_send_permits,
-        &cov_in_flight,
-        &server_tsm,
-        &notification_transactions,
+        &RequestServices {
+            db: Arc::clone(db),
+            ..RequestServices::for_test(Arc::clone(&network), config.clone())
+        },
         confirmed_request_tracker,
-        &device_bindings,
-        &comm_state,
-        &dcc_timer,
-        config,
+        &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
         source_mac,
         source_network,
         confirmed,
@@ -376,9 +362,14 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
     assert!(matches!(response, Apdu::Error(_)));
     assert_eq!(count(&db, sink).await, (0, 0));
 
-    for malformed in [
-        Bytes::from_static(b"bad"),
-        Bytes::from(vec![0; MAX_AUDIT_NOTIFICATION_BYTES + 1]),
+    // A body that doesn't decode is rejected as a syntax fault (#1446); one
+    // past the size bound is refused with an Error.
+    for (malformed, rejected) in [
+        (Bytes::from_static(b"bad"), true),
+        (
+            Bytes::from(vec![0; MAX_AUDIT_NOTIFICATION_BYTES + 1]),
+            false,
+        ),
     ] {
         let response = dispatch(
             &db,
@@ -391,7 +382,11 @@ async fn policy_decode_bounds_sink_and_persistence_fail_before_success_ack() {
         )
         .await
         .unwrap();
-        assert!(matches!(response, Apdu::Error(_)));
+        if rejected {
+            assert!(matches!(response, Apdu::Reject(_)), "{response:?}");
+        } else {
+            assert!(matches!(response, Apdu::Error(_)), "{response:?}");
+        }
         assert_eq!(count(&db, sink).await, (0, 0));
     }
 
@@ -586,3 +581,6 @@ fn sc_builder_exposes_the_same_explicit_receiver_policy() {
 
 #[path = "audit_notification_receipt_tests.rs"]
 mod receipt_tests;
+
+#[path = "audit_notification_staging_tests.rs"]
+mod staging_tests;

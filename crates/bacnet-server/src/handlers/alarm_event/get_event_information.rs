@@ -3,6 +3,12 @@
 use super::super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::enums::NotifyType;
+
+#[path = "event_information_page.rs"]
+mod page;
+pub(crate) use page::{handle_get_event_information_configured, EventInformationFailure};
 
 const EVENT_SUMMARY_SIGNATURE: [PropertyIdentifier; 6] = [
     PropertyIdentifier::EVENT_STATE,
@@ -13,111 +19,94 @@ const EVENT_SUMMARY_SIGNATURE: [PropertyIdentifier; 6] = [
     PropertyIdentifier::NOTIFICATION_CLASS,
 ];
 
-/// A complete, strictly validated snapshot of one event-initiating object.
-struct EventSummaryProjection {
-    object_identifier: ObjectIdentifier,
-    event_state: u32,
-    acknowledged_transitions: u8,
-    event_timestamps: [BACnetTimeStamp; 3],
-    notify_type: u32,
-    event_enable: u8,
-    event_priorities: [u32; 3],
-    notification_class: u32,
-}
-
 enum EventSummaryProjectionResult {
     NotEventInitiating,
     Excluded,
-    Projected(EventSummaryProjection),
+    Projected(EventSummary),
 }
 
-impl EventSummaryProjection {
-    fn read(
-        object: &dyn BACnetObject,
-        db: &ObjectDatabase,
-    ) -> Result<EventSummaryProjectionResult, Error> {
-        let advertised = object.property_list();
-        if !EVENT_SUMMARY_SIGNATURE
-            .iter()
-            .all(|property| advertised.contains(property))
-        {
-            return Ok(EventSummaryProjectionResult::NotEventInitiating);
-        }
+/// Read a complete, strictly validated event summary for one event-initiating object.
+///
+/// `Notification_Class` is not part of the summary: it only selects the
+/// Notification Class object whose `Priority` fills `event_priorities`.
+fn project_event_summary(
+    object: &dyn BACnetObject,
+    db: &ObjectDatabase,
+) -> Result<EventSummaryProjectionResult, Error> {
+    let advertised = object.property_list();
+    if !EVENT_SUMMARY_SIGNATURE
+        .iter()
+        .all(|property| advertised.contains(property))
+    {
+        return Ok(EventSummaryProjectionResult::NotEventInitiating);
+    }
 
-        let object_identifier = object.object_identifier();
-        if advertised.contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE) {
-            match read_required(
-                object,
-                object_identifier,
-                PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            )? {
-                PropertyValue::Boolean(false) => return Ok(EventSummaryProjectionResult::Excluded),
-                PropertyValue::Boolean(true) => {}
-                _ => {
-                    return Err(operational_problem(
-                        object_identifier,
-                        "Event_Detection_Enable is not Boolean",
-                    ))
-                }
+    let object_identifier = object.object_identifier();
+    if advertised.contains(&PropertyIdentifier::EVENT_DETECTION_ENABLE) {
+        match read_required(
+            object,
+            object_identifier,
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        )? {
+            PropertyValue::Boolean(false) => return Ok(EventSummaryProjectionResult::Excluded),
+            PropertyValue::Boolean(true) => {}
+            _ => {
+                return Err(operational_problem(
+                    object_identifier,
+                    "Event_Detection_Enable is not Boolean",
+                ))
             }
         }
-
-        let event_state =
-            read_enumerated(object, object_identifier, PropertyIdentifier::EVENT_STATE)?;
-        let acknowledged_transitions = read_transition_bits(
-            object,
-            object_identifier,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-        )?;
-        let event_timestamps = read_event_timestamps(object, object_identifier)?;
-        let notify_type =
-            read_enumerated(object, object_identifier, PropertyIdentifier::NOTIFY_TYPE)?;
-        let event_enable =
-            read_transition_bits(object, object_identifier, PropertyIdentifier::EVENT_ENABLE)?;
-        let notification_class = read_unsigned_u32(
-            object,
-            object_identifier,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-        )?;
-        let event_priorities =
-            read_notification_class_priorities(db, object_identifier, notification_class)?;
-
-        Ok(EventSummaryProjectionResult::Projected(Self {
-            object_identifier,
-            event_state,
-            acknowledged_transitions,
-            event_timestamps,
-            notify_type,
-            event_enable,
-            event_priorities,
-            notification_class,
-        }))
     }
 
-    fn is_selected(&self) -> bool {
-        self.event_state != EventState::NORMAL.to_raw() || self.acknowledged_transitions != 0b111
-    }
+    let event_state = EventState::from_raw(read_enumerated(
+        object,
+        object_identifier,
+        PropertyIdentifier::EVENT_STATE,
+    )?);
+    let acknowledged_transitions = read_transition_bits(
+        object,
+        object_identifier,
+        PropertyIdentifier::ACKED_TRANSITIONS,
+    )?;
+    let event_timestamps = read_event_timestamps(object, object_identifier)?;
+    let notify_type = NotifyType::from_raw(read_enumerated(
+        object,
+        object_identifier,
+        PropertyIdentifier::NOTIFY_TYPE,
+    )?);
+    let event_enable =
+        read_transition_bits(object, object_identifier, PropertyIdentifier::EVENT_ENABLE)?;
+    let notification_class = read_unsigned_u32(
+        object,
+        object_identifier,
+        PropertyIdentifier::NOTIFICATION_CLASS,
+    )?;
+    let event_priorities =
+        read_notification_class_priorities(db, object_identifier, notification_class)?;
+
+    Ok(EventSummaryProjectionResult::Projected(EventSummary {
+        object_identifier,
+        event_state,
+        acknowledged_transitions,
+        event_timestamps,
+        notify_type,
+        event_enable,
+        event_priorities,
+    }))
 }
 
-impl From<EventSummaryProjection> for EventSummary {
-    fn from(value: EventSummaryProjection) -> Self {
-        Self {
-            object_identifier: value.object_identifier,
-            event_state: value.event_state,
-            acknowledged_transitions: value.acknowledged_transitions,
-            event_timestamps: value.event_timestamps,
-            notify_type: value.notify_type,
-            event_enable: value.event_enable,
-            event_priorities: value.event_priorities,
-            notification_class: value.notification_class,
-        }
-    }
+/// Whether the summary describes an active event state (Clause 13.12): an event
+/// state other than NORMAL, or at least one unacknowledged transition.
+fn is_active_event_state(summary: &EventSummary) -> bool {
+    summary.event_state != EventState::NORMAL
+        || summary.acknowledged_transitions != EventTransitionBits::all()
 }
 
 /// Handle a GetEventInformation request without service-level byte pagination.
 ///
-/// Server dispatch uses the budget-aware variant when segmented transmission is
-/// unavailable. This wrapper remains unbounded for existing direct callers.
+/// Server dispatch uses a separate configured admission and strict page policy.
+/// This wrapper remains unbounded for existing direct callers.
 pub fn handle_get_event_information(
     db: &ObjectDatabase,
     service_data: &[u8],
@@ -138,7 +127,8 @@ pub(crate) fn handle_get_event_information_with_budget(
     buf: &mut BytesMut,
     max_service_ack_bytes: Option<usize>,
 ) -> Result<(), Error> {
-    let request = GetEventInformationRequest::decode(service_data)?;
+    let request =
+        GetEventInformationRequest::decode(service_data).map_err(Error::into_request_reject)?;
     let cursor = request
         .last_received_object_identifier
         .map(|identifier| identifier.encode());
@@ -153,13 +143,13 @@ pub(crate) fn handle_get_event_information_with_budget(
         let Some(object) = db.get(&oid) else {
             continue;
         };
-        let projection = match EventSummaryProjection::read(object, db)? {
+        let summary = match project_event_summary(object, db)? {
             EventSummaryProjectionResult::NotEventInitiating
             | EventSummaryProjectionResult::Excluded => continue,
-            EventSummaryProjectionResult::Projected(projection) => projection,
+            EventSummaryProjectionResult::Projected(summary) => summary,
         };
-        if projection.is_selected() {
-            summaries.push(projection.into());
+        if is_active_event_state(&summary) {
+            summaries.push(summary);
         }
     }
 
@@ -270,12 +260,12 @@ fn read_transition_bits(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,
     property: PropertyIdentifier,
-) -> Result<u8, Error> {
+) -> Result<EventTransitionBits, Error> {
     match read_required(object, object_identifier, property)? {
         PropertyValue::BitString { unused_bits, data }
             if unused_bits == 5 && data.len() == 1 && data[0] & 0x1f == 0 =>
         {
-            Ok(bacnet_types::bitstring::unpack_octet(&data, 3))
+            Ok(EventTransitionBits::from_bacnet(&data))
         }
         _ => Err(operational_problem(
             object_identifier,
@@ -332,13 +322,11 @@ fn read_notification_class_priorities(
         let Some(class_number) = read_notification_class_number(class_object) else {
             continue;
         };
-        if class_number == notification_class {
-            if matching.replace(class_object).is_some() {
-                return Err(operational_problem(
-                    event_object_identifier,
-                    format!("multiple Notification Class objects match {notification_class}"),
-                ));
-            }
+        if class_number == notification_class && matching.replace(class_object).is_some() {
+            return Err(operational_problem(
+                event_object_identifier,
+                format!("multiple Notification Class objects match {notification_class}"),
+            ));
         }
     }
     let class_object = matching.ok_or_else(|| {

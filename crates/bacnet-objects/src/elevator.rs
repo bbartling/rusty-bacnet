@@ -1,41 +1,120 @@
-//! Elevator, Escalator, and Lift objects per ASHRAE 135-2020 Clause 12.
+//! Elevator Group, Escalator, and Lift objects per ASHRAE 135-2020.
 //!
-//! - ElevatorGroupObject (type 57): manages a group of lifts
-//! - EscalatorObject (type 58): represents an escalator
-//! - LiftObject (type 59): represents a single lift/elevator car
+//! - ElevatorGroupObject (type 57) — Clause 12.58
+//! - EscalatorObject (type 58) — Clause 12.60
+//! - LiftObject (type 59) — Clause 12.59
 
-use bacnet_types::enums::{
-    EscalatorFault, EscalatorMode, EscalatorOperationDirection, ObjectType, PropertyIdentifier,
-};
+use bacnet_types::constructed::BACnetLandingCallStatus;
+use bacnet_types::enums::{LiftCarDirection, LiftGroupMode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
-use std::{borrow::Cow, collections::HashSet};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use std::{borrow::Cow, collections::HashSet, hash::Hash};
 
-use crate::common::{self, read_common_properties};
+use crate::common;
 use crate::traits::BACnetObject;
+
+mod car_state;
+mod door_values;
+mod doors;
+mod energy_meter;
+mod escalator;
+mod landing_calls;
+mod lift;
+mod membership;
+mod metadata;
+
+pub use escalator::EscalatorObject;
+pub use lift::LiftObject;
+
+/// Whether `raw` is in the domain of one of this family's extensible Clause 21
+/// enumerations: one of its named values (`named` is its `ALL_NAMED` table,
+/// `value` is `raw` as that type), or the proprietary range 1024..=65535 that
+/// Clause 23.1 (Table 23-1) opens for each of them. Every other value is
+/// reserved or too large, and a write of it is refused with
+/// VALUE_OUT_OF_RANGE.
+fn named_or_proprietary<T: Copy + PartialEq>(named: &[(&str, T)], value: T, raw: u32) -> bool {
+    named.iter().any(|&(_, named)| named == value) || (1024..=65_535).contains(&raw)
+}
+
+/// Whether `direction` is in BACnetLiftCarDirection, the datatype of
+/// Car_Moving_Direction, Car_Assigned_Direction and the direction of each
+/// landing call.
+fn direction_in_range(direction: &LiftCarDirection) -> bool {
+    named_or_proprietary(LiftCarDirection::ALL_NAMED, *direction, direction.to_raw())
+}
+
+/// `value`, or VALUE_OUT_OF_RANGE when `in_range` refuses it.
+fn checked<T>(value: T, in_range: fn(&T) -> bool) -> Result<T, Error> {
+    if in_range(&value) {
+        Ok(value)
+    } else {
+        Err(common::value_out_of_range_error())
+    }
+}
+
+/// Decode a Fault_Signals write, a BACnetLIST of one of this family's fault
+/// enumerations (`named` is its `ALL_NAMED` table, `from_raw` its
+/// constructor): one Enumerated or a list of them. A value that isn't
+/// Enumerated is INVALID_DATA_TYPE; a fault outside the enumeration's domain
+/// or a repeated fault (the list holds a set) is VALUE_OUT_OF_RANGE. The
+/// caller stores nothing unless every element passes.
+fn decode_fault_signals<T: Copy + Eq + Hash>(
+    value: PropertyValue,
+    named: &[(&str, T)],
+    from_raw: fn(u32) -> T,
+) -> Result<Vec<T>, Error> {
+    let values = match value {
+        PropertyValue::Enumerated(v) => vec![PropertyValue::Enumerated(v)],
+        PropertyValue::List(values) => values,
+        _ => return Err(common::invalid_data_type_error()),
+    };
+    let mut faults = Vec::with_capacity(values.len());
+    let mut seen = HashSet::with_capacity(values.len());
+    // A refusal names its element (#1048).
+    for (index, value) in values.into_iter().enumerate() {
+        let PropertyValue::Enumerated(raw) = value else {
+            return Err(common::at_list_element(
+                common::invalid_data_type_error(),
+                index,
+            ));
+        };
+        let fault = from_raw(raw);
+        if !named_or_proprietary(named, fault, raw) || !seen.insert(fault) {
+            return Err(common::at_list_element(
+                common::value_out_of_range_error(),
+                index,
+            ));
+        }
+        faults.push(fault);
+    }
+    Ok(faults)
+}
 
 // ===========================================================================
 // ElevatorGroupObject (type 57)
 // ===========================================================================
 
 /// BACnet Elevator Group object — manages a group of lifts.
+///
+/// The object serves only properties its table (Clause 12.58, Table 12-76)
+/// defines. That table has no Status_Flags, Out_Of_Service or Reliability, so
+/// reads and writes of those return UNKNOWN_PROPERTY.
 pub struct ElevatorGroupObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// Group identifier (Unsigned).
-    group_id: u64,
+    /// The Positive Integer Value object holding the machine room's number.
+    machine_room_id: ObjectIdentifier,
+    /// Group identifier (Unsigned8).
+    group_id: u8,
     /// List of lift ObjectIdentifiers in this group.
     group_members: Vec<ObjectIdentifier>,
-    /// Group mode (LiftGroupMode enumerated value).
-    group_mode: u32,
-    /// Number of landing calls (stored as count).
-    landing_calls: u64,
-    /// Landing call control (Enumerated).
-    landing_call_control: u32,
-    status_flags: StatusFlags,
-    out_of_service: bool,
-    reliability: u32,
+    /// Group mode.
+    group_mode: LiftGroupMode,
+    /// Active landing calls, served as the Landing_Calls BACnetLIST.
+    landing_calls: Vec<BACnetLandingCallStatus>,
+    /// The last call written to Landing_Call_Control.
+    landing_call_control: BACnetLandingCallStatus,
 }
 
 impl ElevatorGroupObject {
@@ -46,20 +125,65 @@ impl ElevatorGroupObject {
             oid,
             name: name.into(),
             description: String::new(),
+            machine_room_id: ObjectIdentifier::new(
+                ObjectType::POSITIVE_INTEGER_VALUE,
+                ObjectIdentifier::MAX_INSTANCE,
+            )?,
             group_id: 0,
             group_members: Vec::new(),
-            group_mode: 0, // Unknown
-            landing_calls: 0,
-            landing_call_control: 0,
-            status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: 0,
+            group_mode: LiftGroupMode::UNKNOWN,
+            landing_calls: Vec::new(),
+            landing_call_control: landing_calls::initial_landing_call_control(),
         })
+    }
+
+    /// The Positive Integer Value object served as Machine_Room_ID. Until the
+    /// application sets one it names instance 4194303, which Clause 12.58
+    /// uses when the machine room has no identification number.
+    pub fn machine_room_id(&self) -> ObjectIdentifier {
+        self.machine_room_id
+    }
+
+    /// Choose which Positive Integer Value object supplies this group's
+    /// machine-room number; clients read the number from that object's
+    /// Present_Value (Clause 12.58).
+    ///
+    /// Machine_Room_ID is read-only over the network, so this is the only way
+    /// to change it. A reference to any other object type is refused with
+    /// VALUE_OUT_OF_RANGE and the property is left unchanged.
+    pub fn set_machine_room_id(&mut self, oid: ObjectIdentifier) -> Result<(), Error> {
+        if oid.object_type() != ObjectType::POSITIVE_INTEGER_VALUE {
+            return Err(common::value_out_of_range_error());
+        }
+        self.machine_room_id = oid;
+        Ok(())
     }
 
     /// Add a lift member to this elevator group.
     pub fn add_member(&mut self, oid: ObjectIdentifier) {
         self.group_members.push(oid);
+    }
+
+    /// The last landing call written to Landing_Call_Control, or a placeholder
+    /// of floor 0 with direction UNKNOWN before any write.
+    pub fn landing_call_control(&self) -> &BACnetLandingCallStatus {
+        &self.landing_call_control
+    }
+
+    /// The active landing calls served as Landing_Calls.
+    pub fn landing_calls(&self) -> &[BACnetLandingCallStatus] {
+        &self.landing_calls
+    }
+
+    /// Replace the active landing calls served as Landing_Calls.
+    ///
+    /// The application owns this list: a Landing_Call_Control write doesn't
+    /// add to it. A call with a direction outside BACnetLiftCarDirection is
+    /// refused with VALUE_OUT_OF_RANGE and the list is left unchanged.
+    pub fn set_landing_calls(&mut self, calls: Vec<BACnetLandingCallStatus>) -> Result<(), Error> {
+        calls.iter().try_for_each(landing_calls::validate)?;
+        self.landing_calls = calls;
+        Ok(())
     }
 }
 
@@ -77,30 +201,51 @@ impl BACnetObject for ElevatorGroupObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
-            return result;
-        }
+        // No read_common_properties!: it would serve Status_Flags,
+        // Out_Of_Service and Reliability, which Table 12-76 doesn't define.
         match property {
+            p if p == PropertyIdentifier::OBJECT_IDENTIFIER => {
+                Ok(PropertyValue::ObjectIdentifier(self.oid))
+            }
+            p if p == PropertyIdentifier::OBJECT_NAME => {
+                Ok(PropertyValue::CharacterString(self.name.clone()))
+            }
+            p if p == PropertyIdentifier::DESCRIPTION => {
+                Ok(PropertyValue::CharacterString(self.description.clone()))
+            }
             p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
                 ObjectType::ELEVATOR_GROUP.to_raw(),
             )),
-            p if p == PropertyIdentifier::GROUP_ID => Ok(PropertyValue::Unsigned(self.group_id)),
-            p if p == PropertyIdentifier::GROUP_MEMBERS => {
-                let items: Vec<PropertyValue> = self
-                    .group_members
+            p if p == PropertyIdentifier::PROPERTY_LIST => {
+                common::read_property_list_property(&self.property_list(), array_index)
+            }
+            p if p == PropertyIdentifier::MACHINE_ROOM_ID => {
+                Ok(PropertyValue::ObjectIdentifier(self.machine_room_id))
+            }
+            p if p == PropertyIdentifier::GROUP_ID => {
+                Ok(PropertyValue::Unsigned(u64::from(self.group_id)))
+            }
+            // A BACnetARRAY (Table 12-76): the whole array, its size at
+            // index 0, or one member.
+            p if p == PropertyIdentifier::GROUP_MEMBERS => common::read_array(
+                self.group_members
                     .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect();
-                Ok(PropertyValue::List(items))
-            }
+                    .copied()
+                    .map(PropertyValue::ObjectIdentifier)
+                    .collect(),
+                array_index,
+            ),
             p if p == PropertyIdentifier::GROUP_MODE => {
-                Ok(PropertyValue::Enumerated(self.group_mode))
+                Ok(PropertyValue::Enumerated(self.group_mode.to_raw()))
             }
-            p if p == PropertyIdentifier::LANDING_CALLS => {
-                Ok(PropertyValue::Unsigned(self.landing_calls))
-            }
+            p if p == PropertyIdentifier::LANDING_CALLS => Ok(PropertyValue::List(
+                self.landing_calls
+                    .iter()
+                    .map(landing_calls::encode)
+                    .collect::<Result<Vec<_>, Error>>()?,
+            )),
             p if p == PropertyIdentifier::LANDING_CALL_CONTROL => {
-                Ok(PropertyValue::Enumerated(self.landing_call_control))
+                landing_calls::encode(&self.landing_call_control)
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -113,18 +258,15 @@ impl BACnetObject for ElevatorGroupObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
         match property {
             p if p == PropertyIdentifier::GROUP_ID => {
                 if let PropertyValue::Unsigned(v) = value {
-                    self.group_id = v;
+                    // Group_ID is an Unsigned8 (Table 12-76).
+                    self.group_id =
+                        u8::try_from(v).map_err(|_| common::value_out_of_range_error())?;
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
@@ -132,480 +274,30 @@ impl BACnetObject for ElevatorGroupObject {
             }
             p if p == PropertyIdentifier::GROUP_MODE => {
                 if let PropertyValue::Enumerated(v) = value {
-                    self.group_mode = v;
+                    self.group_mode = LiftGroupMode::from_raw(v);
                     Ok(())
                 } else {
                     Err(common::invalid_data_type_error())
                 }
             }
             p if p == PropertyIdentifier::LANDING_CALL_CONTROL => {
-                if let PropertyValue::Enumerated(v) = value {
-                    self.landing_call_control = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            _ => Err(common::write_access_denied_error()),
-        }
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::GROUP_ID,
-            PropertyIdentifier::GROUP_MEMBERS,
-            PropertyIdentifier::GROUP_MODE,
-            PropertyIdentifier::LANDING_CALLS,
-            PropertyIdentifier::LANDING_CALL_CONTROL,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
-    }
-}
-
-// ===========================================================================
-// EscalatorObject (type 58)
-// ===========================================================================
-
-/// BACnet Escalator object — represents an escalator.
-pub struct EscalatorObject {
-    oid: ObjectIdentifier,
-    name: String,
-    description: String,
-    /// Escalator mode (BACnetEscalatorMode, Clause 21); proprietary extensions
-    /// (Clause 23.1) are preserved as raw values.
-    escalator_mode: EscalatorMode,
-    /// Fault signal set (BACnetEscalatorFault, Clause 21).
-    fault_signals: Vec<EscalatorFault>,
-    /// Energy meter reading (Real).
-    energy_meter: f32,
-    /// Energy meter reference (stored as raw bytes).
-    energy_meter_ref: Vec<u8>,
-    /// Power mode (Boolean).
-    power_mode: bool,
-    /// Operation direction (BACnetEscalatorOperationDirection, Clause 21);
-    /// proprietary extensions (Clause 23.1) are preserved as raw values.
-    operation_direction: EscalatorOperationDirection,
-    /// Passenger alarm state (Boolean).
-    passenger_alarm: bool,
-    status_flags: StatusFlags,
-    out_of_service: bool,
-    reliability: u32,
-}
-
-impl EscalatorObject {
-    /// Create a new Escalator object with default values.
-    pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
-        let oid = ObjectIdentifier::new(ObjectType::ESCALATOR, instance)?;
-        Ok(Self {
-            oid,
-            name: name.into(),
-            description: String::new(),
-            escalator_mode: EscalatorMode::UNKNOWN,
-            fault_signals: Vec::new(),
-            energy_meter: 0.0,
-            energy_meter_ref: Vec::new(),
-            power_mode: false,
-            operation_direction: EscalatorOperationDirection::UNKNOWN,
-            passenger_alarm: false,
-            status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: 0,
-        })
-    }
-}
-
-impl BACnetObject for EscalatorObject {
-    fn object_identifier(&self) -> ObjectIdentifier {
-        self.oid
-    }
-
-    fn object_name(&self) -> &str {
-        &self.name
-    }
-
-    fn read_property(
-        &self,
-        property: PropertyIdentifier,
-        array_index: Option<u32>,
-    ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
-            return result;
-        }
-        match property {
-            p if p == PropertyIdentifier::OBJECT_TYPE => {
-                Ok(PropertyValue::Enumerated(ObjectType::ESCALATOR.to_raw()))
-            }
-            p if p == PropertyIdentifier::ESCALATOR_MODE => {
-                Ok(PropertyValue::Enumerated(self.escalator_mode.to_raw()))
-            }
-            p if p == PropertyIdentifier::FAULT_SIGNALS => {
-                let items: Vec<PropertyValue> = self
-                    .fault_signals
-                    .iter()
-                    .map(|v| PropertyValue::Enumerated(v.to_raw()))
-                    .collect();
-                Ok(PropertyValue::List(items))
-            }
-            p if p == PropertyIdentifier::ENERGY_METER => {
-                Ok(PropertyValue::Real(self.energy_meter))
-            }
-            p if p == PropertyIdentifier::ENERGY_METER_REF => {
-                Ok(PropertyValue::OctetString(self.energy_meter_ref.clone()))
-            }
-            p if p == PropertyIdentifier::POWER_MODE => Ok(PropertyValue::Boolean(self.power_mode)),
-            p if p == PropertyIdentifier::OPERATION_DIRECTION => {
-                Ok(PropertyValue::Enumerated(self.operation_direction.to_raw()))
-            }
-            p if p == PropertyIdentifier::PASSENGER_ALARM => {
-                Ok(PropertyValue::Boolean(self.passenger_alarm))
-            }
-            _ => Err(common::unknown_property_error()),
-        }
-    }
-
-    fn write_property(
-        &mut self,
-        property: PropertyIdentifier,
-        _array_index: Option<u32>,
-        value: PropertyValue,
-        _priority: Option<u8>,
-    ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
-        if let Some(result) = common::write_description(&mut self.description, property, &value) {
-            return result;
-        }
-        match property {
-            p if p == PropertyIdentifier::POWER_MODE => {
-                if let PropertyValue::Boolean(v) = value {
-                    self.power_mode = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            p if p == PropertyIdentifier::ESCALATOR_MODE => {
-                if let PropertyValue::Enumerated(v) = value {
-                    let named = EscalatorMode::ALL_NAMED
-                        .iter()
-                        .any(|&(_, value)| value.to_raw() == v);
-                    if !(named || (1024..=65535).contains(&v)) {
-                        return Err(common::value_out_of_range_error());
-                    }
-                    self.escalator_mode = EscalatorMode::from_raw(v);
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            p if p == PropertyIdentifier::OPERATION_DIRECTION => {
-                if let PropertyValue::Enumerated(v) = value {
-                    // Accept the six named values of the Clause 21
-                    // BACnetEscalatorOperationDirection production plus
-                    // proprietary extensions (Clause 23.1: 1024..=65535);
-                    // 6..=1023 is reserved and undefined in the 2020
-                    // production. Validate before mutating so a refused
-                    // write leaves the prior value intact.
-                    let named = EscalatorOperationDirection::ALL_NAMED
-                        .iter()
-                        .any(|&(_, value)| value.to_raw() == v);
-                    if !(named || (1024..=65535).contains(&v)) {
-                        return Err(common::value_out_of_range_error());
-                    }
-                    self.operation_direction = EscalatorOperationDirection::from_raw(v);
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            p if p == PropertyIdentifier::ENERGY_METER => {
-                if let PropertyValue::Real(v) = value {
-                    if !v.is_finite() {
-                        return Err(common::value_out_of_range_error());
-                    }
-                    self.energy_meter = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            p if p == PropertyIdentifier::FAULT_SIGNALS => {
-                let values = match value {
-                    PropertyValue::Enumerated(v) => vec![PropertyValue::Enumerated(v)],
-                    PropertyValue::List(values) => values,
-                    _ => return Err(common::invalid_data_type_error()),
-                };
-                let mut faults = Vec::with_capacity(values.len());
-                let mut seen = HashSet::with_capacity(values.len());
-                for value in values {
-                    let PropertyValue::Enumerated(raw) = value else {
-                        return Err(common::invalid_data_type_error());
-                    };
-                    let named = EscalatorFault::ALL_NAMED
-                        .iter()
-                        .any(|&(_, value)| value.to_raw() == raw);
-                    if !(named || (1024..=65535).contains(&raw)) {
-                        return Err(common::value_out_of_range_error());
-                    }
-                    let fault = EscalatorFault::from_raw(raw);
-                    if !seen.insert(fault) {
-                        return Err(common::value_out_of_range_error());
-                    }
-                    faults.push(fault);
-                }
-                self.fault_signals = faults;
+                self.landing_call_control = landing_calls::decode_write(value)?;
                 Ok(())
             }
-            p if p == PropertyIdentifier::PASSENGER_ALARM => {
-                if let PropertyValue::Boolean(v) = value {
-                    self.passenger_alarm = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            _ => Err(common::write_access_denied_error()),
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                _array_index,
+            )),
         }
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_elevator_group_object(self)
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::ESCALATOR_MODE,
-            PropertyIdentifier::FAULT_SIGNALS,
-            PropertyIdentifier::ENERGY_METER,
-            PropertyIdentifier::ENERGY_METER_REF,
-            PropertyIdentifier::POWER_MODE,
-            PropertyIdentifier::OPERATION_DIRECTION,
-            PropertyIdentifier::PASSENGER_ALARM,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        matches!(
-            property,
-            PropertyIdentifier::DESCRIPTION
-                | PropertyIdentifier::OUT_OF_SERVICE
-                | PropertyIdentifier::POWER_MODE
-                | PropertyIdentifier::OPERATION_DIRECTION
-                | PropertyIdentifier::ESCALATOR_MODE
-                | PropertyIdentifier::ENERGY_METER
-                | PropertyIdentifier::FAULT_SIGNALS
-                | PropertyIdentifier::PASSENGER_ALARM
-        )
-    }
-}
-
-// ===========================================================================
-// LiftObject (type 59)
-// ===========================================================================
-
-/// BACnet Lift object — represents a single lift/elevator car.
-pub struct LiftObject {
-    oid: ObjectIdentifier,
-    name: String,
-    description: String,
-    /// Tracking value (Unsigned — current floor).
-    tracking_value: u64,
-    /// Car position (Unsigned).
-    car_position: u64,
-    /// Car moving direction (Enumerated: 0=unknown, 1=stopped, 2=up, 3=down).
-    car_moving_direction: u32,
-    /// Car door status (List of Unsigned).
-    car_door_status: Vec<u64>,
-    /// Car load as a percentage (Unsigned).
-    car_load: u64,
-    /// Number of landing doors (stored as count).
-    landing_doors: u64,
-    /// Floor text labels (List of String).
-    floor_text: Vec<String>,
-    /// Energy meter reading (Real).
-    energy_meter: f32,
-    status_flags: StatusFlags,
-    out_of_service: bool,
-    reliability: u32,
-}
-
-impl LiftObject {
-    /// Create a new Lift object with the given number of floors.
-    ///
-    /// Floor text is initialized to "Floor 1", "Floor 2", etc.
-    pub fn new(instance: u32, name: impl Into<String>, num_floors: usize) -> Result<Self, Error> {
-        let oid = ObjectIdentifier::new(ObjectType::LIFT, instance)?;
-        let floor_text = (1..=num_floors).map(|i| format!("Floor {i}")).collect();
-        Ok(Self {
-            oid,
-            name: name.into(),
-            description: String::new(),
-            tracking_value: 1,
-            car_position: 1,
-            car_moving_direction: 1, // stopped
-            car_door_status: Vec::new(),
-            car_load: 0,
-            landing_doors: num_floors as u64,
-            floor_text,
-            energy_meter: 0.0,
-            status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: 0,
-        })
-    }
-}
-
-impl BACnetObject for LiftObject {
-    fn object_identifier(&self) -> ObjectIdentifier {
-        self.oid
-    }
-
-    fn object_name(&self) -> &str {
-        &self.name
-    }
-
-    fn read_property(
-        &self,
-        property: PropertyIdentifier,
-        array_index: Option<u32>,
-    ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
-            return result;
-        }
-        match property {
-            p if p == PropertyIdentifier::OBJECT_TYPE => {
-                Ok(PropertyValue::Enumerated(ObjectType::LIFT.to_raw()))
-            }
-            p if p == PropertyIdentifier::TRACKING_VALUE => {
-                Ok(PropertyValue::Unsigned(self.tracking_value))
-            }
-            p if p == PropertyIdentifier::CAR_POSITION => {
-                Ok(PropertyValue::Unsigned(self.car_position))
-            }
-            p if p == PropertyIdentifier::CAR_MOVING_DIRECTION => {
-                Ok(PropertyValue::Enumerated(self.car_moving_direction))
-            }
-            p if p == PropertyIdentifier::CAR_DOOR_STATUS => {
-                let items: Vec<PropertyValue> = self
-                    .car_door_status
-                    .iter()
-                    .map(|v| PropertyValue::Unsigned(*v))
-                    .collect();
-                Ok(PropertyValue::List(items))
-            }
-            p if p == PropertyIdentifier::CAR_LOAD => Ok(PropertyValue::Unsigned(self.car_load)),
-            p if p == PropertyIdentifier::LANDING_DOOR_STATUS => {
-                Ok(PropertyValue::Unsigned(self.landing_doors))
-            }
-            p if p == PropertyIdentifier::FLOOR_TEXT => {
-                let items: Vec<PropertyValue> = self
-                    .floor_text
-                    .iter()
-                    .map(|s| PropertyValue::CharacterString(s.clone()))
-                    .collect();
-                Ok(PropertyValue::List(items))
-            }
-            p if p == PropertyIdentifier::ENERGY_METER => {
-                Ok(PropertyValue::Real(self.energy_meter))
-            }
-            p if p == PropertyIdentifier::FLOOR_NUMBER => {
-                Ok(PropertyValue::Unsigned(self.tracking_value))
-            }
-            _ => Err(common::unknown_property_error()),
-        }
-    }
-
-    fn write_property(
-        &mut self,
-        property: PropertyIdentifier,
-        _array_index: Option<u32>,
-        value: PropertyValue,
-        _priority: Option<u8>,
-    ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
-        if let Some(result) = common::write_description(&mut self.description, property, &value) {
-            return result;
-        }
-        match property {
-            p if p == PropertyIdentifier::TRACKING_VALUE => {
-                if let PropertyValue::Unsigned(v) = value {
-                    self.tracking_value = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            p if p == PropertyIdentifier::CAR_POSITION => {
-                if let PropertyValue::Unsigned(v) = value {
-                    self.car_position = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            p if p == PropertyIdentifier::CAR_MOVING_DIRECTION => {
-                if let PropertyValue::Enumerated(v) = value {
-                    if v > 3 {
-                        return Err(common::value_out_of_range_error());
-                    }
-                    self.car_moving_direction = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            p if p == PropertyIdentifier::CAR_LOAD => {
-                if let PropertyValue::Unsigned(v) = value {
-                    if v > 100 {
-                        return Err(common::value_out_of_range_error());
-                    }
-                    self.car_load = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            _ => Err(common::write_access_denied_error()),
-        }
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::TRACKING_VALUE,
-            PropertyIdentifier::CAR_POSITION,
-            PropertyIdentifier::CAR_MOVING_DIRECTION,
-            PropertyIdentifier::CAR_DOOR_STATUS,
-            PropertyIdentifier::CAR_LOAD,
-            PropertyIdentifier::LANDING_DOOR_STATUS,
-            PropertyIdentifier::FLOOR_TEXT,
-            PropertyIdentifier::ENERGY_METER,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 

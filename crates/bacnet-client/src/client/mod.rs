@@ -2,6 +2,10 @@
 //!
 //! The client owns a NetworkLayer, spawns an APDU dispatch task, and provides
 //! methods for sending confirmed and unconfirmed BACnet requests.
+//! Replies to inbound accepted-direct confirmed requests use the original sealed
+//! response capability before any prompt channel, without address fallback on
+//! retirement or invalid authority. This does not change outgoing transaction
+//! correlation, retries or their segmented controls.
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
@@ -30,7 +34,7 @@ use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::bip::BipTransport;
 #[cfg(feature = "ipv6")]
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_transport::port::TransportPort;
+use bacnet_transport::port::{TransportPort, TransportProvenance};
 use bacnet_types::enums::{
     ConfirmedServiceChoice, NetworkPriority, RejectReason, UnconfirmedServiceChoice,
 };
@@ -57,8 +61,6 @@ pub const MAX_COV_CHANNEL_CAPACITY: usize = 65_536;
 
 /// Device discovery event broadcast channel capacity.
 pub const DEVICE_EVENT_CHANNEL_CAPACITY: usize = 64;
-
-const VALID_MAX_APDU_LENGTHS: [u16; 6] = [50, 128, 206, 480, 1024, 1476];
 
 /// Type of change observed in the device discovery table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +126,9 @@ pub struct ClientOptions {
     /// they call `recv()`. The default preserves the historical fixed capacity
     /// of 64.
     pub cov_channel_capacity: usize,
+    /// Capacity of the independent event notification broadcast channel (default 64).
+    /// Slow receivers observe lag; valid confirmed notifications are still acknowledged.
+    pub event_channel_capacity: usize,
     confirmed_cov_notification_ack_policy: ConfirmedCOVNotificationAckPolicy,
 }
 
@@ -147,6 +152,7 @@ impl Default for ClientOptions {
     fn default() -> Self {
         Self {
             cov_channel_capacity: DEFAULT_COV_CHANNEL_CAPACITY,
+            event_channel_capacity: DEFAULT_EVENT_CHANNEL_CAPACITY,
             confirmed_cov_notification_ack_policy:
                 cov_notifications::default_confirmed_cov_notification_ack_policy(),
         }
@@ -171,7 +177,11 @@ pub(crate) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, 
     match response {
         TsmResponse::SimpleAck => Ok(Bytes::new()),
         TsmResponse::ComplexAck { service_data } => Ok(service_data),
-        TsmResponse::Error { class, code } => Err(Error::Protocol { class, code }),
+        TsmResponse::Error {
+            class,
+            code,
+            detail,
+        } => Err(Error::protocol(class, code, detail)),
         TsmResponse::Reject { reason } => Err(Error::Reject { reason }),
         TsmResponse::Abort { reason } => Err(Error::Abort { reason }),
         TsmResponse::NetworkPathTooLong { dnet } => Err(Error::RoutedPathTooLong { dnet }),
@@ -190,6 +200,12 @@ impl ClientOptions {
             return Err(Error::Encoding(format!(
                 "invalid cov-channel-capacity {}; expected 1..={}",
                 self.cov_channel_capacity, MAX_COV_CHANNEL_CAPACITY
+            )));
+        }
+        if !(1..=MAX_EVENT_CHANNEL_CAPACITY).contains(&self.event_channel_capacity) {
+            return Err(Error::Encoding(format!(
+                "invalid event-channel-capacity {}; expected 1..={}",
+                self.event_channel_capacity, MAX_EVENT_CHANNEL_CAPACITY
             )));
         }
         Ok(())
@@ -298,6 +314,8 @@ impl BipClientBuilder {
 /// Default concurrency limit for multi-device batch operations.
 const DEFAULT_BATCH_CONCURRENCY: usize = 32;
 
+mod batch_debug;
+
 /// A request to read a single property from a discovered device.
 #[derive(Debug, Clone)]
 pub struct DeviceReadRequest {
@@ -312,8 +330,9 @@ pub struct DeviceReadRequest {
 }
 
 /// Result of a single-property read from a device within a batch.
-#[derive(Debug)]
 pub struct DeviceReadResult {
+    /// Zero-based position of this occurrence in the original request vector.
+    pub request_index: usize,
     /// The device instance this result corresponds to.
     pub device_instance: u32,
     /// The read result (Ok = decoded ACK, Err = protocol/timeout error).
@@ -326,12 +345,13 @@ pub struct DeviceRpmRequest {
     /// Device instance number (must be in the device table).
     pub device_instance: u32,
     /// ReadAccessSpecifications to send in a single RPM.
-    pub specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+    pub specs: Vec<bacnet_types::constructed::ReadAccessSpecification>,
 }
 
 /// Result of an RPM to a single device within a batch.
-#[derive(Debug)]
 pub struct DeviceRpmResult {
+    /// Zero-based position of this occurrence in the original request vector.
+    pub request_index: usize,
     /// The device instance this result corresponds to.
     pub device_instance: u32,
     /// The RPM result.
@@ -339,7 +359,7 @@ pub struct DeviceRpmResult {
 }
 
 /// A request to write a single property on a discovered device.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DeviceWriteRequest {
     /// Device instance number (must be in the device table).
     pub device_instance: u32,
@@ -358,6 +378,8 @@ pub struct DeviceWriteRequest {
 /// Result of a single-property write to a device within a batch.
 #[derive(Debug)]
 pub struct DeviceWriteResult {
+    /// Zero-based position of this occurrence in the original request vector.
+    pub request_index: usize,
     /// The device instance this result corresponds to.
     pub device_instance: u32,
     /// The write result (Ok = success, Err = protocol/timeout error).
@@ -366,8 +388,8 @@ pub struct DeviceWriteResult {
 
 /// The receive-side promises this client puts in every confirmed request.
 ///
-/// Clause 20.1.2.3 and Clause 20.1.2.4 exist "so that the responding device may
-/// determine how to convey its response", so the same values must bound what
+/// Clause 20.1.2.3 and Clause 20.1.2.4 let the responder choose a response
+/// form the requester can receive, so the same values must bound what
 /// the dispatch loop is willing to take back. Keeping the pair together stops
 /// the two halves from drifting as they are threaded through dispatch.
 #[derive(Debug, Clone, Copy)]
@@ -382,6 +404,11 @@ struct ResponseLimits {
 struct SegmentedReceiveState {
     receiver: SegmentReceiver,
     owner: TransactionOwner,
+    /// Provenance snapshot at session open (RB-07). Compared by value on
+    /// every later segment; a conflicting context fails closed (abort).
+    /// Expires with the session; SC disconnect drops the transport queue so
+    /// no snapshot outlives its connection.
+    provenance: TransportProvenance,
     /// Immediate MAC used to send SegmentAck/Abort PDUs.
     reply_mac: MacAddr,
     /// The peer's SNET/SADR when the segments arrive through a router; the
@@ -409,8 +436,21 @@ struct SegmentedReceiveState {
     accepted_segments: usize,
 }
 
-/// Key for tracking in-progress segmented receives: (correlation_mac, invoke_id).
-type SegKey = (MacAddr, u8);
+/// Key for tracking in-progress segmented receives:
+/// (correlation_mac, invoke_id, provenance).
+///
+/// Including the immutable provenance snapshot gives cross-peer isolation:
+/// the same MAC via different trust contexts never shares a reassembly
+/// session. A conflicting provenance for an otherwise identical key is a
+/// fail-closed abort, not a merge (RB-07 compat mode: no policy change).
+type SegKey = (MacAddr, u8, TransportProvenance);
+
+/// Key for routing inbound SegmentACKs to in-flight segmented sends:
+/// (correlation_mac, invoke_id).
+///
+/// Compat mode: provenance is threaded to the dispatch point but does not
+/// gate SegmentACK delivery (RB-09 consumes it later).
+type SegAckKey = (MacAddr, u8);
 
 struct SegmentAckRoute {
     owner: TransactionOwner,
@@ -424,15 +464,17 @@ pub struct BACnetClient<T: TransportPort> {
     tsm: Arc<Mutex<Tsm>>,
     device_table: Arc<Mutex<DeviceTable>>,
     cov_tx: broadcast::Sender<ReceivedCOVNotification>,
+    event_tx: broadcast::Sender<ReceivedEventNotification>,
     device_tx: broadcast::Sender<DeviceEvent>,
     device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
     dispatch_task: Option<JoinHandle<()>>,
+    network_number_task: Option<JoinHandle<()>>,
     /// Owner-qualified channels feeding SegmentACKs to in-flight segmented sends.
     ///
     /// Dispatch may hold [`Self::tsm`] while acquiring this lock so phase
     /// validation and delivery cannot race terminal completion. No path may
     /// acquire the locks in the opposite order.
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, SegmentAckRoute>>>,
+    seg_ack_senders: Arc<Mutex<HashMap<SegAckKey, SegmentAckRoute>>>,
     cleanup_tx: mpsc::UnboundedSender<TransactionCleanup>,
     #[cfg(test)]
     segmented_post_wait_cleanup: Arc<SegmentedPostWaitCleanupHook>,
@@ -449,60 +491,6 @@ impl BACnetClient<BipTransport> {
             config: ClientConfig::default(),
             options: ClientOptions::default(),
         }
-    }
-
-    pub fn builder() -> BipClientBuilder {
-        Self::bip_builder()
-    }
-
-    /// Read the Broadcast Distribution Table from a BBMD.
-    pub async fn read_bdt(
-        &self,
-        target: &[u8],
-    ) -> Result<Vec<bacnet_transport::bbmd::BdtEntry>, Error> {
-        self.network.transport().read_bdt(target).await
-    }
-
-    /// Write the Broadcast Distribution Table to a BBMD.
-    pub async fn write_bdt(
-        &self,
-        target: &[u8],
-        entries: &[bacnet_transport::bbmd::BdtEntry],
-    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
-        self.network.transport().write_bdt(target, entries).await
-    }
-
-    /// Read the Foreign Device Table from a BBMD.
-    pub async fn read_fdt(
-        &self,
-        target: &[u8],
-    ) -> Result<Vec<bacnet_transport::bbmd::FdtEntryWire>, Error> {
-        self.network.transport().read_fdt(target).await
-    }
-
-    /// Delete a Foreign Device Table entry on a BBMD.
-    pub async fn delete_fdt_entry(
-        &self,
-        target: &[u8],
-        ip: [u8; 4],
-        port: u16,
-    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
-        self.network
-            .transport()
-            .delete_fdt_entry(target, ip, port)
-            .await
-    }
-
-    /// Register as a foreign device with a BBMD and return the result code.
-    pub async fn register_foreign_device_bvlc(
-        &self,
-        target: &[u8],
-        ttl: u16,
-    ) -> Result<bacnet_types::enums::BvlcResultCode, Error> {
-        self.network
-            .transport()
-            .register_foreign_device_bvlc(target, ttl)
-            .await
     }
 }
 
@@ -599,7 +587,7 @@ pub struct ScClientBuilder {
     config: ClientConfig,
     options: ClientOptions,
     hub_url: String,
-    tls_config: Option<std::sync::Arc<tokio_rustls::rustls::ClientConfig>>,
+    tls_config: Option<bacnet_transport::sc_tls::ScNodeTlsConfig>,
     vmac: bacnet_transport::sc_frame::Vmac,
     device_uuid: [u8; 16],
     heartbeat_interval_ms: u64,
@@ -615,11 +603,24 @@ impl ScClientBuilder {
         self
     }
 
-    /// Set the TLS client configuration.
-    pub fn tls_config(
-        mut self,
-        config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
-    ) -> Self {
+    /// Set the validated local node TLS policy, shared across initial and
+    /// reconnect attempts (including normal TLS resumption).
+    ///
+    /// ```
+    /// use bacnet_client::client::{BACnetClient, ScClientBuilder};
+    /// use bacnet_transport::sc_tls::ScNodeTlsConfig;
+    /// fn configured(tls: ScNodeTlsConfig) -> ScClientBuilder {
+    ///     BACnetClient::sc_builder().tls_config(tls)
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0308
+    /// use bacnet_client::client::BACnetClient;
+    /// fn raw(config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>) {
+    ///     let _ = BACnetClient::sc_builder().tls_config(config);
+    /// }
+    /// ```
+    pub fn tls_config(mut self, config: bacnet_transport::sc_tls::ScNodeTlsConfig) -> Self {
         self.tls_config = Some(config);
         self
     }
@@ -713,6 +714,35 @@ impl ScClientBuilder {
     /// Reconnect configuration is validated before TLS lookup or dialing, and
     /// again when the transport starts. An error still consumes this builder
     /// and drops its inputs; this does not promise generic endpoint rollback.
+    ///
+    /// The client's [`transport()`](BACnetClient::transport) lends the hub
+    /// connection-state watch and the NPDU drop counts:
+    ///
+    /// ```no_run
+    /// use bacnet_client::client::BACnetClient;
+    /// use bacnet_transport::sc::ScConnectionState;
+    /// use bacnet_transport::sc_tls::ScNodeTlsConfig;
+    ///
+    /// async fn watch_hub(tls: ScNodeTlsConfig) -> Result<(), bacnet_types::error::Error> {
+    ///     let client = BACnetClient::sc_builder()
+    ///         .hub_url("wss://hub.example.com/bacnet")
+    ///         .tls_config(tls)
+    ///         .vmac([0x02, 0, 0, 0, 0, 0x01])
+    ///         .device_uuid([0x42; 16])
+    ///         .build()
+    ///         .await?;
+    ///     // An owned receiver: it can live in its own task.
+    ///     let mut state = client.transport().connection_state_changes();
+    ///     tokio::spawn(async move {
+    ///         while state.changed().await.is_ok() {
+    ///             let _connected = *state.borrow_and_update() == ScConnectionState::Connected;
+    ///         }
+    ///     });
+    ///     // A snapshot: poll it as often as needed.
+    ///     let _full_queue_drops = client.transport().npdu_drop_counts().full_drops;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn build(
         self,
     ) -> Result<
@@ -737,19 +767,15 @@ impl ScClientBuilder {
         if let Some(rc) = self.reconnect {
             let hub_url = self.hub_url.clone();
             let tls_config = tls_config.clone();
-            #[allow(deprecated)]
-            {
-                transport = transport
-                    .with_connector(move || {
-                        let hub_url = hub_url.clone();
-                        let tls_config = tls_config.clone();
-                        async move {
-                            bacnet_transport::sc_tls::TlsWebSocket::connect(&hub_url, tls_config)
-                                .await
-                        }
-                    })
-                    .with_reconnect(rc);
-            }
+            transport = transport
+                .with_connector(move || {
+                    let hub_url = hub_url.clone();
+                    let tls_config = tls_config.clone();
+                    async move {
+                        bacnet_transport::sc_tls::TlsWebSocket::connect(&hub_url, tls_config).await
+                    }
+                })
+                .with_reconnect(rc);
         }
 
         BACnetClient::start_with_options(self.config, transport, self.options).await
@@ -781,11 +807,7 @@ impl<'a> ConfirmedTarget<'a> {
 }
 
 fn max_apdu_bucket_at_or_below(limit: u16) -> Option<u16> {
-    VALID_MAX_APDU_LENGTHS
-        .iter()
-        .rev()
-        .copied()
-        .find(|bucket| *bucket <= limit)
+    bacnet_encoding::apdu::max_apdu_header_at_or_below(u32::from(limit)).ok()
 }
 
 fn cap_max_apdu_to_transport(configured: u16, transport_limit: u16) -> Result<u16, Error> {
@@ -806,6 +828,10 @@ mod device_events;
 mod device_mgmt;
 mod discovery;
 mod dispatch;
+mod dispatch_context;
+mod inbound_replies;
+use inbound_replies::InboundReply;
+mod event_notifications;
 mod file_list;
 mod lifecycle;
 mod object_mgmt;
@@ -814,12 +840,20 @@ mod requests;
 mod response_admission;
 mod routed_path_limits;
 mod segmentation;
+mod segmentation_abort;
+mod segmentation_context;
 mod segmented_request;
 mod transaction_cleanup;
 mod transaction_peer;
-use routed_path_limits::{routed_path_quarantine_horizon, RoutedPathLease, RoutedPathLimits};
-use transaction_peer::response_transaction_peer;
+mod transport_access;
+mod write_group;
+pub(crate) use routed_path_limits::check_routed_unicast;
+use routed_path_limits::{
+    forwarded_npci_len, routed_path_quarantine_horizon, RoutedPathLease, RoutedPathLimits,
+};
+pub(crate) use transaction_peer::TransactionPeer;
 
+pub use cov::CovPropertySubscription;
 pub use cov_notifications::{
     COVNotificationDelivery, ConfirmedCOVNotificationAckPolicy, ConfirmedCOVNotificationResponse,
     ReceivedCOVNotification,
@@ -827,11 +861,20 @@ pub use cov_notifications::{
 pub use cov_renewal::{
     ManagedCOVSubscription, ManagedCOVSubscriptionEvent, ManagedCOVSubscriptionOptions,
 };
+pub use event_notifications::{
+    EventNotificationDelivery, ReceivedEventNotification, DEFAULT_EVENT_CHANNEL_CAPACITY,
+    MAX_EVENT_CHANNEL_CAPACITY,
+};
+pub use write_group::WriteGroupDestination;
 
 #[cfg(test)]
 mod acknowledge_alarm_tests;
 #[cfg(test)]
 mod audit_tests;
+#[cfg(test)]
+mod batch_tests;
+#[cfg(test)]
+mod broadcast_mac_tests;
 #[cfg(test)]
 mod builder_options_tests;
 #[cfg(test)]
@@ -847,9 +890,17 @@ mod cov_tests;
 #[cfg(test)]
 mod device_events_tests;
 #[cfg(test)]
+mod event_notification_tests;
+#[cfg(test)]
+mod list_error_tests;
+#[cfg(test)]
+mod list_validation_tests;
+#[cfg(test)]
 mod peer_max_apdu_tests;
 #[cfg(test)]
 mod peer_segmentation_tests;
+#[cfg(test)]
+mod rb07_provenance_tests;
 #[cfg(test)]
 mod request_timer_tests;
 #[cfg(test)]
@@ -881,7 +932,15 @@ mod segmented_response_capacity_tests;
 #[cfg(test)]
 mod segmented_timeout_tests;
 #[cfg(test)]
+mod structured_error_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transport_access_tests;
+#[cfg(test)]
+mod wpm_validation_tests;
+#[cfg(test)]
+mod write_priority_tests;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Create a generic builder that accepts a pre-built transport.
@@ -893,3 +952,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod number_tests;
+
+mod network_number;

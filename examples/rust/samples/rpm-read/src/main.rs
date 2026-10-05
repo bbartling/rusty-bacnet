@@ -8,11 +8,10 @@ use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::primitives::decode_application_value;
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
-use bacnet_services::who_is::WhoIsRequest;
+use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bvll::encode_bip_mac;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, UnconfirmedServiceChoice};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
@@ -80,27 +79,6 @@ fn default_broadcast(interface: Ipv4Addr) -> Ipv4Addr {
         Ipv4Addr::BROADCAST
     } else {
         subnet_broadcast(interface)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
-        assert_eq!(
-            default_broadcast(Ipv4Addr::UNSPECIFIED),
-            Ipv4Addr::BROADCAST
-        );
-    }
-
-    #[test]
-    fn default_broadcast_uses_slash_24_for_bound_interface() {
-        assert_eq!(
-            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
-            Ipv4Addr::new(192, 168, 204, 255)
-        );
     }
 }
 
@@ -197,10 +175,14 @@ async fn discover_device(
         return;
     }
 
-    let whois = WhoIsRequest {
-        low_limit: Some(args.device),
-        high_limit: Some(args.device),
+    let range = match DeviceInstanceRange::single(args.device) {
+        Ok(range) => range,
+        Err(e) => {
+            eprintln!("ERROR: --device: {e}");
+            process::exit(1);
+        }
     };
+    let whois = WhoIsRequest { range: Some(range) };
     let mut whois_buf = BytesMut::new();
     whois.encode(&mut whois_buf);
 
@@ -212,7 +194,7 @@ async fn discover_device(
         eprintln!("ERROR: local Who-Is failed: {e}");
         process::exit(1);
     }
-    if let Err(e) = client.who_is(Some(args.device), Some(args.device)).await {
+    if let Err(e) = client.who_is(Some(range)).await {
         eprintln!("ERROR: global Who-Is failed: {e}");
         process::exit(1);
     }
@@ -373,4 +355,25 @@ async fn main() {
 
     let _ = client.stop().await;
     println!("\nDone.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::UNSPECIFIED),
+            Ipv4Addr::BROADCAST
+        );
+    }
+
+    #[test]
+    fn default_broadcast_uses_slash_24_for_bound_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
+            Ipv4Addr::new(192, 168, 204, 255)
+        );
+    }
 }

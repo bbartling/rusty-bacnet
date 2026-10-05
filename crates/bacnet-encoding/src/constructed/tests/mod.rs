@@ -6,12 +6,85 @@ use bacnet_types::constructed::{
     BACnetPropertyStates, BACnetProprietaryPropertyState,
 };
 use bacnet_types::enums::ObjectType;
+use bacnet_types::primitives::ObjectIdentifier;
 
+mod access_credential;
+mod access_rule;
+mod action_list;
+mod assigned_landing_calls;
+mod audit_notification;
+mod authentication_factor_format;
+mod calendar;
+mod channel_value;
+mod color_command;
 mod cov_subscription;
+mod event_log_record;
+mod event_notification;
+mod event_notification_subscription;
 mod event_parameter;
 mod fault_parameter;
+mod landing_call_status;
+mod landing_door_status;
+mod lift_car_call_list;
+mod lighting_command;
+mod log_multiple_record;
+mod log_record;
+mod object_identifier_invariant;
+mod port_permission;
+mod property_access_result;
+mod property_value;
+mod read_access;
 mod recipient;
+mod scale;
+mod schedule;
+mod shed_level;
 mod staging;
+mod tagged;
+mod value_source;
+
+/// Cut `wire`, a complete encoding `decode` accepts, inside the contents of
+/// each primitive member in turn, members inside constructed frames
+/// included, and require [`Error::BufferTooShort`] naming the end of that
+/// member's contents and the length of the cut data (#1333). Returns how
+/// many of the members cut stand inside a frame.
+pub(crate) fn assert_members_cut_short<T: std::fmt::Debug>(
+    what: &str,
+    wire: &[u8],
+    decode: impl Fn(&[u8]) -> Result<T, Error>,
+) -> usize {
+    if let Err(error) = decode(wire) {
+        panic!("{what}: the whole value fails: {error}");
+    }
+    let mut pos = 0;
+    let mut framed = 0;
+    let mut depth = 0usize;
+    while pos < wire.len() {
+        let (tag, start) = tags::decode_tag(wire, pos).unwrap();
+        if tag.is_opening || tag.is_closing {
+            depth = if tag.is_opening { depth + 1 } else { depth - 1 };
+            pos = start;
+            continue;
+        }
+        if tag.class == TagClass::Application && tag.number == tags::app_tag::BOOLEAN {
+            pos = start;
+            continue;
+        }
+        let end = start + tag.length as usize;
+        for cut in start..end {
+            match decode(&wire[..cut]) {
+                Err(Error::BufferTooShort { need, have }) => {
+                    assert_eq!((need, have), (end, cut), "{what} cut at {cut}");
+                }
+                other => panic!("{what} cut at {cut}, in the member at {pos}: {other:?}"),
+            }
+        }
+        if depth > 0 && end > start {
+            framed += 1;
+        }
+        pos = end;
+    }
+    framed
+}
 
 /// A local BACnetDeviceObjectPropertyReference for tests.
 pub(crate) fn dopr_ai(instance: u32, property: u32) -> BACnetDeviceObjectPropertyReference {
@@ -295,6 +368,26 @@ fn dopr_body_round_trip_local_and_full() {
     encode_dopr_body(&mut buf, &full);
     let (decoded, _) = decode_dopr_body(&buf, 0, "test").unwrap();
     assert_eq!(decoded, full);
+}
+
+#[test]
+fn device_object_property_references_decode_one_list_element_at_a_time() {
+    let mut indexed = dopr_ai(5, 85);
+    indexed.property_array_index = Some(2);
+    let full = BACnetDeviceObjectPropertyReference {
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 8).unwrap()),
+        ..dopr_ai(7, 111)
+    };
+    let mut list = BytesMut::new();
+    for reference in [&indexed, &full] {
+        encode_device_object_property_reference(&mut list, reference);
+    }
+    let (first, next) = decode_device_object_property_reference(&list, 0).unwrap();
+    assert_eq!(first, indexed);
+    let (second, end) = decode_device_object_property_reference(&list, next).unwrap();
+    assert_eq!(second, full);
+    assert_eq!(end, list.len());
+    assert!(decode_device_object_property_reference(&list[..next - 1], 0).is_err());
 }
 
 #[test]

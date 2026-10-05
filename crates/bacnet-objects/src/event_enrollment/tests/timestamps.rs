@@ -30,7 +30,7 @@ fn assert_default_timestamp_array(object: &dyn BACnetObject, label: &str) {
 
 #[test]
 fn enrollment_objects_default_event_time_stamps_are_three_zero_sequences() {
-    let event = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let event = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let alert = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
 
     assert_default_timestamp_array(&event, "Event Enrollment");
@@ -158,7 +158,7 @@ fn assert_history_surface(object: &mut dyn BACnetObject, label: &str) {
 #[test]
 fn enrollment_event_time_stamp_arrays_preserve_order_indexes_and_choices() {
     let expected = seeded_timestamps();
-    let mut event = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut event = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     event.event_history.time_stamps = expected.clone();
     let mut alert = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
     alert.event_history.time_stamps = expected.clone();
@@ -170,9 +170,9 @@ fn enrollment_event_time_stamp_arrays_preserve_order_indexes_and_choices() {
 }
 
 #[test]
-fn event_enrollment_detection_disable_resets_history_and_rollback_restores_it() {
+fn event_enrollment_rejected_detection_write_preserves_history_then_disable_resets() {
     let expected = seeded_timestamps();
-    let mut object = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut object = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     object.event_history.time_stamps = expected.clone();
     object.event_history.original_from_states = [
         Some(EventState::NORMAL),
@@ -184,25 +184,17 @@ fn event_enrollment_detection_disable_resets_history_and_rollback_restores_it() 
         Some(EventState::FAULT),
         Some(EventState::NORMAL),
     ];
-    let rollback = object
-        .capture_write_property_rollback(
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            &PropertyValue::Boolean(false),
-        )
-        .expect("Event Enrollment detection write needs an opaque rollback");
-
-    object
-        .write_property(
+    assert_property_error(
+        object.write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
             None,
-            PropertyValue::Boolean(false),
+            PropertyValue::Unsigned(0),
             None,
-        )
-        .unwrap();
-    assert_default_timestamp_array(&object, "disabled Event Enrollment");
-
-    object.restore_write_property_rollback(rollback).unwrap();
-    assert_seeded_timestamp_reads(&object, &expected, "restored Event Enrollment");
+        ),
+        ErrorCode::INVALID_DATA_TYPE,
+        "invalid detection write",
+    );
+    assert_seeded_timestamp_reads(&object, &expected, "unchanged Event Enrollment");
     assert_eq!(
         object.event_history.original_from_states,
         [
@@ -219,25 +211,39 @@ fn event_enrollment_detection_disable_resets_history_and_rollback_restores_it() 
             Some(EventState::NORMAL),
         ]
     );
+    object
+        .write_property(
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            None,
+            PropertyValue::Boolean(false),
+            None,
+        )
+        .unwrap();
+    assert_default_timestamp_array(&object, "disabled Event Enrollment");
+    assert_eq!(object.event_history.original_from_states, [None; 3]);
+    assert_eq!(object.event_history.original_to_states, [None; 3]);
 }
 
 #[test]
-fn alert_enrollment_disable_projection_reset_and_rollback_cover_history() {
+fn alert_enrollment_rejected_write_and_disable_projection_preserve_history_contract() {
     let expected = seeded_timestamps();
     let mut object = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
     object.event_history.time_stamps = expected.clone();
-    let rollback = object
-        .capture_write_property_rollback(
+    assert_property_error(
+        object.write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            &PropertyValue::Boolean(false),
-        )
-        .expect("Alert Enrollment detection write needs an opaque rollback");
-
+            None,
+            PropertyValue::Unsigned(0),
+            None,
+        ),
+        ErrorCode::INVALID_DATA_TYPE,
+        "invalid detection write",
+    );
+    assert_seeded_timestamp_reads(&object, &expected, "unchanged Alert Enrollment");
     object.set_event_detection_enable(false);
     assert_default_timestamp_array(&object, "disabled Alert Enrollment");
-    object.restore_write_property_rollback(rollback).unwrap();
-    assert_seeded_timestamp_reads(&object, &expected, "restored Alert Enrollment");
-
+    assert_eq!(object.event_history.time_stamps, seeded_zero_timestamps());
+    object.event_history.time_stamps = expected.clone();
     object.event_detection_enable = false;
     assert_default_timestamp_array(&object, "directly-disabled Alert Enrollment");
     assert_eq!(object.event_history.time_stamps, expected);
@@ -299,7 +305,7 @@ fn metadata_row(object: &dyn BACnetObject, property: PropertyIdentifier) -> Prop
 
 #[test]
 fn enrollment_property_metadata_is_complete_and_pins_timestamp_requirements() {
-    let event = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let event = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let event_ids = [
         PropertyIdentifier::OBJECT_IDENTIFIER,
         PropertyIdentifier::OBJECT_NAME,
@@ -319,7 +325,6 @@ fn enrollment_property_metadata_is_complete_and_pins_timestamp_requirements() {
         PropertyIdentifier::FAULT_PARAMETERS,
         PropertyIdentifier::TIME_DELAY_NORMAL,
         PropertyIdentifier::STATUS_FLAGS,
-        PropertyIdentifier::OUT_OF_SERVICE,
         PropertyIdentifier::RELIABILITY,
         PropertyIdentifier::PROPERTY_LIST,
     ];
@@ -392,17 +397,32 @@ fn enrollment_property_metadata_is_complete_and_pins_timestamp_requirements() {
 fn alert_to_normal_acknowledgment_cannot_be_cleared() {
     let mut alert = AlertEnrollmentObject::new(1, "AE-1", alert_source()).unwrap();
 
-    alert.set_acked_transitions_internal(0x04, false).unwrap();
-    assert_eq!(alert.acked_transitions, 0b111);
+    alert
+        .set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
+        .unwrap();
+    assert_eq!(alert.acked_transitions, EventTransitionBits::all());
 
-    alert.set_acked_transitions_internal(0x01, false).unwrap();
-    assert_eq!(alert.acked_transitions, 0b110);
-    alert.set_acked_transitions_internal(0x02, false).unwrap();
-    assert_eq!(alert.acked_transitions, 0b100);
-    alert.set_acked_transitions_internal(0x01, true).unwrap();
-    alert.set_acked_transitions_internal(0x02, true).unwrap();
-    assert_eq!(alert.acked_transitions, 0b111);
+    alert
+        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+        .unwrap();
+    assert_eq!(
+        alert.acked_transitions,
+        EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL
+    );
+    alert
+        .set_acked_transitions_internal(EventTransitionBits::TO_FAULT, false)
+        .unwrap();
+    assert_eq!(alert.acked_transitions, EventTransitionBits::TO_NORMAL);
+    alert
+        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, true)
+        .unwrap();
+    alert
+        .set_acked_transitions_internal(EventTransitionBits::TO_FAULT, true)
+        .unwrap();
+    assert_eq!(alert.acked_transitions, EventTransitionBits::all());
 
     alert.set_event_detection_enable(false);
-    assert!(alert.set_acked_transitions_internal(0x04, false).is_err());
+    assert!(alert
+        .set_acked_transitions_internal(EventTransitionBits::TO_NORMAL, false)
+        .is_err());
 }

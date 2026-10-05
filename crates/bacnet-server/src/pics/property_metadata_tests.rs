@@ -1,15 +1,56 @@
 use bacnet_objects::{
+    analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject},
     audit::AuditReporterObject,
-    binary::BinaryInputObject,
+    binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject},
+    device::DeviceObject,
     event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject},
+    multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject},
     staging::{StagingConfig, StagingObject},
     value_types::TimeValueObject,
 };
 use bacnet_types::constructed::BACnetStageLimitValue;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::*;
+
+mod access_identity;
+mod access_topology;
+mod accumulator;
+mod audit_log;
+mod audit_reporter;
+mod averaging;
+mod channel;
+mod color;
+mod command;
+mod elevator;
+mod group;
+mod life_safety;
+mod lighting;
+mod load_control;
+mod loop_program;
+mod network_port;
+mod schedule;
+mod timer;
+
+/// Expected (identifier, optional, writable) row for one property.
+type PropertyRow = (PropertyIdentifier, bool, bool);
+
+/// Constructor for a fresh object of a type, paired with that type.
+type FreshObject = fn() -> (Box<dyn bacnet_objects::traits::BACnetObject>, ObjectType);
+
+// Expected fixtures retain readable declaration order while the PICS contract
+// orders every type's output by raw property ID, including single instances.
+fn sorted_rows(rows: &[PropertyRow]) -> Vec<PropertyRow> {
+    let mut rows = rows.to_vec();
+    rows.sort_by_key(|row| row.0.to_raw());
+    rows
+}
+fn sorted_required(properties: &[PropertyIdentifier]) -> Vec<PropertyIdentifier> {
+    let mut properties = properties.to_vec();
+    properties.sort_by_key(|property| property.to_raw());
+    properties
+}
 
 fn property_support(
     pics: &Pics,
@@ -31,12 +72,16 @@ fn property_support(
 #[test]
 fn pics_projects_migrated_property_metadata() {
     let mut db = ObjectDatabase::new();
+    db.add(Box::new(DeviceObject::new(Default::default()).unwrap()))
+        .unwrap();
     db.add(Box::new(TimeValueObject::new(1, "tv-1").unwrap()))
         .unwrap();
     db.add(Box::new(BinaryInputObject::new(1, "bi-1").unwrap()))
         .unwrap();
-    db.add(Box::new(EventEnrollmentObject::new(1, "ee-1", 0).unwrap()))
-        .unwrap();
+    db.add(Box::new(
+        EventEnrollmentObject::new(1, "ee-1", EventType::CHANGE_OF_BITSTRING).unwrap(),
+    ))
+    .unwrap();
     let alert_source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     db.add(Box::new(
         AlertEnrollmentObject::new(1, "ae-1", alert_source).unwrap(),
@@ -83,7 +128,7 @@ fn pics_projects_migrated_property_metadata() {
             ObjectType::TIME_VALUE,
             PropertyIdentifier::PRIORITY_ARRAY,
             true,
-            true,
+            false,
         ),
         (
             ObjectType::TIME_VALUE,
@@ -109,11 +154,26 @@ fn pics_projects_migrated_property_metadata() {
             true,
             true,
         ),
+        // Table 12-6 requires Acked_Transitions of a Binary Input that
+        // reports intrinsically, and only permits Event_Message_Texts (#1485).
         (
             ObjectType::BINARY_INPUT,
             PropertyIdentifier::ACKED_TRANSITIONS,
+            false,
+            false,
+        ),
+        (
+            ObjectType::BINARY_INPUT,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
             true,
             false,
+        ),
+        // Only permitted too, and writable (#1329).
+        (
+            ObjectType::BINARY_INPUT,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
+            true,
+            true,
         ),
         (
             ObjectType::EVENT_ENROLLMENT,
@@ -189,6 +249,7 @@ fn pics_projects_migrated_property_metadata() {
     }
 
     for object_type in [
+        ObjectType::DEVICE,
         ObjectType::TIME_VALUE,
         ObjectType::BINARY_INPUT,
         ObjectType::EVENT_ENROLLMENT,
@@ -218,7 +279,7 @@ fn pics_projects_migrated_property_metadata() {
         .collect();
     assert_eq!(
         alert_rows,
-        vec![
+        sorted_rows(&[
             (PropertyIdentifier::OBJECT_IDENTIFIER, false, false),
             (PropertyIdentifier::OBJECT_NAME, false, false),
             (PropertyIdentifier::DESCRIPTION, true, true),
@@ -232,7 +293,7 @@ fn pics_projects_migrated_property_metadata() {
             (PropertyIdentifier::NOTIFY_TYPE, false, true),
             (PropertyIdentifier::EVENT_TIME_STAMPS, false, false),
             (PropertyIdentifier::PROPERTY_LIST, false, false),
-        ]
+        ])
     );
 }
 
@@ -260,37 +321,388 @@ fn pics_audit_reporter_metadata_is_complete_and_exact() {
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        rows,
-        vec![
-            (PropertyIdentifier::OBJECT_IDENTIFIER, true, false, false),
-            (PropertyIdentifier::OBJECT_NAME, true, false, false),
-            (PropertyIdentifier::OBJECT_TYPE, true, false, false),
-            (PropertyIdentifier::DESCRIPTION, true, true, true),
-            (PropertyIdentifier::STATUS_FLAGS, true, false, false),
-            (PropertyIdentifier::RELIABILITY, true, false, false),
-            (PropertyIdentifier::EVENT_STATE, true, false, false),
-            (PropertyIdentifier::AUDIT_LEVEL, true, false, false),
-            (
-                PropertyIdentifier::AUDIT_SOURCE_REPORTER,
-                true,
-                false,
-                false,
-            ),
-            (PropertyIdentifier::AUDITABLE_OPERATIONS, true, false, false,),
-            (
-                PropertyIdentifier::AUDIT_PRIORITY_FILTER,
-                true,
-                false,
-                false,
-            ),
-            (
-                PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
-                true,
-                false,
-                false,
-            ),
-            (PropertyIdentifier::PROPERTY_LIST, true, false, false),
-        ]
-    );
+    let mut expected = vec![
+        (PropertyIdentifier::OBJECT_IDENTIFIER, true, false, false),
+        (PropertyIdentifier::OBJECT_NAME, true, false, false),
+        (PropertyIdentifier::OBJECT_TYPE, true, false, false),
+        (PropertyIdentifier::DESCRIPTION, true, true, true),
+        (PropertyIdentifier::STATUS_FLAGS, true, false, false),
+        (PropertyIdentifier::RELIABILITY, true, false, false),
+        (PropertyIdentifier::EVENT_STATE, true, false, false),
+        (PropertyIdentifier::AUDIT_LEVEL, true, false, false),
+        (
+            PropertyIdentifier::AUDIT_SOURCE_REPORTER,
+            true,
+            false,
+            false,
+        ),
+        (PropertyIdentifier::AUDITABLE_OPERATIONS, true, false, false),
+        (
+            PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+            true,
+            false,
+            false,
+        ),
+        (
+            PropertyIdentifier::ISSUE_CONFIRMED_NOTIFICATIONS,
+            true,
+            false,
+            false,
+        ),
+        (PropertyIdentifier::PROPERTY_LIST, true, false, false),
+    ];
+    expected.sort_by_key(|row| row.0.to_raw());
+    assert_eq!(rows, expected);
+}
+
+#[test]
+fn pics_analog_property_metadata_is_exact_for_each_configuration() {
+    use bacnet_objects::traits::BACnetObject;
+    use PropertyIdentifier as P;
+
+    // Expected (identifier, optional, writable) rows, not generated from metadata.
+    // The event rows Tables 12-2, 12-3 and 12-4 require of an intrinsic
+    // reporter are not optional; Time_Delay_Normal and Event_Message_Texts,
+    // which they only permit, are (#1485).
+    let base = [
+        (P::OBJECT_IDENTIFIER, false, false),
+        (P::OBJECT_NAME, false, true),
+        (P::DESCRIPTION, true, true),
+        (P::OBJECT_TYPE, false, false),
+        (P::PRESENT_VALUE, false, true),
+        (P::STATUS_FLAGS, false, false),
+        (P::EVENT_STATE, false, false),
+        (P::EVENT_DETECTION_ENABLE, false, true),
+        (P::OUT_OF_SERVICE, false, true),
+        (P::UNITS, false, false),
+        (P::COV_INCREMENT, true, true),
+        (P::HIGH_LIMIT, false, true),
+        (P::LOW_LIMIT, false, true),
+        (P::DEADBAND, false, true),
+        (P::LIMIT_ENABLE, false, true),
+        (P::EVENT_ENABLE, false, true),
+        (P::NOTIFY_TYPE, false, true),
+        (P::NOTIFICATION_CLASS, false, true),
+        (P::TIME_DELAY, false, true),
+        (P::TIME_DELAY_NORMAL, true, true),
+        (P::RELIABILITY, true, true),
+        (P::RELIABILITY_EVALUATION_INHIBIT, true, true),
+        (P::ACKED_TRANSITIONS, false, false),
+        (P::EVENT_TIME_STAMPS, false, false),
+        (P::EVENT_MESSAGE_TEXTS, true, false),
+        (P::EVENT_MESSAGE_TEXTS_CONFIG, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT_REF, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT, true, true),
+        (P::PROPERTY_LIST, false, false),
+    ];
+    for configuration in 0..8 {
+        let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
+        let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+        let mut ao = AnalogOutputObject::new(1, "AO-1", 62).unwrap();
+        if configuration & 1 != 0 {
+            ai.configure_fault_out_of_range(-10.0, 100.0).unwrap();
+            av.configure_fault_out_of_range(-10.0, 100.0).unwrap();
+        }
+        macro_rules! bounds {
+            ($object:ident) => {
+                if configuration & 2 != 0 {
+                    $object.set_min_pres_value(-20.0);
+                }
+                if configuration & 4 != 0 {
+                    $object.set_max_pres_value(120.0);
+                }
+            };
+        }
+        bounds!(ai);
+        bounds!(av);
+        bounds!(ao);
+        let objects: [Box<dyn BACnetObject>; 3] = [Box::new(ai), Box::new(av), Box::new(ao)];
+        for object in objects {
+            let kind = object.object_identifier().object_type();
+            let mut expected = base.to_vec();
+            if kind != ObjectType::ANALOG_INPUT {
+                let optional = kind == ObjectType::ANALOG_VALUE;
+                expected.splice(
+                    10..10,
+                    [
+                        (P::PRIORITY_ARRAY, optional, false),
+                        (P::RELINQUISH_DEFAULT, optional, true),
+                        (P::CURRENT_COMMAND_PRIORITY, optional, false),
+                    ],
+                );
+            }
+            if configuration & 1 != 0 && kind != ObjectType::ANALOG_OUTPUT {
+                expected.extend([
+                    (P::FAULT_HIGH_LIMIT, true, false),
+                    (P::FAULT_LOW_LIMIT, true, false),
+                ]);
+            }
+            if configuration & 2 != 0 {
+                expected.push((P::MIN_PRES_VALUE, true, false));
+            }
+            if configuration & 4 != 0 {
+                expected.push((P::MAX_PRES_VALUE, true, false));
+            }
+            if kind != ObjectType::ANALOG_INPUT {
+                expected.extend([
+                    (P::VALUE_SOURCE, false, true),
+                    (P::VALUE_SOURCE_ARRAY, false, false),
+                    (P::LAST_COMMAND_TIME, false, false),
+                ]);
+            }
+            let required = object.required_properties();
+            let mut db = ObjectDatabase::new();
+            db.add(object).unwrap();
+            let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+            let support = &pics.supported_object_types[0];
+            assert_eq!(support.object_type, kind);
+            if kind != ObjectType::ANALOG_INPUT {
+                assert_eq!(support.createable, kind == ObjectType::ANALOG_OUTPUT);
+            }
+            let rows: Vec<_> = support
+                .supported_properties
+                .iter()
+                .map(|row| {
+                    assert!(row.access.readable);
+                    (row.property_id, row.access.optional, row.access.writable)
+                })
+                .collect();
+            assert_eq!(
+                rows,
+                sorted_rows(&expected),
+                "configuration {configuration}"
+            );
+            assert_eq!(
+                rows.iter()
+                    .filter_map(|&(p, optional, _)| (!optional).then_some(p))
+                    .collect::<Vec<_>>(),
+                sorted_required(required.as_ref())
+            );
+        }
+    }
+}
+
+#[test]
+fn pics_binary_commandable_property_metadata_is_exact() {
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::primitives::PropertyValue;
+    use PropertyIdentifier as P;
+
+    // Independent (identifier, optional, writable) fixture in legacy order.
+    // Tables 12-8 and 12-10 require the event rows of an intrinsic reporter
+    // but Time_Delay_Normal and Event_Message_Texts (#1485).
+    let base = [
+        (P::OBJECT_IDENTIFIER, false, false),
+        (P::OBJECT_NAME, false, true),
+        (P::DESCRIPTION, true, true),
+        (P::OBJECT_TYPE, false, false),
+        (P::PRESENT_VALUE, false, true),
+        (P::STATUS_FLAGS, false, false),
+        (P::EVENT_STATE, false, false),
+        (P::EVENT_DETECTION_ENABLE, false, true),
+        (P::EVENT_ENABLE, false, true),
+        (P::TIME_DELAY, false, true),
+        (P::TIME_DELAY_NORMAL, true, true),
+        (P::NOTIFY_TYPE, false, true),
+        (P::NOTIFICATION_CLASS, false, true),
+        (P::ACKED_TRANSITIONS, false, false),
+        (P::EVENT_TIME_STAMPS, false, false),
+        (P::EVENT_MESSAGE_TEXTS, true, false),
+        (P::EVENT_MESSAGE_TEXTS_CONFIG, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT_REF, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT, true, true),
+        (P::OUT_OF_SERVICE, false, true),
+        (P::RELIABILITY, true, true),
+        (P::RELIABILITY_EVALUATION_INHIBIT, true, true),
+        (P::ACTIVE_TEXT, true, true),
+        (P::INACTIVE_TEXT, true, true),
+    ];
+    for out_of_service in [false, true] {
+        for detection_enabled in [false, true] {
+            let objects: [Box<dyn BACnetObject>; 2] = [
+                Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
+                Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
+            ];
+            for mut object in objects {
+                let kind = object.object_identifier().object_type();
+                for (p, enabled) in [
+                    (P::OUT_OF_SERVICE, out_of_service),
+                    (P::EVENT_DETECTION_ENABLE, detection_enabled),
+                ] {
+                    object
+                        .write_property_from(
+                            p,
+                            None,
+                            PropertyValue::Boolean(enabled),
+                            None,
+                            &crate::command_source::test_origin(),
+                        )
+                        .unwrap();
+                }
+                let optional = kind == ObjectType::BINARY_VALUE;
+                let mut expected = base.to_vec();
+                expected.splice(
+                    17..17,
+                    [
+                        (P::PRIORITY_ARRAY, optional, false),
+                        (P::RELINQUISH_DEFAULT, optional, true),
+                        (P::CURRENT_COMMAND_PRIORITY, optional, false),
+                    ],
+                );
+                if optional {
+                    expected.push((P::ALARM_VALUE, false, true));
+                } else {
+                    expected.insert(20, (P::POLARITY, false, false));
+                    expected.insert(5, (P::FEEDBACK_VALUE, false, true));
+                }
+                expected.extend([
+                    (P::VALUE_SOURCE, false, true),
+                    (P::VALUE_SOURCE_ARRAY, false, false),
+                    (P::LAST_COMMAND_TIME, false, false),
+                ]);
+                expected.push((P::PROPERTY_LIST, false, false));
+                let required = object.required_properties();
+                let mut db = ObjectDatabase::new();
+                db.add(object).unwrap();
+                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+                assert_eq!(pics.supported_object_types.len(), 1);
+                let support = &pics.supported_object_types[0];
+                assert_eq!(support.object_type, kind);
+                assert!(support.createable);
+                let rows: Vec<_> = support
+                    .supported_properties
+                    .iter()
+                    .map(|row| {
+                        assert!(row.access.readable);
+                        (row.property_id, row.access.optional, row.access.writable)
+                    })
+                    .collect();
+                assert_eq!(
+                    rows,
+                    sorted_rows(&expected),
+                    "{kind:?}, OOS={out_of_service}, detection={detection_enabled}"
+                );
+                assert_eq!(
+                    rows.iter()
+                        .filter_map(|&(p, optional, _)| (!optional).then_some(p))
+                        .collect::<Vec<_>>(),
+                    sorted_required(required.as_ref())
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn pics_multistate_property_metadata_is_exact() {
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::primitives::PropertyValue;
+    use PropertyIdentifier as P;
+
+    let base = [
+        (P::OBJECT_IDENTIFIER, false, false),
+        (P::OBJECT_NAME, false, true),
+        (P::DESCRIPTION, true, true),
+        (P::OBJECT_TYPE, false, false),
+        (P::PRESENT_VALUE, false, true),
+        (P::STATUS_FLAGS, false, false),
+        (P::EVENT_STATE, false, false),
+        (P::EVENT_DETECTION_ENABLE, false, true),
+        (P::EVENT_ENABLE, false, true),
+        (P::TIME_DELAY, false, true),
+        (P::TIME_DELAY_NORMAL, true, true),
+        (P::NOTIFY_TYPE, false, true),
+        (P::NOTIFICATION_CLASS, false, true),
+        (P::ACKED_TRANSITIONS, false, false),
+        (P::EVENT_TIME_STAMPS, false, false),
+        (P::EVENT_MESSAGE_TEXTS, true, false),
+        (P::EVENT_MESSAGE_TEXTS_CONFIG, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT_REF, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT, true, true),
+        (P::OUT_OF_SERVICE, false, true),
+        // A whole State_Text write resizes it, but it takes no write of its
+        // own (#1443).
+        (P::NUMBER_OF_STATES, false, false),
+        (P::RELIABILITY, true, true),
+        (P::RELIABILITY_EVALUATION_INHIBIT, true, true),
+        (P::STATE_TEXT, true, true),
+    ];
+    for out_of_service in [false, true] {
+        for detection_enabled in [false, true] {
+            let objects: [Box<dyn BACnetObject>; 3] = [
+                Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()),
+                Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()),
+                Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()),
+            ];
+            for mut object in objects {
+                let kind = object.object_identifier().object_type();
+                for (p, enabled) in [
+                    (P::OUT_OF_SERVICE, out_of_service),
+                    (P::EVENT_DETECTION_ENABLE, detection_enabled),
+                ] {
+                    object
+                        .write_property_from(
+                            p,
+                            None,
+                            PropertyValue::Boolean(enabled),
+                            None,
+                            &crate::command_source::test_origin(),
+                        )
+                        .unwrap();
+                }
+                let mut expected = base.to_vec();
+                if kind != ObjectType::MULTI_STATE_INPUT {
+                    let optional = kind == ObjectType::MULTI_STATE_VALUE;
+                    expected.splice(
+                        18..18,
+                        [
+                            (P::PRIORITY_ARRAY, optional, false),
+                            (P::RELINQUISH_DEFAULT, optional, true),
+                            (P::CURRENT_COMMAND_PRIORITY, optional, false),
+                        ],
+                    );
+                }
+                if kind == ObjectType::MULTI_STATE_OUTPUT {
+                    expected.insert(5, (P::FEEDBACK_VALUE, false, true));
+                } else {
+                    expected.push((P::ALARM_VALUES, false, true));
+                }
+                if kind != ObjectType::MULTI_STATE_INPUT {
+                    expected.extend([
+                        (P::VALUE_SOURCE, false, true),
+                        (P::VALUE_SOURCE_ARRAY, false, false),
+                        (P::LAST_COMMAND_TIME, false, false),
+                    ]);
+                }
+                expected.push((P::PROPERTY_LIST, false, false));
+                let required = object.required_properties();
+                let mut db = ObjectDatabase::new();
+                db.add(object).unwrap();
+                let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+                assert_eq!(pics.supported_object_types.len(), 1);
+                let support = &pics.supported_object_types[0];
+                assert_eq!(support.object_type, kind);
+                assert!(support.createable);
+                let rows: Vec<_> = support
+                    .supported_properties
+                    .iter()
+                    .map(|row| {
+                        assert!(row.access.readable);
+                        (row.property_id, row.access.optional, row.access.writable)
+                    })
+                    .collect();
+                assert_eq!(
+                    rows,
+                    sorted_rows(&expected),
+                    "{kind:?}, OOS={out_of_service}, detection={detection_enabled}"
+                );
+                assert_eq!(
+                    rows.iter()
+                        .filter_map(|&(p, optional, _)| (!optional).then_some(p))
+                        .collect::<Vec<_>>(),
+                    sorted_required(required.as_ref())
+                );
+            }
+        }
+    }
 }

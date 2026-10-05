@@ -77,7 +77,8 @@ fn alert_enrollment_present_value_is_the_explicit_initial_source_and_is_read_onl
 fn record_alert_source_changes_only_present_value() {
     let mut ae = AlertEnrollmentObject::new(1, "AE", alert_source(1)).unwrap();
     ae.set_event_state_internal(EventState::OFFNORMAL).unwrap();
-    ae.set_acked_transitions_internal(0x01, false).unwrap();
+    ae.set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+        .unwrap();
     let observed_properties = [
         PropertyIdentifier::EVENT_STATE,
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
@@ -123,8 +124,8 @@ fn alert_enrollment_event_detection_enable() {
 #[test]
 fn alert_enrollment_write_event_detection_enable() {
     let mut ae = AlertEnrollmentObject::new(1, "AE", alert_source(1)).unwrap();
-    ae.event_state = EventState::OFFNORMAL.to_raw();
-    ae.acked_transitions = 0;
+    ae.event_state = EventState::OFFNORMAL;
+    ae.acked_transitions = EventTransitionBits::empty();
     ae.write_property(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         None,
@@ -154,8 +155,8 @@ fn alert_enrollment_write_event_detection_enable() {
 #[test]
 fn alert_enrollment_public_detection_flag_projects_disabled_initial_state() {
     let mut ae = AlertEnrollmentObject::new(1, "AE", alert_source(1)).unwrap();
-    ae.event_state = EventState::OFFNORMAL.to_raw();
-    ae.acked_transitions = 0;
+    ae.event_state = EventState::OFFNORMAL;
+    ae.acked_transitions = EventTransitionBits::empty();
 
     ae.event_detection_enable = false;
 
@@ -177,8 +178,8 @@ fn alert_enrollment_public_detection_flag_projects_disabled_initial_state() {
 #[test]
 fn alert_enrollment_setter_resets_state_after_direct_disable() {
     let mut ae = AlertEnrollmentObject::new(1, "AE", alert_source(1)).unwrap();
-    ae.event_state = EventState::OFFNORMAL.to_raw();
-    ae.acked_transitions = 0;
+    ae.event_state = EventState::OFFNORMAL;
+    ae.acked_transitions = EventTransitionBits::empty();
     ae.event_detection_enable = false;
 
     ae.set_event_detection_enable(true);
@@ -214,7 +215,7 @@ fn alert_enrollment_removed_common_properties_are_unknown_and_nonmutating() {
         );
         assert_property_error(
             ae.write_property(property, None, PropertyValue::Boolean(true), None),
-            ErrorCode::WRITE_ACCESS_DENIED,
+            ErrorCode::UNKNOWN_PROPERTY,
             &format!("{property:?} write"),
         );
     }
@@ -227,7 +228,9 @@ fn alert_enrollment_disabled_state_rejects_internal_transition_updates() {
     ae.set_event_detection_enable(false);
 
     assert!(ae.set_event_state_internal(EventState::OFFNORMAL).is_err());
-    assert!(ae.set_acked_transitions_internal(0x01, false).is_err());
+    assert!(ae
+        .set_acked_transitions_internal(EventTransitionBits::TO_OFFNORMAL, false)
+        .is_err());
     assert_eq!(
         ae.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),

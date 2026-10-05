@@ -7,6 +7,13 @@ Demonstrates:
 - Reading properties via VMAC addressing
 
 Prerequisites:
+    Provision a distinct UUID for each node and hub-hosting device before first
+    deployment and store it durably for that device's lifetime. Set
+    SC_HUB_DEVICE_UUID, SC_SERVER_DEVICE_UUID and
+    SC_CLIENT_DEVICE_UUID from those stored values (UUID text). This example only
+    parses them; it never generates or persists identity. Do not share UUIDs or
+    generate a new one on each start. See docs/python-api.md#sc-device-uuid-migration.
+
     Generate TLS certificates first:
         openssl ecparam -genkey -name prime256v1 -out ca-key.pem
         openssl req -new -x509 -key ca-key.pem -out ca-cert.pem -days 365 -subj "/CN=BACnet CA"
@@ -17,6 +24,8 @@ Prerequisites:
 """
 
 import asyncio
+import os
+from uuid import UUID
 
 from rusty_bacnet import (
     BACnetClient,
@@ -30,6 +39,9 @@ from rusty_bacnet import (
 
 
 async def main():
+    hub_uuid = UUID(os.environ["SC_HUB_DEVICE_UUID"]).bytes
+    server_uuid = UUID(os.environ["SC_SERVER_DEVICE_UUID"]).bytes
+    client_uuid = UUID(os.environ["SC_CLIENT_DEVICE_UUID"]).bytes
     # 1. Start the SC Hub
     hub = ScHub(
         listen="127.0.0.1:0",
@@ -37,6 +49,7 @@ async def main():
         key="hub-key.pem",
         vmac=b"\xff\x00\x00\x00\x00\x01",
         ca_cert="ca-cert.pem",  # enable mTLS
+        device_uuid=hub_uuid,
     )
     await hub.start()
     hub_url = await hub.url()
@@ -49,6 +62,7 @@ async def main():
         transport="sc",
         sc_hub=hub_url,
         sc_vmac=b"\x00\x01\x02\x03\x04\x05",
+        sc_device_uuid=server_uuid,
         sc_ca_cert="ca-cert.pem",
         sc_client_cert="server-cert.pem",
         sc_client_key="server-key.pem",
@@ -63,6 +77,7 @@ async def main():
         transport="sc",
         sc_hub=hub_url,
         sc_vmac=b"\x00\x02\x03\x04\x05\x06",
+        sc_device_uuid=client_uuid,
         sc_ca_cert="ca-cert.pem",
         sc_client_cert="client-cert.pem",
         sc_client_key="client-key.pem",
@@ -111,7 +126,8 @@ async def main():
                     print(f"  {prop['property_id']}: {prop['value'].value}")
 
     await server.stop()
-    await hub.stop()
+    print(await hub.status())
+    print(await hub.shutdown_gracefully())  # "graceful" (no peers left) or "forced"
     print("\nAll stopped.")
 
 

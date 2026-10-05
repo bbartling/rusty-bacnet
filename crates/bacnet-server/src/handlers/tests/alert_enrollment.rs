@@ -56,7 +56,7 @@ fn write_raw(
         priority: None,
     };
     let mut request_bytes = BytesMut::new();
-    request.encode(&mut request_bytes);
+    request.encode(&mut request_bytes).unwrap();
     handle_write_property(db, &request_bytes).map(|_| ())
 }
 
@@ -106,7 +106,7 @@ fn alert_present_value_and_removed_properties_have_exact_wire_access() {
         );
         assert_property_error(
             write_wire(&mut db, oid, property, PropertyValue::Boolean(true)),
-            ErrorCode::WRITE_ACCESS_DENIED,
+            ErrorCode::UNKNOWN_PROPERTY,
             &format!("{property:?} write"),
         );
     }

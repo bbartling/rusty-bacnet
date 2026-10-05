@@ -1,0 +1,397 @@
+//! AddListElement and RemoveListElement run the per-write event evaluation,
+//! as WriteProperty does (#1305 review). An Alarm_Values edit that puts the
+//! watched value in or out of alarm transitions at once with Time_Delay 0,
+//! not at the periodic task's second tick, and the transition's
+//! Status_Flags change still reaches a SubscribeCOV subscriber. So does a
+//! whole Alarm_Values written with WriteProperty or WritePropertyMultiple,
+//! one element or none (#1328). A list edit that moves a reported value with
+//! no transition at all, such as masking an Access Door's Door_Alarm_State,
+//! gets the COV fanout too, stamped for a timestamped reference when the
+//! edit commits, while an edit that moves no reported value stays quiet
+//! (#1149).
+//!
+//! The clock is paused, so the periodic task ticks only when a test sleeps
+//! past a second; `settle` stays well inside the first one.
+use super::cov_wire_test_support::*;
+use super::*;
+use bacnet_objects::access_control::{AccessDoorObject, AccessZoneObject};
+use bacnet_objects::multistate::{MultiStateInputObject, MultiStateValueObject};
+use bacnet_services::common::BACnetPropertyValue;
+use bacnet_services::cov::SubscribeCOVRequest;
+use bacnet_services::list_manipulation::ListElementRequest;
+use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
+use bacnet_services::write_property::WritePropertyRequest;
+use bacnet_types::enums::EventState;
+
+const ADD: ConfirmedServiceChoice = ConfirmedServiceChoice::ADD_LIST_ELEMENT;
+const REMOVE: ConfirmedServiceChoice = ConfirmedServiceChoice::REMOVE_LIST_ELEMENT;
+const WP: ConfirmedServiceChoice = ConfirmedServiceChoice::WRITE_PROPERTY;
+const WPM: ConfirmedServiceChoice = ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE;
+
+fn zone1() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ACCESS_ZONE, 1).unwrap()
+}
+
+fn msi1() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap()
+}
+
+/// An AddListElement or RemoveListElement body for `object`'s Alarm_Values.
+fn alarm_values(object: ObjectIdentifier, elements: &[u8]) -> BytesMut {
+    list_body(object, PropertyIdentifier::ALARM_VALUES, elements)
+}
+
+/// An AddListElement or RemoveListElement body for `object`'s `list`.
+fn list_body(object: ObjectIdentifier, list: PropertyIdentifier, elements: &[u8]) -> BytesMut {
+    let mut body = BytesMut::new();
+    ListElementRequest {
+        object_identifier: object,
+        property_identifier: list,
+        property_array_index: None,
+        list_of_elements: elements.to_vec(),
+    }
+    .encode(&mut body)
+    .unwrap();
+    body
+}
+
+/// A WriteProperty body giving `object`'s Alarm_Values the `elements`.
+fn write_alarm_values(object: ObjectIdentifier, elements: &[u8]) -> BytesMut {
+    let mut body = BytesMut::new();
+    WritePropertyRequest {
+        object_identifier: object,
+        property_identifier: PropertyIdentifier::ALARM_VALUES,
+        property_array_index: None,
+        property_value: elements.to_vec(),
+        priority: None,
+    }
+    .encode(&mut body)
+    .unwrap();
+    body
+}
+
+/// The same write as a WritePropertyMultiple body.
+fn write_multiple_alarm_values(object: ObjectIdentifier, elements: &[u8]) -> BytesMut {
+    let mut body = BytesMut::new();
+    WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: object,
+            list_of_properties: vec![BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::ALARM_VALUES,
+                property_array_index: None,
+                value: elements.to_vec(),
+                priority: None,
+            }],
+        }],
+    }
+    .encode(&mut body)
+    .unwrap();
+    body
+}
+
+async fn event_state(h: &Harness, object: ObjectIdentifier) -> EventState {
+    match h
+        .server
+        .database()
+        .read()
+        .await
+        .get(&object)
+        .unwrap()
+        .read_property(PropertyIdentifier::EVENT_STATE, None)
+        .unwrap()
+    {
+        PropertyValue::Enumerated(raw) => EventState::from_raw(raw),
+        other => panic!("Event_State read {other:?}"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn alarm_values_list_edits_move_a_zone_at_once() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        // Six inside a zone whose upper limit is five: ABOVE_UPPER_LIMIT (4).
+        let mut zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
+        zone.set_occupancy_limits(0, 5).unwrap();
+        zone.set_occupancy_count(6);
+        db.add(Box::new(zone)).unwrap();
+    })
+    .await;
+
+    h.request(ADD, alarm_values(zone1(), &[0x91, 4])).await;
+    h.settle().await;
+    assert_eq!(event_state(&h, zone1()).await, EventState::OFFNORMAL);
+
+    h.request(REMOVE, alarm_values(zone1(), &[0x91, 4])).await;
+    h.settle().await;
+    assert_eq!(event_state(&h, zone1()).await, EventState::NORMAL);
+}
+
+#[tokio::test(start_paused = true)]
+async fn alarm_values_list_edit_moves_a_multi_state_input_at_once() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
+        msi.set_present_value(2);
+        db.add(Box::new(msi)).unwrap();
+    })
+    .await;
+    let mut body = BytesMut::new();
+    SubscribeCOVRequest {
+        subscriber_process_identifier: 889,
+        monitored_object_identifier: msi1(),
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+    }
+    .encode(&mut body)
+    .unwrap();
+    h.request(ConfirmedServiceChoice::SUBSCRIBE_COV, body).await;
+    let initial = h.cov_notification().await;
+    assert_eq!(initial.monitored_object_identifier, msi1());
+
+    h.request(ADD, alarm_values(msi1(), &[0x21, 2])).await;
+    h.settle().await;
+    assert_eq!(event_state(&h, msi1()).await, EventState::OFFNORMAL);
+    // The subscriber hears IN_ALARM set.
+    let report = h.cov_notification().await;
+    let flags = report
+        .list_of_values
+        .iter()
+        .find(|value| value.property_identifier == SF)
+        .expect("Status_Flags in the report");
+    assert_eq!(flags.value, [0x82, 0x04, 0x80]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn alarm_values_writes_move_a_multi_state_input_at_once() {
+    // The input starts at state 1.
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()))
+            .unwrap();
+    })
+    .await;
+
+    // One element, then none.
+    h.request(WP, write_alarm_values(msi1(), &[0x21, 1])).await;
+    assert_eq!(response(&h).await, Ok(()));
+    h.settle().await;
+    assert_eq!(event_state(&h, msi1()).await, EventState::OFFNORMAL);
+
+    h.request(WP, write_alarm_values(msi1(), &[])).await;
+    assert_eq!(response(&h).await, Ok(()));
+    h.settle().await;
+    assert_eq!(event_state(&h, msi1()).await, EventState::NORMAL);
+}
+
+#[tokio::test(start_paused = true)]
+async fn alarm_values_write_multiple_moves_a_multi_state_value_at_once() {
+    let msv1 = ObjectIdentifier::new(ObjectType::MULTI_STATE_VALUE, 1).unwrap();
+    // The value starts at state 1, its Relinquish_Default.
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()))
+            .unwrap();
+    })
+    .await;
+
+    h.request(WPM, write_multiple_alarm_values(msv1, &[0x21, 1]))
+        .await;
+    assert_eq!(response(&h).await, Ok(()));
+    h.settle().await;
+    assert_eq!(event_state(&h, msv1).await, EventState::OFFNORMAL);
+
+    h.request(WPM, write_multiple_alarm_values(msv1, &[])).await;
+    assert_eq!(response(&h).await, Ok(()));
+    h.settle().await;
+    assert_eq!(event_state(&h, msv1).await, EventState::NORMAL);
+}
+
+#[tokio::test(start_paused = true)]
+async fn alarm_values_writes_move_a_zone_at_once() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        // Six inside a zone whose upper limit is five: ABOVE_UPPER_LIMIT (4).
+        let mut zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
+        zone.set_occupancy_limits(0, 5).unwrap();
+        zone.set_occupancy_count(6);
+        db.add(Box::new(zone)).unwrap();
+    })
+    .await;
+
+    for (service, body) in [
+        (
+            WP,
+            write_alarm_values as fn(ObjectIdentifier, &[u8]) -> BytesMut,
+        ),
+        (WPM, write_multiple_alarm_values),
+    ] {
+        h.request(service, body(zone1(), &[0x91, 4])).await;
+        assert_eq!(response(&h).await, Ok(()), "{service:?}");
+        h.settle().await;
+        assert_eq!(event_state(&h, zone1()).await, EventState::OFFNORMAL);
+
+        h.request(service, body(zone1(), &[])).await;
+        assert_eq!(response(&h).await, Ok(()), "{service:?}");
+        h.settle().await;
+        assert_eq!(event_state(&h, zone1()).await, EventState::NORMAL);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn masked_alarm_values_list_edit_returns_a_door_to_normal_at_once() {
+    use bacnet_types::enums::DoorAlarmState;
+    let door1 = ObjectIdentifier::new(ObjectType::ACCESS_DOOR, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        // FORCED_OPEN (3) is an alarm value, with Time_Delay 0 (#1149).
+        let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
+        door.set_alarm_values([DoorAlarmState::FORCED_OPEN])
+            .unwrap();
+        door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN)
+            .unwrap();
+        db.add(Box::new(door)).unwrap();
+    })
+    .await;
+    // The application's report reaches the algorithm at the periodic tick.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(event_state(&h, door1).await, EventState::OFFNORMAL);
+
+    // Masking the state the door is in sends it back to NORMAL, and the
+    // edit's own evaluation follows it without waiting for a tick.
+    h.request(
+        ADD,
+        list_body(door1, PropertyIdentifier::MASKED_ALARM_VALUES, &[0x91, 3]),
+    )
+    .await;
+    h.settle().await;
+    assert_eq!(event_state(&h, door1).await, EventState::NORMAL);
+}
+
+/// DOOR-1 in FORCED_OPEN (3), an alarm value behind a minute's Time_Delay,
+/// so no edit below proposes a transition, with a SubscribeCOV subscriber
+/// that has had its initial report.
+async fn subscribed_alarming_door() -> (Harness, ObjectIdentifier) {
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::enums::DoorAlarmState;
+    let door1 = ObjectIdentifier::new(ObjectType::ACCESS_DOOR, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
+        door.set_alarm_values([DoorAlarmState::FORCED_OPEN])
+            .unwrap();
+        door.write_property(
+            PropertyIdentifier::TIME_DELAY,
+            None,
+            PropertyValue::Unsigned(60),
+            None,
+        )
+        .unwrap();
+        door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN)
+            .unwrap();
+        db.add(Box::new(door)).unwrap();
+    })
+    .await;
+    let mut body = BytesMut::new();
+    SubscribeCOVRequest {
+        subscriber_process_identifier: 890,
+        monitored_object_identifier: door1,
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+    }
+    .encode(&mut body)
+    .unwrap();
+    h.request(ConfirmedServiceChoice::SUBSCRIBE_COV, body).await;
+    assert_eq!(door_alarm_state(&h.cov_notification().await), [0x91, 3]);
+    (h, door1)
+}
+
+/// Door_Alarm_State as a COV report carries it.
+fn door_alarm_state(report: &bacnet_services::cov::COVNotificationRequest) -> Vec<u8> {
+    report
+        .list_of_values
+        .iter()
+        .find(|value| value.property_identifier == PropertyIdentifier::DOOR_ALARM_STATE)
+        .expect("Door_Alarm_State in the report")
+        .value
+        .clone()
+}
+
+#[tokio::test(start_paused = true)]
+async fn masked_alarm_values_add_list_element_reports_the_door_back_to_normal() {
+    let (mut h, door1) = subscribed_alarming_door().await;
+    h.request(
+        ADD,
+        list_body(door1, PropertyIdentifier::MASKED_ALARM_VALUES, &[0x91, 3]),
+    )
+    .await;
+    assert_eq!(door_alarm_state(&h.cov_notification().await), [0x91, 0]);
+    h.no_notification().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn alarm_values_remove_list_element_reports_the_door_back_to_normal() {
+    let (mut h, door1) = subscribed_alarming_door().await;
+    // FORCED_OPEN out of Alarm_Values is no alarm the door recognises.
+    h.request(REMOVE, alarm_values(door1, &[0x91, 3])).await;
+    assert_eq!(door_alarm_state(&h.cov_notification().await), [0x91, 0]);
+    h.no_notification().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn alarm_values_edits_that_move_no_reported_value_stay_quiet() {
+    let (mut h, door1) = subscribed_alarming_door().await;
+    // FORCED_OPEN again: AddListElement leaves the list as it was.
+    h.request(ADD, alarm_values(door1, &[0x91, 3])).await;
+    h.no_notification().await;
+    // DOOR_OPEN_TOO_LONG in and out: the door's FORCED_OPEN stays an alarm
+    // value, so nothing a subscriber hears changes.
+    h.request(ADD, alarm_values(door1, &[0x91, 2])).await;
+    h.no_notification().await;
+    h.request(REMOVE, alarm_values(door1, &[0x91, 2])).await;
+    h.no_notification().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn list_edit_stamps_a_timestamped_change_at_the_time_of_the_edit() {
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::enums::DoorAlarmState;
+    const STATE: PropertyIdentifier = PropertyIdentifier::DOOR_ALARM_STATE;
+    let door1 = ObjectIdentifier::new(ObjectType::ACCESS_DOOR, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
+        door.set_alarm_values([DoorAlarmState::FORCED_OPEN])
+            .unwrap();
+        door.write_property(
+            PropertyIdentifier::TIME_DELAY,
+            None,
+            PropertyValue::Unsigned(60),
+            None,
+        )
+        .unwrap();
+        door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN)
+            .unwrap();
+        db.add(Box::new(door)).unwrap();
+    })
+    .await;
+    h.subscribe_specs(false, vec![(door1, vec![(STATE, true)])])
+        .await;
+    h.notification().await;
+
+    // The edit commits at :10; the clock moves to :20 as the response goes
+    // out, before the COV fanout runs.
+    h.set_clock(10);
+    *h.after_ack.lock().unwrap() = Some(at(20));
+    h.request(
+        ADD,
+        list_body(door1, PropertyIdentifier::MASKED_ALARM_VALUES, &[0x91, 3]),
+    )
+    .await;
+    let report = h.notification().await;
+    let rows: Vec<_> = report
+        .list_of_cov_notifications
+        .iter()
+        .filter(|item| item.monitored_object_identifier == door1)
+        .flat_map(|item| &item.list_of_values)
+        .filter(|value| value.property_identifier == STATE)
+        .map(|value| (value.value.clone(), value.time_of_change))
+        .collect();
+    assert_eq!(
+        rows,
+        [(vec![0x91, 0], Some(time(10)))],
+        "the change is stamped when the edit committed"
+    );
+    h.server.stop().await.unwrap();
+}

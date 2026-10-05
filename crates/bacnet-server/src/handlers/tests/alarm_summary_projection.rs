@@ -1,9 +1,13 @@
 use std::borrow::Cow;
 
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::NotifyType;
 
 use super::*;
+
+#[path = "alarm_summary_budget.rs"]
+mod budget;
 
 struct AlarmSummaryFixture {
     oid: ObjectIdentifier,
@@ -33,7 +37,7 @@ impl AlarmSummaryFixture {
                 ),
                 (
                     PropertyIdentifier::ACKED_TRANSITIONS,
-                    transition_bits(0b111),
+                    transition_bits(EventTransitionBits::all()),
                 ),
             ],
         }
@@ -97,16 +101,30 @@ impl BACnetObject for AlarmSummaryFixture {
     }
 }
 
-fn transition_bits(bits: u8) -> PropertyValue {
+fn transition_bits(bits: EventTransitionBits) -> PropertyValue {
     PropertyValue::BitString {
         unused_bits: 5,
-        data: vec![bacnet_types::bitstring::pack_octet(bits)],
+        data: vec![bits.to_bacnet()],
     }
 }
 
 fn response(db: &ObjectDatabase) -> Result<GetAlarmSummaryAck, Error> {
     let mut encoded = BytesMut::new();
-    handle_get_alarm_summary(db, &mut encoded)?;
+    let legacy = handle_get_alarm_summary(db, &mut encoded);
+    let mut bounded = BytesMut::new();
+    let result = handle_get_alarm_summary_budgeted(
+        db,
+        &mut bounded,
+        crate::server::GetAlarmSummaryBudget::default(),
+    );
+    match (&legacy, &result) {
+        (Ok(()), Ok(())) => assert_eq!(encoded, bounded),
+        (Err(expected), Err(AlarmSummaryFailure::Service(actual))) => {
+            assert_eq!(expected.to_string(), actual.to_string())
+        }
+        other => panic!("bounded/legacy projection drift: {other:?}"),
+    }
+    legacy?;
     GetAlarmSummaryAck::decode(&encoded)
 }
 
@@ -133,7 +151,7 @@ fn selects_only_active_alarm_notify_type_and_preserves_output_fields() {
     );
     selected.set(
         PropertyIdentifier::ACKED_TRANSITIONS,
-        transition_bits(0b010),
+        transition_bits(EventTransitionBits::TO_FAULT),
     );
     add(&mut db, selected);
 
@@ -157,7 +175,7 @@ fn selects_only_active_alarm_notify_type_and_preserves_output_fields() {
     assert_eq!(ack.entries[0].alarm_state, EventState::FAULT);
     assert_eq!(
         ack.entries[0].acknowledged_transitions,
-        (5, vec![0b0100_0000])
+        EventTransitionBits::TO_FAULT
     );
 }
 

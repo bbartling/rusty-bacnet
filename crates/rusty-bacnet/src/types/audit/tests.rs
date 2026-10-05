@@ -4,13 +4,16 @@ use bacnet_services::audit::{
     AuditLogQueryAck, BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
 };
 use bacnet_types::constructed::BACnetRecipient;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 use pyo3::exceptions::{PyTypeError, PyValueError};
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 use pyo3::PyTypeInfo;
 
 use crate::types::audit_projection::audit_log_query_ack_to_py;
+use crate::types::PyObjectIdentifier;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -245,7 +248,7 @@ fn base_query<'py>(py: Python<'py>, parameters: &Bound<'py, PyDict>) -> Bound<'p
     query.set_item("query_parameters", parameters).unwrap();
     query.set_item("requested_count", u16::MAX).unwrap();
     query
-        .set_item("start_at_sequence_number", u32::MAX)
+        .set_item("start_at_sequence_number", u64::MAX)
         .unwrap();
     query
 }
@@ -281,14 +284,15 @@ fn query_mapping_preserves_both_choices_and_rejects_invalid_flags() {
         by_target
             .set_item("operations", (1u64 << 15) | (1u64 << 63))
             .unwrap();
-        by_target.set_item("successful_actions_only", true).unwrap();
+        by_target.set_item("successful_actions_only", 1).unwrap();
         let parsed = audit_log_query_request_from_py(base_query(py, &by_target).as_any()).unwrap();
-        assert_eq!(parsed.start_at_sequence_number, Some(u32::MAX));
+        assert_eq!(parsed.start_at_sequence_number, Some(u64::MAX));
         assert_eq!(parsed.requested_count, u16::MAX);
         let BACnetAuditLogQueryParameters::ByTarget {
             target_array_index,
             target_priority,
             operations,
+            successful_actions_only,
             ..
         } = parsed.query_parameters
         else {
@@ -297,20 +301,69 @@ fn query_mapping_preserves_both_choices_and_rejects_invalid_flags() {
         assert_eq!(target_array_index, Some(u64::MAX));
         assert_eq!(target_priority, Some(16));
         assert_eq!(operations.unwrap().bits(), (1u64 << 15) | (1u64 << 63));
+        assert_eq!(successful_actions_only, BACnetSuccessFilter::SUCCESSES_ONLY);
 
         let by_source = PyDict::new(py);
         by_source.set_item("kind", "by_source").unwrap();
         by_source
             .set_item("source_device_identifier", py_oid(ObjectType::DEVICE, 13))
             .unwrap();
-        by_source
-            .set_item("successful_actions_only", false)
-            .unwrap();
+        by_source.set_item("successful_actions_only", 0).unwrap();
         let parsed = audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap();
-        assert!(matches!(
-            parsed.query_parameters,
-            BACnetAuditLogQueryParameters::BySource { .. }
-        ));
+        let BACnetAuditLogQueryParameters::BySource {
+            successful_actions_only,
+            ..
+        } = parsed.query_parameters
+        else {
+            panic!("expected by-source query");
+        };
+        assert_eq!(successful_actions_only, BACnetSuccessFilter::ALL);
+
+        // RB-20: the third corrected-baseline value is accepted, while the
+        // deprecated Boolean meaning stays a TypeError either way.
+        by_source.set_item("successful_actions_only", 2).unwrap();
+        let parsed = audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap();
+        let BACnetAuditLogQueryParameters::BySource {
+            successful_actions_only,
+            ..
+        } = parsed.query_parameters
+        else {
+            panic!("expected by-source query");
+        };
+        assert_eq!(successful_actions_only, BACnetSuccessFilter::FAILURES_ONLY);
+
+        by_source.set_item("successful_actions_only", 3).unwrap();
+        assert_error_type::<PyValueError>(
+            py,
+            audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
+        );
+        for legacy in [true, false] {
+            by_source
+                .set_item("successful_actions_only", legacy)
+                .unwrap();
+            assert_error_type::<PyTypeError>(
+                py,
+                audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
+            );
+        }
+        by_source.set_item("successful_actions_only", 0).unwrap();
+
+        // A bool is never an arbitrary enum/count/cursor integer, even where
+        // the range would admit 0/1.
+        let count_query = base_query(py, &by_source);
+        count_query.set_item("requested_count", true).unwrap();
+        assert_error_type::<PyTypeError>(
+            py,
+            audit_log_query_request_from_py(count_query.as_any()).unwrap_err(),
+        );
+        let cursor_query = base_query(py, &by_source);
+        cursor_query
+            .set_item("start_at_sequence_number", false)
+            .unwrap();
+        assert_error_type::<PyTypeError>(
+            py,
+            audit_log_query_request_from_py(cursor_query.as_any()).unwrap_err(),
+        );
 
         for invalid in [1u64 << 16, 1u64 << 31] {
             by_source.set_item("operations", invalid).unwrap();
@@ -319,8 +372,9 @@ fn query_mapping_preserves_both_choices_and_rejects_invalid_flags() {
                 audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
             );
         }
+        // Outside unsigned64 overflows (#1360).
         by_source.set_item("operations", -1).unwrap();
-        assert_error_type::<PyValueError>(
+        assert_error_type::<pyo3::exceptions::PyOverflowError>(
             py,
             audit_log_query_request_from_py(base_query(py, &by_source).as_any()).unwrap_err(),
         );
@@ -384,7 +438,11 @@ fn ack_projection_covers_every_datum_and_nested_optional_field() {
         )
     };
     let datums = [
-        BACnetAuditLogDatum::LogStatus(0b010),
+        // Python sees the bit0-first value: log-disabled is 1, log-interrupted 4.
+        BACnetAuditLogDatum::LogStatus(
+            bacnet_types::bitstring::LogStatus::LOG_DISABLED
+                | bacnet_types::bitstring::LogStatus::LOG_INTERRUPTED,
+        ),
         BACnetAuditLogDatum::AuditNotification(audit_notification(true)),
         BACnetAuditLogDatum::AuditNotification(audit_notification(false)),
         BACnetAuditLogDatum::TimeChange(-1.5),
@@ -483,7 +541,7 @@ fn ack_projection_covers_every_datum_and_nested_optional_field() {
                         .unwrap()
                         .extract::<u8>()
                         .unwrap(),
-                    0b010
+                    0b101
                 ),
                 3 => assert_eq!(
                     datum

@@ -1,12 +1,14 @@
 //! BACnetServer: builder, APDU dispatch, and lifecycle management.
 //!
 //! The server wraps a NetworkLayer behind Arc (shared with the dispatch task),
-//! owns an ObjectDatabase via Arc<Mutex>, and spawns a dispatch task that
+//! owns an ObjectDatabase via `Arc<RwLock>`, and spawns a dispatch task that
 //! routes incoming APDUs to service handlers.
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
+#[cfg(test)]
+pub(crate) use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,10 +18,12 @@ use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tracing::{debug, warn};
 
+use event_delivery::EventDelivery;
+
 use bacnet_encoding::apdu::{
-    self, encode_apdu, validate_max_apdu_length, AbortPdu, Apdu, ComplexAck,
-    ConfirmedRequest as ConfirmedRequestPdu, ErrorPdu, RejectPdu, SegmentAck as SegmentAckPdu,
-    SimpleAck, UnconfirmedRequest as UnconfirmedRequestPdu,
+    self, encode_apdu, AbortPdu, Apdu, ComplexAck, ConfirmedRequest as ConfirmedRequestPdu,
+    ErrorPdu, RejectPdu, SegmentAck as SegmentAckPdu, SimpleAck,
+    UnconfirmedRequest as UnconfirmedRequestPdu,
 };
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::primitives::encode_property_value;
@@ -34,10 +38,8 @@ use bacnet_objects::notification_class::{
 use bacnet_services::alarm_event::EventNotificationRequest;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::COVNotificationRequest;
-use bacnet_services::cov_multiple::{
-    COVNotificationItem, COVNotificationMultipleRequest, COVNotificationValue,
-};
-use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
+use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
+use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{
@@ -54,16 +56,28 @@ use crate::audit_notification::{
     UnconfirmedAuditNotificationAuthorizationContext, UnconfirmedAuditNotificationAuthorizer,
     MAX_AUDIT_NOTIFICATIONS, MAX_AUDIT_NOTIFICATION_BYTES,
 };
-use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
+pub use crate::cov::{CovCounters, CovPolicy};
+use crate::cov::{
+    CovNotificationKind, CovSubscription, CovSubscriptionSnapshot, CovSubscriptionTable,
+};
 use crate::handlers;
 use crate::life_safety::{LifeSafetyOperationAuthorizationContext, LifeSafetyOperationAuthorizer};
-use confirmed_request_tracker::{ConfirmedRequestAdmission, ConfirmedRequestTracker};
+use confirmed_request_tracker::{
+    ConfirmedRequestAdmission, ConfirmedRequestTracker, PendingConfirmedRequest,
+};
 pub use device_bindings::DeviceBinding;
 use device_bindings::{register_configured_binding, DeviceBindingTable};
+use learned_router_cache::LearnedRouterCache;
+use lso_replay::{LsoAdmission, PendingLsoReplay};
 use notification_transactions::{
-    canonical_direct_peer, canonical_routed_peer, run_notification_worker,
-    NotificationTransactions, NotificationWorkerResult,
+    canonical_direct_peer, canonical_routed_peer, run_notification_under_dcc,
+    run_notification_worker, InitiationRestricted, NotificationTransactions,
+    NotificationWorkerResult,
 };
+use request_services::{DispatchContext, RequestOrigin, RequestServices, UnconfirmedServices};
+use requests::confirmed_response::ResponseTarget;
+use requests::ConfirmedRequestOwnership;
+use segmentation::{ComplexAckParams, SegmentedSendResources};
 
 /// Maximum number of concurrent segmented reassembly sessions.
 const MAX_SEG_RECEIVERS: usize = 128;
@@ -98,164 +112,9 @@ const DEFAULT_APDU_SEGMENT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default retransmission budget for segmented response segments.
 const DEFAULT_APDU_SEGMENT_RETRIES: u8 = MAX_NEG_SEGMENT_ACK_RETRIES;
 
-/// Default number of APDU retries for confirmed COV notifications.
+/// Default number of APDU retries for confirmed notifications and the
+/// WriteProperty requests Command actions send to other devices.
 const DEFAULT_APDU_RETRIES: u8 = 3;
-
-type TsmPeer = (MacAddr, Option<NpduAddress>);
-type TsmKey = (MacAddr, Option<NpduAddress>, u8);
-
-// ---------------------------------------------------------------------------
-// Server-side Transaction State Machine (TSM) for outgoing confirmed requests
-// ---------------------------------------------------------------------------
-
-/// Result of a confirmed COV notification from the subscriber's perspective.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CovAckResult {
-    /// SimpleAck received — subscriber accepted the notification.
-    Ack,
-    /// Error or Reject/Abort received — subscriber rejected the notification.
-    Error,
-}
-
-/// Legacy server transaction state and learned-router cache.
-///
-/// The allocation and pending-result methods remain available to existing
-/// server internals and tests. Standalone confirmed notification paths use the
-/// private endpoint-core adapter instead.
-pub struct ServerTsm {
-    #[allow(dead_code)]
-    next_invoke_id: u8,
-    /// Oneshot senders keyed by peer MAC and invoke ID. When a result arrives
-    /// from the dispatch loop, we send it directly — no polling needed.
-    #[allow(dead_code)]
-    pending: HashMap<TsmKey, oneshot::Sender<CovAckResult>>,
-    /// Router MACs learned per remote network, Clause 6.5.3 method 4: "using
-    /// the local broadcast MAC address in the initial transmission to a device
-    /// on a remote DNET and noting the SA associated with any subsequent
-    /// responses from the remote device" (#375). Consulted so later confirmed
-    /// sends to that DNET can unicast to the router instead of broadcasting.
-    routers: HashMap<u16, MacAddr>,
-}
-
-/// Cap on learned router entries; a full cache just means later networks keep
-/// using the (always-correct) broadcast form of Clause 6.5.3.
-const MAX_LEARNED_ROUTERS: usize = 64;
-
-impl ServerTsm {
-    fn new() -> Self {
-        Self {
-            next_invoke_id: 0,
-            pending: HashMap::new(),
-            routers: HashMap::new(),
-        }
-    }
-
-    /// Allocate the next invoke ID and register a oneshot channel for the result.
-    /// Returns (invoke_id, receiver).
-    #[allow(dead_code)]
-    fn allocate(&mut self, peer: TsmPeer) -> Option<(u8, oneshot::Receiver<CovAckResult>)> {
-        for offset in 0..=u8::MAX {
-            let id = self.next_invoke_id.wrapping_add(offset);
-            if !self
-                .pending
-                .contains_key(&(peer.0.clone(), peer.1.clone(), id))
-            {
-                self.next_invoke_id = id.wrapping_add(1);
-                let rx = self.register(peer, id);
-                return Some((id, rx));
-            }
-        }
-        None
-    }
-
-    /// Register or replace the pending receiver for a peer/invoke-id pair.
-    #[allow(dead_code)]
-    fn register(&mut self, peer: TsmPeer, invoke_id: u8) -> oneshot::Receiver<CovAckResult> {
-        let (tx, rx) = oneshot::channel();
-        self.pending.insert((peer.0, peer.1, invoke_id), tx);
-        rx
-    }
-
-    /// Record a result from the dispatch loop (SimpleAck, Error, etc.).
-    /// Sends immediately through the oneshot channel.
-    #[allow(dead_code)]
-    fn record_result(
-        &mut self,
-        peer: &MacAddr,
-        network: Option<&NpduAddress>,
-        invoke_id: u8,
-        result: CovAckResult,
-    ) -> bool {
-        if let Some(tx) = self
-            .pending
-            .remove(&(peer.clone(), network.cloned(), invoke_id))
-        {
-            let _ = tx.send(result);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Remove a pending entry (cleanup on completion or exhaustion).
-    #[allow(dead_code)]
-    fn remove(&mut self, peer: &TsmPeer, invoke_id: u8) {
-        self.pending
-            .remove(&(peer.0.clone(), peer.1.clone(), invoke_id));
-    }
-
-    /// Correlate an inbound response with the transaction awaiting it (#375).
-    ///
-    /// Three key shapes are tried, most specific first:
-    /// 1. exactly as the sender registered it — the immediate MAC plus any
-    ///    routed identity;
-    /// 2. the router-unknown form — an empty local half with the routed
-    ///    identity, used when the request went out via the Clause 6.5.3
-    ///    broadcast DA and the delivering router's MAC was unknowable at
-    ///    registration;
-    /// 3. the legacy wildcard `(empty, None)`, which nothing registers today
-    ///    but which older callers may still expect.
-    ///
-    /// A hit that carries a routed identity also teaches the router cache:
-    /// the response's immediate MAC is "the SA associated with [a] subsequent
-    /// response from the remote device" (Clause 6.5.3 method 4).
-    #[allow(dead_code)]
-    fn record_result_correlated(
-        &mut self,
-        source_mac: &MacAddr,
-        source_network: Option<&NpduAddress>,
-        invoke_id: u8,
-        result: CovAckResult,
-    ) -> bool {
-        let hit = self.record_result(source_mac, source_network, invoke_id, result)
-            || (source_network.is_some()
-                && self.record_result(&MacAddr::new(), source_network, invoke_id, result))
-            || self.record_result(&MacAddr::new(), None, invoke_id, result);
-        if hit {
-            if let Some(address) = source_network {
-                self.learn_router(address.network, source_mac);
-            }
-        }
-        hit
-    }
-
-    /// Cache `router` as the way to reach `network`, bounded by
-    /// [`MAX_LEARNED_ROUTERS`].
-    fn learn_router(&mut self, network: u16, router: &MacAddr) {
-        if router.is_empty() {
-            return;
-        }
-        if self.routers.len() >= MAX_LEARNED_ROUTERS && !self.routers.contains_key(&network) {
-            return;
-        }
-        self.routers.insert(network, router.clone());
-    }
-
-    /// The learned router MAC for `network`, if any.
-    fn cached_router(&self, network: u16) -> Option<MacAddr> {
-        self.routers.get(&network).cloned()
-    }
-}
 
 /// Data from a TimeSynchronization request.
 #[derive(Debug, Clone)]
@@ -264,178 +123,33 @@ pub struct TimeSyncData {
     pub raw_service_data: Bytes,
     /// Whether this was a UTC time sync (vs. local).
     pub is_utc: bool,
+    /// Transport-native source MAC; on SC this is the source VMAC, not a
+    /// certificate principal. This metadata is a claimed identity only.
+    pub source_mac: MacAddr,
+    /// Claimed routed NPDU source, if present; takes precedence for policy matching.
+    pub source_network: Option<NpduAddress>,
+    /// Honest transport + origin provenance, threaded for diagnostics only
+    /// (RB-07 compat mode: decisions unchanged; RB-09 consumes it later).
+    pub provenance: bacnet_transport::port::TransportProvenance,
 }
 
-/// Server configuration.
-#[derive(Clone)]
-pub struct ServerConfig {
-    /// Local interface to bind.
-    pub interface: Ipv4Addr,
-    /// UDP port (default 0xBAC0 = 47808).
-    pub port: u16,
-    /// Directed broadcast address.
-    pub broadcast_address: Ipv4Addr,
-    /// Maximum APDU length accepted.
-    pub max_apdu_length: u32,
-    /// Segmentation support level.
-    ///
-    /// Enforced, not just advertised: the dispatch loop reassembles inbound
-    /// segmented requests only under `BOTH`/`RECEIVE` and transmits
-    /// segmented responses only under `BOTH`/`TRANSMIT` (Clauses 5.4.5.1 and
-    /// 5.4.5.3); anything else draws a SEGMENTATION_NOT_SUPPORTED Abort. The
-    /// default is `NONE`, so a default-configured server refuses segmented
-    /// traffic in both directions — set this to what the device should
-    /// actually honor.
-    pub segmentation_supported: Segmentation,
-    /// Vendor identifier.
-    pub vendor_id: u16,
-    /// Timeout in ms before retrying a failed confirmed COV notification send (default 3000ms).
-    pub cov_retry_timeout_ms: u64,
-    /// Optional observer invoked after a time-synchronization request is accepted.
-    pub on_time_sync: Option<Arc<dyn Fn(TimeSyncData) + Send + Sync>>,
-    /// Optional LifeSafetyOperation authorization policy.
-    ///
-    /// Absence is fail-closed: requests receive SERVICES /
-    /// SERVICE_REQUEST_DENIED before object mutation.
-    pub life_safety_operation_authorizer: Option<LifeSafetyOperationAuthorizer>,
-    /// Exactly one explicitly configured Audit Log notification sink.
-    ///
-    /// Absence is fail-closed; the server never selects a sink by database
-    /// iteration order.
-    pub audit_notification_sink: Option<ObjectIdentifier>,
-    /// Optional fast, nonblocking ConfirmedAuditNotification authorizer.
-    ///
-    /// Absence, `false`, or a panic denies the request before mutation.
-    pub audit_notification_authorizer: Option<AuditNotificationAuthorizer>,
-    /// Optional fast, nonblocking UnconfirmedAuditNotification authorizer.
-    ///
-    /// Absence, `false`, or a panic silently denies the request before mutation.
-    pub unconfirmed_audit_notification_authorizer: Option<UnconfirmedAuditNotificationAuthorizer>,
-    /// Optional password required for DeviceCommunicationControl.
-    pub dcc_password: Option<String>,
-    /// Optional password required for ReinitializeDevice.
-    pub reinit_password: Option<String>,
-    /// Enable periodic fault detection / reliability evaluation.
-    /// When true, the server invokes every object's opt-in, object-owned
-    /// reliability evaluation hook every 10 seconds. Stock objects currently
-    /// inherit the no-op default.
-    ///
-    /// This governs reliability evaluation only. Event Enrollment evaluation
-    /// is configured separately via [`enable_event_enrollment`](Self::enable_event_enrollment).
-    pub enable_fault_detection: bool,
-    /// Enable periodic Event Enrollment evaluation (default `true`).
-    ///
-    /// When true, the server re-reads the property each Event Enrollment object
-    /// names in its `Object_Property_Reference` and applies the configured event
-    /// algorithm. Startup: the task is spawned by [`start`](BACnetServer::start)
-    /// and its first pass runs immediately, then once per interval. Shutdown:
-    /// [`stop`](BACnetServer::stop) aborts it and awaits the abort.
-    ///
-    /// This switch governs the evaluation task; it is not the per-object
-    /// `Event_Detection_Enable` property of ASHRAE 135-2020 Clause 13.2.2.1.
-    /// Setting it false stops evaluation without performing the reset that
-    /// clause requires of a disabled detector (`Event_State` to NORMAL, with the
-    /// corresponding timestamp and acknowledgment state), so a device carrying
-    /// active enrollments will hold whatever state it last detected.
-    ///
-    /// Evaluation is a no-op on databases holding no Event Enrollment objects,
-    /// so the default is on.
-    ///
-    /// Successful enabled transitions commit `Event_State`,
-    /// `Acked_Transitions`, and `Event_Time_Stamps` atomically and are then
-    /// routed through the shared EventNotification sender. Event Enrollment
-    /// message text remains intentionally absent, and exact event-specific
-    /// notification values are deferred to the payload projection work.
-    pub enable_event_enrollment: bool,
-    /// Interval in seconds between Event Enrollment evaluation passes (default 10).
-    ///
-    /// This is a sampling cadence with no basis in ASHRAE 135-2020, which
-    /// prescribes no evaluation frequency and leaves acquisition of a monitored
-    /// value a local matter (Clause 12.12). It is not the `Time_Delay` of an
-    /// event algorithm, which is how long a condition must persist before a
-    /// transition is indicated (Clause 13.3) — a coarse interval delays
-    /// detection and can miss a condition that both appears and clears between
-    /// two passes.
-    ///
-    /// A value of `0` is clamped to one second. Ignored when
-    /// [`enable_event_enrollment`](Self::enable_event_enrollment) is false.
-    pub event_enrollment_interval_secs: u64,
-}
-
-impl std::fmt::Debug for ServerConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServerConfig")
-            .field("interface", &self.interface)
-            .field("port", &self.port)
-            .field("broadcast_address", &self.broadcast_address)
-            .field("max_apdu_length", &self.max_apdu_length)
-            .field("segmentation_supported", &self.segmentation_supported)
-            .field("vendor_id", &self.vendor_id)
-            .field("cov_retry_timeout_ms", &self.cov_retry_timeout_ms)
-            .field(
-                "on_time_sync",
-                &self.on_time_sync.as_ref().map(|_| "<callback>"),
-            )
-            .field(
-                "life_safety_operation_authorizer",
-                &self
-                    .life_safety_operation_authorizer
-                    .as_ref()
-                    .map(|_| "<callback>"),
-            )
-            .field("audit_notification_sink", &self.audit_notification_sink)
-            .field(
-                "audit_notification_authorizer",
-                &self
-                    .audit_notification_authorizer
-                    .as_ref()
-                    .map(|_| "<callback>"),
-            )
-            .field(
-                "unconfirmed_audit_notification_authorizer",
-                &self
-                    .unconfirmed_audit_notification_authorizer
-                    .as_ref()
-                    .map(|_| "<callback>"),
-            )
-            .field("dcc_password", &self.dcc_password.as_ref().map(|_| "***"))
-            .field(
-                "reinit_password",
-                &self.reinit_password.as_ref().map(|_| "***"),
-            )
-            .field("enable_fault_detection", &self.enable_fault_detection)
-            .field("enable_event_enrollment", &self.enable_event_enrollment)
-            .field(
-                "event_enrollment_interval_secs",
-                &self.event_enrollment_interval_secs,
-            )
-            .finish()
-    }
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            interface: Ipv4Addr::UNSPECIFIED,
-            port: 0xBAC0,
-            broadcast_address: Ipv4Addr::BROADCAST,
-            max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
-            vendor_id: 0,
-            cov_retry_timeout_ms: 3000,
-            on_time_sync: None,
-            life_safety_operation_authorizer: None,
-            audit_notification_sink: None,
-            audit_notification_authorizer: None,
-            unconfirmed_audit_notification_authorizer: None,
-            dcc_password: None,
-            reinit_password: None,
-            enable_fault_detection: false,
-            enable_event_enrollment: true,
-            event_enrollment_interval_secs: 10,
-        }
-    }
-}
+mod config;
+pub use config::ServerConfig;
+mod audit_batch_queue;
+mod audit_batch_runtime;
+mod audit_context_preparation;
+mod audit_forwarder;
+#[cfg(test)]
+mod audit_forwarder_tests;
+mod audit_recipient;
+mod audit_recipient_routes;
+mod audit_reporter;
+mod audit_reporter_changes;
+mod audit_send_now;
+mod heap_futures;
+pub use audit_reporter::{valid_bip_audit_address, AuditReportersConfig};
+#[cfg(test)]
+mod audit_reporter_tests;
 
 /// Generic builder for BACnetServer with a pre-built transport.
 pub struct ServerBuilder<T: TransportPort> {
@@ -462,12 +176,6 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for DeviceCommunicationControl requests.
-    pub fn dcc_password(mut self, password: impl Into<String>) -> Self {
-        self.config.dcc_password = Some(password.into());
-        self
     }
 
     /// Set the password required for ReinitializeDevice requests.
@@ -551,6 +259,19 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         self
     }
 
+    /// Set the discovery rate-limiting and duplicate suppression policy.
+    pub fn discovery_policy(mut self, policy: DiscoveryPolicy) -> Self {
+        self.config.discovery_policy = policy;
+        self
+    }
+
+    /// Set the COV quota and notification work budget policy, checked by
+    /// [`CovPolicy::validate`] before transport startup.
+    pub fn cov_policy(mut self, policy: CovPolicy) -> Self {
+        self.config.cov_policy = policy;
+        self
+    }
+
     /// Build and start the server.
     pub async fn build(self) -> Result<BACnetServer<T>, Error> {
         let transport = self
@@ -603,12 +324,6 @@ impl BipServerBuilder {
     pub fn device_binding(mut self, binding: DeviceBinding) -> Result<Self, Error> {
         register_configured_binding(&mut self.configured_device_bindings, binding)?;
         Ok(self)
-    }
-
-    /// Set the password required for DeviceCommunicationControl requests.
-    pub fn dcc_password(mut self, password: impl Into<String>) -> Self {
-        self.config.dcc_password = Some(password.into());
-        self
     }
 
     /// Set the password required for ReinitializeDevice requests.
@@ -692,6 +407,19 @@ impl BipServerBuilder {
         self
     }
 
+    /// Set the discovery rate-limiting and duplicate suppression policy.
+    pub fn discovery_policy(mut self, policy: DiscoveryPolicy) -> Self {
+        self.config.discovery_policy = policy;
+        self
+    }
+
+    /// Set the COV quota and notification work budget policy, checked by
+    /// [`CovPolicy::validate`] before transport startup.
+    pub fn cov_policy(mut self, policy: CovPolicy) -> Self {
+        self.config.cov_policy = policy;
+        self
+    }
+
     /// Build and start the server, constructing a BipTransport from the config.
     pub async fn build(self) -> Result<BACnetServer<BipTransport>, Error> {
         let transport = BipTransport::new(
@@ -710,174 +438,33 @@ impl BipServerBuilder {
     }
 }
 
-/// Key for tracking segmented transactions by peer and invoke ID.
-type SegKey = (MacAddr, Option<NpduAddress>, u8);
-
-fn segmented_transaction_key(
-    source_mac: &[u8],
-    source_network: Option<&NpduAddress>,
-    invoke_id: u8,
-) -> SegKey {
-    match source_network {
-        Some(address)
-            if (1..=0xFFFE).contains(&address.network) && !address.mac_address.is_empty() =>
-        {
-            (MacAddr::new(), Some(address.clone()), invoke_id)
-        }
-        _ => (
-            MacAddr::from_slice(source_mac),
-            source_network.cloned(),
-            invoke_id,
-        ),
-    }
-}
-
-#[derive(Debug)]
-enum SegmentedSendEvent {
-    SegmentAck(SegmentAckPdu),
-    Abort(AbortPdu),
-}
-
-#[derive(Debug, Clone)]
-enum SegmentedSendControlEvent {
-    Abort(AbortPdu),
-    Cancel,
-}
-
-struct SegmentedSendHandle {
-    segment_ack_tx: mpsc::Sender<SegmentAckPdu>,
-    control_tx: watch::Sender<Option<SegmentedSendControlEvent>>,
-    closed: AtomicBool,
-    current_sequence: AtomicU16,
-    total_segments: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SegmentAckDisposition {
-    Advance,
-    Retransmit,
-}
-
-fn segment_ack_disposition(
-    ack: &SegmentAckPdu,
-    current: usize,
-    total_segments: usize,
-) -> Option<SegmentAckDisposition> {
-    if current >= total_segments {
-        return None;
-    }
-
-    let ack_seq = ack.sequence_number as usize;
-    if ack_seq >= total_segments {
-        return None;
-    }
-
-    // Clause 5.4.4.2 treats either ACK flavor's sequence number as the last
-    // segment accepted. A NAK for the preceding segment asks for `current`
-    // again; a NAK for `current` confirms it and advances the send window.
-    if ack_seq == current {
-        Some(SegmentAckDisposition::Advance)
-    } else if ack.negative_ack && current.checked_sub(1) == Some(ack_seq) {
-        Some(SegmentAckDisposition::Retransmit)
-    } else {
-        None
-    }
-}
-
-impl SegmentedSendHandle {
-    fn new(
-        segment_ack_tx: mpsc::Sender<SegmentAckPdu>,
-        control_tx: watch::Sender<Option<SegmentedSendControlEvent>>,
-        total_segments: usize,
-    ) -> Self {
-        Self {
-            segment_ack_tx,
-            control_tx,
-            closed: AtomicBool::new(false),
-            current_sequence: AtomicU16::new(u16::MAX),
-            total_segments,
-        }
-    }
-
-    fn accepts_segment_ack(&self, ack: &SegmentAckPdu) -> bool {
-        if ack.sent_by_server || self.closed.load(Ordering::Acquire) {
-            return false;
-        }
-
-        let current = self.current_sequence.load(Ordering::Acquire) as usize;
-        if current >= self.total_segments {
-            return false;
-        }
-
-        segment_ack_disposition(ack, current, self.total_segments).is_some()
-    }
-
-    fn send_control(&self, event: SegmentedSendControlEvent) {
-        self.closed.store(true, Ordering::Release);
-        self.control_tx.send_replace(Some(event));
-    }
-
-    fn same_channel(&self, sender: &mpsc::Sender<SegmentAckPdu>) -> bool {
-        self.segment_ack_tx.same_channel(sender)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SegmentedSendOptions {
-    segment_timeout: Duration,
-    max_retries: u8,
-}
-
-impl Default for SegmentedSendOptions {
-    fn default() -> Self {
-        Self {
-            segment_timeout: DEFAULT_APDU_SEGMENT_TIMEOUT,
-            max_retries: DEFAULT_APDU_SEGMENT_RETRIES,
-        }
-    }
-}
-
-struct SegmentedRequestState {
-    payload: segmented_receive::RequestPayload,
-    last_activity: Instant,
-    /// Last successfully saved new in-order segment, independent of SegmentTimer.
-    last_progress: Instant,
-    expected_seq: u8,
-    /// Last sequence number in the previously completed receive window.
-    initial_sequence_number: u8,
-    /// Duplicates silently discarded in the current receive window.
-    duplicate_count: u8,
-    /// Last segment accepted in order (Clause 5.4.2 LastSequenceNumber).
-    last_acked_seq: u8,
-    window_pos: u8,
-    actual_window_size: u8,
-    /// Monotonic count of segments accepted in order (#364).
-    ///
-    /// The reassembly total. `expected_seq` cannot serve: Clause 20.1.2.7
-    /// makes the sequence number modulo 256, so a 260-segment request ends at
-    /// sequence 3 and `seq + 1` names a four-segment total. This counter also
-    /// carries the overrun cap — acceptance is strictly in order, so it
-    /// reaches [`MAX_REQUEST_SEGMENTS`] exactly when the sequence number is
-    /// about to wrap onto stored segment 0.
-    accepted_segments: usize,
-}
+type TransportCleanup<T> = JoinHandle<(NetworkLayer<T>, Result<(), Error>)>;
 
 /// BACnet server with APDU dispatch and service handling.
 pub struct BACnetServer<T: TransportPort> {
+    target_audit: Option<Arc<audit_recipient::TargetAudit<T>>>,
     config: ServerConfig,
+    discovery_limiter: Arc<DiscoveryLimiter>,
+    #[allow(dead_code)] // Retained with the server, including direct dispatch tests.
+    time_sync_limiter: Arc<TimeSyncLimiter>,
     /// Server-owned clock controller; absent in explicit clockless mode.
     _clock: Option<Arc<ServerClock>>,
     /// Shared network layer (also held by dispatch task; read by
     /// [`write_local`](Self::write_local) for post-write COV/event sends).
-    network: Arc<NetworkLayer<T>>,
+    network: Option<Arc<NetworkLayer<T>>>,
+    broadcaster: Arc<broadcaster::BroadcasterState<T>>,
+    transport_cleanup: Option<TransportCleanup<T>>,
+    transport_cleanup_error: Option<String>,
+    network_number_task: Option<JoinHandle<()>>,
     /// Shared object database.
     db: Arc<RwLock<ObjectDatabase>>,
     /// COV subscription table (also held by dispatch task; read by
     /// [`write_local`](Self::write_local) to fire post-write notifications).
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
+    cov_counters: Arc<crate::cov::AtomicCovCounters>,
     /// Channels for routing segmented-send events to in-progress segmented sends.
     #[allow(dead_code)]
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     /// Permits that cap live segmented response sender tasks, including
     /// cancelled senders that have not yet exited a transport send.
     #[allow(dead_code)]
@@ -885,8 +472,8 @@ pub struct BACnetServer<T: TransportPort> {
     /// Operational cap of 255 concurrent confirmed COV notification workers.
     /// Invoke-ID ownership is handled by `notification_transactions`.
     cov_in_flight: Arc<Semaphore>,
-    /// Legacy public TSM state and the learned DNET-to-router cache.
-    server_tsm: Arc<Mutex<ServerTsm>>,
+    /// Bounded DNET-to-router cache learned from admitted notification terminals.
+    learned_routers: Arc<Mutex<LearnedRouterCache>>,
     /// Invoke-ID ownership and terminal admission for confirmed notifications.
     notification_transactions: Arc<NotificationTransactions>,
     /// Server-lifetime exact inbound ConfirmedRequest duplicate state.
@@ -894,13 +481,17 @@ pub struct BACnetServer<T: TransportPort> {
     confirmed_request_tracker: Arc<ConfirmedRequestTracker>,
     /// Shared configured and passively observed Device recipient authority.
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
-    /// Communication state: 0 = Enable, 1 = Disable, 2 = DisableInitiation.
-    comm_state: Arc<AtomicU8>,
-    /// Handle for the DCC auto-re-enable timer. A new DCC request aborts
-    /// any previous timer.
-    #[allow(dead_code)]
-    dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// DeviceCommunicationControl state; only `dcc_timer` changes it.
+    comm_state: Arc<CommState>,
+    /// DCC timer owner and replacement/expiry serialization boundary.
+    /// Valid replacement and explicit stop abort and join before clearing it.
+    dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
+    dcc_outcomes: Arc<dcc_outcomes::DccOutcomes>,
+    /// Lifetime totals of undelivered event notifications (#1142).
+    event_suppressions: Arc<event_suppression::EventSuppressions>,
+    mutation_decisions: Arc<crate::mutation::MutationDecisions>,
     dispatch_task: Option<JoinHandle<()>>,
+    request_tasks: Arc<request_tasks::RequestTasks>,
     cov_purge_task: Option<JoinHandle<()>>,
     fault_detection_task: Option<JoinHandle<()>>,
     event_enrollment_task: Option<JoinHandle<()>>,
@@ -908,24 +499,28 @@ pub struct BACnetServer<T: TransportPort> {
     schedule_tick_task: Option<JoinHandle<()>>,
     /// One-second `Time_Delay` confirmation task for intrinsic reporting.
     intrinsic_reporting_task: Option<JoinHandle<()>>,
-    /// Monotonic Binary Lighting Output WARN_OFF/WARN_RELINQUISH task.
+    /// Monotonic object-operation task: Binary Lighting Output
+    /// WARN_OFF/WARN_RELINQUISH egress and Access Door pulse relock (#1073).
     binary_lighting_operation_task: Option<JoinHandle<()>>,
+    /// Follow-up fanout after acknowledged confirmed COV reports (#896).
+    cov_revisit_task: Option<JoinHandle<()>>,
     local_mac: MacAddr,
 }
 
-/// Cloneable handle for sending unsolicited I-Am announcements.
+/// Cloneable handle for unsolicited I-Am announcements while its server runs.
+///
+/// At most 32 local broadcasts may be in flight. Admission fails immediately
+/// at capacity or after shutdown begins. Admitted sends belong to the server:
+/// cancelling their caller only drops its waiter; stop cancels and joins them.
+/// Retaining this handle does not retain the transport after shutdown.
 pub struct IAmBroadcaster<T: TransportPort> {
-    config: ServerConfig,
-    network: Arc<NetworkLayer<T>>,
-    db: Arc<RwLock<ObjectDatabase>>,
+    state: std::sync::Weak<broadcaster::BroadcasterState<T>>,
 }
 
 impl<T: TransportPort> Clone for IAmBroadcaster<T> {
     fn clone(&self) -> Self {
         Self {
-            config: self.config.clone(),
-            network: Arc::clone(&self.network),
-            db: Arc::clone(&self.db),
+            state: self.state.clone(),
         }
     }
 }
@@ -939,36 +534,93 @@ impl BACnetServer<BipTransport> {
             configured_device_bindings: Vec::new(),
         }
     }
-
-    /// Create a BIP-specific builder (alias for backward compatibility).
-    pub fn builder() -> BipServerBuilder {
-        Self::bip_builder()
-    }
 }
 
 mod clock;
+mod command_runs;
+mod time_sync_policy;
+mod write_group;
 #[cfg(test)]
 pub(crate) use clock::clocked_test_database;
 pub use clock::ClockConfig;
 use clock::ServerClock;
+use time_sync_policy::{request_limiters, TimeSyncLimiter};
+pub use time_sync_policy::{
+    TimeSyncPolicy, TimeSyncRateLimit, TimeSyncSource, TimeSyncSourceRestriction,
+};
 mod binary_lighting_lifecycle;
+#[cfg(test)]
+mod confirmed_issuance_tests;
 mod confirmed_request_tracker;
 mod cov_clock;
 mod cov_encoding;
+mod cov_fanout;
 mod cov_notifications;
+mod cov_notify_context;
 mod cov_snapshot;
+mod dcc_disable_rate;
+pub(crate) mod dcc_outcomes;
+mod dcc_policy;
+mod lso_replay;
+pub use dcc_disable_rate::DccDisableRateLimit;
+mod dcc_timer;
+pub use dcc_outcomes::DccOutcomeCounters;
+pub use dcc_policy::{DccPolicy, DccSource, DccSourceRestriction};
+use dcc_timer::CommState;
+pub use dcc_timer::DccState;
+mod binding_probes;
 mod device_bindings;
+mod discovery;
+#[doc(hidden)]
+pub use discovery::iam_request_for as discovery_iam_for_test;
+pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
+pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
+mod audit_log_purge;
 mod dispatch;
+mod durable_writes;
+mod event_delivery;
 mod event_enrollment_lifecycle;
+mod event_forwarding;
+pub use event_forwarding::MAX_FORWARDED_DESTINATIONS;
+mod event_forwarding_repeats;
 mod event_message_policy;
 pub(crate) mod event_notification_payload;
 mod event_notifications;
 mod event_recipient_route;
+mod event_send;
+mod event_suppression;
+pub use event_suppression::EventNotificationCounters;
+mod received_event_log;
+pub use received_event_log::{RECEIVED_EVENT_LOG_RATE, RECEIVED_EVENT_LOG_SOURCES};
+mod confirmed_answer;
 pub(crate) mod event_timestamp;
+mod handles;
+mod learned_router_cache;
 mod lifecycle;
 mod local_writes;
+mod network_port;
+#[cfg(test)]
+mod network_port_tests;
+pub use confirmed_answer::{CovAckResult, Refusal};
+mod remote_writes;
+pub(crate) use remote_writes::RemoteRequestError;
 mod notification_transactions;
+#[doc(hidden)]
+pub use notification_transactions::{
+    canonical_direct_peer as __endpoint_canonical_direct_peer,
+    canonical_routed_peer as __endpoint_canonical_routed_peer,
+    run_notification_worker as __endpoint_run_notification_worker,
+    AuditFailureContext as __endpoint_AuditFailureContext,
+    AuditFailureQueue as __endpoint_AuditFailureQueue,
+    AuditFailureTicket as __endpoint_AuditFailureTicket,
+    NotificationOperation as __endpoint_NotificationOperation,
+    NotificationReserveError as __endpoint_NotificationReserveError,
+    NotificationTransactions as __endpoint_NotificationTransactions,
+    NotificationWorkerResult as __endpoint_NotificationWorkerResult,
+};
 mod requests;
+#[doc(hidden)]
+pub use requests::endpoint_responder::EndpointResponder as __endpoint_EndpointResponder;
 #[cfg(feature = "sc-tls")]
 mod sc_builder;
 #[cfg(test)]
@@ -982,22 +634,119 @@ pub use sc_builder::ScServerBuilder;
 mod responses;
 mod segmentation;
 mod segmented_receive;
+mod segmented_send;
+pub(crate) use segmented_send::*;
+mod request_admission;
+mod rpm_budget;
+pub use rpm_budget::ReadPropertyMultipleBudget;
+mod alarm_summary_budget;
+pub use alarm_summary_budget::GetAlarmSummaryBudget;
+mod atomic_read_file_budget;
+mod atomic_write_file_budget;
+mod read_range_budget;
+pub use read_range_budget::ReadRangeBudget;
+mod event_information_budget;
+pub use event_information_budget::GetEventInformationBudget;
+mod enrollment_summary_budget;
+pub use atomic_read_file_budget::AtomicReadFileBudget;
+pub use atomic_write_file_budget::AtomicWriteFileBudget;
+pub use enrollment_summary_budget::GetEnrollmentSummaryBudget;
+#[cfg(test)]
+mod atomic_read_file_tests;
+#[cfg(test)]
+mod atomic_write_file_tests;
+#[cfg(test)]
+mod enrollment_summary_tests;
+mod request_peer;
+mod request_services;
+mod request_tasks;
+pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
 mod shutdown;
 
 #[cfg(test)]
+mod access_door_event_tests;
+#[cfg(test)]
+mod access_door_pulse_task_tests;
+#[cfg(test)]
+mod access_zone_event_tests;
+#[cfg(test)]
 mod acknowledge_alarm_tests;
+#[cfg(test)]
+mod active_cov_subscriptions_tests;
 #[cfg(test)]
 mod audit_log_query_tests;
 #[cfg(test)]
+mod averaging_reference_write_tests;
+#[cfg(test)]
+mod averaging_sample_tests;
+#[cfg(test)]
 mod binary_lighting_task_tests;
 #[cfg(test)]
+mod channel_member_concurrency_tests;
+#[cfg(test)]
+mod channel_reliability_tests;
+#[cfg(test)]
+mod channel_remote_datatype_tests;
+#[cfg(test)]
+mod channel_remote_write_tests;
+#[cfg(test)]
+mod channel_run_tests;
+#[cfg(test)]
+mod channel_wire_tests;
+#[cfg(test)]
+mod command_action_run_tests;
+#[cfg(test)]
+mod command_action_wire_tests;
+#[cfg(test)]
+mod command_remote_write_tests;
+#[cfg(test)]
+mod command_run_cancel_tests;
+#[cfg(test)]
+mod command_run_stop_tests;
+#[cfg(test)]
+mod confirmed_broadcast_tests;
+#[cfg(test)]
+mod cov_background_tests;
+#[cfg(test)]
+mod cov_budget_tests;
+#[cfg(test)]
+mod cov_confirmed_baseline_tests;
+#[cfg(test)]
+mod cov_confirmed_context_tests;
+#[cfg(test)]
+mod cov_multiple_admission_tests;
+#[cfg(test)]
 mod cov_notifications_tests;
+#[cfg(test)]
+mod cov_quota_tests;
+#[cfg(test)]
+mod cov_timed_capture_order_tests;
+#[cfg(test)]
+mod cov_timed_chunk_tests;
+#[cfg(test)]
+mod cov_timed_deadline_tests;
+#[cfg(test)]
+mod cov_timed_multiple_tests;
+#[cfg(test)]
+mod cov_timed_producer_tests;
+#[cfg(test)]
+mod cov_timed_value_split_tests;
+#[cfg(test)]
+mod cov_untimed_split_tests;
+#[cfg(test)]
+mod cov_wire_test_support;
 #[cfg(test)]
 mod dcc_event_detection_tests;
 #[cfg(test)]
 mod device_bindings_tests;
 #[cfg(test)]
 mod device_recipient_routing_tests;
+#[cfg(all(test, feature = "sc-tls"))]
+mod direct_principal_tests;
+#[cfg(test)]
+mod discovery_dcc_tests;
+#[cfg(test)]
+mod discovery_tests;
 #[cfg(test)]
 mod event_confirmed_routing_tests;
 #[cfg(test)]
@@ -1005,23 +754,105 @@ mod event_enable_distribution_tests;
 #[cfg(test)]
 mod event_enrollment_task_tests;
 #[cfg(test)]
+mod event_forwarding_bounds_tests;
+#[cfg(test)]
+mod event_forwarding_cap_tests;
+#[cfg(test)]
+mod event_forwarding_origin_tests;
+#[cfg(test)]
+mod event_forwarding_rule_tests;
+#[cfg(test)]
+mod event_forwarding_tests;
+#[cfg(test)]
+mod event_log_notification_tests;
+#[cfg(test)]
 mod event_network_priority_tests;
 #[cfg(test)]
 mod event_notifications_tests;
 #[cfg(test)]
 mod event_recipient_routing_tests;
 #[cfg(test)]
+mod life_safety_application_tests;
+#[cfg(test)]
 mod life_safety_cov_tests;
+#[cfg(test)]
+mod life_safety_operation_replay_tests;
 #[cfg(test)]
 mod life_safety_operation_tests;
 #[cfg(test)]
+mod lighting_command_member_tests;
+#[cfg(test)]
+mod lighting_engine_task_tests;
+#[cfg(test)]
+mod lighting_present_value_tests;
+#[cfg(test)]
+mod list_element_event_tests;
+#[cfg(test)]
+mod local_network_number_tests;
+#[cfg(test)]
+mod local_network_outbound_tests;
+#[cfg(test)]
+mod log_reference_resize_tests;
+#[cfg(test)]
+mod loop_controlled_variable_tests;
+#[cfg(test)]
+mod loop_cov_tests;
+#[cfg(test)]
+mod mistagged_request_wire_tests;
+#[cfg(test)]
+mod noncommandable_null_cov_tests;
+#[cfg(test)]
+mod notification_dcc_tests;
+#[cfg(test)]
 mod notification_transactions_tests;
+#[cfg(test)]
+mod pulse_converter_cov_tests;
+#[cfg(test)]
+mod pulse_converter_reference_tests;
+#[cfg(test)]
+mod rb07_provenance_tests;
+#[cfg(test)]
+mod reference_write_wire_tests;
+#[cfg(test)]
+mod remote_write_answer_tests;
+#[cfg(test)]
+mod remote_write_discovery_tests;
+#[cfg(test)]
+mod run_cycle_tests;
+#[cfg(test)]
+mod schedule_create_retry_tests;
+#[cfg(test)]
+mod schedule_reference_list_tests;
+#[cfg(test)]
+mod schedule_reference_write_tests;
+#[cfg(test)]
+mod schedule_write_tests;
 #[cfg(test)]
 mod segmentation_tests;
 #[cfg(test)]
+mod staging_cov_tests;
+#[cfg(test)]
+mod staging_reference_write_tests;
+#[cfg(test)]
+mod subscribed_recipients_expiry_tests;
+#[cfg(test)]
+mod table_13_1_cov_tests;
+#[cfg(test)]
+pub(crate) mod test_forwarder;
+#[cfg(test)]
+pub(crate) mod test_transport;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trailing_octet_wire_tests;
+#[cfg(test)]
+mod truncated_request_wire_tests;
+#[cfg(test)]
+mod value_cov_increment_tests;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Start a server builder for a caller-supplied transport type, with default configuration and
+    /// an empty object database.
     pub fn generic_builder() -> ServerBuilder<T> {
         ServerBuilder {
             config: ServerConfig::default(),
@@ -1030,4 +861,38 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             configured_device_bindings: Vec::new(),
         }
     }
+
+    /// Get a snapshot of discovery rate-limiting counters.
+    pub fn discovery_counters(&self) -> DiscoveryCounters {
+        self.discovery_limiter.counters()
+    }
+
+    /// Get a snapshot of COV operational and telemetry counters.
+    pub fn cov_counters(&self) -> CovCounters {
+        self.cov_counters.snapshot()
+    }
+
+    /// Sample lifetime mutation authorization decisions, including after `stop()`.
+    /// Counts decisions, not completed handlers or response delivery; see
+    /// [`MutationDecisionCounters`](crate::mutation::MutationDecisionCounters).
+    pub fn mutation_decision_counters(&self) -> crate::mutation::MutationDecisionCounters {
+        self.mutation_decisions.snapshot()
+    }
+
+    /// Remove COV subscriptions using this current immediate MAC and routed source.
+    /// Cleanup of an obsolete router leaves subscriptions renewed onto another route.
+    /// Only removed entries release their contribution to the shared quota group.
+    pub async fn remove_peer_subscriptions(
+        &self,
+        mac: &[u8],
+        network: Option<&NpduAddress>,
+    ) -> usize {
+        let mut table = self.cov_table.write().await;
+        table.remove_peer_subscriptions(mac, network)
+    }
 }
+
+#[cfg(test)]
+mod cov_identity_completion_tests;
+
+mod broadcaster;

@@ -31,7 +31,7 @@ rand = "0.10"
 tracing-subscriber = "0.3"
 
 [features]
-console = ["console-subscriber"]
+console = ["dep:console-subscriber"]
 
 [[bin]]
 name = "stress-test"
@@ -75,14 +75,6 @@ harness = false
 
 [[bench]]
 name = "bip6_throughput"
-harness = false
-
-[[bench]]
-name = "sc_latency"
-harness = false
-
-[[bench]]
-name = "sc_throughput"
 harness = false
 
 [[bench]]

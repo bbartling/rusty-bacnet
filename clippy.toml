@@ -1,0 +1,2 @@
+# Printing is denied workspace-wide; tests may print.
+allow-print-in-tests = true

@@ -6,10 +6,7 @@
 
 use std::borrow::Cow;
 
-use bacnet_encoding::constructed::{
-    decode_device_object_reference, decode_stage_limit_value, encode_device_object_reference,
-    encode_stage_limit_value,
-};
+use bacnet_encoding::constructed::{decode_stage_limit_value, encode_stage_limit_value};
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
@@ -19,6 +16,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
 use crate::common::{self, read_common_properties};
+use crate::device_reference;
 use crate::property_metadata::{
     property_list_from_metadata, PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
@@ -31,6 +29,8 @@ use metadata::STAGING_PROPERTY_METADATA;
 ///
 /// Target references are deliberately local-only. A reference carrying a
 /// `device_identifier` is rejected rather than initiating remote BACnet I/O.
+/// The bundled server drops a Device identifier naming its own Device from a
+/// written reference before the object sees it (#1136).
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagingConfig {
     /// Initial REAL `Present_Value`; finite values are clamped to the ladder.
@@ -86,9 +86,10 @@ pub struct StagingObject {
     priority_for_writing: u8,
     min_present_value: f32,
     units: u32,
+    cov_increment: f32,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
     generation: u64,
     pending_plan: Option<StagingWritePlan>,
 }
@@ -123,9 +124,10 @@ impl StagingObject {
             priority_for_writing: config.priority_for_writing,
             min_present_value: config.min_present_value,
             units: config.units,
+            cov_increment: 0.0,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: Reliability::NO_FAULT_DETECTED.to_raw(),
+            reliability: Reliability::NO_FAULT_DETECTED,
             generation: 0,
             pending_plan: None,
         })
@@ -259,23 +261,19 @@ impl StagingObject {
         let mut candidate = self.target_references.clone();
         match array_index {
             None => {
-                let PropertyValue::List(values) = value else {
-                    return Err(common::invalid_data_type_error());
-                };
-                if values.len() != candidate.len() {
+                let references: Vec<BACnetDeviceObjectReference> =
+                    device_reference::decode_references(&value)?;
+                if references.len() != candidate.len() {
                     return Err(common::value_out_of_range_error());
                 }
-                candidate = values
-                    .into_iter()
-                    .map(decode_reference_property_value)
-                    .collect::<Result<_, _>>()?;
+                candidate = references;
             }
             Some(0) => return Err(common::write_access_denied_error()),
             Some(index) => {
                 let Some(reference) = candidate.get_mut((index - 1) as usize) else {
                     return Err(common::invalid_array_index_error());
                 };
-                *reference = decode_reference_property_value(value)?;
+                *reference = device_reference::decode_reference(&value)?;
             }
         }
         validate_target_references(&candidate)?;
@@ -292,7 +290,11 @@ impl StagingObject {
         value: PropertyValue,
     ) -> Result<(), Error> {
         let Some(names) = &self.stage_names else {
-            return Err(common::write_access_denied_error());
+            return Err(if array_index.is_none() {
+                common::unknown_property_error()
+            } else {
+                common::write_access_denied_error()
+            });
         };
         let mut candidate = names.clone();
         match array_index {
@@ -374,7 +376,7 @@ impl BACnetObject for StagingObject {
                 ErrorCode::VALUE_NOT_INITIALIZED,
             )),
             PropertyIdentifier::PRESENT_STAGE => Ok(PropertyValue::Unsigned(self.present_stage)),
-            PropertyIdentifier::STAGES => read_encoded_array(
+            PropertyIdentifier::STAGES => common::read_array(
                 self.stages
                     .iter()
                     .map(|stage| {
@@ -389,7 +391,7 @@ impl BACnetObject for StagingObject {
                 let Some(names) = &self.stage_names else {
                     return Err(common::unknown_property_error());
                 };
-                read_encoded_array(
+                common::read_array(
                     names
                         .iter()
                         .cloned()
@@ -398,15 +400,8 @@ impl BACnetObject for StagingObject {
                     array_index,
                 )
             }
-            PropertyIdentifier::TARGET_REFERENCES => read_encoded_array(
-                self.target_references
-                    .iter()
-                    .map(|reference| {
-                        let mut encoded = BytesMut::new();
-                        encode_device_object_reference(&mut encoded, reference);
-                        PropertyValue::ApplicationData(encoded.to_vec())
-                    })
-                    .collect(),
+            PropertyIdentifier::TARGET_REFERENCES => common::read_array(
+                device_reference::reference_elements(&self.target_references),
                 array_index,
             ),
             PropertyIdentifier::EVENT_STATE => {
@@ -418,6 +413,7 @@ impl BACnetObject for StagingObject {
             }
             PropertyIdentifier::MIN_PRES_VALUE => Ok(PropertyValue::Real(self.min_present_value)),
             PropertyIdentifier::MAX_PRES_VALUE => Ok(PropertyValue::Real(self.max_present_value())),
+            PropertyIdentifier::COV_INCREMENT => Ok(PropertyValue::Real(self.cov_increment)),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -440,6 +436,10 @@ impl BACnetObject for StagingObject {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
+        }
+        if let Some(result) = common::write_cov_increment(&mut self.cov_increment, property, &value)
+        {
             return result;
         }
         match property {
@@ -472,9 +472,10 @@ impl BACnetObject for StagingObject {
                 if !self.out_of_service {
                     return Err(common::write_access_denied_error());
                 }
-                let PropertyValue::Enumerated(value) = value else {
+                let PropertyValue::Enumerated(raw) = value else {
                     return Err(common::invalid_data_type_error());
                 };
+                let value = Reliability::from_raw(raw);
                 if !common::is_reliability_value_valid(value) {
                     return Err(common::value_out_of_range_error());
                 }
@@ -512,7 +513,11 @@ impl BACnetObject for StagingObject {
                 }
                 Ok(())
             }
-            _ => Err(common::write_access_denied_error()),
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                array_index,
+            )),
         }
     }
 
@@ -522,6 +527,16 @@ impl BACnetObject for StagingObject {
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         property_list_from_metadata(&self.metadata())
+    }
+
+    // Table 13-1 Staging row: Present_Value by COV_Increment, Status_Flags and
+    // Present_Stage trigger, and Present_Stage is reported (the trait default).
+    fn supports_cov(&self) -> bool {
+        true
+    }
+
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 
     fn take_staging_write_plan_internal(&mut self) -> Option<StagingWritePlan> {
@@ -540,29 +555,15 @@ impl BACnetObject for StagingObject {
             return false;
         }
         let reliability = if success {
-            Reliability::NO_FAULT_DETECTED.to_raw()
+            Reliability::NO_FAULT_DETECTED
         } else {
-            Reliability::UNRELIABLE_OTHER.to_raw()
+            Reliability::UNRELIABLE_OTHER
         };
         if reliability == self.reliability {
             return false;
         }
         self.reliability = reliability;
         true
-    }
-}
-
-fn read_encoded_array(
-    values: Vec<PropertyValue>,
-    array_index: Option<u32>,
-) -> Result<PropertyValue, Error> {
-    match array_index {
-        None => Ok(PropertyValue::List(values)),
-        Some(0) => Ok(PropertyValue::Unsigned(values.len() as u64)),
-        Some(index) => values
-            .into_iter()
-            .nth((index - 1) as usize)
-            .ok_or_else(common::invalid_array_index_error),
     }
 }
 
@@ -576,20 +577,6 @@ fn decode_stage_property_value(value: PropertyValue) -> Result<BACnetStageLimitV
         return Err(common::invalid_data_encoding_error());
     }
     Ok(stage)
-}
-
-fn decode_reference_property_value(
-    value: PropertyValue,
-) -> Result<BACnetDeviceObjectReference, Error> {
-    let PropertyValue::ApplicationData(bytes) = value else {
-        return Err(common::invalid_data_type_error());
-    };
-    let (reference, consumed) = decode_device_object_reference(&bytes, 0)
-        .map_err(|_| common::invalid_data_encoding_error())?;
-    if consumed != bytes.len() {
-        return Err(common::invalid_data_encoding_error());
-    }
-    Ok(reference)
 }
 
 fn validate_config(config: &StagingConfig) -> Result<(), Error> {
@@ -612,12 +599,11 @@ fn validate_config(config: &StagingConfig) -> Result<(), Error> {
 
 fn validate_target_references(references: &[BACnetDeviceObjectReference]) -> Result<(), Error> {
     for reference in references {
-        if reference.device_identifier.is_some() {
-            return Err(protocol_error(
-                ErrorClass::PROPERTY,
-                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-            ));
-        }
+        // A device member that isn't a Device makes no reference (#1285).
+        // The object can't tell which Device holds it, so any other Device
+        // member is refused too; the server localizes one naming itself
+        // (#1136).
+        device_reference::check_local_member(reference.device_identifier)?;
         if !matches!(
             reference.object_identifier.object_type(),
             ObjectType::BINARY_OUTPUT

@@ -9,6 +9,7 @@ use crate::sc_frame::{
     decode_sc_bvlc_result, is_broadcast_vmac, ScBvlcResult, ScFunction, ScMessage, Vmac,
 };
 
+use super::diagnostic_throttle::DiagnosticThrottle;
 use super::{data_attributes, source_admission};
 
 /// BACnet/SC connection state.
@@ -27,10 +28,13 @@ pub enum ScConnectionState {
 /// BACnet/SC hub connection manager.
 #[derive(Clone)]
 pub struct ScConnection {
+    /// Connection lifecycle state.
     pub state: ScConnectionState,
+    /// Virtual MAC address of this node.
     pub local_vmac: Vmac,
     /// Device UUID (16 bytes, RFC 4122).
     pub device_uuid: [u8; 16],
+    /// Hub's virtual MAC address, learned from Connect-Accept; `None` until connected.
     pub hub_vmac: Option<Vmac>,
     /// Maximum encoded BACnet/SC BVLC message length this node can accept.
     pub max_bvlc_length: u16,
@@ -49,9 +53,17 @@ pub struct ScConnection {
     pub hub_device_uuid: Option<[u8; 16]>,
     /// Whether the last connect failure permits another connection attempt.
     pub(super) connect_retry_allowed: bool,
+    /// Owner-local throttle for connection-path malformed diagnostics only.
+    ///
+    /// Logging-only: never affects state transitions, NPDU delivery, or NAK
+    /// decisions. At most one diagnostic per second per connection; bursts
+    /// count as suppressed for the next summary. Ignored by transactional
+    /// field comparisons (logging state, not protocol state).
+    malformed_diag: DiagnosticThrottle,
 }
 
 impl ScConnection {
+    /// Create a disconnected connection for this node's VMAC and device UUID, using default limits.
     pub fn new(local_vmac: Vmac, device_uuid: [u8; 16]) -> Self {
         Self {
             state: ScConnectionState::Disconnected,
@@ -59,7 +71,7 @@ impl ScConnection {
             device_uuid,
             hub_vmac: None,
             max_bvlc_length: crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH,
-            max_apdu_length: 1476,
+            max_apdu_length: crate::sc_limits::LOCAL_RECEIVE_NPDU_CAPACITY,
             hub_max_bvlc_length: 1476,
             hub_max_apdu_length: 1476,
             next_message_id: 1,
@@ -67,6 +79,7 @@ impl ScConnection {
             pending_connect_message_id: None,
             hub_device_uuid: None,
             connect_retry_allowed: true,
+            malformed_diag: DiagnosticThrottle::new(),
         }
     }
 
@@ -82,6 +95,16 @@ impl ScConnection {
         if !probe.connect_retry_allowed {
             self.connect_retry_allowed = false;
         }
+    }
+
+    /// Test-only suppressed diagnostic count for the connection throttle.
+    ///
+    /// Exposes the logging throttle without affecting wire decisions, so
+    /// burst tests can assert O(1) diagnostics alongside bit-for-bit
+    /// accept/NAK/silence behavior.
+    #[cfg(test)]
+    pub(super) fn malformed_diag_suppressed(&self) -> u64 {
+        self.malformed_diag.suppressed()
     }
 
     /// Generate the next message ID.
@@ -122,10 +145,20 @@ impl ScConnection {
         }
         if let Some(expected_id) = self.pending_connect_message_id {
             if msg.message_id != expected_id {
-                warn!(
-                    "ConnectAccept message_id {:#x} does not match request {:#x}",
-                    msg.message_id, expected_id
-                );
+                if self.malformed_diag.should_emit_now() {
+                    let suppressed = self.malformed_diag.take_suppressed();
+                    if suppressed > 0 {
+                        warn!(
+                            "ConnectAccept message_id {:#x} does not match request {:#x} (suppressed {suppressed} similar diagnostics)",
+                            msg.message_id, expected_id
+                        );
+                    } else {
+                        warn!(
+                            "ConnectAccept message_id {:#x} does not match request {:#x}",
+                            msg.message_id, expected_id
+                        );
+                    }
+                }
                 return false;
             }
         }
@@ -222,6 +255,119 @@ impl ScConnection {
         })
     }
 
+    /// Build a solicited Advertisement reply (AB.2.8.1 content, AB.3.2 trigger).
+    ///
+    /// The caller supplies the destination selected by the request-addressing
+    /// rule (`None` for a hub-peer solicitation, otherwise the solicitation
+    /// origin) and the hub-connection status derived from live transport
+    /// state (1 = primary hub, 2 = failover hub). The message ID is always
+    /// fresh: a solicited Advertisement is not a "response message" and must
+    /// not copy the solicitation ID (AB.3.1.3). This standalone builder keeps
+    /// accept-direct 0; the transport uses its registered listener's live
+    /// intake state. The two maxima echo local receive configuration. No Data Options.
+    pub fn build_solicited_advertisement(
+        &mut self,
+        destination_vmac: Option<Vmac>,
+        hub_status: u8,
+    ) -> ScMessage {
+        self.build_solicited_advertisement_with_direct(destination_vmac, hub_status, false)
+    }
+
+    pub(super) fn build_solicited_advertisement_with_direct(
+        &mut self,
+        destination_vmac: Option<Vmac>,
+        hub_status: u8,
+        accept_direct: bool,
+    ) -> ScMessage {
+        debug_assert!(
+            hub_status == 1 || hub_status == 2,
+            "solicited Advertisement status must be 1 (primary) or 2 (failover)"
+        );
+        let mut payload = Vec::with_capacity(6);
+        payload.push(hub_status);
+        payload.push(u8::from(accept_direct));
+        payload.extend_from_slice(&self.max_bvlc_length.to_be_bytes());
+        payload.extend_from_slice(&self.max_apdu_length.to_be_bytes());
+        ScMessage {
+            function: ScFunction::Advertisement,
+            message_id: self.next_id(),
+            originating_vmac: None,
+            destination_vmac,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::from(payload),
+        }
+    }
+
+    /// Build an Address-Resolution request for on-demand direct discovery.
+    ///
+    /// The destination names the target node; the origin is omitted because
+    /// the sender is the originator. The payload is empty and no Data
+    /// Options are present. The message ID is fresh from the shared counter
+    /// so the later ACK can be correlated by ID. Only the ID counter moves.
+    pub fn build_address_resolution_request(&mut self, destination_vmac: Vmac) -> ScMessage {
+        ScMessage {
+            function: ScFunction::AddressResolution,
+            message_id: self.next_id(),
+            originating_vmac: None,
+            destination_vmac: Some(destination_vmac),
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::new(),
+        }
+    }
+
+    /// Build a direct-connection Encapsulated-NPDU (peer-addressed, no VMACs).
+    ///
+    /// Used only for unicast over an established direct WebSocket to the
+    /// connection peer: both address parameters are omitted. Hub sends keep
+    /// the destination address. Only the ID counter moves besides the
+    /// returned message.
+    pub fn build_direct_encapsulated_npdu(
+        &mut self,
+        npdu: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<ScMessage, Error> {
+        let data_options = data_attributes::to_data_options(data_attributes)?;
+        Ok(ScMessage {
+            function: ScFunction::EncapsulatedNpdu,
+            message_id: self.next_id(),
+            originating_vmac: None,
+            destination_vmac: None,
+            dest_options: Vec::new(),
+            data_options,
+            payload: Bytes::copy_from_slice(npdu),
+        })
+    }
+
+    /// Build an Address-Resolution-ACK reply for one accepted request.
+    ///
+    /// The destination mirrors the request origin (`None` for a hub-peer
+    /// request so the reply stays peer-addressed, otherwise the requesting
+    /// node) and the payload carries the configured space-joined URI list,
+    /// or zero octets when unconfigured. The message ID copies the request
+    /// ID: Address-Resolution-ACK is a response message (AB.2 list) and
+    /// response messages carry the causing ID (AB.3.1.3); AB.2.7.1 repeats
+    /// the response-ID rule for this ACK. Only the solicited Advertisement
+    /// is excepted (AB.3.1.3), not this ACK. No Data Options. The caller
+    /// supplies already-validated payload bytes; no counter moves.
+    pub fn build_address_resolution_ack(
+        &self,
+        request_message_id: u16,
+        destination_vmac: Option<Vmac>,
+        uri_payload: &[u8],
+    ) -> ScMessage {
+        ScMessage {
+            function: ScFunction::AddressResolutionAck,
+            message_id: request_message_id,
+            originating_vmac: None,
+            destination_vmac,
+            dest_options: Vec::new(),
+            data_options: Vec::new(),
+            payload: Bytes::copy_from_slice(uri_payload),
+        }
+    }
+
     /// Handle a received message. Returns NPDU data if it's an Encapsulated-NPDU for us.
     /// Hub-relayed NPDUs must include a non-reserved Originating VMAC.
     pub fn handle_received(&mut self, msg: &ScMessage) -> Option<(Bytes, Vmac)> {
@@ -231,7 +377,14 @@ impl ScConnection {
         match msg.function {
             ScFunction::EncapsulatedNpdu => {
                 if self.state != ScConnectionState::Connected {
-                    debug!("Ignoring EncapsulatedNpdu in {:?} state", self.state);
+                    if self.malformed_diag.should_emit_now() {
+                        let suppressed = self.malformed_diag.take_suppressed();
+                        if suppressed > 0 {
+                            debug!("Ignoring EncapsulatedNpdu in {:?} state (suppressed {suppressed} similar diagnostics)", self.state);
+                        } else {
+                            debug!("Ignoring EncapsulatedNpdu in {:?} state", self.state);
+                        }
+                    }
                     return None;
                 }
                 if let Some(dest) = msg.destination_vmac {
@@ -240,14 +393,28 @@ impl ScConnection {
                     }
                 }
                 if msg.payload.len() > self.max_apdu_length as usize {
-                    warn!(
-                        "BACnet/SC NPDU ({} bytes) exceeds local Max-NPDU-Length ({}), dropping",
-                        msg.payload.len(),
-                        self.max_apdu_length
-                    );
+                    if self.malformed_diag.should_emit_now() {
+                        let suppressed = self.malformed_diag.take_suppressed();
+                        if suppressed > 0 {
+                            warn!(
+                                "BACnet/SC NPDU ({} bytes) exceeds local Max-NPDU-Length ({}), dropping (suppressed {suppressed} similar diagnostics)",
+                                msg.payload.len(),
+                                self.max_apdu_length
+                            );
+                        } else {
+                            warn!(
+                                "BACnet/SC NPDU ({} bytes) exceeds local Max-NPDU-Length ({}), dropping",
+                                msg.payload.len(),
+                                self.max_apdu_length
+                            );
+                        }
+                    }
                     return None;
                 }
                 let source = source_admission::hub_source(msg)?;
+                if crate::sc_frame::missing_npdu_payload(msg) {
+                    return None;
+                }
                 Some((msg.payload.clone(), source))
             }
             ScFunction::HeartbeatRequest => None,
@@ -279,25 +446,90 @@ impl ScConnection {
                         error_code,
                         ..
                     }) => {
-                        warn!(
-                            "BACnet/SC BVLC-Result NAK: function={:#x} \
-                             error_class={} error_code={}",
-                            result_for.to_raw(),
-                            error_class,
-                            error_code
-                        );
+                        if self.malformed_diag.should_emit_now() {
+                            let suppressed = self.malformed_diag.take_suppressed();
+                            if suppressed > 0 {
+                                warn!(
+                                    "BACnet/SC BVLC-Result NAK: function={:#x} \
+                                     error_class={} error_code={} (suppressed {suppressed} similar diagnostics)",
+                                    result_for.to_raw(),
+                                    error_class,
+                                    error_code
+                                );
+                            } else {
+                                warn!(
+                                    "BACnet/SC BVLC-Result NAK: function={:#x} \
+                                     error_class={} error_code={}",
+                                    result_for.to_raw(),
+                                    error_class,
+                                    error_code
+                                );
+                            }
+                        }
                         if result_for != ScFunction::EncapsulatedNpdu {
-                            self.state = ScConnectionState::Disconnected;
+                            // Discovery negatives relayed from a target node
+                            // (origin present) are normal: the peer does not
+                            // accept direct connections (an empty ACK instead means no known URIs).
+                            // Stay connected so the sender can fall back to
+                            // hub delivery. Hub-peer NAKs (origin absent)
+                            // keep the existing fatal policy.
+                            let discovery_negative = matches!(
+                                result_for,
+                                ScFunction::AddressResolution | ScFunction::AddressResolutionAck
+                            ) && msg.originating_vmac.is_some();
+                            if !discovery_negative {
+                                self.state = ScConnectionState::Disconnected;
+                            }
                         }
                     }
                     Err(e) => {
-                        warn!("Malformed BACnet/SC BVLC-Result: {e}");
+                        if self.malformed_diag.should_emit_now() {
+                            let suppressed = self.malformed_diag.take_suppressed();
+                            if suppressed > 0 {
+                                warn!("Malformed BACnet/SC BVLC-Result: {e} (suppressed {suppressed} similar diagnostics)");
+                            } else {
+                                warn!("Malformed BACnet/SC BVLC-Result: {e}");
+                            }
+                        }
                         self.state = ScConnectionState::Disconnected;
                     }
                 }
                 None
             }
+            ScFunction::Advertisement | ScFunction::AdvertisementSolicitation => {
+                // Validated before activity by the rejection gate. Received
+                // Advertisements need no local peer store and stay consumed
+                // without NPDU delivery or state change. Solicited replies to
+                // accepted solicitations are originated by the transport loop
+                // (which owns the hub role, rate clock, and socket), so this
+                // handler stays pure.
+                None
+            }
+            ScFunction::ProprietaryMessage => {
+                // Validated before activity by the rejection gate. Vendor
+                // dispatch is a local matter; the frame is consumed without
+                // NPDU delivery or state change.
+                None
+            }
+            ScFunction::AddressResolution | ScFunction::AddressResolutionAck => {
+                // Validated before activity by the rejection gate. Replies to
+                // accepted requests are originated by the transport loop
+                // (which owns the socket and the advertised URIs), so this
+                // handler stays pure; discovery and dialing remain later
+                // work. Well-formed bodies stay consumed without NPDU
+                // delivery or state change.
+                None
+            }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+impl<W: super::WebSocketPort> super::ScTransport<W> {
+    /// The live connection, including its mutable identity fields. Test-only:
+    /// applications read the state through `connection_state_changes()`.
+    pub(crate) fn connection(&self) -> Option<&std::sync::Arc<tokio::sync::Mutex<ScConnection>>> {
+        self.connection.as_ref()
     }
 }

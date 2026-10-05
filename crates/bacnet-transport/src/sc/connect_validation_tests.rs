@@ -67,6 +67,70 @@ fn connect_accept_reserved_identity_is_transactional() {
     assert_unchanged(&conn, &before);
 }
 
+#[test]
+fn connect_accept_zero_uuid_is_transactional_in_every_state() {
+    // Independent AB.2.11 vector: function/flags/ID, VMAC, nil UUID, limits.
+    let wire = [
+        7, 0, 0, 1, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0x20, 0, 0x10, 0,
+    ];
+    let accept = decode_sc_message(&wire).unwrap();
+    for state in [
+        ScConnectionState::Disconnected,
+        ScConnectionState::Connecting,
+        ScConnectionState::Connected,
+        ScConnectionState::Disconnecting,
+    ] {
+        let mut conn = sentinel_connection();
+        assert_eq!(conn.build_connect_request().message_id, 1);
+        conn.state = state;
+        conn.connect_retry_allowed = false;
+        conn.disconnect_ack_to_send = Some(conn.build_heartbeat_ack(42));
+        let before = conn.clone();
+        assert!(!conn.handle_connect_accept(&accept));
+        assert_unchanged(&conn, &before);
+    }
+}
+
+#[test]
+fn connect_accept_zero_limits_is_transactional_in_every_state() {
+    for limits in [[0, 0, 0x10, 0], [0x20, 0, 0, 0], [0; 4]] {
+        let mut wire = valid_connect(7, [0x22; 6]);
+        wire[2..4].copy_from_slice(&1u16.to_be_bytes());
+        wire[26..30].copy_from_slice(&limits);
+        let accept = decode_sc_message(&wire).unwrap();
+        for state in [
+            ScConnectionState::Disconnected,
+            ScConnectionState::Connecting,
+            ScConnectionState::Connected,
+            ScConnectionState::Disconnecting,
+        ] {
+            let mut conn = sentinel_connection();
+            assert_eq!(conn.build_connect_request().message_id, 1);
+            conn.state = state;
+            conn.connect_retry_allowed = false;
+            conn.disconnect_ack_to_send = Some(conn.build_heartbeat_ack(42));
+            let before = conn.clone();
+            assert!(!conn.handle_connect_accept(&accept), "limits {limits:?}");
+            assert_unchanged(&conn, &before);
+        }
+    }
+}
+
+#[test]
+fn zero_uuid_range_nak_does_not_reseed_vmac() {
+    let mut conn = sentinel_connection();
+    let id = conn.build_connect_request().message_id;
+    let before = conn.local_vmac;
+    let mut wire = vec![0, 0, 0, 0, 6, 1, 0, 0, 7, 0, 80];
+    wire[2..4].copy_from_slice(&id.to_be_bytes());
+    let result =
+        crate::sc_frame::decode_sc_bvlc_result(&decode_sc_message(&wire).unwrap()).unwrap();
+    assert!(!conn.handle_connect_result(id, &result).unwrap());
+    assert_eq!(conn.local_vmac, before);
+    assert_eq!(conn.state, ScConnectionState::Disconnected);
+}
+
 #[tokio::test]
 async fn connect_accept_reserved_identity_is_silently_discarded() {
     let (inner, peer) = LoopbackWebSocket::pair();
@@ -127,31 +191,41 @@ async fn connect_accept_invalid_matrix_waits_silently_for_valid_accept() {
     let (receiving, mut received) = mpsc::unbounded_channel();
     let ws = ObservedWebSocket { inner, receiving };
     let conn = Arc::new(Mutex::new(sentinel_connection()));
+    let (states, mut state) = watch::channel(ScConnectionState::Disconnected);
     let task = tokio::spawn({
         let conn = conn.clone();
-        async move { perform_handshake(&ws, &conn, None, 5000).await }
+        async move { perform_handshake(&ws, &conn, Some(&states), 5000).await }
     });
     let request = decode_sc_message(&peer.recv().await.unwrap()).unwrap();
     next_receive(&mut received).await;
     let before = conn.lock().await.clone();
+    assert_eq!(*state.borrow_and_update(), ScConnectionState::Connecting);
     for case in invalid_connects(7, [0x02; 6]) {
-        let mut wire = case.wire;
-        wire[2..4].copy_from_slice(&request.message_id.to_be_bytes());
-        peer.send(&wire).await.unwrap();
-        next_receive(&mut received).await;
-        assert_unchanged(&*conn.lock().await, &before);
-        assert!(
-            timeout(Duration::from_millis(10), peer.recv())
-                .await
-                .is_err(),
-            "{} elicited a response",
-            case.name
-        );
+        for id in [request.message_id, request.message_id.wrapping_add(1)] {
+            let mut wire = case.wire.clone();
+            wire[2..4].copy_from_slice(&id.to_be_bytes());
+            peer.send(&wire).await.unwrap();
+            next_receive(&mut received).await;
+            assert_unchanged(&*conn.lock().await, &before);
+            assert!(
+                !state.has_changed().unwrap(),
+                "{} published state",
+                case.name
+            );
+            assert!(
+                timeout(Duration::from_millis(10), peer.recv())
+                    .await
+                    .is_err(),
+                "{} elicited a response",
+                case.name
+            );
+        }
     }
     let mut valid = valid_connect_with_options(7, [0x22; 6]);
     valid[2..4].copy_from_slice(&request.message_id.to_be_bytes());
     peer.send(&valid).await.unwrap();
     task.await.unwrap().unwrap();
+    assert_eq!(*state.borrow(), ScConnectionState::Connected);
     let conn = conn.lock().await;
     assert_eq!(conn.state, ScConnectionState::Connected);
     assert_eq!(conn.pending_connect_message_id, None);
@@ -193,4 +267,129 @@ async fn connect_accept_invalid_flood_keeps_absolute_deadline() {
     expected.state = ScConnectionState::Disconnected;
     expected.pending_connect_message_id = None;
     assert_unchanged(&*conn.lock().await, &expected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn connect_accept_nil_only_and_flood_keep_absolute_deadline() {
+    check_invalid_only_and_flood_deadline(10..26).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn connect_accept_zero_limits_only_and_flood_keep_absolute_deadline() {
+    for field in [26..28, 28..30, 26..30] {
+        check_invalid_only_and_flood_deadline(field).await;
+    }
+}
+
+async fn check_invalid_only_and_flood_deadline(field: std::ops::Range<usize>) {
+    for frames in [1, 9] {
+        let (inner, peer) = LoopbackWebSocket::pair();
+        let (receiving, mut received) = mpsc::unbounded_channel();
+        let ws = ObservedWebSocket { inner, receiving };
+        let conn = Arc::new(Mutex::new(sentinel_connection()));
+        let (states, mut state) = watch::channel(ScConnectionState::Disconnected);
+        let task = tokio::spawn({
+            let conn = conn.clone();
+            async move { perform_handshake(&ws, &conn, Some(&states), 1000).await }
+        });
+        let request = peer.recv().await.unwrap();
+        next_receive(&mut received).await;
+        let started = tokio::time::Instant::now();
+        let mut expected = conn.lock().await.clone();
+        assert_eq!(*state.borrow_and_update(), ScConnectionState::Connecting);
+        let mut nil = valid_connect(7, [0x22; 6]);
+        nil[2..4].copy_from_slice(&request[2..4]);
+        nil[field.clone()].fill(0);
+        for _ in 0..frames {
+            tokio::time::advance(Duration::from_millis(100)).await;
+            peer.send(&nil).await.unwrap();
+            next_receive(&mut received).await;
+            assert_unchanged(&*conn.lock().await, &expected);
+            assert!(!state.has_changed().unwrap());
+        }
+        tokio::time::advance(Duration::from_millis(1000 - frames * 100)).await;
+        assert!(
+            matches!(task.await.unwrap(), Err(Error::Timeout(d)) if d == Duration::from_secs(1))
+        );
+        assert_eq!(started.elapsed(), Duration::from_secs(1));
+        assert_eq!(*state.borrow(), ScConnectionState::Disconnected);
+        expected.state = ScConnectionState::Disconnected;
+        expected.pending_connect_message_id = None;
+        assert_unchanged(&*conn.lock().await, &expected);
+        // Once the owned socket drops, an empty channel proves no reply was queued.
+        assert!(peer.recv().await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn connect_accept_nil_wrong_id_is_discarded_but_valid_wrong_id_is_terminal() {
+    check_invalid_wrong_id(10..26).await;
+}
+
+#[tokio::test]
+async fn connect_accept_zero_limits_wrong_id_is_discarded_but_valid_wrong_id_is_terminal() {
+    for field in [26..28, 28..30, 26..30] {
+        check_invalid_wrong_id(field).await;
+    }
+}
+
+async fn check_invalid_wrong_id(field: std::ops::Range<usize>) {
+    let (inner, peer) = LoopbackWebSocket::pair();
+    let (receiving, mut received) = mpsc::unbounded_channel();
+    let ws = ObservedWebSocket { inner, receiving };
+    let conn = Arc::new(Mutex::new(sentinel_connection()));
+    let task = tokio::spawn({
+        let conn = conn.clone();
+        async move { perform_handshake(&ws, &conn, None, 5000).await }
+    });
+    let request = decode_sc_message(&peer.recv().await.unwrap()).unwrap();
+    next_receive(&mut received).await;
+    let mut expected = conn.lock().await.clone();
+    let mut accept = valid_connect(7, [0x22; 6]);
+    accept[2..4].copy_from_slice(&request.message_id.wrapping_add(1).to_be_bytes());
+    let valid = accept.clone();
+    accept[field].fill(0);
+    peer.send(&accept).await.unwrap();
+    next_receive(&mut received).await;
+    assert_unchanged(&*conn.lock().await, &expected);
+    assert!(timeout(Duration::from_millis(10), peer.recv())
+        .await
+        .is_err());
+    peer.send(&valid).await.unwrap();
+    let error = task.await.unwrap().unwrap_err();
+    assert_eq!(
+        ScConnectError::from_error(&error),
+        Some(&ScConnectError::ConnectAcceptMismatch)
+    );
+    expected.state = ScConnectionState::Disconnected;
+    expected.pending_connect_message_id = None;
+    assert_unchanged(&*conn.lock().await, &expected);
+    assert!(peer.recv().await.is_err());
+}
+
+#[test]
+fn connect_accept_positive_limits_commit_without_normalization() {
+    for (bvlc, npdu) in [
+        (1u16, 1u16),
+        (1, 65535),
+        (65535, 1),
+        (65535, 65535),
+        (1200, 480),
+        (300, 1476),
+        (1476, 1476),
+    ] {
+        let mut conn = sentinel_connection();
+        let id = conn.build_connect_request().message_id;
+        let mut wire = valid_connect(7, [0x22; 6]);
+        wire[2..4].copy_from_slice(&id.to_be_bytes());
+        wire[26..28].copy_from_slice(&bvlc.to_be_bytes());
+        wire[28..30].copy_from_slice(&npdu.to_be_bytes());
+        assert!(conn.handle_connect_accept(&decode_sc_message(&wire).unwrap()));
+        assert_eq!(conn.state, ScConnectionState::Connected);
+        assert_eq!(conn.pending_connect_message_id, None);
+        assert_eq!(
+            (conn.hub_max_bvlc_length, conn.hub_max_apdu_length),
+            (bvlc, npdu)
+        );
+    }
 }

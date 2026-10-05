@@ -7,14 +7,15 @@ use bacnet_types::enums::{
     ErrorClass, ErrorCode, FileAccessMethod, ObjectType, PropertyIdentifier,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
+use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::clock::ClockReader;
-use crate::common::{self, read_common_properties};
-use crate::traits::{BACnetObject, WritePropertyRollback};
+use crate::common::{self, read_identity_properties};
+use crate::traits::BACnetObject;
 
+mod metadata;
 mod resize;
 
 // ---------------------------------------------------------------------------
@@ -26,9 +27,9 @@ mod resize;
 /// Clause 14.2 requires a write whose 'File Start Position' exceeds the
 /// file size to extend the file to that size, and the position is a signed
 /// 32-bit INTEGER, so an unbounded implementation would zero-fill up to
-/// 2 GiB from one small request. Clause 18 defines FILE_FULL for exactly
-/// this bound: "when a File Object becomes filled to a designed limit, as
-/// opposed to a No Space Available / Out of Memory situation".
+/// 2 GiB from one small request. Clause 18 uses FILE_FULL for reaching a
+/// File object's configured capacity, distinct from exhausting storage
+/// space or memory.
 pub const DEFAULT_MAX_FILE_SIZE: u64 = 1_048_576;
 
 /// Default growth cap, in records, for network writes to one record-access
@@ -103,7 +104,7 @@ pub struct FileRecordRead {
 /// Where an AtomicWriteFile write starts.
 ///
 /// Clauses 14.2.2.2 and 14.2.2.3 give 'File Start Position' and 'File
-/// Start Record' the special value -1 for "an append to file operation";
+/// Start Record' the special value -1 to append at the end of the file;
 /// every other value is an offset from the beginning of the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileWriteStart {
@@ -126,8 +127,8 @@ pub enum FileWriteStart {
 /// [`BACnetObject::file_storage_internal`] and
 /// [`BACnetObject::file_storage_internal_mut`]. Every method has a default
 /// that refuses with SERVICES / FILE_ACCESS_DENIED — there is no
-/// implementation behind it, so the file is "otherwise not accessible" in
-/// Clause 18's words — and a stream-only implementation overrides only the
+/// implementation behind it, making the file inaccessible under
+/// Clause 18 — and a stream-only implementation overrides only the
 /// two stream methods.
 ///
 /// Error contract, using the Clause 14 pairs:
@@ -137,14 +138,14 @@ pub enum FileWriteStart {
 ///   legal and yields an empty window. The built-in empty file reports
 ///   `end_of_file` TRUE there; non-empty files report FALSE for such a window.
 /// - OBJECT / FILE_FULL when a write would grow the file past the
-///   implementation's designed limit (Clause 14.2.4.1; Clause 18).
+///   most this implementation can hold (Clause 14.2.4.1; Clause 18).
 /// - SERVICES / INVALID_FILE_ACCESS_METHOD when the method does not match
 ///   the object's `File_Access_Method`; only a genuine mismatch, never a
 ///   missing implementation, reports this.
 /// - SERVICES / FILE_ACCESS_DENIED from the defaults above.
 ///
 /// A write that returns `Err` must leave the storage unchanged: the service
-/// fails "in its entirety" (Clause 14.2.4), and the server encodes no ACK on
+/// fails as a whole (Clause 14.2.4), and the server encodes no ACK on
 /// the error path. Resolved write positions must fit the ACK's INTEGER, so
 /// implementations keep their limit at or below `i32::MAX`.
 pub trait FileStorage: Send + Sync {
@@ -230,10 +231,6 @@ pub struct FileObject {
     data: Vec<u8>,
     /// Record data (used when file_access_method == RECORD_ACCESS).
     records: Vec<Vec<u8>>,
-    status_flags: StatusFlags,
-    out_of_service: bool,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
     /// Growth cap in octets for network writes; not a BACnet property.
     max_file_size: u64,
     /// Growth cap in records for network writes; not a BACnet property.
@@ -259,29 +256,13 @@ impl FileObject {
             description: String::new(),
             file_type: file_type.into(),
             file_size: 0,
-            modification_date: (
-                Date {
-                    year: Date::UNSPECIFIED,
-                    month: Date::UNSPECIFIED,
-                    day: Date::UNSPECIFIED,
-                    day_of_week: Date::UNSPECIFIED,
-                },
-                Time {
-                    hour: Time::UNSPECIFIED,
-                    minute: Time::UNSPECIFIED,
-                    second: Time::UNSPECIFIED,
-                    hundredths: Time::UNSPECIFIED,
-                },
-            ),
+            modification_date: crate::clock::UNSPECIFIED_DATETIME,
             archive: false,
             read_only: false,
             file_access_method: FileAccessMethod::STREAM_ACCESS.to_raw(),
             record_count: None,
             data: Vec::new(),
             records: Vec::new(),
-            status_flags: StatusFlags::empty(),
-            out_of_service: false,
-            reliability: 0,
             max_file_size: DEFAULT_MAX_FILE_SIZE,
             max_record_count: DEFAULT_MAX_RECORD_COUNT,
             clock: None,
@@ -430,29 +411,8 @@ impl FileObject {
         }
     }
 
-    fn modification_datetime(&self) -> (Date, Time) {
-        let frame = self.clock.as_ref().and_then(|clock| clock.read_clock());
-        match frame {
-            Some(frame) if frame.is_valid_actual_datetime() => (frame.local_date, frame.local_time),
-            _ => (
-                Date {
-                    year: Date::UNSPECIFIED,
-                    month: Date::UNSPECIFIED,
-                    day: Date::UNSPECIFIED,
-                    day_of_week: Date::UNSPECIFIED,
-                },
-                Time {
-                    hour: Time::UNSPECIFIED,
-                    minute: Time::UNSPECIFIED,
-                    second: Time::UNSPECIFIED,
-                    hundredths: Time::UNSPECIFIED,
-                },
-            ),
-        }
-    }
-
     fn mark_modified(&mut self) {
-        self.modification_date = self.modification_datetime();
+        self.modification_date = crate::clock::stamp_datetime(self.clock.as_deref());
         self.archive = false;
     }
 }
@@ -597,7 +557,8 @@ impl BACnetObject for FileObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        // Table 12-16 has no Status_Flags, Reliability or Out_Of_Service (#1064).
+        if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;
         }
 
@@ -636,11 +597,6 @@ impl BACnetObject for FileObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
 
         match property {
             p if p == PropertyIdentifier::ARCHIVE => {
@@ -671,50 +627,27 @@ impl BACnetObject for FileObject {
             p if p == PropertyIdentifier::MODIFICATION_DATE => {
                 Err(common::write_access_denied_error())
             }
-            p if p == PropertyIdentifier::RECORD_COUNT => resize::write_records(self, value),
-            _ => Err(common::write_access_denied_error()),
+            p if p == PropertyIdentifier::RECORD_COUNT => {
+                if _array_index.is_none() && self.record_count.is_none() {
+                    Err(common::unknown_property_error())
+                } else {
+                    resize::write_records(self, value)
+                }
+            }
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                _array_index,
+            )),
         }
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        let mut props = vec![
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::FILE_TYPE,
-            PropertyIdentifier::FILE_SIZE,
-            PropertyIdentifier::MODIFICATION_DATE,
-            PropertyIdentifier::ARCHIVE,
-            PropertyIdentifier::READ_ONLY,
-            PropertyIdentifier::FILE_ACCESS_METHOD,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        if self.record_count.is_some() {
-            props.push(PropertyIdentifier::RECORD_COUNT);
-        }
-        Cow::Owned(props)
-    }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        resize::is_writable(self, property)
-    }
-
-    fn capture_write_property_rollback(
-        &mut self,
-        property: PropertyIdentifier,
-        value: &PropertyValue,
-    ) -> Option<WritePropertyRollback> {
-        resize::capture(self, property, value)
-    }
-
-    fn restore_write_property_rollback(
-        &mut self,
-        rollback: WritePropertyRollback,
-    ) -> Result<(), Error> {
-        resize::restore(self, rollback)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {

@@ -3,12 +3,14 @@ use std::sync::Arc;
 
 use bacnet_encoding::apdu::{AbortPdu, Apdu};
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 use tokio::sync::mpsc;
+
+use super::segmentation_context::InboundSegmentSource;
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 
@@ -126,10 +128,15 @@ impl FullCapacityFixture {
                 let mut receiver = SegmentReceiver::new();
                 receiver.receive(0, Bytes::from_static(b"held")).unwrap();
                 (
-                    (MacAddr::from_slice(SERVER_MAC), invoke_id),
+                    (
+                        MacAddr::from_slice(SERVER_MAC),
+                        invoke_id,
+                        TransportProvenance::unverified(),
+                    ),
                     SegmentedReceiveState {
                         receiver,
                         owner,
+                        provenance: TransportProvenance::unverified(),
                         reply_mac: MacAddr::from_slice(SERVER_MAC),
                         reply_network: None,
                         expected_next_seq: 1,
@@ -251,8 +258,11 @@ async fn full_receive_capacity_aborts_only_the_new_transaction_and_reclaims_its_
         &fixture.client.tsm,
         &fixture.client.network,
         &mut shadow_state,
-        SERVER_MAC,
-        &None,
+        InboundSegmentSource {
+            mac: SERVER_MAC,
+            network: &None,
+            provenance: TransportProvenance::unverified(),
+        },
         unsupported_ack,
         ResponseLimits {
             segmented_response_accepted: false,

@@ -7,15 +7,49 @@
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
 
+use crate::bitstring::{DaysOfWeek, EventTransitionBits};
+use crate::enums::LifeSafetyState;
 use crate::error::Error;
-use crate::primitives::{Date, ObjectIdentifier, Time};
+use crate::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use crate::MacAddr;
 
+mod action;
+pub use action::{BACnetActionCommand, BACnetActionList};
+mod access;
+pub use access::{
+    BACnetAccessRule, BACnetAssignedAccessRights, BACnetAuthenticationFactor,
+    BACnetAuthenticationFactorFormat, BACnetCredentialAuthenticationFactor,
+};
 mod audit;
 pub use audit::{
     AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
+    BACnetObjectSelector,
 };
+mod color;
+pub use color::{BACnetColorCommand, BACnetXyColor};
+mod event_notification;
+pub use event_notification::{
+    ChangeOfValueChoice, EventNotificationRequest, NotificationParameters,
+};
+mod lift;
+pub use lift::{
+    AssignedLandingCall, BACnetAssignedLandingCalls, BACnetLandingCallStatus,
+    BACnetLandingDoorStatus, BACnetLiftCarCallList, LandingCallCommand, LandingDoor,
+};
+mod lighting;
+pub use lighting::BACnetLightingCommand;
+mod log;
+pub use log::{
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
+    LogDatum, LogValue,
+};
+mod property_access;
+pub use property_access::{AccessResult, BACnetPropertyAccessResult};
+mod property_value;
+pub use property_value::BACnetPropertyValue;
+mod read_access;
+pub use read_access::{PropertyReference, ReadAccessSpecification};
 mod staging;
 pub use staging::BACnetStageLimitValue;
 
@@ -25,34 +59,15 @@ pub use staging::BACnetStageLimitValue;
 
 /// BACnet date range: a SEQUENCE of start and end Date values.
 ///
-/// Encoded as 8 bytes: 4 bytes for start_date followed by 4 bytes for end_date.
+/// On the wire each Date is application-tagged; the codec is
+/// `bacnet_encoding::constructed::{encode_date_range, decode_date_range}`.
+/// An unspecified start or end date leaves that side of the range open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetDateRange {
     /// The start of the date range (inclusive).
     pub start_date: Date,
     /// The end of the date range (inclusive).
     pub end_date: Date,
-}
-
-impl BACnetDateRange {
-    /// Encode to 8 bytes (start_date || end_date).
-    pub fn encode(&self) -> [u8; 8] {
-        let mut out = [0u8; 8];
-        out[..4].copy_from_slice(&self.start_date.encode());
-        out[4..].copy_from_slice(&self.end_date.encode());
-        out
-    }
-
-    /// Decode from at least 8 bytes.
-    pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        if data.len() < 8 {
-            return Err(Error::buffer_too_short(8, data.len()));
-        }
-        Ok(Self {
-            start_date: Date::decode(&data[0..4])?,
-            end_date: Date::decode(&data[4..8])?,
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -64,15 +79,16 @@ impl BACnetDateRange {
 ///
 /// Each field may be `0xFF` to mean "any" (wildcard).
 ///
-/// - `month`: 1-12, 13=odd, 14=even, 0xFF=any
-/// - `week_of_month`: 1=first, 2=second, ..., 5=last, 6=any-in-first,
-///   0xFF=any
+/// - `month`: 1-12, 13=odd months, 14=even months, 0xFF=any
+/// - `week_of_month`: 1-5 = the days numbered 1-7, 8-14, 15-21, 22-28 and
+///   29-31; 6 = the last 7 days of the month; 7, 8 and 9 = the 7 days before
+///   the last 7, 14 and 21 days; 0xFF=any
 /// - `day_of_week`: 1=Monday..7=Sunday, 0xFF=any
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetWeekNDay {
     /// Month (1-14, or 0xFF for any).
     pub month: u8,
-    /// Week of month (1-6, or 0xFF for any).
+    /// Week of month (1-9, or 0xFF for any).
     pub week_of_month: u8,
     /// Day of week (1-7, or 0xFF for any).
     pub day_of_week: u8,
@@ -101,7 +117,7 @@ impl BACnetWeekNDay {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetCalendarEntry (Clause 12.6.3 -- property list of Calendar object)
+// BACnetCalendarEntry (Clause 21.6 -- Calendar Date_List; Calendar object Clause 12.9)
 // ---------------------------------------------------------------------------
 
 /// BACnet calendar entry: a CHOICE between a specific date, a date range,
@@ -111,6 +127,9 @@ impl BACnetWeekNDay {
 /// - `[0]` Date
 /// - `[1]` DateRange
 /// - `[2]` WeekNDay
+///
+/// The wire codec is `bacnet_encoding::constructed::{encode_calendar_entry,
+/// decode_calendar_entry}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BACnetCalendarEntry {
     /// A single specific date (context tag 0).
@@ -122,24 +141,27 @@ pub enum BACnetCalendarEntry {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetTimeValue (Clause 12.17.4 -- used by Schedule weekly_schedule)
+// BACnetTimeValue (Clause 12.24 -- Schedule Weekly_Schedule; Clause 21.6)
 // ---------------------------------------------------------------------------
 
-/// BACnet time-value pair: a Time followed by an application-tagged value.
+/// BACnet time-value pair: a Time followed by a value of any primitive
+/// datatype.
 ///
-/// The `value` field holds raw application-tagged bytes because the value
-/// type is polymorphic (Real, Boolean, Unsigned, Null, etc.) and the Schedule
-/// object stores them opaquely for later dispatch.
+/// The value is typed, so a Schedule writes it with its own datatype. Only
+/// primitive values ([`PropertyValue::is_primitive`]) belong here; the codec
+/// refuses to encode a `List` or `ApplicationData`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BACnetTimeValue {
     /// The time at which the value applies.
     pub time: Time,
-    /// Raw application-tagged BACnet encoding of the value.
-    pub value: Vec<u8>,
+    /// The value: NULL, BOOLEAN, Unsigned, INTEGER, REAL, Double, OCTET
+    /// STRING, CharacterString, BIT STRING, ENUMERATED, Date, Time or
+    /// BACnetObjectIdentifier.
+    pub value: PropertyValue,
 }
 
 // ---------------------------------------------------------------------------
-// SpecialEventPeriod (Clause 12.17.5 -- used by BACnetSpecialEvent)
+// SpecialEventPeriod (Clause 12.24 -- Schedule Exception_Schedule; Clause 21.6)
 // ---------------------------------------------------------------------------
 
 /// The period portion of a BACnetSpecialEvent: either an inline
@@ -157,7 +179,7 @@ pub enum SpecialEventPeriod {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetSpecialEvent (Clause 12.17.5 -- exception_schedule of Schedule)
+// BACnetSpecialEvent (Clause 12.24 -- Schedule Exception_Schedule; Clause 21.6)
 // ---------------------------------------------------------------------------
 
 /// BACnet special event: an exception schedule entry combining a period
@@ -168,8 +190,12 @@ pub struct BACnetSpecialEvent {
     pub period: SpecialEventPeriod,
     /// Ordered list of time-value pairs to apply during this period.
     pub list_of_time_values: Vec<BACnetTimeValue>,
-    /// Priority for conflict resolution (1=highest..16=lowest).
-    pub event_priority: u8,
+    /// Priority for conflict resolution, 1 (highest) to 16 (lowest).
+    ///
+    /// Held as the full Unsigned the wire can carry, so a decoded event keeps
+    /// a priority outside that range intact for its consumer to refuse; the
+    /// Schedule object answers such a value with VALUE_OUT_OF_RANGE.
+    pub event_priority: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +235,14 @@ impl BACnetObjectPropertyReference {
             property_identifier,
             property_array_index: Some(array_index),
         }
+    }
+
+    /// Whether the reference names nothing: its object is at the reserved
+    /// instance 4194303, which Clause 12.1 lets an identifier hold to mean
+    /// uninitialized or unused. A property of this type has no empty
+    /// encoding, so the stack serves an unset one in this form (#1417).
+    pub fn is_unset(&self) -> bool {
+        self.object_identifier.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE
     }
 }
 
@@ -262,6 +296,33 @@ impl BACnetDeviceObjectPropertyReference {
         self.property_array_index = Some(array_index);
         self
     }
+
+    /// Whether the device identifier is absent or names a Device object,
+    /// the rule [`BACnetDeviceObjectReference::device_identifier_is_device`]
+    /// applies to that type's device member.
+    pub fn device_identifier_is_device(&self) -> bool {
+        device_identifier_is_device(self.device_identifier)
+    }
+
+    /// Whether the reference names nothing: its object, or its Device when
+    /// it has one, is at the reserved instance 4194303 (Clause 12.1), the
+    /// rule Clause 12.30.11 gives an empty Trend Log Multiple element. A
+    /// property of this type has no empty encoding, so the stack serves an
+    /// unset one in this form (#1417).
+    pub fn is_unset(&self) -> bool {
+        let reserved =
+            |oid: ObjectIdentifier| oid.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE;
+        reserved(self.object_identifier) || self.device_identifier.is_some_and(reserved)
+    }
+}
+
+/// Whether an optional device member is absent or a Device object
+/// identifier, the only object type the member of a device-qualified
+/// reference can hold (Clause 21). The `device_identifier_is_device` methods
+/// of both reference types apply it, and so does every check the objects
+/// and the Python bindings run on a device member.
+pub fn device_identifier_is_device(device: Option<ObjectIdentifier>) -> bool {
+    device.is_none_or(|device| device.object_type() == crate::enums::ObjectType::DEVICE)
 }
 
 // ---------------------------------------------------------------------------
@@ -273,11 +334,38 @@ impl BACnetDeviceObjectPropertyReference {
 pub struct BACnetAddress {
     /// Network number (0 = local network, 1-65534 = remote, 65535 = broadcast).
     pub network_number: u16,
-    /// MAC-layer address (variable length; empty = local broadcast).
+    /// MAC-layer address (variable length, at most [`Self::MAX_MAC_LEN`] on the
+    /// wire; empty = broadcast).
     pub mac_address: MacAddr,
 }
 
 impl BACnetAddress {
+    /// The longest `mac_address`, in octets, that this stack encodes or decodes
+    /// in any `BACnetAddress` (#1124, #1156), and of any DADR or SADR the
+    /// network layer encodes or decodes (#1141).
+    ///
+    /// Clause 21 puts no length on the OCTET STRING, but a MAC is only useful
+    /// if it names a node on some data link. Table 6-2 gives the network-layer
+    /// address length of each standard data link, and the longest there is 7
+    /// octets (a LonTalk Neuron_ID destination). The data links this stack
+    /// serves address a node in at most 18 octets: 1 for MS/TP, 6 for B/IP,
+    /// Ethernet and B/SC, and 18 for B/IPv6, whose port names a peer by its
+    /// 16-octet IPv6 address and 2-octet UDP port. A longer MAC names no node
+    /// on any of them, nor on a standard data link behind a router.
+    ///
+    /// Every codec for this type in bacnet-encoding holds to the bound: the
+    /// recipient, ValueSource and AuditLogQuery decoders refuse a longer MAC
+    /// and their encoders refuse to write one. The local setters that store a
+    /// configured recipient (a Recipient_List destination or the
+    /// Audit_Notification_Recipient) refuse one too, so a stored recipient
+    /// always decodes again. The NPDU codec refuses a longer DLEN or SLEN
+    /// (`NpduAddress::MAX_MAC_LEN` in bacnet-encoding), and bacnet-network's
+    /// `NetworkLayer` and `BACnetRouter` drop a frame whose link-layer source
+    /// MAC is longer (#1198), so the source addresses the stack learns off the
+    /// network, which COV subscription lists and audit records report, fit the
+    /// bound as well. So does the device MAC a You-Are request assigns (#1200).
+    pub const MAX_MAC_LEN: usize = 18;
+
     /// Create a local-broadcast address.
     pub fn local_broadcast() -> Self {
         Self {
@@ -314,7 +402,7 @@ pub enum BACnetRecipient {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetDestination (Clause 12.15.5 -- recipient_list of NotificationClass)
+// BACnetDestination -- notification recipient, schedule, and delivery options
 // ---------------------------------------------------------------------------
 
 /// A single entry in a NotificationClass recipient list.
@@ -323,8 +411,8 @@ pub enum BACnetRecipient {
 /// (confirmed vs. unconfirmed, which transition types).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetDestination {
-    /// Bitmask of valid days (bit 0 = Monday ... bit 6 = Sunday), 7 bits used.
-    pub valid_days: u8,
+    /// Weekdays when this destination accepts notifications.
+    pub valid_days: DaysOfWeek,
     /// Start of the daily time window during which this destination is active.
     pub from_time: Time,
     /// End of the daily time window.
@@ -335,96 +423,59 @@ pub struct BACnetDestination {
     pub process_identifier: u32,
     /// If true, use ConfirmedEventNotification; otherwise unconfirmed.
     pub issue_confirmed_notifications: bool,
-    /// Bitmask of event transitions to send (bit 0=ToOffNormal, bit 1=ToFault,
-    /// bit 2=ToNormal), 3 bits used.
-    pub transitions: u8,
+    /// Event transitions whose notifications this destination receives.
+    pub transitions: EventTransitionBits,
 }
 
 // ---------------------------------------------------------------------------
-// LogDatum (Clause 12.20.5 -- log_buffer element datum of TrendLog)
+// BACnetEventNotificationSubscription (Clause 21)
 // ---------------------------------------------------------------------------
 
-/// The datum field of a BACnetLogRecord: a CHOICE covering all possible
-/// logged value types.
+/// One entry of a Notification Forwarder's Subscribed_Recipients (Clause
+/// 12.51.9): a recipient that asked for forwarded notifications for a limited
+/// time.
 ///
-/// Context tags per spec:
-/// - `[0]` log-status (BACnetLogStatus, 8-bit flags)
-/// - `[1]` boolean-value
-/// - `[2]` real-value
-/// - `[3]` enum-value (unsigned)
-/// - `[4]` unsigned-value
-/// - `[5]` signed-value
-/// - `[6]` bitstring-value
-/// - `[7]` null-value
-/// - `[8]` failure (BACnetError)
-/// - `[9]` time-change (REAL, clock-adjustment seconds)
-/// - `[10]` any-value (raw application-tagged bytes)
-#[derive(Debug, Clone, PartialEq)]
-pub enum LogDatum {
-    /// Log-status flags (context tag 0).  Bit 0=log-disabled, bit 1=buffer-purged,
-    /// bit 2=log-interrupted.
-    LogStatus(u8),
-    /// Boolean value (context tag 1).
-    BooleanValue(bool),
-    /// Real (f32) value (context tag 2).
-    RealValue(f32),
-    /// Enumerated value (context tag 3).
-    EnumValue(u32),
-    /// Unsigned integer value (context tag 4).
-    UnsignedValue(u64),
-    /// Signed integer value (context tag 5).
-    SignedValue(i64),
-    /// Bit-string value (context tag 6).
-    BitstringValue {
-        /// Number of unused bits in the last byte.
-        unused_bits: u8,
-        /// The bit data.
-        data: Vec<u8>,
-    },
-    /// Null value (context tag 7).
-    NullValue,
-    /// Error (context tag 8): error class + error code.
-    Failure {
-        /// Raw BACnet error class value.
-        error_class: u32,
-        /// Raw BACnet error code value.
-        error_code: u32,
-    },
-    /// Time-change: clock-adjustment amount in seconds (context tag 9).
-    TimeChange(f32),
-    /// Any-value: raw application-tagged bytes for types not enumerated above
-    /// (context tag 10).
-    AnyValue(Vec<u8>),
+/// The recipient and process identifier identify the entry: the list services
+/// match on those two members alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BACnetEventNotificationSubscription {
+    /// Device or address that receives the notifications (`[0]`).
+    pub recipient: BACnetRecipient,
+    /// Process on the recipient that receives them (`[1]`).
+    pub process_identifier: u32,
+    /// `true` for confirmed notifications, `false` for unconfirmed ones (`[2]`).
+    pub issue_confirmed_notifications: bool,
+    /// Minutes left before the entry lapses (`[3]`). Unlike COV subscription
+    /// lifetimes this counts minutes, not seconds.
+    pub time_remaining: u32,
 }
 
 // ---------------------------------------------------------------------------
-// BACnetLogRecord (Clause 12.20.5 -- log_buffer of TrendLog)
+// BACnetPortPermission (Clause 21)
 // ---------------------------------------------------------------------------
 
-/// A single record stored in a TrendLog object's log buffer.
-///
-/// Contains a timestamp (date + time), the logged datum, and optional
-/// status flags that were in effect at logging time.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetLogRecord {
-    /// The date at which this record was logged.
-    pub date: Date,
-    /// The time at which this record was logged.
-    pub time: Time,
-    /// The logged datum.
-    pub log_datum: LogDatum,
-    /// Optional status flags at time of logging (4-bit BACnet StatusFlags).
-    pub status_flags: Option<u8>,
+/// One element of a Notification Forwarder's Port_Filter (Clause 12.51.11):
+/// whether notifications that arrive through one network port are forwarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BACnetPortPermission {
+    /// The port, by its Clause 6 port ID; 0 on a node that does not route
+    /// (`[0]`).
+    pub port_id: u8,
+    /// `true` when notifications received through the port are forwarded
+    /// (`[1]`).
+    pub enabled: bool,
 }
 
 // ---------------------------------------------------------------------------
 // BACnetScale (Clause 21)
 // ---------------------------------------------------------------------------
 
-/// BACnet Scale: CHOICE { float-scale [0] Real, integer-scale [1] Integer }.
+/// BACnet Scale: CHOICE { float-scale \[0\] Real, integer-scale \[1\] Integer }.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetScale {
+    /// Present_Value is multiplied by this factor to get engineering units.
     FloatScale(f32),
+    /// Present_Value is multiplied by ten raised to this power to get engineering units.
     IntegerScale(i32),
 }
 
@@ -435,48 +486,32 @@ pub enum BACnetScale {
 /// BACnet Prescale: SEQUENCE { multiplier Unsigned, modulo-divide Unsigned }.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BACnetPrescale {
+    /// Numerator of the pulse-to-value conversion ratio, added to the accumulator per input pulse.
     pub multiplier: u32,
+    /// Denominator of the conversion ratio; each time the accumulator reaches it, the value steps
+    /// by one.
     pub modulo_divide: u32,
 }
 
 // ---------------------------------------------------------------------------
-// BACnetShedLevel (Clause 12 — used by LoadControl)
+// BACnetShedLevel (Clause 21 — used by LoadControl)
 // ---------------------------------------------------------------------------
 
-/// BACnet ShedLevel — CHOICE for LoadControl.
+/// A Load Control shed level (`BACnetShedLevel`, Clause 21): the datatype of
+/// Requested_Shed_Level, Expected_Shed_Level and Actual_Shed_Level
+/// (Clause 12.28).
+///
+/// On the wire each alternative is one primitive context tag: percent `[0]`,
+/// level `[1]`, amount `[2]`. The codec is
+/// `bacnet_encoding::constructed::{encode_shed_level, decode_shed_level}`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetShedLevel {
-    /// Shed level as a percentage (0–100).
-    Percent(u32),
-    /// Shed level as an abstract level value.
-    Level(u32),
-    /// Shed level as a floating-point amount.
+    /// The load to run at, as a percentage of the baseline (Unsigned).
+    Percent(u64),
+    /// A preconfigured shed level (Unsigned). Level 0 means no shed.
+    Level(u64),
+    /// Kilowatts to take off the baseline (REAL).
     Amount(f32),
-}
-
-// ---------------------------------------------------------------------------
-// BACnetLightingCommand (Clause 21 -- used by LightingOutput)
-// ---------------------------------------------------------------------------
-
-/// BACnet Lighting Command -- controls lighting operations.
-///
-/// Per ASHRAE 135-2020 Clause 21, this type is used by the LightingOutput
-/// object's LIGHTING_COMMAND property to specify a lighting operation
-/// (e.g., fade, ramp, step) with optional parameters.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetLightingCommand {
-    /// The lighting operation (LightingOperation enum raw value).
-    pub operation: u32,
-    /// Optional target brightness level (0.0 to 100.0 percent).
-    pub target_level: Option<f32>,
-    /// Optional ramp rate (percent per second).
-    pub ramp_rate: Option<f32>,
-    /// Optional step increment (percent).
-    pub step_increment: Option<f32>,
-    /// Optional fade time (milliseconds).
-    pub fade_time: Option<u32>,
-    /// Optional priority (1-16).
-    pub priority: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -496,59 +531,30 @@ pub struct BACnetDeviceObjectReference {
     pub object_identifier: ObjectIdentifier,
 }
 
-// ---------------------------------------------------------------------------
-// BACnetAccessRule (Clause 12 -- used by AccessRights object)
-// ---------------------------------------------------------------------------
+impl BACnetDeviceObjectReference {
+    /// Whether the device identifier is absent or names a Device object.
+    ///
+    /// The Clause 21 production gives the first member to the Device that
+    /// holds the object, so an identifier of any other object type can't make
+    /// a valid reference. Setters and write paths that take these references
+    /// refuse one that fails this check.
+    pub fn device_identifier_is_device(&self) -> bool {
+        device_identifier_is_device(self.device_identifier)
+    }
+}
 
-/// BACnet Access Rule for access control objects.
-///
-/// Specifies a time range and location with an enable/disable flag,
-/// used in positive and negative access rules lists.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetAccessRule {
-    /// Time range specifier: 0 = specified, 1 = always.
-    pub time_range_specifier: u32,
-    /// Optional time range (start date, start time, end date, end time).
-    /// Present only when `time_range_specifier` is 0 (specified).
-    pub time_range: Option<(Date, Time, Date, Time)>,
-    /// Location specifier: 0 = specified, 1 = all.
-    pub location_specifier: u32,
-    /// Optional location reference. Present only when `location_specifier` is 0 (specified).
-    pub location: Option<BACnetDeviceObjectReference>,
-    /// Whether access is enabled or disabled by this rule.
-    pub enable: bool,
+impl From<ObjectIdentifier> for BACnetDeviceObjectReference {
+    /// A reference to an object in this device: no device identifier.
+    fn from(object_identifier: ObjectIdentifier) -> Self {
+        Self {
+            device_identifier: None,
+            object_identifier,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
-// BACnetAssignedAccessRights (Clause 12 -- used by AccessCredential/AccessUser)
-// ---------------------------------------------------------------------------
-
-/// BACnet Assigned Access Rights.
-///
-/// Associates a reference to an AccessRights object with an enable flag.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BACnetAssignedAccessRights {
-    /// Reference to an AccessRights object.
-    pub assigned_access_rights: ObjectIdentifier,
-    /// Whether these access rights are currently enabled.
-    pub enable: bool,
-}
-
-// ---------------------------------------------------------------------------
-// BACnetAssignedLandingCalls (Clause 12 -- used by ElevatorGroup)
-// ---------------------------------------------------------------------------
-
-/// BACnet Assigned Landing Calls for elevator group.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetAssignedLandingCalls {
-    /// The floor number for this landing call.
-    pub floor_number: u8,
-    /// Direction: 0=up, 1=down, 2=unknown.
-    pub direction: u32,
-}
-
-// ---------------------------------------------------------------------------
-// FaultParameters (Clause 12.12.50)
+// FaultParameters (Clause 12.12 -- Fault_Parameters of Event Enrollment)
 // ---------------------------------------------------------------------------
 
 /// Fault parameter variants for configuring fault detection algorithms.
@@ -557,30 +563,46 @@ pub enum FaultParameters {
     /// No fault detection.
     FaultNone,
     /// Fault on characterstring match.
-    FaultCharacterString { fault_values: Vec<String> },
+    FaultCharacterString {
+        /// Strings that, when the monitored value matches one, indicate a fault.
+        fault_values: Vec<String>,
+    },
     /// Vendor-defined fault algorithm.
     FaultExtended {
+        /// Vendor identifier that owns the extended algorithm.
         vendor_id: u16,
+        /// Vendor-defined identifier of the fault algorithm.
         extended_fault_type: u32,
+        /// Pre-encoded, vendor-specific parameter bytes carried opaquely.
         parameters: Vec<u8>,
     },
     /// Fault on life safety state match.
     FaultLifeSafety {
-        fault_values: Vec<u32>,
-        mode_for_reference: BACnetDeviceObjectPropertyReference,
+        /// Life safety states that indicate a fault.
+        fault_values: Vec<LifeSafetyState>,
+        /// Reference to the mode property consulted when evaluating these states.
+        mode_property_reference: BACnetDeviceObjectPropertyReference,
     },
     /// Fault on property state match.
     FaultState {
+        /// Property states that indicate a fault when the monitored property takes one of them.
         fault_values: Vec<BACnetPropertyStates>,
     },
     /// Fault on status flags change.
     FaultStatusFlags {
+        /// Reference to the StatusFlags property whose FAULT bit is monitored.
         reference: BACnetDeviceObjectPropertyReference,
     },
     /// Fault when value exceeds range.
-    FaultOutOfRange { min_normal: f64, max_normal: f64 },
+    FaultOutOfRange {
+        /// Lower bound of the normal range; values below it are a fault.
+        min_normal: f64,
+        /// Upper bound of the normal range; values above it are a fault.
+        max_normal: f64,
+    },
     /// Fault from listed reference.
     FaultListed {
+        /// BACnetLIST property whose entries carry the fault indications to watch.
         reference: BACnetDeviceObjectPropertyReference,
     },
 }
@@ -592,7 +614,9 @@ pub enum FaultParameters {
 /// BACnet Recipient Process — a recipient with an associated process identifier.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BACnetRecipientProcess {
+    /// Device or address that receives the notifications.
     pub recipient: BACnetRecipient,
+    /// Process on the recipient that asked for the notifications; echoed back in each one.
     pub process_identifier: u32,
 }
 
@@ -606,11 +630,61 @@ pub struct BACnetRecipientProcess {
 /// (object + property + optional index).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BACnetCOVSubscription {
+    /// Subscriber (device or address plus process identifier) that receives the notifications.
     pub recipient: BACnetRecipientProcess,
+    /// Object and property being watched.
     pub monitored_property_reference: BACnetObjectPropertyReference,
+    /// `true` for confirmed notifications, `false` for unconfirmed ones.
     pub issue_confirmed_notifications: bool,
+    /// Seconds left before the subscription lapses; 0 means it never lapses.
     pub time_remaining: u32,
+    /// COV increment in use for a numeric monitored property: the requested one, else the
+    /// object's COV_Increment. `None` when the monitored property isn't numeric.
     pub cov_increment: Option<f32>,
+}
+
+// ---------------------------------------------------------------------------
+// BACnetCOVMultipleSubscription (Clause 21)
+// ---------------------------------------------------------------------------
+
+/// One COV-multiple context of Device `Active_COV_Multiple_Subscriptions`:
+/// a recipient and notification form with one remaining lifetime and maximum
+/// notification delay shared by every nested COV reference.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BACnetCOVMultipleSubscription {
+    /// COV-client address and subscriber process identifier (`[0]`).
+    pub recipient: BACnetRecipientProcess,
+    /// Notification form of this context (`[1]`).
+    pub issue_confirmed_notifications: bool,
+    /// Remaining context lifetime in seconds (`[2]`).
+    pub time_remaining: u32,
+    /// Maximum notification delay in seconds (`[3]`).
+    pub max_notification_delay: u32,
+    /// Monitored objects and their COV references (`[4]`).
+    pub list_of_cov_subscription_specifications: Vec<BACnetCOVSubscriptionSpecification>,
+}
+
+/// The COV references a COV-multiple context holds for one monitored object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BACnetCOVSubscriptionSpecification {
+    /// Monitored object (`[0]`).
+    pub monitored_object_identifier: ObjectIdentifier,
+    /// COV references on that object (`[1]`).
+    pub list_of_cov_references: Vec<BACnetCOVReference>,
+}
+
+/// One monitored property (a `BACnetPropertyReference`) of a COV-multiple
+/// subscription specification.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BACnetCOVReference {
+    /// Monitored property (`[0]` property identifier).
+    pub property_identifier: crate::enums::PropertyIdentifier,
+    /// Optional array index; absence and zero are distinct.
+    pub property_array_index: Option<u32>,
+    /// COV increment in use (`[1]`), present for numeric monitored values.
+    pub cov_increment: Option<f32>,
+    /// Whether notifications carry the time of change (`[2]`).
+    pub timestamped: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -620,13 +694,16 @@ pub struct BACnetCOVSubscription {
 /// BACnet Value Source — identifies the source of a property value write.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetValueSource {
+    /// No identified source: context \[0\] NULL.
     None,
-    Object(ObjectIdentifier),
+    /// Source object, optionally qualified by a device: constructed context \[1\].
+    Object(BACnetDeviceObjectReference),
+    /// Source network/MAC address: constructed context \[2\].
     Address(BACnetAddress),
 }
 
 // ---------------------------------------------------------------------------
-// BACnetEventParameter (Clause 13.5 -- Event_Parameters CHOICE alternatives)
+// BACnetEventParameter -- Event_Parameters algorithm alternatives
 // ---------------------------------------------------------------------------
 
 mod event_parameter;

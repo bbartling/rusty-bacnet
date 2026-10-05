@@ -4,7 +4,6 @@
 //! ObjectDatabase and returns the encoded response bytes.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use bacnet_encoding::npdu::NpduAddress;
@@ -28,24 +27,35 @@ use bacnet_types::enums::{
     EnableDisable, ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
     RejectReason,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, ErrorDetail};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 use bacnet_types::MacAddr;
 
 use bytes::BytesMut;
 
-use crate::cov::{CovNotificationKind, CovSubscription, CovSubscriptionTable};
+use crate::cov::active::LiveCovSelection;
+use crate::cov::{
+    CovNotificationKind, CovSubscription, CovSubscriptionKey, CovSubscriptionSnapshot,
+    CovSubscriptionTable, MultipleContextKey, SubscriberEndpoint,
+};
+use crate::device_view::DeviceReadContext;
 
 mod alarm_event;
 mod audit_log_query;
 mod audit_notification;
 mod cov;
-mod device_mgmt;
+pub(crate) mod device_mgmt;
 mod file;
+mod group_present_value;
 mod list;
 mod object_mgmt;
+mod read_budget;
+pub(crate) use read_budget::ReadFailure;
 mod read_property;
 mod read_range;
+mod rpm_budget;
+pub(crate) use rpm_budget::RpmPlan;
+pub(crate) mod relinquish;
 mod write_property;
 
 pub use alarm_event::*;

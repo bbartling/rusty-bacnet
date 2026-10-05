@@ -23,11 +23,12 @@ async fn assert_no_bvll(socket: &UdpSocket, label: &str) {
 
 #[tokio::test]
 async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
-    let bbmd_socket = Arc::new(
+    let bbmd_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = bbmd_socket.local_addr().unwrap().port();
     let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
@@ -48,6 +49,7 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
     let (npdu_tx, mut npdu_rx) = mpsc::channel(1);
 
     let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state.enable_foreign_device_registration(ForeignDevicePolicy::default());
     state
         .set_bdt(vec![BdtEntry {
             ip: Ipv4Addr::LOCALHOST.octets(),
@@ -72,8 +74,10 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_broadcast_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
-        bdt_persist_path: None,
+        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: None,
         force_dbtn_forward_failure: false,
+        forwarded_origins: super::groups::ForwardedOrigins::detached(),
     };
     let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);
     let msg = BvllMessage {
@@ -83,7 +87,7 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
         originating_port: None,
     };
 
-    handle_bvll_message(&msg, sender, &ctx).await;
+    handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
 
     let received = timeout(Duration::from_secs(2), npdu_rx.recv())
         .await
@@ -120,11 +124,12 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
 
 #[tokio::test]
 async fn dbtn_registered_foreign_device_naks_when_forwarding_fails() {
-    let bbmd_socket = Arc::new(
+    let bbmd_socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let local_port = bbmd_socket.local_addr().unwrap().port();
     let origin_fd_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
@@ -133,6 +138,7 @@ async fn dbtn_registered_foreign_device_naks_when_forwarding_fails() {
     let (npdu_tx, _npdu_rx) = mpsc::channel(1);
 
     let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state.enable_foreign_device_registration(ForeignDevicePolicy::default());
     assert_eq!(
         state.register_foreign_device(Ipv4Addr::LOCALHOST.octets(), origin_fd_port, 60),
         BvlcResultCode::SUCCESSFUL_COMPLETION
@@ -146,8 +152,10 @@ async fn dbtn_registered_foreign_device_naks_when_forwarding_fails() {
         broadcast_addr: Ipv4Addr::LOCALHOST,
         broadcast_port: local_port,
         pending_bvlc_response: Arc::new(Mutex::new(None)),
-        bdt_persist_path: None,
+        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: None,
         force_dbtn_forward_failure: true,
+        forwarded_origins: super::groups::ForwardedOrigins::detached(),
     };
     let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);
     let msg = BvllMessage {
@@ -157,7 +165,7 @@ async fn dbtn_registered_foreign_device_naks_when_forwarding_fails() {
         originating_port: None,
     };
 
-    handle_bvll_message(&msg, sender, &ctx).await;
+    handle_bvll_message(&msg, sender, Delivery::Unicast, &ctx).await;
 
     let result = recv_bvll(&origin_fd_sink).await;
     assert_eq!(result.function, BvlcFunction::BVLC_RESULT);

@@ -13,6 +13,17 @@ use crate::sc_frame::{
 
 use super::helpers::registered_client_matches_sink_in_map;
 use super::{Clients, WsSink};
+use crate::sc::diagnostic_throttle::DiagnosticThrottle;
+
+/// Emits one throttled hub-Result diagnostic. Returns without logging when
+/// the per-connection window budget is exhausted (suppressed is counted for
+/// the next summary). Never affects relay decisions.
+fn emit_result_diagnostic(diag: &mut DiagnosticThrottle, log: impl FnOnce(u64)) {
+    if diag.should_emit_now() {
+        let suppressed = diag.take_suppressed();
+        log(suppressed);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HubRelayTarget {
@@ -46,6 +57,7 @@ pub(super) fn hub_relay_target(msg: &ScMessage) -> Result<HubRelayTarget, HubRel
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_hub_relay_message(
     inbound: &ScMessage,
     sender_vmac: Vmac,
@@ -114,41 +126,117 @@ pub(super) async fn relay_result(
     msg: &ScMessage,
     registered_vmac: Vmac,
     clients: &Clients,
-    source_sink: &Arc<Mutex<WsSink>>,
-    close_requested: &Arc<AtomicBool>,
+    source: (&Arc<Mutex<WsSink>>, &Arc<AtomicBool>),
+    relay_send_budget: std::time::Duration,
+    diag: &mut DiagnosticThrottle,
 ) -> ResultRelayDisposition {
+    let (source_sink, close_requested) = source;
     let result_for = match decode_sc_bvlc_result(msg) {
         Ok(ScBvlcResult::Ack { result_for }) | Ok(ScBvlcResult::Nak { result_for, .. }) => {
             result_for
         }
         Err(e) => {
-            debug!("Hub: malformed peer Result from {registered_vmac:02x?}, dropping: {e}");
+            emit_result_diagnostic(diag, |suppressed| {
+                if suppressed > 0 {
+                    debug!("Hub: malformed peer Result from {registered_vmac:02x?}, dropping: {e} (suppressed {suppressed} similar diagnostics)");
+                } else {
+                    debug!("Hub: malformed peer Result from {registered_vmac:02x?}, dropping: {e}");
+                }
+            });
             return ResultRelayDisposition::Continue;
         }
     };
-    if result_for != ScFunction::EncapsulatedNpdu {
-        debug!(
-            "Hub: peer Result for {:?} from {registered_vmac:02x?}, dropping",
-            result_for
-        );
+    // General-known Result forwarding rule (AB.5.1/AB.5.3.2): the hub
+    // forwards unicast BVLC messages by destination-VMAC match with no
+    // per-function carve-out. A BVLC-Result is itself a unicast response
+    // (AB.2/AB.2.4); the result_for octet stays opaque payload, and an
+    // unmatched Result is a local matter for the destination node
+    // (AB.3.1.1). Relay set: 0x01 Encapsulated-NPDU, 0x02
+    // Address-Resolution, 0x03 Address-Resolution-ACK (a unicast response
+    // directed at the AR initiator per AB.2.7, returned through the hub
+    // per AB.4.1), 0x04 Advertisement, 0x05 Advertisement-Solicitation,
+    // 0x0C Proprietary-Message, and Unknown. Drop set: 0x00
+    // Result-for-Result (a received Result must not draw a Result per
+    // AB.3.1.1) and 0x06-0x0B connection/heartbeat traffic, which is
+    // connection-peer scoped (AB.5.3.1/AB.6.2), never hub-forwarded.
+    if !matches!(
+        result_for,
+        ScFunction::EncapsulatedNpdu
+            | ScFunction::AddressResolution
+            | ScFunction::AddressResolutionAck
+            | ScFunction::Advertisement
+            | ScFunction::AdvertisementSolicitation
+            | ScFunction::ProprietaryMessage
+            | ScFunction::Unknown(_)
+    ) {
+        emit_result_diagnostic(diag, |suppressed| {
+            if suppressed > 0 {
+                debug!(
+                    "Hub: peer Result for {:?} from {registered_vmac:02x?}, dropping (suppressed {suppressed} similar diagnostics)",
+                    result_for
+                );
+            } else {
+                debug!(
+                    "Hub: peer Result for {:?} from {registered_vmac:02x?}, dropping",
+                    result_for
+                );
+            }
+        });
         return ResultRelayDisposition::Continue;
     }
 
     let destination = match hub_relay_target(msg) {
         Ok(HubRelayTarget::Unicast(destination)) => destination,
         Ok(HubRelayTarget::Broadcast) => {
-            debug!("Hub: broadcast Result from {registered_vmac:02x?}, dropping");
+            emit_result_diagnostic(diag, |suppressed| {
+                if suppressed > 0 {
+                    debug!("Hub: broadcast Result from {registered_vmac:02x?}, dropping (suppressed {suppressed} similar diagnostics)");
+                } else {
+                    debug!("Hub: broadcast Result from {registered_vmac:02x?}, dropping");
+                }
+            });
             return ResultRelayDisposition::Continue;
         }
         Err(HubRelayReject::OriginatingVmacPresent) => {
-            debug!("Hub: Result from {registered_vmac:02x?} had Originating VMAC, dropping");
+            emit_result_diagnostic(diag, |suppressed| {
+                if suppressed > 0 {
+                    debug!("Hub: Result from {registered_vmac:02x?} had Originating VMAC, dropping (suppressed {suppressed} similar diagnostics)");
+                } else {
+                    debug!(
+                        "Hub: Result from {registered_vmac:02x?} had Originating VMAC, dropping"
+                    );
+                }
+            });
             return ResultRelayDisposition::Continue;
         }
         Err(HubRelayReject::MissingDestinationVmac) => {
-            debug!("Hub: Result from {registered_vmac:02x?} had no relay destination, dropping");
+            emit_result_diagnostic(diag, |suppressed| {
+                if suppressed > 0 {
+                    debug!("Hub: Result from {registered_vmac:02x?} had no relay destination, dropping (suppressed {suppressed} similar diagnostics)");
+                } else {
+                    debug!("Hub: Result from {registered_vmac:02x?} had no relay destination, dropping");
+                }
+            });
             return ResultRelayDisposition::Continue;
         }
     };
+
+    // Preserve EncapsulatedNpdu self-target behavior; only these selected
+    // families have the explicit no-echo rule. Address-Resolution-ACK is
+    // unicast-only like the rest of this set (AB.2.7), so self-addressed
+    // Results stay dropped here as well.
+    if matches!(
+        result_for,
+        ScFunction::AddressResolution
+            | ScFunction::AddressResolutionAck
+            | ScFunction::Advertisement
+            | ScFunction::AdvertisementSolicitation
+            | ScFunction::ProprietaryMessage
+            | ScFunction::Unknown(_)
+    ) && destination == registered_vmac
+    {
+        return ResultRelayDisposition::Continue;
+    }
 
     let Some(relay_buf) = encode_hub_relay_frame(
         wire,
@@ -156,7 +244,13 @@ pub(super) async fn relay_result(
         registered_vmac,
         HubRelayTarget::Unicast(destination),
     ) else {
-        warn!("Hub: failed to preserve peer Result frame from {registered_vmac:02x?}");
+        emit_result_diagnostic(diag, |suppressed| {
+            if suppressed > 0 {
+                warn!("Hub: failed to preserve peer Result frame from {registered_vmac:02x?} (suppressed {suppressed} similar diagnostics)");
+            } else {
+                warn!("Hub: failed to preserve peer Result frame from {registered_vmac:02x?}");
+            }
+        });
         return ResultRelayDisposition::Continue;
     };
     let relay_len = relay_buf.len();
@@ -175,43 +269,49 @@ pub(super) async fn relay_result(
     };
 
     let Some((target, max_bvlc)) = target else {
-        debug!("Hub: no client with vmac {destination:02x?} for Result relay");
+        emit_result_diagnostic(diag, |suppressed| {
+            if suppressed > 0 {
+                debug!("Hub: no client with vmac {destination:02x?} for Result relay (suppressed {suppressed} similar diagnostics)");
+            } else {
+                debug!("Hub: no client with vmac {destination:02x?} for Result relay");
+            }
+        });
         return ResultRelayDisposition::Continue;
     };
     if relay_len > max_bvlc as usize {
-        warn!(
-            "Hub: Result BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {destination:02x?}, dropping"
-        );
+        emit_result_diagnostic(diag, |suppressed| {
+            if suppressed > 0 {
+                warn!(
+                    "Hub: Result BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {destination:02x?}, dropping (suppressed {suppressed} similar diagnostics)"
+                );
+            } else {
+                warn!(
+                    "Hub: Result BVLC ({relay_len} bytes) exceeds target max_bvlc ({max_bvlc}) for {destination:02x?}, dropping"
+                );
+            }
+        });
         return ResultRelayDisposition::Continue;
     }
     if close_requested.load(Ordering::Acquire) {
         return ResultRelayDisposition::CloseSource;
     }
-    let send = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        if let Err(error) = super::relay_send::send(
+    let result = tokio::time::timeout(
+        relay_send_budget,
+        super::relay_send::send(
             &target,
             clients,
             Message::Binary(relay_buf.to_vec().into()),
             &super::relay_send::SocketIo,
-        )
-        .await
-        {
-            warn!("Hub: Result relay failed to {destination:02x?}: {error}");
-        }
-        ResultRelayDisposition::Continue
-    })
+        ),
+    )
     .await;
-    if let Ok(disposition) = send {
-        if disposition == ResultRelayDisposition::CloseSource
-            || close_requested.load(Ordering::Acquire)
-        {
-            return ResultRelayDisposition::CloseSource;
-        }
-        return ResultRelayDisposition::Continue;
-    }
     if close_requested.load(Ordering::Acquire) {
         return ResultRelayDisposition::CloseSource;
     }
-    warn!("Hub: Result relay timed out to {destination:02x?}");
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!("Hub: Result relay failed to {destination:02x?}: {error}"),
+        Err(_) => warn!("Hub: Result relay timed out to {destination:02x?}"),
+    }
     ResultRelayDisposition::Continue
 }

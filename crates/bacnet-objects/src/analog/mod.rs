@@ -11,7 +11,6 @@ use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::event::{history::EventHistory, OutOfRangeDetector};
-use crate::rollback::impl_intrinsic_write_rollback;
 use crate::traits::{BACnetObject, ReliabilityEvaluation};
 
 #[derive(Clone, Copy)]
@@ -27,10 +26,10 @@ pub(crate) enum OwnedRangeFault {
 }
 
 impl OwnedRangeFault {
-    fn reliability(self) -> u32 {
+    fn reliability(self) -> Reliability {
         match self {
-            Self::UnderRange => Reliability::UNDER_RANGE.to_raw(),
-            Self::OverRange => Reliability::OVER_RANGE.to_raw(),
+            Self::UnderRange => Reliability::UNDER_RANGE,
+            Self::OverRange => Reliability::OVER_RANGE,
         }
     }
 }
@@ -61,22 +60,6 @@ impl FaultOutOfRangeState {
         }
     }
 
-    fn property_list(
-        &self,
-        base: &'static [PropertyIdentifier],
-    ) -> Cow<'static, [PropertyIdentifier]> {
-        if self.limits.is_none() {
-            return Cow::Borrowed(base);
-        }
-        let mut properties = Vec::with_capacity(base.len() + 2);
-        properties.extend_from_slice(base);
-        properties.extend([
-            PropertyIdentifier::FAULT_HIGH_LIMIT,
-            PropertyIdentifier::FAULT_LOW_LIMIT,
-        ]);
-        Cow::Owned(properties)
-    }
-
     fn clear_ownership(&mut self) {
         self.owned_fault = None;
     }
@@ -84,7 +67,7 @@ impl FaultOutOfRangeState {
     fn evaluate(
         &mut self,
         monitored_value: f32,
-        reliability: &mut u32,
+        reliability: &mut Reliability,
     ) -> Result<ReliabilityEvaluation, Error> {
         let Some(limits) = self.limits else {
             return Ok(ReliabilityEvaluation::Unchanged);
@@ -104,10 +87,10 @@ impl FaultOutOfRangeState {
             (
                 observed_fault
                     .map(OwnedRangeFault::reliability)
-                    .unwrap_or_else(|| Reliability::NO_FAULT_DETECTED.to_raw()),
+                    .unwrap_or(Reliability::NO_FAULT_DETECTED),
                 observed_fault,
             )
-        } else if *reliability == Reliability::NO_FAULT_DETECTED.to_raw() {
+        } else if *reliability == Reliability::NO_FAULT_DETECTED {
             let Some(fault) = observed_fault else {
                 return Ok(ReliabilityEvaluation::Unchanged);
             };
@@ -127,6 +110,31 @@ impl FaultOutOfRangeState {
             new_reliability,
         })
     }
+}
+
+/// What a createable analog object takes only from a CreateObject initial
+/// value (#1429): Units, which stays read-only to WriteProperty.
+const CREATION_ONLY: &[PropertyIdentifier] = &[PropertyIdentifier::UNITS];
+
+/// Set `units` from a Units initial value. An Enumerated above 65535 is
+/// outside BACnetEngineeringUnits (Clause 21) and is VALUE_OUT_OF_RANGE;
+/// any other property is WRITE_ACCESS_DENIED, as the trait default answers.
+fn initialize_units(
+    units: &mut u32,
+    property: PropertyIdentifier,
+    value: PropertyValue,
+) -> Result<(), Error> {
+    if property != PropertyIdentifier::UNITS {
+        return Err(common::write_access_denied_error());
+    }
+    let PropertyValue::Enumerated(raw) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    if raw > 65_535 {
+        return Err(common::value_out_of_range_error());
+    }
+    *units = raw;
+    Ok(())
 }
 
 mod input;

@@ -1,5 +1,28 @@
 use super::*;
 
+mod access_identity;
+mod access_topology;
+mod accumulator;
+mod audit_log;
+mod averaging;
+mod calendar;
+mod channel;
+mod color;
+mod command;
+mod command_source;
+mod elevator;
+mod file;
+mod group;
+mod group_present_value;
+mod life_safety;
+mod lighting;
+mod load_control;
+mod loop_program;
+mod network_port;
+mod notification_class;
+mod schedule;
+mod timer;
+
 #[test]
 fn read_property_handler_success() {
     let db = make_db_with_ai();
@@ -26,57 +49,26 @@ fn read_property_handler_success() {
     assert_eq!(val, bacnet_types::primitives::PropertyValue::Real(72.5));
 }
 
-fn active_cov_subscription_db() -> (ObjectDatabase, ObjectIdentifier, Vec<u8>) {
+/// The low-level handlers carry no server COV context: they report the
+/// Device's standalone empty list. Live projection is a server-wire contract
+/// (`server::active_cov_subscriptions_tests`).
+#[test]
+fn active_cov_subscriptions_low_level_handlers_read_standalone_empty_list() {
     use bacnet_objects::device::{DeviceConfig, DeviceObject};
-    use bacnet_types::constructed::{
-        BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
-        BACnetRecipientProcess,
-    };
+    use bacnet_services::rpm::ReadPropertyMultipleRequest;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
-    let mut device = DeviceObject::new(DeviceConfig {
-        instance: 1,
-        name: "COV Device".into(),
-        ..Default::default()
-    })
-    .unwrap();
-    let subscription = BACnetCOVSubscription {
-        recipient: BACnetRecipientProcess {
-            recipient: BACnetRecipient::Device(
-                ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap(),
-            ),
-            process_identifier: 7,
-        },
-        monitored_property_reference: BACnetObjectPropertyReference::new_indexed(
-            ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 3).unwrap(),
-            87,
-            2,
-        ),
-        issue_confirmed_notifications: true,
-        time_remaining: 300,
-        cov_increment: Some(0.5),
-    };
-
-    let expected = vec![
-        0x0E, 0x0E, 0x0C, 0x02, 0x00, 0x00, 0x07, 0x0F, 0x19, 0x07, 0x0F, 0x1E, 0x0C, 0x00, 0x40,
-        0x00, 0x03, 0x19, 0x57, 0x29, 0x02, 0x1F, 0x29, 0x01, 0x3A, 0x01, 0x2C, 0x4C, 0x3F, 0x00,
-        0x00, 0x00,
-    ];
-    let mut encoded = BytesMut::new();
-    bacnet_encoding::constructed::encode_cov_subscription_list(
-        &mut encoded,
-        std::slice::from_ref(&subscription),
-    );
-    assert_eq!(encoded.as_ref(), expected);
-    device.add_cov_subscription(subscription);
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(device)).unwrap();
-    (db, oid, expected)
-}
-
-#[test]
-fn active_cov_subscriptions_read_property_preserves_constructed_bytes() {
-    let (db, oid, expected) = active_cov_subscription_db();
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            instance: 1,
+            name: "COV Device".into(),
+            ..Default::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
     let request = ReadPropertyRequest {
         object_identifier: oid,
         property_identifier: PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
@@ -84,20 +76,13 @@ fn active_cov_subscriptions_read_property_preserves_constructed_bytes() {
     };
     let mut request_buf = BytesMut::new();
     request.encode(&mut request_buf);
-
     let mut response_buf = BytesMut::new();
     handle_read_property(&db, &request_buf, &mut response_buf).unwrap();
-    let ack = ReadPropertyACK::decode(&response_buf).unwrap();
+    assert!(ReadPropertyACK::decode(&response_buf)
+        .unwrap()
+        .property_value
+        .is_empty());
 
-    assert_eq!(ack.property_value, expected);
-}
-
-#[test]
-fn active_cov_subscriptions_read_property_multiple_preserves_constructed_bytes() {
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleRequest};
-
-    let (db, oid, expected) = active_cov_subscription_db();
     let request = ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
             object_identifier: oid,
@@ -108,14 +93,14 @@ fn active_cov_subscriptions_read_property_multiple_preserves_constructed_bytes()
         }],
     };
     let mut request_buf = BytesMut::new();
-    request.encode(&mut request_buf);
+    request.encode(&mut request_buf).unwrap();
 
     let mut response_buf = BytesMut::new();
     handle_read_property_multiple(&db, &request_buf, &mut response_buf).unwrap();
     let ack = ReadPropertyMultipleACK::decode(&response_buf).unwrap();
     let result = &ack.list_of_read_access_results[0].list_of_results[0];
 
-    assert_eq!(result.property_value.as_deref(), Some(expected.as_slice()));
+    assert_eq!(result.property_value.as_deref(), Some(&[][..]));
     assert!(result.error.is_none());
 }
 
@@ -133,7 +118,7 @@ fn read_property_handler_serves_multistate_event_time_stamps_count() {
 
     let mut ack_buf = BytesMut::new();
     handle_read_property(&db, &buf, &mut ack_buf).unwrap();
-    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf).unwrap();
     assert_eq!(ack.property_array_index, Some(0));
     let (value, end) =
         bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
@@ -219,9 +204,9 @@ fn write_property_handler_success() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
-    handle_write_property(&mut db, &buf).unwrap();
+    sourced_wp(&mut db, &buf).unwrap();
 
     // Verify the value was written
     let obj = db.get(&oid).unwrap();
@@ -236,8 +221,7 @@ fn rpm_handler_success() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -255,7 +239,7 @@ fn rpm_handler_success() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
@@ -285,8 +269,7 @@ fn rpm_handler_unknown_property_returns_inline_error() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -304,7 +287,7 @@ fn rpm_handler_unknown_property_returns_inline_error() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
@@ -321,8 +304,7 @@ fn rpm_handler_unknown_object_returns_inline_error() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 99).unwrap();
 
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -334,7 +316,7 @@ fn rpm_handler_unknown_object_returns_inline_error() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
@@ -350,8 +332,7 @@ fn rpm_handler_all_properties_expanded() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -363,7 +344,7 @@ fn rpm_handler_all_properties_expanded() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
@@ -401,8 +382,7 @@ fn rpm_handler_all_properties_expanded() {
 fn rpm_all_includes_multistate_event_history() {
     let db = make_db_with_msi();
     let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -414,10 +394,10 @@ fn rpm_all_includes_multistate_event_history() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
-    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf).unwrap();
     let results = &ack.list_of_read_access_results[0].list_of_results;
 
     let timestamps = results
@@ -460,8 +440,7 @@ fn rpm_all_includes_multistate_event_history() {
 fn rpm_explicit_index_returns_one_multistate_event_message() {
     let db = make_db_with_msi();
     let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -473,10 +452,10 @@ fn rpm_explicit_index_returns_one_multistate_event_message() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
-    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_buf).unwrap();
     let result = &ack.list_of_read_access_results[0].list_of_results[0];
 
     assert_eq!(result.property_array_index, Some(2));
@@ -494,86 +473,58 @@ fn rpm_explicit_index_returns_one_multistate_event_message() {
 
 #[test]
 fn rpm_handler_required_vs_optional() {
-    let db = make_db_with_ai();
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    use super::property_metadata::assert_rpm_selector_bytes;
+    use PropertyIdentifier as P;
+
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        bacnet_objects::value_types::DateValueObject::new(1, "DV-1").unwrap(),
+    ))
+    .unwrap();
+    let oid = ObjectIdentifier::new(ObjectType::DATE_VALUE, 1).unwrap();
     assert!(
-        db.get(&oid).unwrap().property_metadata().is_empty(),
-        "Analog Input intentionally exercises the legacy RPM fallback"
+        !db.get(&oid).unwrap().property_metadata().is_empty(),
+        "Date Value routes RPM selectors through canonical metadata"
     );
 
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
-
-    // REQUIRED wildcard
-    let req_required = bacnet_services::rpm::ReadPropertyMultipleRequest {
-        list_of_read_access_specs: vec![ReadAccessSpecification {
-            object_identifier: oid,
-            list_of_property_references: vec![PropertyReference {
-                property_identifier: PropertyIdentifier::REQUIRED,
-                property_array_index: None,
-            }],
-        }],
-    };
-    let mut buf = BytesMut::new();
-    req_required.encode(&mut buf);
-    let mut ack_buf = BytesMut::new();
-    handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
-    let ack_bytes = ack_buf.to_vec();
-    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_bytes).unwrap();
-    let required_results = &ack.list_of_read_access_results[0].list_of_results;
-
-    // OPTIONAL wildcard
-    let req_optional = bacnet_services::rpm::ReadPropertyMultipleRequest {
-        list_of_read_access_specs: vec![ReadAccessSpecification {
-            object_identifier: oid,
-            list_of_property_references: vec![PropertyReference {
-                property_identifier: PropertyIdentifier::OPTIONAL,
-                property_array_index: None,
-            }],
-        }],
-    };
-    let mut buf = BytesMut::new();
-    req_optional.encode(&mut buf);
-    let mut ack_buf = BytesMut::new();
-    handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
-    let ack_bytes = ack_buf.to_vec();
-    let ack = bacnet_services::rpm::ReadPropertyMultipleACK::decode(&ack_bytes).unwrap();
-    let optional_results = &ack.list_of_read_access_results[0].list_of_results;
-
-    // REQUIRED must include the 4 universal properties
-    let req_pids: Vec<_> = required_results
-        .iter()
-        .map(|r| r.property_identifier)
-        .collect();
-    assert!(req_pids.contains(&PropertyIdentifier::OBJECT_IDENTIFIER));
-    assert!(req_pids.contains(&PropertyIdentifier::OBJECT_NAME));
-    assert!(req_pids.contains(&PropertyIdentifier::OBJECT_TYPE));
-    assert!(req_pids.contains(&PropertyIdentifier::PROPERTY_LIST));
-
-    // OPTIONAL must NOT include any required properties
-    let opt_pids: Vec<_> = optional_results
-        .iter()
-        .map(|r| r.property_identifier)
-        .collect();
-    for req_pid in &req_pids {
-        assert!(
-            !opt_pids.contains(req_pid),
-            "OPTIONAL should not contain {req_pid:?}"
-        );
-    }
-
-    // REQUIRED + OPTIONAL should cover ALL.
-    // Note: REQUIRED may include PROPERTY_LIST (per Clause 12.11.12,
-    // property_list() excludes itself, so REQUIRED can have 1 extra).
-    let obj = db.get(&oid).unwrap();
-    let all_pids = obj.property_list();
-    let required_set: std::collections::HashSet<_> = req_pids.iter().collect();
-    let optional_set: std::collections::HashSet<_> = opt_pids.iter().collect();
-    for pid in all_pids.iter() {
-        assert!(
-            required_set.contains(pid) || optional_set.contains(pid),
-            "ALL property {pid:?} missing from REQUIRED and OPTIONAL"
-        );
+    // Metadata routing fixtures mirror the Time Value precedent: REQUIRED
+    // carries the RequiredRead rows (Property_List excluded from the wire
+    // expansion), OPTIONAL the Optional rows, and ALL the 11-row projection.
+    let req_pids = [
+        P::OBJECT_IDENTIFIER,
+        P::OBJECT_NAME,
+        P::OBJECT_TYPE,
+        P::PRESENT_VALUE,
+        P::STATUS_FLAGS,
+    ];
+    let opt_pids = [
+        P::DESCRIPTION,
+        P::OUT_OF_SERVICE,
+        P::RELIABILITY,
+        P::PRIORITY_ARRAY,
+        P::RELINQUISH_DEFAULT,
+        P::CURRENT_COMMAND_PRIORITY,
+    ];
+    // ALL omits Property_List although required_properties keeps it.
+    let all = [
+        P::OBJECT_IDENTIFIER,
+        P::OBJECT_NAME,
+        P::DESCRIPTION,
+        P::OBJECT_TYPE,
+        P::PRESENT_VALUE,
+        P::STATUS_FLAGS,
+        P::OUT_OF_SERVICE,
+        P::RELIABILITY,
+        P::PRIORITY_ARRAY,
+        P::RELINQUISH_DEFAULT,
+        P::CURRENT_COMMAND_PRIORITY,
+    ];
+    for (selector, expected) in [
+        (P::REQUIRED, req_pids.as_slice()),
+        (P::OPTIONAL, opt_pids.as_slice()),
+        (P::ALL, all.as_slice()),
+    ] {
+        assert_rpm_selector_bytes(&db, oid, selector, expected);
     }
 }
 
@@ -582,7 +533,7 @@ fn read_property_serves_derived_services_supported() {
     // End-to-end pin for #192: the wire-level BitString a client receives for
     // Protocol_Services_Supported, through the real ReadProperty handler path.
     // Expected bytes derive from device::EXECUTED_SERVICES bits
-    // {0,3-12,14-17,19,20,31-39,41,44-46} packed MSB-first over the full
+    // {0,2-12,14-17,19,20,29,31-41,44-46} packed MSB-first over the full
     // production range (49 defined bits, 7 octets, 7 unused).
     let db = make_db_with_device_and_ai();
     let oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
@@ -597,7 +548,7 @@ fn read_property_serves_derived_services_supported() {
 
     let mut ack_buf = BytesMut::new();
     handle_read_property(&db, &buf, &mut ack_buf).unwrap();
-    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf).unwrap();
 
     let (val, _) =
         bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
@@ -605,7 +556,7 @@ fn read_property_serves_derived_services_supported() {
         val,
         bacnet_types::primitives::PropertyValue::BitString {
             unused_bits: 7,
-            data: vec![0x9F, 0xFB, 0xD8, 0x01, 0xFF, 0x4E, 0x00],
+            data: vec![0xBF, 0xFB, 0xD8, 0x05, 0xFF, 0xCE, 0x00],
         }
     );
 
@@ -619,4 +570,110 @@ fn read_property_serves_derived_services_supported() {
     assert!(ss.contains(bacnet_types::enums::ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION));
     assert!(ss.contains(bacnet_types::enums::ServiceSupported::AUDIT_LOG_QUERY));
     assert!(!ss.contains(bacnet_types::enums::ServiceSupported::I_AM));
+    // Executed for the Notification Forwarder objects (#1225).
+    assert!(ss.contains(bacnet_types::enums::ServiceSupported::CONFIRMED_EVENT_NOTIFICATION));
+    assert!(ss.contains(bacnet_types::enums::ServiceSupported::UNCONFIRMED_EVENT_NOTIFICATION));
+}
+
+#[test]
+fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
+    use bacnet_services::rpm::ReadPropertyMultipleACK;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+    use bacnet_types::primitives::PropertyValue;
+    use PropertyIdentifier as P;
+
+    for mut object in super::property_metadata::multistate_objects() {
+        let oid = object.object_identifier();
+        let label = "indexed label".repeat(100);
+        object
+            .write_property(
+                P::STATE_TEXT,
+                Some(2),
+                PropertyValue::CharacterString(label.clone()),
+                None,
+            )
+            .unwrap();
+        let mut db = ObjectDatabase::new();
+        db.add(object).unwrap();
+        // The object read arms retain their legacy behavior; the service gates
+        // an index on scalar/list properties before dispatch in both paths.
+        let references = [
+            (P::STATE_TEXT, 0),
+            (P::STATE_TEXT, 1),
+            (P::STATE_TEXT, 2),
+            (P::STATE_TEXT, 3),
+            (P::STATE_TEXT, 4),
+            (P::ALARM_VALUES, 0),
+            (P::NUMBER_OF_STATES, 1),
+            (P::FEEDBACK_VALUE, 1),
+        ];
+        let request = ReadPropertyMultipleRequest {
+            list_of_read_access_specs: vec![ReadAccessSpecification {
+                object_identifier: oid,
+                list_of_property_references: references
+                    .iter()
+                    .map(|&(p, i)| PropertyReference {
+                        property_identifier: p,
+                        property_array_index: Some(i),
+                    })
+                    .collect(),
+            }],
+        };
+        let mut bytes = BytesMut::new();
+        request.encode(&mut bytes).unwrap();
+        let mut legacy = BytesMut::new();
+        handle_read_property_multiple(&db, &bytes, &mut legacy).unwrap();
+        let ack = ReadPropertyMultipleACK::decode(&legacy).unwrap();
+        let results = &ack.list_of_read_access_results[0].list_of_results;
+        assert_eq!(results.len(), references.len());
+        for (result, (p, i)) in results.iter().zip(references) {
+            assert_eq!(result.property_identifier, p);
+            assert_eq!(
+                result.property_array_index,
+                (p == P::STATE_TEXT).then_some(i)
+            );
+            if p == P::STATE_TEXT && i <= 3 {
+                assert!(result.error.is_none());
+                let value_bytes = result.property_value.as_ref().unwrap();
+                let (value, end) =
+                    bacnet_encoding::primitives::decode_application_value(value_bytes, 0).unwrap();
+                let expected = match i {
+                    0 => PropertyValue::Unsigned(3),
+                    2 => PropertyValue::CharacterString(label.clone()),
+                    _ => PropertyValue::CharacterString(format!("State {i}")),
+                };
+                assert_eq!(value, expected);
+                assert_eq!(end, value_bytes.len());
+            } else {
+                let expected = if p == P::STATE_TEXT {
+                    ErrorCode::INVALID_ARRAY_INDEX
+                } else {
+                    ErrorCode::PROPERTY_IS_NOT_AN_ARRAY
+                };
+                assert_eq!(result.error, Some((ErrorClass::PROPERTY, expected)));
+                assert!(result.property_value.is_none());
+            }
+        }
+        let budget = crate::server::ReadPropertyMultipleBudget {
+            max_result_elements: references.len(),
+            max_service_ack_bytes: legacy.len(),
+        };
+        let mut bounded = BytesMut::new();
+        super::super::rpm_budget::handle_rpm_budgeted(&db, &bytes, &mut bounded, budget).unwrap();
+        assert_eq!(bounded, legacy);
+        let mut prefix = BytesMut::from(&b"prefix"[..]);
+        assert!(matches!(
+            super::super::rpm_budget::handle_rpm_budgeted(
+                &db,
+                &bytes,
+                &mut prefix,
+                crate::server::ReadPropertyMultipleBudget {
+                    max_service_ack_bytes: legacy.len() - 1,
+                    ..budget
+                }
+            ),
+            Err(super::super::ReadFailure::Bytes)
+        ));
+        assert_eq!(&prefix[..], b"prefix");
+    }
 }

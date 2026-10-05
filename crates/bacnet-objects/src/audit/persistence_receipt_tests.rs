@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
 };
@@ -14,6 +15,35 @@ use super::{
 };
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn forwarding_v1_reopen_reapplies_member_of_without_rewriting_snapshot() {
+    use crate::traits::BACnetObject;
+    use std::sync::Arc;
+
+    let base = temp_base("forwarding");
+    let storage = Arc::new(FileAuditLogPersistence::new(&base).unwrap());
+    let expected = snapshot_with_record();
+    let bytes = encode_snapshot_v1(&expected).unwrap();
+    std::fs::write(&storage.slot_paths()[1], &bytes).unwrap();
+    let mut log = super::AuditLogObject::new(1, "v1", 1, storage.clone()).unwrap();
+    assert!(log.audit_log_forwarding_internal().is_none());
+    let parent = bacnet_types::constructed::BACnetDeviceObjectReference {
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 20).unwrap()),
+        object_identifier: ObjectIdentifier::new(ObjectType::AUDIT_LOG, 7).unwrap(),
+    };
+    log.set_member_of(Some(parent.clone()));
+    assert_eq!(
+        log.audit_log_forwarding_internal().unwrap().parent(),
+        &parent
+    );
+    assert_eq!(log.current_snapshot(), expected);
+    assert!(log.current_snapshot().completed_receipts.is_empty());
+    assert_eq!(storage.load(oid()).unwrap().unwrap(), expected);
+    assert_eq!(std::fs::read(&storage.slot_paths()[1]).unwrap(), bytes);
+    assert!(!storage.slot_paths()[0].exists());
+    cleanup(&base);
+}
 
 fn temp_base(label: &str) -> PathBuf {
     let serial = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -67,7 +97,7 @@ fn snapshot_with_record() -> AuditLogSnapshot {
                     hundredths: 0,
                 },
             ),
-            datum: BACnetAuditLogDatum::LogStatus(0),
+            datum: BACnetAuditLogDatum::LogStatus(LogStatus::empty()),
         },
     });
     snapshot
@@ -113,7 +143,7 @@ fn unknown_and_malformed_v2_receipt_fields_fail_closed() {
     let original = std::fs::read(&active).unwrap();
 
     let mut unknown = original.clone();
-    unknown[8..10].copy_from_slice(&3u16.to_be_bytes());
+    unknown[8..10].copy_from_slice(&4u16.to_be_bytes());
     rewrite_checksum(&mut unknown);
     std::fs::write(&active, unknown).unwrap();
     assert!(storage.load(oid()).is_err());

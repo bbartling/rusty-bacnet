@@ -1,9 +1,9 @@
 //! Encoded WP/WPM coverage for Binary Lighting Output command operations.
 
 use super::*;
+use bacnet_encoding::constructed::encode_bacnet_property_value;
 use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_services::common::BACnetPropertyValue;
-use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use std::time::Duration;
 
 fn encode_value(value: PropertyValue) -> Vec<u8> {
@@ -36,7 +36,7 @@ fn wp(
         priority,
     };
     let mut bytes = BytesMut::new();
-    request.encode(&mut bytes);
+    request.encode(&mut bytes).unwrap();
     handle_write_property(db, &bytes).map(|_| ())
 }
 
@@ -45,26 +45,23 @@ fn wpm(
     oid: ObjectIdentifier,
     writes: Vec<(PropertyIdentifier, Option<u32>, PropertyValue, Option<u8>)>,
 ) -> Result<(), Error> {
-    let request = WritePropertyMultipleRequest {
-        list_of_write_access_specs: vec![WriteAccessSpecification {
-            object_identifier: oid,
-            list_of_properties: writes
-                .into_iter()
-                .map(
-                    |(property_identifier, property_array_index, value, priority)| {
-                        BACnetPropertyValue {
-                            property_identifier,
-                            property_array_index,
-                            value: encode_value(value),
-                            priority,
-                        }
-                    },
-                )
-                .collect(),
-        }],
-    };
+    // Exercise inbound semantics, including invalid remote priorities. Do not
+    // pass these peer fixtures through outbound typed-request validation.
     let mut bytes = BytesMut::new();
-    request.encode(&mut bytes);
+    bacnet_encoding::primitives::encode_ctx_object_id(&mut bytes, 0, &oid);
+    bacnet_encoding::tags::encode_opening_tag(&mut bytes, 1);
+    for (property_identifier, property_array_index, value, priority) in writes {
+        encode_bacnet_property_value(
+            &BACnetPropertyValue {
+                property_identifier,
+                property_array_index,
+                value: encode_value(value),
+                priority,
+            },
+            &mut bytes,
+        );
+    }
+    bacnet_encoding::tags::encode_closing_tag(&mut bytes, 1);
     handle_write_property_multiple(db, &bytes).map(|_| ())
 }
 
@@ -81,7 +78,7 @@ fn read(
 }
 
 fn blink_count(db: &ObjectDatabase, oid: ObjectIdentifier) -> u64 {
-    db.get(&oid).unwrap().binary_lighting_blink_count_internal()
+    db.get(&oid).unwrap().lighting_blink_count_internal()
 }
 
 fn advance(db: &mut ObjectDatabase, oid: ObjectIdentifier, elapsed: Duration) -> bool {
@@ -98,24 +95,13 @@ fn assert_property_error(error: Error, expected: ErrorCode) {
     }
 }
 
-fn assert_priority_decode_error(error: Error, priority: u8) {
-    match error {
-        Error::Decoding { message, .. } => assert!(
-            message.contains(&format!("priority {priority} out of range 1-16")),
-            "unexpected priority error: {message}"
-        ),
-        other => panic!("expected existing priority decoding error, got {other:?}"),
-    }
-}
-
-fn assert_services_invalid_tag(error: Error) {
-    match error {
-        Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::SERVICES.to_raw() as u32);
-            assert_eq!(code, ErrorCode::INVALID_TAG.to_raw() as u32);
-        }
-        other => panic!("expected SERVICES/INVALID_TAG, got {other:?}"),
-    }
+fn assert_priority_range_error(error: Error) {
+    assert!(
+        matches!(error, Error::Protocol { class, code }
+        if class == ErrorClass::SERVICES.to_raw() as u32
+            && code == ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw() as u32),
+        "{error:?}"
+    );
 }
 
 fn configure_eligible_warn_off(db: &mut ObjectDatabase, oid: ObjectIdentifier, seconds: u64) {
@@ -223,18 +209,19 @@ fn write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix() {
     .unwrap();
 
     for priority in [0, 17, u8::MAX] {
-        assert_priority_decode_error(
-            wp(
-                &mut db,
-                oid,
-                PropertyIdentifier::PRESENT_VALUE,
-                None,
-                PropertyValue::Enumerated(0),
-                Some(priority),
-            )
-            .unwrap_err(),
-            priority,
-        );
+        // Malformed peer input must bypass the validated outbound priority field.
+        let mut bytes = BytesMut::new();
+        WritePropertyRequest {
+            object_identifier: oid,
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            property_value: encode_value(PropertyValue::Enumerated(0)),
+            priority: None,
+        }
+        .encode(&mut bytes)
+        .unwrap();
+        bacnet_encoding::primitives::encode_ctx_unsigned(&mut bytes, 4, u64::from(priority));
+        assert_priority_range_error(handle_write_property(&mut db, &bytes).unwrap_err());
         assert_eq!(
             read(&db, oid, PropertyIdentifier::EGRESS_ACTIVE, None),
             PropertyValue::Boolean(true)
@@ -242,7 +229,7 @@ fn write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix() {
         assert_eq!(blink_count(&db, oid), 1);
     }
 
-    assert_services_invalid_tag(
+    assert_priority_range_error(
         wpm(
             &mut db,
             oid,
@@ -266,7 +253,7 @@ fn write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix() {
     assert_eq!(
         read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(4)),
         PropertyValue::Enumerated(1),
-        "the valid WPM prefix commits before malformed priority syntax"
+        "the valid WPM prefix commits before an out-of-range priority"
     );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::EGRESS_ACTIVE, None),
@@ -278,20 +265,23 @@ fn write_property_priority_errors_are_atomic_and_wpm_keeps_prior_prefix() {
 #[test]
 fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
     let (mut db, oid) = database();
-    for accepted in [
+    for denied in [
         PropertyValue::Enumerated(0),
         PropertyValue::Enumerated(1),
         PropertyValue::Null,
     ] {
-        wp(
-            &mut db,
-            oid,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(8),
-            accepted,
-            None,
-        )
-        .unwrap();
+        assert_property_error(
+            wp(
+                &mut db,
+                oid,
+                PropertyIdentifier::PRIORITY_ARRAY,
+                Some(8),
+                denied,
+                None,
+            )
+            .unwrap_err(),
+            ErrorCode::WRITE_ACCESS_DENIED,
+        );
     }
     for value in [2, 3, 4, 5, 64, 255] {
         assert_property_error(
@@ -304,7 +294,7 @@ fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
                 None,
             )
             .unwrap_err(),
-            ErrorCode::VALUE_OUT_OF_RANGE,
+            ErrorCode::WRITE_ACCESS_DENIED,
         );
         assert_eq!(
             read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(8)),
@@ -321,7 +311,7 @@ fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
             None,
         )
         .unwrap_err(),
-        ErrorCode::INVALID_DATA_TYPE,
+        ErrorCode::WRITE_ACCESS_DENIED,
     );
     assert_property_error(
         wp(
@@ -333,7 +323,7 @@ fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
             None,
         )
         .unwrap_err(),
-        ErrorCode::INVALID_ARRAY_INDEX,
+        ErrorCode::WRITE_ACCESS_DENIED,
     );
 
     assert_property_error(
@@ -356,7 +346,7 @@ fn direct_priority_array_operation_values_are_rejected_with_exact_errors() {
             ],
         )
         .unwrap_err(),
-        ErrorCode::VALUE_OUT_OF_RANGE,
+        ErrorCode::WRITE_ACCESS_DENIED,
     );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(4)),
@@ -550,7 +540,7 @@ fn failed_wpm_keeps_new_timer_from_successful_prefix() {
 }
 
 #[test]
-fn direct_priority_array_wpm_halts_and_failed_wpm_keeps_prefix() {
+fn present_value_priority_wpm_halts_and_failed_wpm_keeps_prefix() {
     let (mut successful_db, successful_oid) = database();
     configure_eligible_warn_off(&mut successful_db, successful_oid, 5);
     wp(
@@ -566,10 +556,10 @@ fn direct_priority_array_wpm_halts_and_failed_wpm_keeps_prefix() {
         &mut successful_db,
         successful_oid,
         vec![(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(4),
-            PropertyValue::Enumerated(1),
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Enumerated(1),
+            Some(4),
         )],
     )
     .unwrap();
@@ -619,10 +609,10 @@ fn direct_priority_array_wpm_halts_and_failed_wpm_keeps_prefix() {
             oid,
             vec![
                 (
-                    PropertyIdentifier::PRIORITY_ARRAY,
-                    Some(4),
-                    PropertyValue::Enumerated(1),
+                    PropertyIdentifier::PRESENT_VALUE,
                     None,
+                    PropertyValue::Enumerated(1),
+                    Some(4),
                 ),
                 (
                     PropertyIdentifier::PRESENT_VALUE,
@@ -639,7 +629,7 @@ fn direct_priority_array_wpm_halts_and_failed_wpm_keeps_prefix() {
     assert_eq!(
         read(&db, oid, PropertyIdentifier::PRIORITY_ARRAY, Some(4)),
         PropertyValue::Enumerated(1),
-        "the successful direct priority write stays committed"
+        "the successful prioritized Present_Value write stays committed"
     );
     assert_eq!(
         read(&db, oid, PropertyIdentifier::EGRESS_ACTIVE, None),

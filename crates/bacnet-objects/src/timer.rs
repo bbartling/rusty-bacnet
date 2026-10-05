@@ -1,15 +1,17 @@
-//! Timer object (type 31) per ASHRAE 135-2020 Clause 12.
+//! Timer object (type 31) per ASHRAE 135-2020 Clause 12.57.
 //!
 //! The Timer object represents a countdown or count-up timer. Its present value
 //! is an Enumerated representing the timer state: 0=idle, 1=running, 2=expired.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
+
+mod metadata;
 
 /// Timer state enumeration values.
 const TIMER_STATE_IDLE: u32 = 0;
@@ -27,10 +29,10 @@ pub struct TimerObject {
     update_time: (Date, Time),
     expiration_time: (Date, Time),
     status_flags: StatusFlags,
-    /// Event_State: 0 = NORMAL.
-    event_state: u32,
+    /// Event_State.
+    event_state: EventState,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl TimerObject {
@@ -73,9 +75,9 @@ impl TimerObject {
                 },
             ),
             status_flags: StatusFlags::empty(),
-            event_state: 0, // NORMAL
+            event_state: EventState::NORMAL,
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 
@@ -149,7 +151,7 @@ impl BACnetObject for TimerObject {
                 PropertyValue::Time(self.expiration_time.1),
             ])),
             p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state))
+                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -191,27 +193,20 @@ impl BACnetObject for TimerObject {
                     Err(common::invalid_data_type_error())
                 }
             }
-            _ => Err(common::write_access_denied_error()),
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                _array_index,
+            )),
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::TIMER_STATE,
-            PropertyIdentifier::TIMER_RUNNING,
-            PropertyIdentifier::INITIAL_TIMEOUT,
-            PropertyIdentifier::UPDATE_TIME,
-            PropertyIdentifier::EXPIRATION_TIME,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 

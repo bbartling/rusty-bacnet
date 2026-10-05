@@ -1,6 +1,9 @@
+use super::segmentation_context::{
+    ConfirmedWait, InboundSegmentSource, ReassemblyAbortTarget, SegmentedRequestLimits,
+};
 use super::segmented_request::{OutgoingSegmentContext, OutgoingSegmentSend};
 use super::*;
-use crate::tsm::CompletionOutcome;
+use crate::tsm::{CompletionOutcome, SegmentedAckArrival};
 use bacnet_encoding::apdu::advertised_max_segments;
 
 /// Size of the sequence-number space, and so the hard reassembly ceiling.
@@ -9,8 +12,8 @@ use bacnet_encoding::apdu::advertised_max_segments;
 /// sequence number modulo 256, so a longer response is entirely representable —
 /// this client simply keys its segment store by that `u8` and cannot tell
 /// segment 257 from segment 1. Clause 5.4.4.4 names this exact situation
-/// (`NewSegmentReceived_NoSpace`, "the segment cannot be saved due to local
-/// conditions") and prescribes the Abort below.
+/// (`NewSegmentReceived_NoSpace`, a local inability to retain a segment)
+/// and prescribes the Abort below.
 ///
 /// Exactly 256 segments reassemble correctly and must keep working; 257 is the
 /// first that would corrupt the payload.
@@ -19,14 +22,12 @@ const SEQUENCE_NUMBER_SPACE: usize = 256;
 impl ResponseLimits {
     /// The receive-side limits `config` puts on the wire.
     pub(super) fn from_config(config: &ClientConfig) -> Self {
-        // Clause 20.1.2.4 defines max-segments-accepted as "the maximum number
-        // of segments that the device will accept"; Clause 5.2.1.3 makes it
-        // binding, requiring the segment count to be the smallest of the
-        // sender's own limit and "(b) the maximum number of segments accepted
-        // by the remote peer device" — which, for a ComplexACK, is "the 'Max
-        // Segments Accepted' parameter of the BACnet-Confirmed-Request-PDU for
-        // which this is a response". A peer that overruns it is therefore
-        // non-conformant, not merely unusual.
+        // Clause 20.1.2.4 uses max-segments-accepted to advertise receive
+        // capacity in segments. Clause 5.2.1.3 caps a transfer at the smaller
+        // of the sender's capacity and the receiver's advertised capacity.
+        // For a ComplexACK, the receiver's value comes from Max Segments
+        // Accepted in the corresponding BACnet-Confirmed-Request-PDU.
+        // Exceeding that limit is non-conformant, not merely unusual.
         //
         // Only the rungs B'001'..B'110' name a number; B'000' and B'111'
         // promise nothing, and `advertised_max_segments` reports those as
@@ -41,86 +42,57 @@ impl ResponseLimits {
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Transmit an Abort this client originates.
-    ///
-    /// Every Abort a requesting BACnet-user sends carries `'server' = FALSE` —
-    /// Clauses 5.4.4.1, 5.4.4.3 and 5.4.4.4 each spell it out — because the
-    /// flag names the sender's role, not the error.
-    pub(super) async fn send_client_abort(
-        network: &Arc<NetworkLayer<T>>,
-        reply_mac: &[u8],
-        reply_network: &Option<NpduAddress>,
-        invoke_id: u8,
-        abort_reason: bacnet_types::enums::AbortReason,
-    ) {
-        let abort = Apdu::Abort(AbortPdu {
-            sent_by_server: false,
-            invoke_id,
-            abort_reason,
-        });
-        let mut buf = BytesMut::with_capacity(4);
-        if let Err(e) = encode_apdu(&mut buf, &abort) {
-            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to encode Abort");
-            return;
-        }
-        if let Err(e) = Self::send_reply_apdu(network, &buf, reply_mac, reply_network).await {
-            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send Abort");
-        }
-    }
-
-    /// Abort a reassembly in progress, telling both the peer and the caller.
-    ///
-    /// Clause 5.4.4.4 gives this same shape to every way SEGMENTED_CONF can
-    /// end badly — `NewSegmentReceived_NoSpace` for a segment that "cannot be
-    /// saved due to local conditions" and `UnexpectedPDU_Received` for a PDU
-    /// that does not belong in the state. Both "transmit a BACnet-Abort-PDU
-    /// with 'server' = FALSE", "send ABORT.indication ... to the local
-    /// application program", and "enter the IDLE state"; only `abort-reason`
-    /// differs. The local ABORT.indication is the waiting caller, so the
-    /// transaction is completed rather than left to time out.
-    ///
-    /// The caller is responsible for having removed the `seg_state` entry —
-    /// that is the "enter the IDLE state" half.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn abort_reassembly(
-        tsm: &Arc<Mutex<Tsm>>,
-        network: &Arc<NetworkLayer<T>>,
-        tsm_mac: &MacAddr,
-        owner: &TransactionOwner,
-        reply_mac: &MacAddr,
-        reply_network: &Option<NpduAddress>,
-        invoke_id: u8,
-        reason: bacnet_types::enums::AbortReason,
-    ) {
-        Self::send_client_abort(network, reply_mac, reply_network, invoke_id, reason).await;
-        tsm.lock().await.complete_transaction_for_owner(
-            tsm_mac,
-            invoke_id,
-            owner,
-            None,
-            TsmResponse::Abort {
-                reason: reason.to_raw(),
-            },
-        );
-    }
-
     /// Handle a segmented ComplexAck: accumulate segments, send SegmentAcks,
     /// and reassemble when all segments are received.
     pub(super) async fn handle_segmented_complex_ack(
         tsm: &Arc<Mutex<Tsm>>,
         network: &Arc<NetworkLayer<T>>,
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
-        source_mac: &[u8],
-        source_network: &Option<NpduAddress>,
+        source: InboundSegmentSource<'_>,
         ack: bacnet_encoding::apdu::ComplexAck,
         limits: ResponseLimits,
     ) {
+        let InboundSegmentSource {
+            mac: source_mac,
+            network: source_network,
+            provenance,
+        } = source;
         let seq = ack.sequence_number.unwrap_or(0);
-        let transaction_peer = response_transaction_peer(source_mac, source_network);
-        let tsm_mac = transaction_peer.tsm_mac;
-        let canonical_peer = transaction_peer.canonical;
         let coordinator_apdu = Apdu::ComplexAck(ack.clone());
-        let key = (tsm_mac.clone(), ack.invoke_id);
+        let TransactionPeer {
+            tsm_mac,
+            canonical: canonical_peer,
+        } = TransactionPeer::of_answer_in(
+            tsm,
+            source_mac,
+            source_network.as_ref(),
+            network.local_network_number().get(),
+            &coordinator_apdu,
+        )
+        .await;
+        let key = (tsm_mac.clone(), ack.invoke_id, provenance);
+        if let Some(conflict) = super::response_admission::find_provenance_conflict(
+            seg_state,
+            &tsm_mac,
+            ack.invoke_id,
+            provenance,
+        ) {
+            if let Some(state) = seg_state.remove(&conflict) {
+                warn!(
+                    invoke_id = ack.invoke_id,
+                    "Aborting segmented reassembly on provenance mismatch (fail-closed)"
+                );
+                Self::abort_reassembly(
+                    tsm,
+                    network,
+                    state.abort_target(&tsm_mac),
+                    ack.invoke_id,
+                    bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                )
+                .await;
+            }
+            return;
+        }
 
         let mut deferred_owner = None;
         let owner = loop {
@@ -128,10 +100,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let mut tsm = tsm.lock().await;
                 if let Some(owner) = deferred_owner.as_ref() {
                     tsm.coordinated_admit_segmented_complex_ack_for_owner(
-                        &tsm_mac,
-                        ack.invoke_id,
-                        seq,
-                        limits.segmented_response_accepted,
+                        SegmentedAckArrival {
+                            source_mac: &tsm_mac,
+                            invoke_id: ack.invoke_id,
+                            sequence_number: seq,
+                            segmented_response_accepted: limits.segmented_response_accepted,
+                        },
                         owner,
                         &canonical_peer,
                         &coordinator_apdu,
@@ -209,10 +183,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Self::abort_reassembly(
                 tsm,
                 network,
-                &tsm_mac,
-                &owner,
-                &MacAddr::from_slice(source_mac),
-                source_network,
+                ReassemblyAbortTarget {
+                    tsm_mac: &tsm_mac,
+                    owner: &owner,
+                    reply_mac: &MacAddr::from_slice(source_mac),
+                    reply_network: source_network,
+                },
                 ack.invoke_id,
                 bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
             )
@@ -226,6 +202,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .or_insert_with(|| SegmentedReceiveState {
                 receiver: SegmentReceiver::new(),
                 owner: owner.clone(),
+                provenance,
                 reply_mac: MacAddr::from_slice(source_mac),
                 reply_network: source_network.clone(),
                 expected_next_seq: 0,
@@ -236,6 +213,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 actual_window_size: proposed_ws,
                 accepted_segments: 0,
             });
+        // Compat-mode live read: the key already isolates contexts; the
+        // snapshot must match the key or the session fails closed elsewhere.
+        debug_assert_eq!(state.provenance, provenance);
 
         if state.accepted_segments > 0
             && tsm
@@ -326,10 +306,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Self::abort_reassembly(
                 tsm,
                 network,
-                &tsm_mac,
-                &owner,
-                &reply_mac,
-                &reply_network,
+                ReassemblyAbortTarget {
+                    tsm_mac: &tsm_mac,
+                    owner: &owner,
+                    reply_mac: &reply_mac,
+                    reply_network: &reply_network,
+                },
                 ack.invoke_id,
                 bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
             )
@@ -364,7 +346,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return;
         }
         if let Err(e) = state.receiver.receive(seq, ack.service_ack) {
-            // Also "the segment cannot be saved due to local conditions", so
+            // This is another local failure to retain the segment, so
             // Clause 5.4.4.4 wants the same Abort rather than leaving the
             // caller to time out on a session that can no longer complete.
             warn!(error = %e, "Rejecting oversized segment");
@@ -376,10 +358,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Self::abort_reassembly(
                 tsm,
                 network,
-                &tsm_mac,
-                &owner,
-                &reply_mac,
-                &reply_network,
+                ReassemblyAbortTarget {
+                    tsm_mac: &tsm_mac,
+                    owner: &owner,
+                    reply_mac: &reply_mac,
+                    reply_network: &reply_network,
+                },
                 ack.invoke_id,
                 bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
             )
@@ -473,11 +457,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         target: ConfirmedTarget<'_>,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
-        remote_max_apdu: u16,
-        remote_max_segments: Option<u32>,
-        routed_forwarded_npci_len: Option<u16>,
-        routed_path_lease: Option<&RoutedPathLease>,
+        limits: SegmentedRequestLimits<'_>,
     ) -> Result<Bytes, Error> {
+        let SegmentedRequestLimits {
+            remote_max_apdu,
+            remote_max_segments,
+            routed_forwarded_npci_len,
+            routed_path_lease,
+        } = limits;
         let transaction_peer = target.transaction_peer();
         let tsm_mac = transaction_peer.tsm_mac;
         let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
@@ -657,10 +644,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 // segment count, e.g. a duplicated ack from
                                 // an earlier transfer aliased onto a reused
                                 // invoke ID — is 5.4.4.2
-                                // DuplicateACK_Received: "restart
-                                // SegmentTimer and enter the
-                                // SEGMENTED_REQUEST state to await an
-                                // acknowledgment" — discard and keep
+                                // DuplicateACK_Received: SegmentTimer starts
+                                // over and the transfer stays in
+                                // SEGMENTED_REQUEST — discard and keep
                                 // waiting, never a failure (#368). The
                                 // `continue` below re-enters the timeout
                                 // call, which is the SegmentTimer restart.
@@ -769,13 +755,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // A later key-only cancellation could target a reused invoke ID.
             owns_tsm_cleanup = false;
             self.wait_for_confirmed_response(
-                target,
-                &tsm_mac,
-                invoke_id,
-                &owner,
+                ConfirmedWait {
+                    target,
+                    tsm_mac: &tsm_mac,
+                    invoke_id,
+                    owner: &owner,
+                    retry_apdu: None,
+                },
                 response_rx,
                 progress_rx,
-                None,
             )
             .await
         }

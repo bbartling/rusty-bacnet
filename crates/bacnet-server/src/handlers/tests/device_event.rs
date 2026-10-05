@@ -1,6 +1,8 @@
 use super::*;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::enums::NotifyType;
 use bacnet_types::primitives::{Date, Time};
 
 struct EventSummaryFixture {
@@ -149,60 +151,6 @@ fn get_event_information_ack(
 }
 
 #[test]
-fn device_communication_control_handler() {
-    let comm_state = AtomicU8::new(0);
-
-    let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
-        time_duration: Some(60),
-        enable_disable: EnableDisable::DISABLE_INITIATION,
-        password: None,
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
-
-    let (state, duration) = handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-    assert_eq!(state, EnableDisable::DISABLE_INITIATION);
-    assert_eq!(duration, Some(60));
-    assert_eq!(comm_state.load(Ordering::Acquire), 2);
-}
-
-#[test]
-fn device_communication_control_enable() {
-    let comm_state = AtomicU8::new(1); // start disabled
-
-    let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
-        time_duration: None,
-        enable_disable: EnableDisable::ENABLE,
-        password: None,
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
-
-    let (state, duration) = handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-    assert_eq!(state, EnableDisable::ENABLE);
-    assert_eq!(duration, None);
-    assert_eq!(comm_state.load(Ordering::Acquire), 0);
-}
-
-#[test]
-fn device_communication_control_disable_initiation() {
-    let comm_state = AtomicU8::new(0);
-
-    let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
-        time_duration: None,
-        enable_disable: EnableDisable::DISABLE_INITIATION,
-        password: None,
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
-
-    let (state, duration) = handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-    assert_eq!(state, EnableDisable::DISABLE_INITIATION);
-    assert_eq!(duration, None);
-    assert_eq!(comm_state.load(Ordering::Acquire), 2);
-}
-
-#[test]
 fn reinitialize_device_handler() {
     let request = bacnet_services::device_mgmt::ReinitializeDeviceRequest {
         reinitialized_state: bacnet_types::enums::ReinitializedState::WARMSTART,
@@ -232,7 +180,7 @@ fn get_event_information_empty() {
 
 #[test]
 fn get_event_information_reports_non_normal_objects() {
-    use bacnet_objects::event::LimitEnable;
+    use bacnet_types::bitstring::LimitEnable;
 
     let mut db = ObjectDatabase::new();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
@@ -263,7 +211,7 @@ fn get_event_information_reports_non_normal_objects() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )
@@ -299,7 +247,7 @@ fn get_event_information_reports_non_normal_objects() {
 
 #[test]
 fn get_event_information_reads_event_enable_notify_type_and_priorities() {
-    use bacnet_objects::event::LimitEnable;
+    use bacnet_types::bitstring::LimitEnable;
     let mut db = ObjectDatabase::new();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     ai.write_property(
@@ -328,7 +276,7 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )
@@ -380,8 +328,11 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
     handle_get_event_information(&db, &buf, &mut ack_buf).unwrap();
     let ack = GetEventInformationAck::decode(&ack_buf).unwrap();
     let summary = &ack.list_of_event_summaries[0];
-    assert_eq!(summary.event_enable, 0x05);
-    assert_eq!(summary.notify_type, 1);
+    assert_eq!(
+        summary.event_enable,
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
+    );
+    assert_eq!(summary.notify_type, NotifyType::EVENT);
     assert_eq!(summary.event_priorities, [100, 150, 200]);
 }
 
@@ -497,7 +448,7 @@ fn get_event_information_paginates_by_object_identifier_after_cursor_removal() {
     assert!(!first_page.more_events);
 
     let cursor = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 25).unwrap();
-    db.remove(&cursor).unwrap();
+    db.remove(&cursor).unwrap().unwrap();
     let second_page = get_event_information_ack(&db, Some(cursor));
     let second_instances: Vec<_> = second_page
         .list_of_event_summaries

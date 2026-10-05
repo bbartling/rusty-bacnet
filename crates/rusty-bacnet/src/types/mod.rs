@@ -15,34 +15,70 @@ use tokio::sync::broadcast;
 
 use bacnet_client::client::{COVNotificationDelivery, ReceivedCOVNotification};
 use bacnet_client::discovery::DiscoveredDevice;
-use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
-use bacnet_services::common::{BACnetPropertyValue, PropertyReference};
-use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleACK};
+use bacnet_encoding::primitives::encode_property_value;
+use bacnet_services::common::BACnetPropertyValue;
+use bacnet_services::rpm::ReadPropertyMultipleACK;
 use bacnet_services::wpm::WriteAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums as bacnet_enums;
 use bacnet_types::primitives;
 
+mod access_rule;
+mod action_list;
 mod address;
 mod audit;
 mod audit_projection;
+mod constructed_py;
+mod constructed_read;
 mod cov;
+mod date;
+mod destination;
 mod device;
 mod enums;
+mod mapping;
 mod object_identifier;
+mod property_reference;
 mod property_value;
+mod read_value;
 mod rpm_wpm;
 mod timestamp;
 
+pub(crate) use access_rule::{access_rules_from_py, device_object_reference};
+pub(crate) use action_list::action_lists_from_py;
 pub use address::parse_address;
+pub(crate) use audit::recipient as audit_recipient_from_py;
 pub(crate) use audit::{audit_log_query_request_from_py, audit_notification_request_from_py};
 pub(crate) use audit_projection::audit_log_query_ack_to_py;
 pub use cov::{PyCovNotification, PyCovNotificationIterator};
+pub(crate) use date::specific_date_time;
+pub(crate) use destination::destinations;
 pub use device::PyDiscoveredDevice;
 pub use enums::*;
+pub(crate) use mapping::scale as scale_from_py;
 pub use object_identifier::PyObjectIdentifier;
+pub(crate) use property_reference::{
+    check_device, local_device, localize, property_references_from_py,
+};
 pub use property_value::PyPropertyValue;
-pub(crate) use rpm_wpm::{py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py};
+pub(crate) use read_value::{decode_read_ack, decode_read_value};
+pub(crate) use rpm_wpm::{
+    py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyDeviceWrite, PyPropertyWrite,
+    PyReadAccessSpec, PyWriteAccessSpec,
+};
+pub(crate) use timestamp::date_time_tuple;
 pub use timestamp::PyBACnetTimeStamp;
+
+/// What `__reduce__` raises for a class with no constructor that doesn't
+/// copy or pickle, because it holds live or receive-time state (#1500).
+/// Without it, pickle protocols 0 and 1 would dump such an object, naming
+/// its `rusty_bacnet` class, and fail only when the pickle is loaded.
+pub(crate) fn not_picklable(object: &Bound<'_, PyAny>) -> PyErr {
+    let name = object
+        .get_type()
+        .qualname()
+        .map_or_else(|_| "object".to_owned(), |name| name.to_string());
+    pyo3::exceptions::PyTypeError::new_err(format!("cannot pickle 'rusty_bacnet.{name}' object"))
+}
 
 // Module registration
 // ---------------------------------------------------------------------------
@@ -80,6 +116,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEventState>()?;
     PyEventState::register_constants(&m.getattr("EventState")?)?;
 
+    m.add_class::<PyAcknowledgmentFilter>()?;
+    PyAcknowledgmentFilter::register_constants(&m.getattr("AcknowledgmentFilter")?)?;
+
     m.add_class::<PyEnrollmentSummaryEventStateFilter>()?;
     PyEnrollmentSummaryEventStateFilter::register_constants(
         &m.getattr("EnrollmentSummaryEventStateFilter")?,
@@ -91,6 +130,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMessagePriority>()?;
     PyMessagePriority::register_constants(&m.getattr("MessagePriority")?)?;
 
+    m.add_class::<PyVTClass>()?;
+    PyVTClass::register_constants(&m.getattr("VTClass")?)?;
+
     // Composite types
     m.add_class::<PyObjectIdentifier>()?;
     m.add_class::<PyPropertyValue>()?;
@@ -98,6 +140,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDiscoveredDevice>()?;
     m.add_class::<PyCovNotification>()?;
     m.add_class::<PyCovNotificationIterator>()?;
+
+    // 255, what an unspecified date or time field holds (#1501).
+    m.add("UNSPECIFIED", date::UNSPECIFIED)?;
 
     Ok(())
 }

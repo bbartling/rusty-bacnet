@@ -4,7 +4,7 @@
 use bacnet_client::client::BACnetClient;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{EnableDisable, ObjectType, ReinitializedState};
+use bacnet_types::enums::{EnableDisable, EventState, ObjectType, ReinitializedState};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 
 use crate::output::{self, OutputFormat};
@@ -170,7 +170,7 @@ fn build_acknowledge_alarm_request(
     process_id: u32,
     object_type: ObjectType,
     instance: u32,
-    event_state: u32,
+    event_state: EventState,
     source: &str,
     timestamp: BACnetTimeStamp,
     time_of_acknowledgment: BACnetTimeStamp,
@@ -185,19 +185,37 @@ fn build_acknowledge_alarm_request(
     })
 }
 
+/// The alarm being acknowledged and the acknowledgment metadata.
+pub struct AcknowledgeAlarmArgs<'a> {
+    /// Type of the object whose alarm is acknowledged.
+    pub object_type: ObjectType,
+    /// Instance number of the object whose alarm is acknowledged.
+    pub instance: u32,
+    /// Event state being acknowledged.
+    pub event_state: EventState,
+    /// Free-text source of the acknowledgment.
+    pub source: &'a str,
+    /// Timestamp of the event transition being acknowledged.
+    pub timestamp: BACnetTimeStamp,
+    /// Timestamp recorded as the time of acknowledgment.
+    pub time_of_acknowledgment: BACnetTimeStamp,
+}
+
 /// Acknowledge an alarm on a remote device with exact caller-supplied timestamps.
-#[allow(clippy::too_many_arguments)]
 pub async fn acknowledge_alarm_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],
-    object_type: ObjectType,
-    instance: u32,
-    event_state: u32,
-    source: &str,
-    timestamp: BACnetTimeStamp,
-    time_of_acknowledgment: BACnetTimeStamp,
+    args: AcknowledgeAlarmArgs<'_>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let AcknowledgeAlarmArgs {
+        object_type,
+        instance,
+        event_state,
+        source,
+        timestamp,
+        time_of_acknowledgment,
+    } = args;
     // Use PID as process identifier
     let process_id = std::process::id();
     let request = build_acknowledge_alarm_request(
@@ -277,7 +295,7 @@ mod acknowledgment_tests {
             0x1234_5678,
             ObjectType::ANALOG_INPUT,
             77,
-            3,
+            EventState::HIGH_LIMIT,
             "operator-console",
             event_timestamp.clone(),
             acknowledgment_timestamp.clone(),
@@ -290,7 +308,7 @@ mod acknowledgment_tests {
             ObjectType::ANALOG_INPUT
         );
         assert_eq!(request.event_object_identifier.instance_number(), 77);
-        assert_eq!(request.event_state_acknowledged, 3);
+        assert_eq!(request.event_state_acknowledged, EventState::HIGH_LIMIT);
         assert_eq!(request.timestamp, event_timestamp);
         assert_eq!(request.acknowledgment_source, "operator-console");
         assert_eq!(request.time_of_acknowledgment, acknowledgment_timestamp);

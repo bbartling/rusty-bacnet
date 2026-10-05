@@ -12,4 +12,5 @@ pub fn handle_text_message(
     service_data: &[u8],
 ) -> Result<bacnet_services::text_message::TextMessageRequest, Error> {
     bacnet_services::text_message::TextMessageRequest::decode(service_data)
+        .map_err(Error::into_request_reject)
 }

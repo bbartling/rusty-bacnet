@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_encoding::npdu::Npdu;
 use bacnet_network::layer::ReceivedNetworkControl;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bytes::Bytes;
 
@@ -19,6 +20,47 @@ fn forwarded_npci_rejects_unrepresentable_addresses() {
     assert!(forwarded_npci_len(256, 6).is_err());
     assert!(forwarded_npci_len(6, 0).is_err());
     assert!(forwarded_npci_len(6, 256).is_err());
+}
+
+/// A routed confirmed destination names one station on one remote network
+/// (#1278): DNET 1 and 65534 pass, DNET 0 and 65535 fail, and so does a DADR
+/// that is empty or too long, in the shared check and the forwarded NPCI.
+#[test]
+fn routed_unicast_needs_one_remote_network_and_one_station() {
+    for dnet in [1, u16::MAX - 1] {
+        assert!(check_routed_unicast(dnet, 1).is_ok());
+    }
+    for (dnet, dadr_len) in [(0, 6), (u16::MAX, 6), (100, 0), (100, 19)] {
+        assert!(matches!(
+            check_routed_unicast(dnet, dadr_len),
+            Err(Error::Encoding(_))
+        ));
+    }
+    assert!(matches!(forwarded_npci_len(0, 6),
+        Err(Error::Encoding(m)) if m == "routed destination MAC address must contain 1..=18 octets"));
+}
+
+/// Every MAC a routed path carries holds to [`NpduAddress::MAX_MAC_LEN`]
+/// (#1267). An 18-octet router MAC, forwarded source and DADR build a path; one
+/// octet more is refused, and a refused router MAC reserves no path entry.
+#[tokio::test]
+async fn routed_path_macs_hold_to_the_npdu_address_bound() {
+    let longest = NpduAddress::MAX_MAC_LEN;
+    assert_eq!(forwarded_npci_len(longest, longest).unwrap(), 45);
+    assert!(matches!(forwarded_npci_len(6, longest + 1),
+        Err(Error::Encoding(m)) if m == "local source MAC address for routed forwarding must contain 1..=18 octets"));
+    assert!(matches!(forwarded_npci_len(longest + 1, 6),
+        Err(Error::Encoding(m)) if m == "routed destination MAC address must contain 1..=18 octets"));
+
+    let limits = Arc::new(RoutedPathLimits::with_capacity(
+        4,
+        Duration::from_millis(10),
+    ));
+    assert!(matches!(limits.acquire(&[2; 19], 100).await,
+        Err(Error::Encoding(m)) if m == "immediate router MAC address must contain 1..=18 octets"));
+    assert!(limits.state().entries.is_empty());
+    drop(limits.acquire(&[2; 18], 100).await.unwrap());
+    assert_eq!(limits.state().entries.len(), 1);
 }
 
 #[tokio::test]
@@ -73,7 +115,8 @@ async fn hostile_pre_tsm_paths_reclaim_idle_entries_at_capacity() {
     ));
     for path in 1..=40u16 {
         let lease = limits.acquire(&path.to_be_bytes(), path).await.unwrap();
-        assert_eq!(lease.max_apdu(255, 255).unwrap(), 0);
+        // 228 NPDU - (9 + two 18-octet addresses) = 183 APDU.
+        assert_eq!(lease.max_apdu(forwarded_npci_len(18, 18).unwrap()), 183);
         drop(lease);
         assert!(limits.state().entries.len() <= 3);
     }
@@ -178,6 +221,7 @@ fn reason_4_control(router: &[u8], dnet: u16, ingress_sequence: u64) -> Received
         source_mac: MacAddr::from_slice(router),
         link_layer_group: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         ingress_sequence,
     }
 }

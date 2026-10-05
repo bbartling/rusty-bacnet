@@ -1,5 +1,8 @@
 use super::*;
 use crate::event::CommandFailureDetector;
+use crate::property_metadata::PropertyMetadata;
+
+mod metadata;
 
 // ---------------------------------------------------------------------------
 // MultiStateOutput (type 14)
@@ -20,9 +23,9 @@ pub struct MultiStateOutputObject {
     status_flags: StatusFlags,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
-    reliability_before_out_of_service: Option<u32>,
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
+    reliability: Reliability,
+    reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,
     reliability_evaluator: MultiStateReliabilityState,
     event_detection_enable: bool,
@@ -30,11 +33,12 @@ pub struct MultiStateOutputObject {
     /// COMMAND_FAILURE event detector.
     event_detector: CommandFailureDetector,
     pub(crate) event_history: EventHistory,
-    /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
-    value_source: common::ValueSourceTracking,
+    /// Implemented paired command-source tracking (Clause 19.5).
+    value_source: crate::command_source::ValueSourceTracking,
 }
 
 impl MultiStateOutputObject {
+    /// Create a new Multi-state Output object; `number_of_states` must be at least 1.
     pub fn new(
         instance: u32,
         name: impl Into<String>,
@@ -53,7 +57,7 @@ impl MultiStateOutputObject {
             status_flags: StatusFlags::empty(),
             priority_array: [None; 16],
             relinquish_default: 1,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             reliability_evaluator: MultiStateReliabilityState::default(),
@@ -63,7 +67,7 @@ impl MultiStateOutputObject {
                 .collect(),
             event_detector: CommandFailureDetector::default(),
             event_history: EventHistory::default(),
-            value_source: common::ValueSourceTracking::default(),
+            value_source: crate::command_source::ValueSourceTracking::default(),
         })
     }
 
@@ -76,6 +80,19 @@ impl MultiStateOutputObject {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
         let _ = self.recompute_reliability();
+    }
+
+    /// The values the object keeps that name a state, which a new count
+    /// may not strand: the commands in Priority_Array, Present_Value and
+    /// Relinquish_Default. Feedback_Value is left out: it is sensed, and
+    /// outside the states it is reported as CONFIGURATION_ERROR rather than
+    /// refused.
+    fn held_states(&self) -> impl Iterator<Item = u32> + '_ {
+        self.priority_array
+            .iter()
+            .flatten()
+            .copied()
+            .chain([self.present_value, self.relinquish_default])
     }
 
     fn configuration_invalid(&self) -> bool {
@@ -126,7 +143,7 @@ impl MultiStateOutputObject {
     ///
     /// Number_Of_States shrink interplay: if the state count ever shrinks
     /// below this value, the standard leaves adjustment of Priority_Array,
-    /// Relinquish_Default, Present_Value, and Feedback_Value "a local matter"
+    /// Relinquish_Default, Present_Value, and Feedback_Value to local policy
     /// (Clause 12.19 / Table 12-22 Number_Of_States text). This implementation does
     /// NOT auto-adjust: out-of-range stored values are a configuration
     /// decision for the application to resolve; the object-owned evaluator
@@ -162,19 +179,6 @@ impl BACnetObject for MultiStateOutputObject {
         event_detection_enable,
         CommandFailureDetector::ALGORITHM
     );
-    impl_intrinsic_write_rollback!(
-        event_detector,
-        event_detection_enable,
-        event_history,
-        reliability_inhibit,
-        reliability,
-        out_of_service,
-        reliability_before_out_of_service;
-        reliability_evaluator,
-        priority_array,
-        relinquish_default,
-        present_value
-    );
 
     fn acknowledge_alarm_correlated_internal(
         &mut self,
@@ -199,12 +203,19 @@ impl BACnetObject for MultiStateOutputObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if let Some(result) = self
+            .value_source
+            .read(property, array_index, &self.priority_array)
+        {
+            return result;
+        }
+
         if property == PropertyIdentifier::STATUS_FLAGS {
             return Ok(common::compute_status_flags(
                 self.status_flags,
                 self.reliability,
                 self.out_of_service,
-                self.event_detector.event_state.to_raw(),
+                self.event_detector.event_state,
             ));
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
@@ -235,15 +246,6 @@ impl BACnetObject for MultiStateOutputObject {
             p if p == PropertyIdentifier::NUMBER_OF_STATES => {
                 Ok(PropertyValue::Unsigned(self.number_of_states as u64))
             }
-            p if p == PropertyIdentifier::VALUE_SOURCE => {
-                Ok(self.value_source.value_source.clone())
-            }
-            p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
-                match self.value_source.last_command_time {
-                    BACnetTimeStamp::SequenceNumber(n) => u64::from(n),
-                    _ => 0,
-                },
-            )),
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, |v: u32| PropertyValue::Unsigned(
                     v as u64
@@ -272,50 +274,69 @@ impl BACnetObject for MultiStateOutputObject {
         }
     }
 
-    fn write_property(
+    fn write_property_from(
         &mut self,
         property: PropertyIdentifier,
         array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
+        origin: &crate::command_source::CommandOrigin,
     ) -> Result<(), Error> {
+        if matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
+        ) && array_index.is_some()
         {
-            let num_states = self.number_of_states;
-            common::write_priority_array_direct!(self, property, array_index, value, |v| {
-                if let PropertyValue::Unsigned(u) = v {
-                    if u < 1 || u > num_states as u64 {
-                        Err(common::value_out_of_range_error())
-                    } else {
-                        Ok(u as u32)
-                    }
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            });
+            return Err(common::property_is_not_an_array_error());
+        }
+        if property == PropertyIdentifier::VALUE_SOURCE {
+            return self.value_source.correct(value, priority, origin);
         }
         if property == PropertyIdentifier::PRESENT_VALUE {
             let num_states = self.number_of_states;
-            return common::write_priority_array!(self, value, priority, |v| {
-                if let PropertyValue::Unsigned(u) = v {
-                    if u < 1 || u > num_states as u64 {
-                        Err(common::value_out_of_range_error())
+            return crate::command_source::write_sourced_priority!(
+                self,
+                value,
+                priority,
+                origin,
+                |v| {
+                    if let PropertyValue::Unsigned(u) = v {
+                        if u < 1 || u > num_states as u64 {
+                            Err(common::value_out_of_range_error())
+                        } else {
+                            Ok(u as u32)
+                        }
                     } else {
-                        Ok(u as u32)
+                        Err(common::invalid_data_type_error())
                     }
-                } else {
-                    Err(common::invalid_data_type_error())
                 }
-            });
+            );
+        }
+        self.write_property(property, array_index, value, priority)
+    }
+
+    fn write_property(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        _priority: Option<u8>,
+    ) -> Result<(), Error> {
+        if matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
+        ) {
+            return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::FEEDBACK_VALUE {
             if let PropertyValue::Unsigned(u) = value {
                 // Checked for representability but deliberately NOT range-checked against
                 // Number_Of_States, unlike Present_Value. Clause 12.19 treats a
                 // Feedback_Value outside the state set as a condition to be *reported* —
-                // "If any of those properties other than Present_Value are out of range,
-                // the value of the Reliability property shall remain CONFIGURATION_ERROR"
-                // — not as a value to refuse. Feedback_Value reflects a sensed quantity
-                // whose determination is "a local matter", so it can legitimately fall
+                // for the Number_Of_States-bounded properties apart from Present_Value,
+                // an out-of-range value pins Reliability at CONFIGURATION_ERROR until
+                // fixed — not as a value to refuse. Feedback_Value reflects a sensed quantity
+                // determined by local policy, so it can legitimately fall
                 // outside the configured range; refusing it would make CONFIGURATION_ERROR
                 // unreachable. The object-owned evaluator applies that reliability.
                 //
@@ -332,24 +353,25 @@ impl BACnetObject for MultiStateOutputObject {
             return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::STATE_TEXT {
-            match array_index {
-                Some(idx) if idx >= 1 && (idx as usize) <= self.state_text.len() => {
-                    if let PropertyValue::CharacterString(s) = value {
-                        self.state_text[(idx - 1) as usize] = s;
-                        return Ok(());
-                    }
-                    return Err(common::invalid_data_type_error());
-                }
-                None => return Err(common::write_access_denied_error()),
-                _ => return Err(common::invalid_array_index_error()),
-            }
+            // Written whole, State_Text sets Number_Of_States too (#1443).
+            let held: Vec<u32> = self.held_states().collect();
+            write_state_text(
+                &mut self.number_of_states,
+                &mut self.state_text,
+                held,
+                array_index,
+                value,
+            )?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             if let PropertyValue::Boolean(v) = value {
                 self.event_detection_enable = v;
                 if !v {
                     self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
-                    self.event_detector.acked_transitions = 0b111;
+                    self.event_detector.acked_transitions =
+                        bacnet_types::bitstring::EventTransitionBits::all();
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
                     self.event_history.reset();
@@ -357,6 +379,13 @@ impl BACnetObject for MultiStateOutputObject {
                 return Ok(());
             }
             return Err(common::invalid_data_type_error());
+        }
+        // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+        if let Some(result) =
+            self.event_history
+                .write(property, array_index, &value, self.event_detection_enable)
+        {
+            return result;
         }
         if let Some(result) = write_generic_event_properties!(self, property, value) {
             return result;
@@ -378,8 +407,9 @@ impl BACnetObject for MultiStateOutputObject {
             property,
             &value,
         ) {
-            result?;
-            let _ = self.recompute_reliability();
+            if result? == crate::reliability_inhibit::OutOfServiceWrite::Applied {
+                let _ = self.recompute_reliability();
+            }
             return Ok(());
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
@@ -388,10 +418,9 @@ impl BACnetObject for MultiStateOutputObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        // Clause 12.19, while Out_Of_Service is TRUE: "the Present_Value property and
-        // the Reliability property, if present and capable of taking on values other
-        // than NO_FAULT_DETECTED, shall be writable to allow simulating specific
-        // conditions or for testing purposes".
+        // Clause 12.19 requires simulation/test writes while Out_Of_Service is TRUE:
+        // Present_Value is writable, as is Reliability when that property exists
+        // and supports values beyond NO_FAULT_DETECTED.
         // `is_writable_property` stays statically true because it describes capability.
         if let Some(result) = self.reliability_inhibit.write_client_reliability(
             self.out_of_service,
@@ -408,44 +437,44 @@ impl BACnetObject for MultiStateOutputObject {
             }
             return Err(common::invalid_data_type_error());
         }
-        Err(common::write_access_denied_error())
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            array_index,
+        ))
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        metadata::for_object(self)
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::FEEDBACK_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::TIME_DELAY,
-            PropertyIdentifier::TIME_DELAY_NORMAL,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::NUMBER_OF_STATES,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            PropertyIdentifier::RELINQUISH_DEFAULT,
-            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
-            PropertyIdentifier::STATE_TEXT,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn is_createable(&self) -> bool {
         true
     }
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        CREATION_ONLY
+    }
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        let held: Vec<u32> = self.held_states().collect();
+        initialize_states(
+            &mut self.number_of_states,
+            &mut self.state_text,
+            held,
+            property,
+            value,
+        )?;
+        let _ = self.recompute_reliability();
+        Ok(())
+    }
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -464,16 +493,6 @@ impl BACnetObject for MultiStateOutputObject {
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
         self.reliability_inhibit.enabled()
     }
-
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the MultiStateOutput `write_property` arms.
-        common::is_multistate_commandable_writable(property)
-            || property == PropertyIdentifier::RELIABILITY
-            || property == PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT
-            || common::is_generic_event_property_writable(property)
-            || property == PropertyIdentifier::FEEDBACK_VALUE
-            || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
-    }
 }
 
 #[cfg(test)]
@@ -487,7 +506,13 @@ mod command_failure_tests {
         value: u64,
     ) {
         object
-            .write_property(property, None, PropertyValue::Unsigned(value), None)
+            .write_property_from(
+                property,
+                None,
+                PropertyValue::Unsigned(value),
+                None,
+                &crate::command_source::test_origin(),
+            )
             .unwrap();
     }
 
@@ -543,11 +568,12 @@ mod command_failure_tests {
         );
 
         assert!(mso
-            .write_property(
+            .write_property_from(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 PropertyValue::Unsigned(7),
                 None,
+                &crate::command_source::test_origin(),
             )
             .is_err());
     }
@@ -670,8 +696,14 @@ mod command_failure_tests {
             ),
         ];
         for (property, value) in writes {
-            mso.write_property(property, None, value.clone(), None)
-                .unwrap();
+            mso.write_property_from(
+                property,
+                None,
+                value.clone(),
+                None,
+                &crate::command_source::test_origin(),
+            )
+            .unwrap();
             assert_eq!(mso.read_property(property, None).unwrap(), value);
         }
 
@@ -740,7 +772,8 @@ mod command_failure_tests {
             mso.evaluate_intrinsic_reporting().unwrap().change.to,
             EventState::OFFNORMAL
         );
-        mso.event_detector.acked_transitions = 0;
+        mso.event_detector.acked_transitions =
+            bacnet_types::bitstring::EventTransitionBits::empty();
         set_detection_enabled(&mut mso, false);
 
         assert_eq!(
@@ -759,7 +792,7 @@ mod command_failure_tests {
         assert_eq!(mso.evaluate_intrinsic_reporting(), None);
         assert_eq!(mso.tick_intrinsic_reporting(), None);
 
-        mso.reliability = 1;
+        mso.reliability = Reliability::NO_SENSOR;
         assert_eq!(
             mso.read_property(PropertyIdentifier::STATUS_FLAGS, None)
                 .unwrap(),
@@ -781,39 +814,4 @@ mod command_failure_tests {
 }
 
 #[cfg(test)]
-mod reliability_evaluator_tests {
-    use super::*;
-    use bacnet_types::enums::Reliability;
-
-    #[test]
-    fn configuration_error_dominates_bypassed_invalid_present_value() {
-        let mut mso = MultiStateOutputObject::new(1, "MSO-dominance", 2).unwrap();
-        mso.present_value = 3;
-        mso.feedback_value = 3;
-
-        mso.evaluate_reliability_internal().unwrap();
-        assert_eq!(
-            mso.reliability,
-            Reliability::CONFIGURATION_ERROR.to_raw(),
-            "invalid configuration must dominate invalid Present_Value"
-        );
-        mso.feedback_value = 1;
-        mso.evaluate_reliability_internal().unwrap();
-        assert_eq!(
-            mso.reliability,
-            Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw()
-        );
-        mso.write_property(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Unsigned(1),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            mso.reliability,
-            Reliability::NO_FAULT_DETECTED.to_raw(),
-            "the central priority recalculation must recover synchronously"
-        );
-    }
-}
+mod reliability_evaluator_tests;

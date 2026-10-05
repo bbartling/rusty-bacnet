@@ -183,6 +183,9 @@ impl ResolvedEnum {
             300 => Self::AccessPassbackMode(AccessPassbackMode::from_raw(value)), // passback-mode
             318 => Self::AccessUserType(AccessUserType::from_raw(value)),       // user-type
             263 => Self::AccessCredentialDisable(AccessCredentialDisable::from_raw(value)), // credential-disable
+            // credential-status is BACnetBinaryPV on the one object type that
+            // defines it, the Access Credential (Table 12-40).
+            264 => Self::BinaryPV(BinaryPV::from_raw(value)),
             303 => {
                 Self::AccessCredentialDisableReason(AccessCredentialDisableReason::from_raw(value))
             } // reason-for-disable
@@ -490,6 +493,18 @@ mod tests {
         assert_eq!(
             ResolvedEnum::from_property(PropertyIdentifier::ALARM_VALUE, 1),
             ResolvedEnum::BinaryPV(BinaryPV::ACTIVE),
+        );
+    }
+
+    #[test]
+    fn credential_status_resolves_to_binary_pv() {
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::CREDENTIAL_STATUS, 1),
+            ResolvedEnum::BinaryPV(BinaryPV::ACTIVE),
+        );
+        assert_eq!(
+            ResolvedEnum::from_property(PropertyIdentifier::CREDENTIAL_STATUS, 0).to_string(),
+            "INACTIVE"
         );
     }
 

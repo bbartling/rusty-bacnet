@@ -4,8 +4,9 @@ use bacnet_objects::event::{EnrollmentSummaryCapability, EventTransition};
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::enrollment_summary::{GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest};
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
-use bacnet_types::enums::EventType;
+use bacnet_types::enums::{AcknowledgmentFilter, EventType};
 use bacnet_types::primitives::Time;
 
 use super::*;
@@ -23,7 +24,7 @@ impl SummaryFixture {
         instance: u32,
         event_type: EventType,
         event_state: EventState,
-        acknowledged_transitions: u8,
+        acknowledged_transitions: EventTransitionBits,
         notification_class: u32,
         last_transition: Option<EventTransition>,
     ) -> Self {
@@ -144,10 +145,10 @@ impl BACnetObject for SummaryFixture {
     }
 }
 
-pub(super) fn transition_bits(bits: u8) -> PropertyValue {
+pub(super) fn transition_bits(bits: EventTransitionBits) -> PropertyValue {
     PropertyValue::BitString {
         unused_bits: 5,
-        data: vec![bacnet_types::bitstring::pack_octet(bits)],
+        data: vec![bits.to_bacnet()],
     }
 }
 
@@ -160,7 +161,9 @@ pub(super) fn class(
     let mut class = NotificationClass::new(instance, format!("NC-{instance}")).unwrap();
     class.notification_class = intrinsic_notification_class;
     class.priority = priority;
-    class.recipient_list = recipient_list;
+    for destination in recipient_list {
+        class.add_destination(destination).unwrap();
+    }
     class
 }
 
@@ -169,7 +172,7 @@ pub(super) fn destination(
     process_identifier: u32,
 ) -> BACnetDestination {
     BACnetDestination {
-        valid_days: 0,
+        valid_days: DaysOfWeek::empty(),
         from_time: Time {
             hour: 23,
             minute: 0,
@@ -185,13 +188,13 @@ pub(super) fn destination(
         recipient,
         process_identifier,
         issue_confirmed_notifications: false,
-        transitions: 0,
+        transitions: EventTransitionBits::empty(),
     }
 }
 
 pub(super) fn request() -> GetEnrollmentSummaryRequest {
     GetEnrollmentSummaryRequest {
-        acknowledgment_filter: 0,
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
         enrollment_filter: None,
         event_state_filter: None,
         event_type_filter: None,
@@ -207,7 +210,22 @@ pub(super) fn response(
     let mut encoded_request = BytesMut::new();
     request.encode(&mut encoded_request);
     let mut encoded_ack = BytesMut::new();
-    handle_get_enrollment_summary(db, &encoded_request, &mut encoded_ack)?;
+    let legacy = handle_get_enrollment_summary(db, &encoded_request, &mut encoded_ack);
+    let mut bounded_ack = BytesMut::new();
+    let bounded = handle_get_enrollment_summary_budgeted(
+        db,
+        &encoded_request,
+        &mut bounded_ack,
+        crate::server::GetEnrollmentSummaryBudget::default(),
+    );
+    match (&legacy, bounded) {
+        (Ok(()), Ok(())) => assert_eq!(bounded_ack, encoded_ack),
+        (Err(expected), Err(EnrollmentSummaryFailure::Service(actual))) => {
+            assert_eq!(format!("{actual:?}"), format!("{expected:?}"))
+        }
+        (expected, actual) => panic!("legacy/budget parity: {expected:?} vs {actual:?}"),
+    }
+    legacy?;
     GetEnrollmentSummaryAck::decode(&encoded_ack)
 }
 

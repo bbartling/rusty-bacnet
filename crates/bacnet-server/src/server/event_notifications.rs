@@ -2,15 +2,12 @@ use super::event_message_policy::intrinsic_event_message_text;
 use super::event_notification_payload::{project_intrinsic_payload, CommittedNotificationPayload};
 #[path = "event_notification_profile.rs"]
 mod profile;
+pub(super) use self::profile::CommittedIntrinsicTransition;
 use self::profile::{
     CommittedHistorySnapshot, CommittedMessageProjection, NotificationConstruction,
     NotificationHistorySource, NotificationTransition,
 };
-pub(super) use self::profile::{CommittedIntrinsicTransition, ResolvedIntrinsicTransition};
-use super::event_recipient_route::{
-    network_priority_for_event, system_utc_recipient_filter_time, ConfirmedRecipientRoute,
-    RecipientRoute,
-};
+use super::event_recipient_route::system_utc_recipient_filter_time;
 use super::event_timestamp::{
     confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp, SampledEventClock,
 };
@@ -18,7 +15,6 @@ use super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::event::{EventTransition, EventTransitionCommit, TransitionOutcome};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::constructed::BACnetRecipient;
 
 use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
 
@@ -171,9 +167,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         };
         let event_type = outcome.change.event_type(outcome.event_type);
+        let device = db.local_device().identifier();
         let event_values = db
             .get(oid)
-            .and_then(|object| project_intrinsic_payload(object, &outcome.change, event_type))
+            .and_then(|object| {
+                project_intrinsic_payload(object, &outcome.change, event_type, device)
+            })
             .or_else(|| {
                 debug!(
                     %oid,
@@ -204,84 +203,56 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// seeds a pending transition (returning `None`, so no notification is
     /// sent here) and the one-second [`intrinsic_reporting_task`](Self::start)
     /// advances the countdown and sends the notification on expiry.
-    #[cfg(test)]
-    pub(super) async fn fire_event_notifications(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        comm_state: &Arc<AtomicU8>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        oid: &ObjectIdentifier,
-        retry_timeout_ms: u64,
-    ) {
-        Self::fire_event_notifications_with_bindings(
-            db,
-            network,
-            comm_state,
-            server_tsm,
-            notification_transactions,
-            &Arc::new(RwLock::new(DeviceBindingTable::new())),
-            oid,
-            retry_timeout_ms,
-        )
-        .await;
-    }
-
+    ///
+    /// A caller owes the object a COV fanout afterwards, as the periodic task
+    /// gives one, since a proposal can commit (changing Status_Flags) even
+    /// when its projection is refused.
     pub(super) async fn fire_event_notifications_with_bindings(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        comm_state: &Arc<AtomicU8>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
+        ctx: &EventDelivery<'_, T>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         oid: &ObjectIdentifier,
-        retry_timeout_ms: u64,
     ) {
+        let db = ctx.db;
         let resolved = {
             let mut db = db.write().await;
-            let (requires_atomic_commit, outcome) = match db.get_mut(oid) {
-                Some(object) => (
-                    object.intrinsic_reporting_requires_atomic_commit(),
-                    object.evaluate_intrinsic_reporting(),
-                ),
-                None => return,
-            };
-            outcome.and_then(|outcome| {
-                if requires_atomic_commit {
-                    Self::commit_intrinsic_transition(&mut db, oid, outcome)
-                        .map(ResolvedIntrinsicTransition::Committed)
-                } else {
-                    Some(ResolvedIntrinsicTransition::Legacy(outcome))
-                }
-            })
+            // Event_Algorithm_Inhibit follows its reference as of now (#1329).
+            db.follow_event_algorithm_inhibit(oid);
+            let outcome = db
+                .get_mut(oid)
+                .and_then(|object| object.evaluate_intrinsic_reporting());
+            let resolved = outcome
+                .and_then(|outcome| Self::commit_intrinsic_transition(&mut db, oid, outcome));
+            // A committed transition changes Status_Flags: capture it at its
+            // own time for timestamped COV-multiple references.
+            if resolved.is_some() {
+                let capture = cov_table.read().await.timed_capture(*oid);
+                capture.run(&db);
+            }
+            resolved
         };
 
-        // A successful built-in commit has already applied the local transition
-        // actions; a legacy object applied them during evaluation. Whatever
-        // Event_Enable says, only external distribution is gated here:
-        // Clause 12.12 defines Event_Enable as enabling and disabling the
-        // distribution of notifications, and Clause 13.2.5 places that gate
-        // inside the notification-distribution process — downstream of the
-        // transition actions, none of which it governs.
-        //
-        // The shared commit kernel has also stored the selected timestamp and
-        // updated Acked_Transitions from the Notification Class policy and
-        // stored the selected local message in the transition coordinate.
+        // Local transition actions commit before Event_Enable or DCC can suppress
+        // external distribution (Clauses 13.2.2.1.4 and 13.2.5).
         if let Some(resolved) = resolved {
-            if resolved.distribute() && resolved.can_emit() {
-                Self::build_and_send_event_notification_with_bindings(
-                    db,
-                    network,
-                    comm_state,
-                    server_tsm,
-                    notification_transactions,
-                    device_bindings,
-                    oid,
-                    resolved,
-                    retry_timeout_ms,
-                )
-                .await;
+            if resolved.distribute && resolved.event_values.is_some() {
+                Self::build_and_send_event_notification_with_bindings(ctx, oid, resolved).await;
             }
+        }
+    }
+
+    /// Run the per-write evaluation on every object a confirmed service
+    /// wrote. Each such service (WriteProperty, WritePropertyMultiple,
+    /// AddListElement and RemoveListElement) has already put every object it
+    /// wrote, Life Safety objects aside, in the COV fanout that runs after
+    /// this, so a committed transition's Status_Flags change reaches
+    /// subscribers.
+    pub(super) async fn fire_written_event_notifications(
+        ctx: &EventDelivery<'_, T>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        written_oids: &[ObjectIdentifier],
+    ) {
+        for oid in written_oids {
+            Self::fire_event_notifications_with_bindings(ctx, cov_table, oid).await;
         }
     }
 
@@ -290,46 +261,33 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// Shared by the per-write path and the
     /// periodic `Time_Delay` confirmation path, so both emit identical
-    /// notifications. Skipped when DCC is active (comm_state >= 1). Re-reads
+    /// notifications. Skipped while DCC restricts initiation. Re-reads
     /// `Notification_Class` / `Notify_Type` under a brief `db.write()` guard,
     /// then drops the lock before any network send.
-    #[cfg(test)]
-    pub(super) async fn build_and_send_event_notification(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        comm_state: &Arc<AtomicU8>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        oid: &ObjectIdentifier,
-        transition: impl Into<NotificationTransition>,
-        retry_timeout_ms: u64,
-    ) {
-        Self::build_and_send_event_notification_with_bindings(
-            db,
-            network,
-            comm_state,
-            server_tsm,
-            notification_transactions,
-            &Arc::new(RwLock::new(DeviceBindingTable::new())),
-            oid,
-            transition,
-            retry_timeout_ms,
-        )
-        .await;
-    }
-
+    ///
+    /// Every notification built here also goes to the device's Event Log
+    /// objects ([`ObjectDatabase::log_event_notification`]), under the build
+    /// guard and before the network send, with Process Identifier 0, the value
+    /// it has before a recipient's own is filled in. It is logged when the
+    /// Notification Class selects nobody, since Clause 13.2.5 keeps the
+    /// Recipient_List out of distribution to local objects, but not when the
+    /// recipient lookup fails closed: that transition is refused whole, and a
+    /// record would carry a priority and ack policy the class never gave.
+    /// Event_Enable and DCC, which stop the notification being built, keep it
+    /// out of the logs too, a local choice. Received notifications never come
+    /// here.
     pub(super) async fn build_and_send_event_notification_with_bindings(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        comm_state: &Arc<AtomicU8>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
+        ctx: &EventDelivery<'_, T>,
         oid: &ObjectIdentifier,
         transition: impl Into<NotificationTransition>,
-        retry_timeout_ms: u64,
     ) {
-        if comm_state.load(Ordering::Acquire) >= 1 {
+        let &EventDelivery {
+            db,
+            comm_state,
+            suppressions,
+            ..
+        } = ctx;
+        if comm_state.initiation_restricted() {
             return;
         }
 
@@ -359,15 +317,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             };
 
             let device_oid = db
-                .list_objects()
-                .into_iter()
-                .find(|o| o.object_type() == ObjectType::DEVICE)
+                .selected_device()
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
 
-            let (today_bit, current_time) = match recipient_clock {
+            let (today, current_time) = match recipient_clock {
                 SampledEventClock::Valid(clock_frame) => (
                     clock_frame
-                        .day_of_week_bit()
+                        .day_of_week()
                         .expect("validated ClockFrame has a day of week"),
                     clock_frame.local_time,
                 ),
@@ -398,15 +354,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .unwrap_or(0);
 
             let notify_type = match construction {
-                NotificationConstruction::Acknowledgment => NotifyType::ACK_NOTIFICATION.to_raw(),
+                NotificationConstruction::Acknowledgment => NotifyType::ACK_NOTIFICATION,
                 NotificationConstruction::Event => object
                     .read_property(PropertyIdentifier::NOTIFY_TYPE, None)
                     .ok()
                     .and_then(|v| match v {
-                        PropertyValue::Enumerated(n) => Some(n),
+                        PropertyValue::Enumerated(n) => Some(NotifyType::from_raw(n)),
                         _ => None,
                     })
-                    .unwrap_or(NotifyType::ALARM.to_raw()),
+                    .unwrap_or(NotifyType::ALARM),
             };
 
             let transition = change.transition();
@@ -424,11 +380,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &db,
                     notification_class,
                     transition,
-                    today_bit,
+                    today,
                     &current_time,
                 ),
                 notification_class,
                 transition,
+                suppressions,
             ) else {
                 return;
             };
@@ -440,311 +397,41 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 timestamp,
                 notification_class,
                 priority,
-                event_type: event_type.to_raw(),
+                event_type,
                 message_text,
                 notify_type,
                 // ack_required is only meaningful for ALARM/EVENT notify types
                 // (ACK_NOTIFICATION omits the field on the wire). Per §13.2.1 the
                 // value is the NotificationClass's per-transition Ack_Required,
                 // not a function of Notify_Type alone.
-                ack_required: if notify_type == NotifyType::ACK_NOTIFICATION.to_raw() {
+                ack_required: if notify_type == NotifyType::ACK_NOTIFICATION {
                     false
                 } else {
                     ack_required
                 },
-                from_state: change.from.to_raw(),
-                to_state: change.to.to_raw(),
-                event_values: if notify_type == NotifyType::ACK_NOTIFICATION.to_raw() {
+                from_state: change.from,
+                to_state: change.to,
+                event_values: if notify_type == NotifyType::ACK_NOTIFICATION {
                     None
                 } else {
                     event_values.map(CommittedNotificationPayload::into_parameters)
                 },
             };
 
+            db.log_event_notification(&base_notification);
             (base_notification, recipients)
         };
 
-        let notification_class = notification.notification_class;
-        // Clause 13.2.5.4 sets the NPDU priority from the notification's
-        // event priority, on every send of this notification — retries too.
-        let network_priority = network_priority_for_event(notification.priority);
-
-        for (recipient, process_id, confirmed) in &recipients {
-            let route = match recipient {
-                BACnetRecipient::Address(address) => {
-                    RecipientRoute::resolve_address(address, |mac| {
-                        network.transport().is_broadcast_mac(mac)
-                    })
-                }
-                BACnetRecipient::Device(identifier) => {
-                    let resolution = {
-                        let table = device_bindings.read().await;
-                        table.resolve_at(identifier, Instant::now(), |mac| {
-                            network.transport().is_broadcast_mac(mac)
-                        })
-                    };
-                    RecipientRoute::from_device_resolution(resolution)
-                }
-            };
-
-            if !route.is_deliverable(notification_class) {
-                continue;
-            }
-
-            // Downgrading to unconfirmed would drop the acknowledgment the
-            // recipient was configured to require, so both cases are skips.
-            if *confirmed && !route.permits_confirmed() {
-                // Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs.
-                warn!(
-                    notification_class,
-                    "Recipient requests confirmed notifications at a broadcast address; \
-                     Clause 6.3 permits only unconfirmed PDUs there, skipping"
-                );
-                continue;
-            }
-
-            let mut targeted = notification.clone();
-            targeted.process_identifier = *process_id;
-
-            let mut service_buf = BytesMut::new();
-            if let Err(e) = targeted.encode(&mut service_buf) {
-                warn!(error = %e, "Failed to encode EventNotification");
-                continue;
-            }
-
-            let service_bytes = service_buf.freeze();
-
-            if *confirmed {
-                // Convert only the unicast route shapes admitted above and
-                // fail closed if the route classification changes.
-                let Some(ConfirmedRecipientRoute {
-                    canonical_peer,
-                    local_target,
-                    remote,
-                    freshness,
-                }) = route.into_confirmed()
-                else {
-                    warn!(
-                        notification_class,
-                        "Confirmed notification route is unusable"
-                    );
-                    continue;
-                };
-                let (operation, result_rx) = match notification_transactions.reserve(
-                    canonical_peer,
-                    ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
-                ) {
-                    Ok(reservation) => reservation,
-                    Err(error) => {
-                        warn!(%error, "No free invoke ID for confirmed EventNotification");
-                        continue;
-                    }
-                };
-                let id = operation.invoke_id();
-
-                let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-                    segmented: false,
-                    more_follows: false,
-                    segmented_response_accepted: false,
-                    max_segments: None,
-                    max_apdu_length: 1476,
-                    invoke_id: id,
-                    sequence_number: None,
-                    proposed_window_size: None,
-                    service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
-                    service_request: service_bytes,
-                });
-
-                let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
-
-                let network = Arc::clone(network);
-                let tsm = Arc::clone(server_tsm);
-                let timeout = Duration::from_millis(retry_timeout_ms);
-                let apdu_retries = DEFAULT_APDU_RETRIES;
-                tokio::spawn(async move {
-                    let result = run_notification_worker(
-                        operation,
-                        result_rx,
-                        timeout,
-                        apdu_retries,
-                        |attempt| {
-                            let network = Arc::clone(&network);
-                            let tsm = Arc::clone(&tsm);
-                            let buf = buf.clone();
-                            let local_target = local_target.clone();
-                            let remote = remote.clone();
-                            async move {
-                                if freshness.is_some_and(|freshness| {
-                                    !freshness.permits_attempt_at(tokio::time::Instant::now())
-                                }) {
-                                    debug!(
-                                        invoke_id = id,
-                                        attempt,
-                                        "Observed Device binding expired before notification attempt"
-                                    );
-                                    return Err(());
-                                }
-                                let send_result = match (local_target, remote) {
-                                    (Some(target), None) => {
-                                        network
-                                            .send_apdu(&buf, &target, true, network_priority)
-                                            .await
-                                    }
-                                    (None, Some((dnet, dadr, configured_router))) => {
-                                        // A Device binding keeps its fixed next hop for
-                                        // each permitted attempt. Address recipients retain
-                                        // the learned-router/broadcast behavior.
-                                        let router = match configured_router {
-                                            Some(router) => Some(router),
-                                            None if attempt == 0 => {
-                                                tsm.lock().await.cached_router(dnet)
-                                            }
-                                            None => None,
-                                        };
-                                        match router {
-                                            Some(router_mac) => {
-                                                network
-                                                    .send_apdu_routed(
-                                                        &buf,
-                                                        dnet,
-                                                        &dadr,
-                                                        &router_mac,
-                                                        true,
-                                                        network_priority,
-                                                    )
-                                                    .await
-                                            }
-                                            None => {
-                                                network
-                                                    .send_apdu_routed_via_local_broadcast(
-                                                        &buf,
-                                                        dnet,
-                                                        &dadr,
-                                                        true,
-                                                        network_priority,
-                                                    )
-                                                    .await
-                                            }
-                                        }
-                                    }
-                                    _ => unreachable!("confirmed route validated before spawn"),
-                                };
-                                match &send_result {
-                                    Ok(()) => debug!(
-                                        invoke_id = id,
-                                        attempt, "Confirmed EventNotification sent"
-                                    ),
-                                    Err(error) => warn!(
-                                        %error,
-                                        attempt, "Confirmed EventNotification send failed"
-                                    ),
-                                }
-                                send_result.map_err(|_| ())
-                            }
-                        },
-                    )
-                    .await;
-                    match result {
-                        NotificationWorkerResult::Ack => {
-                            debug!(invoke_id = id, "EventNotification acknowledged");
-                        }
-                        NotificationWorkerResult::Error => {
-                            warn!(invoke_id = id, "EventNotification rejected by recipient");
-                        }
-                        NotificationWorkerResult::Exhausted => warn!(
-                            invoke_id = id,
-                            "EventNotification failed after {} retries", apdu_retries
-                        ),
-                        NotificationWorkerResult::Closed => {}
-                    }
-                });
-            } else {
-                let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-                    service_choice: UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION,
-                    service_request: service_bytes,
-                });
-
-                let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
-
-                let send_result = match &route {
-                    RecipientRoute::LocalUnicast(mac) => {
-                        network.send_apdu(&buf, mac, false, network_priority).await
-                    }
-                    RecipientRoute::BoundLocalUnicast { mac, .. } => {
-                        network.send_apdu(&buf, mac, false, network_priority).await
-                    }
-                    RecipientRoute::LocalBroadcast => {
-                        network.broadcast_apdu(&buf, false, network_priority).await
-                    }
-                    // Carries DNET with DLEN zero, so routers forward it
-                    // onto the remote network as a broadcast there.
-                    RecipientRoute::RemoteBroadcast(net) => {
-                        network
-                            .broadcast_to_network(&buf, *net, false, network_priority)
-                            .await
-                    }
-                    // Carries DNET 0xFFFF, which routers forward to every
-                    // reachable network. `broadcast_to_network` rejects that
-                    // DNET, so it needs its own send.
-                    RecipientRoute::GlobalBroadcast => {
-                        network
-                            .broadcast_global_apdu(&buf, false, network_priority)
-                            .await
-                    }
-                    // DNET/DADR name the recipient; the link DA is the local
-                    // broadcast because this non-routing device keeps no
-                    // router table (Clause 6.5.3's unknown-router form).
-                    RecipientRoute::RemoteUnicast { network: net, mac } => {
-                        network
-                            .send_apdu_routed_via_local_broadcast(
-                                &buf,
-                                *net,
-                                mac,
-                                false,
-                                network_priority,
-                            )
-                            .await
-                    }
-                    RecipientRoute::BoundRoutedUnicast {
-                        network: net,
-                        mac,
-                        router,
-                        ..
-                    } => {
-                        network
-                            .send_apdu_routed(&buf, *net, mac, router, false, network_priority)
-                            .await
-                    }
-                    // Filtered out by `RecipientRoute::is_deliverable` above.
-                    RecipientRoute::ContradictoryGlobal
-                    | RecipientRoute::UnknownDevice
-                    | RecipientRoute::StaleDevice
-                    | RecipientRoute::InvalidDevice => continue,
-                };
-
-                if let Err(e) = send_result {
-                    warn!(
-                        error = %e,
-                        "Failed to send unconfirmed EventNotification"
-                    );
-                }
-            }
+        if !recipients.is_empty() {
+            Self::deliver_local_notification(ctx, notification, &recipients).await;
         }
     }
 
     /// Distribute a successfully accepted acknowledgment after its requester
     /// response path has completed.
     pub(super) async fn send_acknowledgment_notification_with_bindings(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        comm_state: &Arc<AtomicU8>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
+        ctx: &EventDelivery<'_, T>,
         accepted: handlers::AcceptedAcknowledgeAlarm,
-        retry_timeout_ms: u64,
     ) {
         let Some(notification) = accepted.notification else {
             return;
@@ -753,15 +440,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
         Self::build_and_send_event_notification_with_bindings(
-            db,
-            network,
-            comm_state,
-            server_tsm,
-            notification_transactions,
-            device_bindings,
+            ctx,
             &accepted.event_object_identifier,
             NotificationTransition::acknowledgment(notification.change, notification.event_type),
-            retry_timeout_ms,
         )
         .await;
     }

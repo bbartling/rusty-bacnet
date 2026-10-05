@@ -1,5 +1,6 @@
-use super::cov_notifications_tests::RecordingTransport;
+use super::cov_notifications_tests::recording_transport;
 use super::*;
+use crate::server::test_transport::{SendLog, TestTransport};
 
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
@@ -10,7 +11,6 @@ use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bytes::Bytes;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
 fn point_oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap()
@@ -27,8 +27,10 @@ fn subscription(
         subscriber_process_identifier: process_id,
         monitored_object_identifier: point_oid(),
         issue_confirmed_notifications: false,
-        expires_at: None,
-        last_notified_value: None,
+        // A Multiple context always has a finite lifetime.
+        expires_at: (kind == CovNotificationKind::Multiple)
+            .then(|| Instant::now() + Duration::from_secs(3600)),
+        last_notified_observation: None,
         monitored_property: property,
         monitored_property_array_index: None,
         cov_increment: None,
@@ -44,11 +46,10 @@ fn life_safety_db() -> ObjectDatabase {
     db
 }
 
-fn decode_sent(sent: &StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>) -> Vec<Apdu> {
+fn decode_sent(sent: &SendLog) -> Vec<Apdu> {
     sent.lock()
-        .unwrap()
         .iter()
-        .map(|(frame, _)| decode_apdu(decode_npdu(frame.clone()).unwrap().payload).unwrap())
+        .map(|frame| decode_apdu(decode_npdu(frame.npdu.clone()).unwrap().payload).unwrap())
         .collect()
 }
 
@@ -69,26 +70,24 @@ fn single_properties(apdu: &Apdu) -> Vec<PropertyIdentifier> {
 }
 
 struct ExactFixture {
-    sent: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>,
+    sent: SendLog,
     db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
     cov_in_flight: Arc<Semaphore>,
     transactions: Arc<NotificationTransactions>,
-    comm_state: Arc<AtomicU8>,
+    comm_state: Arc<CommState>,
 }
 
 impl ExactFixture {
     async fn new(subscriptions: impl IntoIterator<Item = CovSubscription>) -> Self {
-        let sent = StdArc::new(StdMutex::new(Vec::new()));
-        let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-            &sent,
-        ))));
+        let (transport, sent) = recording_transport();
+        let network = Arc::new(NetworkLayer::new(transport));
         let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
         {
             let mut table = cov_table.write().await;
             for subscription in subscriptions {
-                table.subscribe(subscription);
+                table.admit_for_test(subscription, 0).unwrap();
             }
         }
         Self {
@@ -98,19 +97,21 @@ impl ExactFixture {
             cov_table,
             cov_in_flight: Arc::new(Semaphore::new(255)),
             transactions: NotificationTransactions::new(),
-            comm_state: Arc::new(AtomicU8::new(0)),
+            comm_state: Arc::new(CommState::default()),
         }
     }
 
     async fn fire(&self, changes: &[PropertyIdentifier]) {
-        BACnetServer::<RecordingTransport>::fire_life_safety_cov_notifications(
-            &self.db,
-            &self.network,
-            &self.cov_table,
-            &self.cov_in_flight,
-            &self.transactions,
-            &self.comm_state,
-            &ServerConfig::default(),
+        BACnetServer::<TestTransport>::fire_life_safety_cov_notifications(
+            &crate::server::cov_notify_context::CovNotifyContext {
+                db: &self.db,
+                network: &self.network,
+                cov_table: &self.cov_table,
+                cov_in_flight: &self.cov_in_flight,
+                notification_transactions: &self.transactions,
+                comm_state: &self.comm_state,
+                config: &ServerConfig::default(),
+            },
             &point_oid(),
             changes,
         )
@@ -119,7 +120,7 @@ impl ExactFixture {
 
     fn take_apdus(&self) -> Vec<Apdu> {
         let decoded = decode_sent(&self.sent);
-        self.sent.lock().unwrap().clear();
+        self.sent.clear();
         decoded
     }
 }
@@ -186,6 +187,17 @@ async fn exact_single_cov_filters_whole_and_property_payloads() {
         PropertyIdentifier::STATUS_FLAGS,
     ]));
 
+    // A selected-value repeat is now suppressed; change the expected-operation state.
+    fixture
+        .db
+        .write()
+        .await
+        .get_mut(&point_oid())
+        .unwrap()
+        .set_life_safety_operation_expected_internal(
+            bacnet_types::enums::LifeSafetyOperation::SILENCE,
+        )
+        .unwrap();
     fixture
         .fire(&[PropertyIdentifier::OPERATION_EXPECTED])
         .await;
@@ -275,85 +287,25 @@ async fn exact_multiple_cov_groups_matching_properties_and_one_status_flags() {
 }
 
 #[tokio::test]
-async fn initial_single_and_multiple_life_safety_payloads_include_one_status_flags() {
-    let single = subscription(
-        Some(PropertyIdentifier::OPERATION_EXPECTED),
-        CovNotificationKind::Single,
-        1,
-    );
-    let mut multiple = subscription(
-        Some(PropertyIdentifier::SILENCED),
-        CovNotificationKind::Multiple,
-        2,
-    );
-    multiple.subscriber_mac = single.subscriber_mac.clone();
-    let fixture = ExactFixture::new([single.clone(), multiple.clone()]).await;
-
-    BACnetServer::<RecordingTransport>::fire_initial_cov_notification(
-        &fixture.db,
-        &fixture.network,
-        &fixture.cov_table,
-        &fixture.cov_in_flight,
-        &fixture.transactions,
-        &fixture.comm_state,
-        &ServerConfig::default(),
-        &single,
-    )
-    .await;
-    BACnetServer::<RecordingTransport>::fire_initial_cov_notification_multiple(
-        &fixture.db,
-        &fixture.network,
-        &fixture.cov_table,
-        &fixture.cov_in_flight,
-        &fixture.transactions,
-        &fixture.comm_state,
-        &ServerConfig::default(),
-        &[multiple],
-    )
-    .await;
-
-    let apdus = fixture.take_apdus();
-    assert_eq!(apdus.len(), 2);
-    assert_eq!(
-        single_properties(&apdus[0]),
-        vec![
-            PropertyIdentifier::OPERATION_EXPECTED,
-            PropertyIdentifier::STATUS_FLAGS,
-        ]
-    );
-    let Apdu::UnconfirmedRequest(request) = &apdus[1] else {
-        panic!("expected unconfirmed multiple notification");
-    };
-    let notification = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
-    let properties: Vec<_> = notification.list_of_cov_notifications[0]
-        .list_of_values
-        .iter()
-        .map(|value| value.property_identifier)
-        .collect();
-    assert_eq!(
-        properties,
-        vec![
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::STATUS_FLAGS,
-        ]
-    );
-}
-
-#[tokio::test]
 async fn trusted_rearm_and_local_oos_write_notify_only_actual_deltas() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let mut server = BACnetServer::<RecordingTransport>::generic_builder()
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+    let (transport, sent) = recording_transport();
+    let mut server = BACnetServer::<TestTransport>::generic_builder()
+        .transport(transport)
         .database(life_safety_db())
         .enable_event_enrollment(false)
         .build()
         .await
         .unwrap();
-    server.cov_table.write().await.subscribe(subscription(
-        Some(PropertyIdentifier::OPERATION_EXPECTED),
-        CovNotificationKind::Single,
-        1,
-    ));
+    server
+        .cov_table
+        .write()
+        .await
+        .subscribe(subscription(
+            Some(PropertyIdentifier::OPERATION_EXPECTED),
+            CovNotificationKind::Single,
+            1,
+        ))
+        .unwrap();
 
     server
         .set_life_safety_operation_expected_local(&point_oid(), LifeSafetyOperation::SILENCE)
@@ -373,6 +325,7 @@ async fn trusted_rearm_and_local_oos_write_notify_only_actual_deltas() {
             None,
             PropertyValue::Boolean(true),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -384,6 +337,7 @@ async fn trusted_rearm_and_local_oos_write_notify_only_actual_deltas() {
             None,
             PropertyValue::Boolean(true),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -393,19 +347,19 @@ async fn trusted_rearm_and_local_oos_write_notify_only_actual_deltas() {
 }
 
 struct DispatchFixture {
-    sent: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>,
+    sent: SendLog,
     db: Arc<RwLock<ObjectDatabase>>,
-    network: Arc<NetworkLayer<RecordingTransport>>,
+    network: Arc<NetworkLayer<TestTransport>>,
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
-    seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
+    seg_ack_senders: Arc<segmented_send::SegmentedSendRegistry>,
     seg_send_permits: Arc<Semaphore>,
     cov_in_flight: Arc<Semaphore>,
-    server_tsm: Arc<Mutex<ServerTsm>>,
+    learned_routers: Arc<Mutex<LearnedRouterCache>>,
     transactions: Arc<NotificationTransactions>,
     tracker: Arc<ConfirmedRequestTracker>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
-    comm_state: Arc<AtomicU8>,
-    dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>>,
+    comm_state: Arc<CommState>,
+    dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     config: ServerConfig,
     source_mac: MacAddr,
 }
@@ -415,30 +369,28 @@ impl DispatchFixture {
         db: ObjectDatabase,
         subscriptions: impl IntoIterator<Item = CovSubscription>,
     ) -> Self {
-        let sent = StdArc::new(StdMutex::new(Vec::new()));
+        let (transport, sent) = recording_transport();
         let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
         {
             let mut table = cov_table.write().await;
             for subscription in subscriptions {
-                table.subscribe(subscription);
+                table.admit_for_test(subscription, 0).unwrap();
             }
         }
         Self {
-            network: Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-                &sent,
-            )))),
+            network: Arc::new(NetworkLayer::new(transport)),
             sent,
             db: Arc::new(RwLock::new(db)),
             cov_table,
-            seg_ack_senders: Arc::new(Mutex::new(HashMap::new())),
+            seg_ack_senders: Arc::new(segmented_send::SegmentedSendRegistry::default()),
             seg_send_permits: Arc::new(Semaphore::new(MAX_SEG_SENDERS)),
             cov_in_flight: Arc::new(Semaphore::new(255)),
-            server_tsm: Arc::new(Mutex::new(ServerTsm::new())),
+            learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
             transactions: NotificationTransactions::new(),
             tracker: Arc::new(ConfirmedRequestTracker::default()),
             device_bindings: Arc::new(RwLock::new(DeviceBindingTable::new())),
-            comm_state: Arc::new(AtomicU8::new(0)),
-            dcc_timer: Arc::new(Mutex::new(None)),
+            comm_state: Arc::new(CommState::default()),
+            dcc_timer: Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default())),
             config: ServerConfig {
                 life_safety_operation_authorizer: Some(Arc::new(|_| true)),
                 ..ServerConfig::default()
@@ -453,22 +405,42 @@ impl DispatchFixture {
         service_choice: ConfirmedServiceChoice,
         service_request: Bytes,
     ) {
-        BACnetServer::<RecordingTransport>::handle_confirmed_request(
-            &self.db,
-            &self.network,
-            &self.cov_table,
-            &self.seg_ack_senders,
-            &self.seg_send_permits,
-            &self.cov_in_flight,
-            &self.server_tsm,
-            &self.transactions,
-            &self.tracker,
-            &self.device_bindings,
-            &self.comm_state,
-            &self.dcc_timer,
-            &self.config,
+        self.dispatch_at(
             &self.source_mac,
             None,
+            invoke_id,
+            service_choice,
+            service_request,
+        )
+        .await;
+    }
+
+    async fn dispatch_at(
+        &self,
+        source: &MacAddr,
+        routed: Option<&NpduAddress>,
+        invoke_id: u8,
+        service_choice: ConfirmedServiceChoice,
+        service_request: Bytes,
+    ) {
+        BACnetServer::<TestTransport>::handle_confirmed_request(
+            &RequestServices {
+                db: Arc::clone(&self.db),
+                cov_table: Arc::clone(&self.cov_table),
+                seg_ack_senders: Arc::clone(&self.seg_ack_senders),
+                seg_send_permits: Arc::clone(&self.seg_send_permits),
+                cov_in_flight: Arc::clone(&self.cov_in_flight),
+                learned_routers: Arc::clone(&self.learned_routers),
+                notification_transactions: Arc::clone(&self.transactions),
+                device_bindings: Arc::clone(&self.device_bindings),
+                comm_state: Arc::clone(&self.comm_state),
+                dcc_timer: Arc::clone(&self.dcc_timer),
+                ..RequestServices::for_test(Arc::clone(&self.network), self.config.clone())
+            },
+            &self.tracker,
+            &Arc::new(crate::server::request_tasks::RequestTasks::default()).spawner(),
+            source,
+            routed.cloned(),
             ConfirmedRequestPdu {
                 segmented: false,
                 more_follows: false,
@@ -488,7 +460,7 @@ impl DispatchFixture {
 
     fn take_apdus(&self) -> Vec<Apdu> {
         let apdus = decode_sent(&self.sent);
-        self.sent.lock().unwrap().clear();
+        self.sent.clear();
         apdus
     }
 }
@@ -504,7 +476,7 @@ fn encode_write_property(property: PropertyIdentifier, value: PropertyValue) -> 
         priority: None,
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
     encoded.freeze()
 }
 
@@ -580,7 +552,7 @@ async fn network_write_property_and_multiple_use_exact_status_deltas() {
         }],
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
     fixture
         .dispatch(
             3,
@@ -603,9 +575,9 @@ async fn network_write_property_and_multiple_use_exact_status_deltas() {
 }
 
 #[tokio::test]
-async fn operation_ack_precedes_exact_cov_and_duplicate_is_silent() {
+async fn operation_ack_precedes_exact_cov_and_duplicate_replays_ack_without_second_cov() {
     let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-    point.set_present_value(bacnet_types::enums::LifeSafetyState::ALARM.to_raw());
+    point.set_present_value(bacnet_types::enums::LifeSafetyState::ALARM);
     point.set_operation_expected(LifeSafetyOperation::RESET);
     point.set_reset_executor(Arc::new(|_| {
         Ok(LifeSafetyPointResetCommit {
@@ -634,6 +606,12 @@ async fn operation_ack_precedes_exact_cov_and_duplicate_is_silent() {
             encoded.clone(),
         )
         .await;
+    let first_raw: Vec<Bytes> = fixture
+        .sent
+        .lock()
+        .iter()
+        .map(|frame| frame.npdu.clone())
+        .collect();
     let apdus = fixture.take_apdus();
     assert_eq!(apdus.len(), 2);
     assert!(matches!(apdus[0], Apdu::SimpleAck(_)));
@@ -645,10 +623,30 @@ async fn operation_ack_precedes_exact_cov_and_duplicate_is_silent() {
         ]
     );
 
+    // PR-0801: retransmitted already-executed LSO replays the byte-identical
+    // SimpleACK with zero side effects — no second COV. This is a local
+    // service-specific extension, not a Standard mandate.
     fixture
         .dispatch(0x51, ConfirmedServiceChoice::LIFE_SAFETY_OPERATION, encoded)
         .await;
-    assert!(fixture.take_apdus().is_empty(), "exact duplicate is silent");
+    let second_raw: Vec<Bytes> = fixture
+        .sent
+        .lock()
+        .iter()
+        .map(|frame| frame.npdu.clone())
+        .collect();
+    assert_eq!(
+        second_raw.len(),
+        1,
+        "executed LSO duplicate replays exactly one ACK with no second COV"
+    );
+    assert_eq!(
+        second_raw[0], first_raw[0],
+        "replayed LSO ACK must be byte-identical"
+    );
+    let apdus = fixture.take_apdus();
+    assert_eq!(apdus.len(), 1);
+    assert!(matches!(apdus[0], Apdu::SimpleAck(_)));
 
     {
         let mut db = fixture.db.write().await;
@@ -677,8 +675,23 @@ async fn operation_ack_precedes_exact_cov_and_duplicate_is_silent() {
     assert!(matches!(apdus[0], Apdu::SimpleAck(_)));
 }
 
+mod custom_operation;
+mod event_state_pins;
 mod failures;
 mod initial;
 mod routed;
 mod schedule;
+mod simulation;
 mod wpm_prefix;
+
+#[path = "life_safety_cov_tests/identity.rs"]
+mod identity;
+
+#[path = "life_safety_cov_tests/identity_arrays.rs"]
+mod identity_arrays;
+
+#[cfg(test)]
+mod lifetime;
+
+#[cfg(test)]
+mod lifetime_mixed;

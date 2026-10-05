@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+ipv6 = ["bacnet-transport/ipv6"]
+ethernet = ["bacnet-transport/ethernet"]
+
 [dev-dependencies]
 bacnet-types.workspace = true
 bacnet-encoding.workspace = true
@@ -17,7 +21,9 @@ bacnet-client.workspace = true
 bacnet-server.workspace = true
 bytes.workspace = true
 serde_json = "1"
-tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util"] }
+socket2 = { workspace = true, features = ["all"] }
+libc.workspace = true
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util", "io-util"] }
 
 [lints]
 workspace = true

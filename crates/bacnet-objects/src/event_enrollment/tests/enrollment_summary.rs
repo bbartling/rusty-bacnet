@@ -13,11 +13,12 @@ fn monitored_reference() -> BACnetDeviceObjectPropertyReference {
 
 #[test]
 fn configured_event_enrollment_reports_stored_type_and_shared_commit_coordinate() {
-    let mut enrollment =
-        EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_VALUE.to_raw()).unwrap();
+    let mut enrollment = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_VALUE).unwrap();
     assert_eq!(enrollment.enrollment_summary_capability_internal(), None);
 
-    enrollment.set_object_property_reference(Some(monitored_reference()));
+    enrollment
+        .set_object_property_reference(Some(monitored_reference()))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::ChangeOfValue {
         time_delay: 0,
         criteria: bacnet_types::constructed::ChangeOfValueCriteria::ReferencedPropertyIncrement(
@@ -53,8 +54,7 @@ fn configured_event_enrollment_reports_stored_type_and_shared_commit_coordinate(
 
 #[test]
 fn unsupported_or_unreferenced_event_enrollment_and_alert_enrollment_opt_out() {
-    let mut enrollment =
-        EventEnrollmentObject::new(1, "EE-1", EventType::EXTENDED.to_raw()).unwrap();
+    let mut enrollment = EventEnrollmentObject::new(1, "EE-1", EventType::EXTENDED).unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::Extended {
         vendor_id: 1,
         extended_event_type: 2,
@@ -62,7 +62,9 @@ fn unsupported_or_unreferenced_event_enrollment_and_alert_enrollment_opt_out() {
     });
     assert_eq!(enrollment.enrollment_summary_capability_internal(), None);
 
-    enrollment.set_object_property_reference(Some(monitored_reference()));
+    enrollment
+        .set_object_property_reference(Some(monitored_reference()))
+        .unwrap();
     assert_eq!(enrollment.enrollment_summary_capability_internal(), None);
 
     let alert = AlertEnrollmentObject::new(
@@ -76,9 +78,10 @@ fn unsupported_or_unreferenced_event_enrollment_and_alert_enrollment_opt_out() {
 
 #[test]
 fn detection_enable_is_separate_from_configured_capability() {
-    let mut enrollment =
-        EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE.to_raw()).unwrap();
-    enrollment.set_object_property_reference(Some(monitored_reference()));
+    let mut enrollment = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE).unwrap();
+    enrollment
+        .set_object_property_reference(Some(monitored_reference()))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 0.0,

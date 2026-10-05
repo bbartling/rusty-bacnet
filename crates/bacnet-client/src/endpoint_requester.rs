@@ -5,12 +5,15 @@ use std::time::Duration;
 use bacnet_encoding::apdu::{
     encode_apdu, validate_max_apdu_length, AbortPdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu,
 };
+use bacnet_encoding::npdu::NpduAddress;
 use bacnet_endpoint_core::coordinator::{
     Admission, AdmissionKind, CanonicalPeer, OutboundTransactionCoordinator, TerminalPolicy,
 };
-use bacnet_endpoint_core::endpoint_ingress::EndpointEgress;
+use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
+use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
+use bacnet_transport::port::{DataAttribute, TransportProvenance};
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, NetworkPriority, PropertyIdentifier,
 };
@@ -19,11 +22,80 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
-use crate::client::{confirmed_response_result, new_coordinated_tsm, ClientConfig};
+use crate::client::{
+    check_routed_unicast, confirmed_response_result, new_coordinated_tsm, ClientConfig,
+    TransactionPeer,
+};
+#[path = "endpoint_operation.rs"]
+mod operation;
+#[path = "endpoint_operation_request.rs"]
+mod operation_request;
+pub use operation::{EndpointOperationOutcome, PreparedEndpointOperation};
+pub use operation_request::{EndpointOperationAck, EndpointOperationRequest};
+#[path = "endpoint_read_request.rs"]
+mod read_request;
+pub use read_request::{EndpointReadAck, EndpointReadRequest};
+
 use crate::tsm::{CompletionOutcome, CoordinatedCompletion, TransactionOwner, Tsm, TsmResponse};
 
 fn shutdown_error() -> Error {
     Error::Encoding("endpoint shutdown".into())
+}
+
+/// The transaction peer an outbound endpoint destination is keyed to, the
+/// same way the standalone client keys its requests ([`TransactionPeer`]).
+fn outbound_tsm_peer(destination: &EndpointApduDestination) -> TransactionPeer {
+    TransactionPeer::of(match destination {
+        EndpointApduDestination::Direct { destination_mac } => {
+            CanonicalPeer::direct(destination_mac)
+        }
+        EndpointApduDestination::Routed {
+            destination_network,
+            destination_mac,
+            ..
+        }
+        | EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network,
+            destination_mac,
+        } => CanonicalPeer::routed(*destination_network, destination_mac),
+        EndpointApduDestination::LocalBroadcast
+        | EndpointApduDestination::RemoteBroadcast { .. }
+        | EndpointApduDestination::GlobalBroadcast => CanonicalPeer::direct(&[]),
+    })
+}
+
+fn reply_destination_for(received: &ReceivedApdu) -> EndpointApduDestination {
+    match received.source_network.clone() {
+        Some(address) if !address.mac_address.is_empty() => EndpointApduDestination::Routed {
+            destination_network: address.network,
+            destination_mac: address.mac_address,
+            router_mac: received.source_mac.clone(),
+        },
+        _ => EndpointApduDestination::Direct {
+            destination_mac: received.source_mac.clone(),
+        },
+    }
+}
+
+#[allow(dead_code)]
+fn preserve_inbound_context(
+    received: &ReceivedApdu,
+) -> (
+    bool,
+    bool,
+    Vec<DataAttribute>,
+    TransportProvenance,
+    Option<NpduAddress>,
+    Option<u16>,
+) {
+    (
+        received.link_layer_group,
+        received.is_group,
+        received.data_attributes.clone(),
+        received.provenance,
+        received.source_network.clone(),
+        received.ingress_network,
+    )
 }
 
 struct EndpointRequesterInner {
@@ -44,7 +116,7 @@ impl Drop for EndpointRequesterInner {
     }
 }
 
-/// Direct, unsegmented ReadProperty requester attached to a shared endpoint.
+/// Unsegmented RP/RR/RPM/WP requester attached to a shared endpoint.
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct EndpointRequester {
@@ -77,6 +149,10 @@ impl EndpointRequester {
     }
 
     /// Performs one direct ReadProperty transaction.
+    ///
+    /// Direct unicast with no data attributes. Routed and
+    /// attribute-preserving sends use
+    /// [`Self::read_property_with_destination`].
     #[doc(hidden)]
     pub async fn read_property(
         &self,
@@ -85,24 +161,161 @@ impl EndpointRequester {
         property_identifier: PropertyIdentifier,
         property_array_index: Option<u32>,
     ) -> Result<ReadPropertyACK, Error> {
-        if !self.inner.open.load(Ordering::Acquire) {
-            return Err(shutdown_error());
-        }
-
-        let request = ReadPropertyRequest {
+        self.read_property_with_destination(
+            EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(destination_mac),
+            },
+            Vec::new(),
             object_identifier,
             property_identifier,
             property_array_index,
-        };
-        let mut service_data = BytesMut::new();
-        request.encode(&mut service_data);
-        if 4 + service_data.len() > usize::from(self.inner.max_apdu_length) {
-            return Err(Error::Segmentation(
-                "endpoint requester supports only unsegmented ReadProperty".into(),
+        )
+        .await
+    }
+
+    /// Performs one ReadProperty transaction to an explicit endpoint destination.
+    ///
+    /// `data_attributes` are passed through to
+    /// [`EndpointEgress`] unchanged; no new policy decisions are made.
+    #[doc(hidden)]
+    pub async fn read_property_with_destination(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        property_array_index: Option<u32>,
+    ) -> Result<ReadPropertyACK, Error> {
+        self.prepare_read_property(
+            destination,
+            data_attributes,
+            object_identifier,
+            property_identifier,
+            property_array_index,
+        )?
+        .execute()
+        .await
+        .result?
+        .into_property()
+    }
+
+    /// Validate and reserve the exact transaction before transferring ownership.
+    /// Dropping the prepared operation releases only its own requester lease.
+    #[doc(hidden)]
+    pub fn prepare_read_property(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        property_array_index: Option<u32>,
+    ) -> Result<PreparedEndpointOperation, Error> {
+        self.prepare_read(
+            destination,
+            data_attributes,
+            EndpointReadRequest::Property(ReadPropertyRequest {
+                object_identifier,
+                property_identifier,
+                property_array_index,
+            }),
+        )
+    }
+
+    /// Validate/encode before reserving a lease for the supported read services.
+    #[doc(hidden)]
+    pub fn prepare_read(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        request: EndpointReadRequest,
+    ) -> Result<PreparedEndpointOperation, Error> {
+        self.prepare_operation(
+            destination,
+            data_attributes,
+            EndpointOperationRequest::Read(request),
+        )
+    }
+
+    /// Prepare one WriteProperty on the same requester and lease pool.
+    #[doc(hidden)]
+    pub fn prepare_write(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        request: bacnet_services::write_property::WritePropertyRequest,
+    ) -> Result<PreparedEndpointOperation, Error> {
+        self.prepare_operation(
+            destination,
+            data_attributes,
+            EndpointOperationRequest::Write(request),
+        )
+    }
+
+    /// Validate the complete request before reserving any transaction resources.
+    #[doc(hidden)]
+    pub fn prepare_operation(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        request: EndpointOperationRequest,
+    ) -> Result<PreparedEndpointOperation, Error> {
+        if !self.inner.open.load(Ordering::Acquire) {
+            return Err(shutdown_error());
+        }
+        // Broadcast destinations never carry a confirmed request (Clause 6.3).
+        // The egress refuses one too, but only once a transaction is taken, so
+        // fail fast here, before any lease or invoke ID is allocated.
+        if matches!(
+            destination,
+            EndpointApduDestination::LocalBroadcast
+                | EndpointApduDestination::RemoteBroadcast { .. }
+                | EndpointApduDestination::GlobalBroadcast
+        ) {
+            return Err(Error::Encoding(
+                "endpoint requester cannot send confirmed requests to a broadcast destination"
+                    .into(),
             ));
         }
+        // A routed destination names one device, as a client's routed
+        // confirmed request does (#1278): DNET 0 names no network, and DNET
+        // 65535 or an empty DADR would turn the request into a broadcast.
+        if let EndpointApduDestination::Routed {
+            destination_network,
+            destination_mac,
+            ..
+        }
+        | EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network,
+            destination_mac,
+        } = &destination
+        {
+            check_routed_unicast(*destination_network, destination_mac.len())?;
+        }
+        // Once those checks pass on the destination as named, one routed on
+        // the endpoint's own network goes as the local destination it is
+        // (#1403). The transaction is keyed to the MAC it goes to. Its answer
+        // comes from there with no SNET, or through a router with this
+        // network as its SNET, and either completes it (#1465).
+        let destination = destination.localized(self.inner.egress.local_network_number().get());
+        // A direct destination, as named or as localized, that reaches a group
+        // of nodes is a local broadcast (#1479).
+        if let EndpointApduDestination::Direct { destination_mac } = &destination {
+            if self.inner.egress.is_group_destination(destination_mac) {
+                return Err(Error::Encoding(
+                    "endpoint requester cannot send confirmed requests to a broadcast or group \
+                     address"
+                        .into(),
+                ));
+            }
+        }
 
-        let destination = MacAddr::from_slice(destination_mac);
+        let service_data = self.encode_operation(&request)?;
+        let service = request.service();
+
+        let TransactionPeer {
+            tsm_mac,
+            canonical: peer,
+        } = outbound_tsm_peer(&destination);
         let (invoke_id, registration) = {
             let mut tsm = self
                 .inner
@@ -113,19 +326,19 @@ impl EndpointRequester {
                 return Err(shutdown_error());
             }
             tsm.register_coordinated_transaction_with_policy(
-                destination.clone(),
-                CanonicalPeer::direct(destination_mac),
-                ConfirmedServiceChoice::READ_PROPERTY,
+                tsm_mac.clone(),
+                peer,
+                service,
                 false,
-                TerminalPolicy::ComplexAck,
+                request.terminal_policy(),
             )
             .map_err(|error| Error::Encoding(error.to_string()))?
         };
 
         let owner = registration.owner.clone();
-        let mut guard = EndpointRequestGuard {
+        let guard = EndpointRequestGuard {
             inner: Arc::clone(&self.inner),
-            destination: destination.clone(),
+            destination: tsm_mac.clone(),
             invoke_id,
             owner,
             active: true,
@@ -139,49 +352,79 @@ impl EndpointRequester {
             invoke_id,
             sequence_number: None,
             proposed_window_size: None,
-            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            service_choice: service,
             service_request: service_data.freeze(),
         });
         let mut encoded = BytesMut::new();
         encode_apdu(&mut encoded, &pdu)?;
         let encoded = encoded.to_vec();
-        let mut response = registration.response;
+        Ok(PreparedEndpointOperation {
+            guard,
+            destination,
+            data_attributes,
+            request,
+            encoded,
+            response: registration.response,
+        })
+    }
 
-        for attempt in 0..=self.inner.retries {
-            if !self.inner.open.load(Ordering::Acquire) {
-                return Err(shutdown_error());
-            }
-            self.inner
-                .egress
-                .send_direct(
-                    encoded.clone(),
-                    destination.clone(),
-                    true,
-                    NetworkPriority::NORMAL,
-                )
-                .await?;
+    /// Preflight without reserving a lease or submitting traffic.
+    #[doc(hidden)]
+    pub fn validate_operation(&self, request: &EndpointOperationRequest) -> Result<(), Error> {
+        self.encode_operation(request).map(|_| ())
+    }
 
-            match tokio::time::timeout(self.inner.timeout, &mut response).await {
-                Ok(Ok(response)) => {
-                    guard.active = false;
-                    let service_data = confirmed_response_result(response)?;
-                    return ReadPropertyACK::decode(&service_data);
-                }
-                Ok(Err(_)) if !self.inner.open.load(Ordering::Acquire) => {
-                    return Err(shutdown_error());
-                }
-                Ok(Err(_)) => {
-                    return Err(Error::Encoding("TSM response channel closed".into()));
-                }
-                Err(_) if attempt < self.inner.retries => {}
-                Err(_) => return Err(Error::Timeout(self.inner.timeout)),
-            }
+    fn encode_operation(&self, request: &EndpointOperationRequest) -> Result<BytesMut, Error> {
+        let mut service_data = BytesMut::new();
+        request.encode(&mut service_data)?;
+        if 4 + service_data.len() > usize::from(self.inner.max_apdu_length) {
+            return Err(Error::Segmentation(
+                "endpoint requester supports only unsegmented requests".into(),
+            ));
         }
+        Ok(service_data)
+    }
 
-        unreachable!("the inclusive retry loop always returns")
+    /// Perform an unsegmented ReadRange to an explicit destination.
+    #[doc(hidden)]
+    pub async fn read_range_with_destination(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        object_identifier: ObjectIdentifier,
+        property_identifier: PropertyIdentifier,
+        property_array_index: Option<u32>,
+        range: Option<RangeSpec>,
+    ) -> Result<ReadRangeAck, Error> {
+        self.prepare_read(
+            destination,
+            data_attributes,
+            EndpointReadRequest::Range(ReadRangeRequest {
+                object_identifier,
+                property_identifier,
+                property_array_index,
+                range,
+            }),
+        )?
+        .execute()
+        .await
+        .result?
+        .into_range()
     }
 
     /// Handles a response already admitted by the shared coordinator.
+    ///
+    /// Direct and routed responses are both accepted. The TSM key and
+    /// canonical peer are the peer the admission matched
+    /// ([`OutboundTransactionCoordinator::admit_from_source`]), not a second
+    /// reading of the envelope: the endpoint's network number cannot change
+    /// between the two, and a lease matched by its routed alias (#1465)
+    /// completes under the key it was registered with. Equal inbound and
+    /// outbound numeric invoke IDs stay unambiguous via the classifier and
+    /// that admission.
+    /// Link-group, attributes, ingress-network and
+    /// provenance are preserved structurally (threaded, never used for a new
+    /// decision).
     #[doc(hidden)]
     pub async fn complete_pre_admitted(
         &self,
@@ -189,9 +432,18 @@ impl EndpointRequester {
         apdu: Apdu,
         received: ReceivedApdu,
     ) -> bool {
-        if !self.inner.open.load(Ordering::Acquire) || received.source_network.is_some() {
+        if !self.inner.open.load(Ordering::Acquire) {
             return false;
         }
+        // Structural preservation: bind every provenance/context field so a
+        // future drop is a compile-visible change, not a silent regression.
+        // No new decisions are made from these values here.
+        let (_link_group, _is_group, _attributes, _provenance, _source_network, _ingress) =
+            preserve_inbound_context(&received);
+        let TransactionPeer {
+            tsm_mac,
+            canonical: peer,
+        } = TransactionPeer::of(admission.metadata().peer().clone());
         match admission.kind() {
             AdmissionKind::Terminal => {
                 let response = match &apdu {
@@ -199,10 +451,7 @@ impl EndpointRequester {
                     Apdu::ComplexAck(ack) if !ack.segmented => TsmResponse::ComplexAck {
                         service_data: ack.service_ack.clone(),
                     },
-                    Apdu::Error(error) => TsmResponse::Error {
-                        class: error.error_class.to_raw() as u32,
-                        code: error.error_code.to_raw() as u32,
-                    },
+                    Apdu::Error(error) => TsmResponse::from_error_pdu(error),
                     Apdu::Reject(reject) => TsmResponse::Reject {
                         reason: reject.reject_reason.to_raw(),
                     },
@@ -215,11 +464,8 @@ impl EndpointRequester {
                     | Apdu::ComplexAck(_) => return false,
                 };
                 let completion = self.inner.tsm.lock().ok().map(|mut tsm| {
-                    tsm.complete_pre_admitted_terminal_response(
-                        &received.source_mac,
-                        &admission,
-                        &apdu,
-                        response,
+                    tsm.complete_pre_admitted_terminal_response_for_peer(
+                        &tsm_mac, &peer, &admission, &apdu, response,
                     )
                 });
                 matches!(
@@ -231,10 +477,8 @@ impl EndpointRequester {
             }
             AdmissionKind::NonTerminal => {
                 let rejected = self.inner.tsm.lock().is_ok_and(|mut tsm| {
-                    tsm.reject_pre_admitted_segmented_response(
-                        &received.source_mac,
-                        &admission,
-                        &apdu,
+                    tsm.reject_pre_admitted_segmented_response_for_peer(
+                        &tsm_mac, &peer, &admission, &apdu,
                     )
                 });
                 if !rejected {
@@ -250,13 +494,19 @@ impl EndpointRequester {
                 if encode_apdu(&mut encoded, &abort).is_err() {
                     return false;
                 }
+                // Preserve the inbound envelope's routing + data attributes on
+                // the abort (pass-through, no new decisions). Provenance and
+                // link-group are already bound above for structural preservation.
+                let destination = reply_destination_for(&received);
+                let attributes = received.data_attributes.clone();
                 self.inner
                     .egress
-                    .send_direct(
+                    .send_apdu(
                         encoded.to_vec(),
-                        received.source_mac,
+                        destination,
                         false,
                         NetworkPriority::NORMAL,
+                        attributes,
                     )
                     .await
                     .is_ok()

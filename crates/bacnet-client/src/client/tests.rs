@@ -16,7 +16,7 @@ use tokio::time::Duration;
 mod wpm_error_projection;
 
 async fn make_client() -> BACnetClient<BipTransport> {
-    BACnetClient::builder()
+    BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .apdu_timeout_ms(2000)
@@ -32,7 +32,7 @@ async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&[0x33; 16]);
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 
@@ -52,18 +52,13 @@ async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
 async fn assert_sc_socket_closed_after_drop(ws_hub: &LoopbackWebSocket, context: &str) {
     timeout(Duration::from_secs(1), async {
-        loop {
-            match ws_hub.recv().await {
-                Ok(data) => {
-                    let msg = decode_sc_message(&data).unwrap();
-                    assert_ne!(
-                        msg.function,
-                        ScFunction::HeartbeatAck,
-                        "{context} must not leave SC answering heartbeats"
-                    );
-                }
-                Err(_) => break,
-            }
+        while let Ok(data) = ws_hub.recv().await {
+            let msg = decode_sc_message(&data).unwrap();
+            assert_ne!(
+                msg.function,
+                ScFunction::HeartbeatAck,
+                "{context} must not leave SC answering heartbeats"
+            );
         }
     })
     .await
@@ -125,7 +120,7 @@ async fn client_stop_releases_bip_socket_before_drop() {
 
     timeout(Duration::from_secs(1), async {
         loop {
-            match BACnetClient::builder()
+            match BACnetClient::bip_builder()
                 .interface(Ipv4Addr::LOCALHOST)
                 .port(port)
                 .build()
@@ -174,7 +169,7 @@ async fn client_drop_releases_bip_socket() {
 
     timeout(Duration::from_secs(1), async {
         loop {
-            match BACnetClient::builder()
+            match BACnetClient::bip_builder()
                 .interface(Ipv4Addr::LOCALHOST)
                 .port(port)
                 .build()
@@ -197,7 +192,7 @@ async fn client_drop_releases_sc_transport_socket() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
-    let transport = ScTransport::new(ws_client, client_vmac);
+    let transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
 
     let hub_task = tokio::spawn(async move {
         sc_hub_accept(&ws_hub, hub_vmac).await;
@@ -246,7 +241,7 @@ async fn device_table_purge_runs_without_inbound_apdu() {
 
 #[tokio::test]
 async fn client_rejects_invalid_max_apdu_length() {
-    let result = BACnetClient::builder()
+    let result = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .max_apdu_length(1000)
@@ -499,7 +494,7 @@ async fn segmented_complex_ack_reassembly() {
 
 #[tokio::test]
 async fn segmented_confirmed_request_sends_segments() {
-    let mut client = BACnetClient::builder()
+    let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .apdu_timeout_ms(5000)
@@ -591,7 +586,7 @@ async fn segmented_confirmed_request_sends_segments() {
 
 #[tokio::test]
 async fn segmented_request_with_complex_ack_response() {
-    let mut client = BACnetClient::builder()
+    let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .apdu_timeout_ms(5000)
@@ -774,7 +769,7 @@ async fn routed_segmented_request_uses_routed_tsm_key() {
 
 #[tokio::test]
 async fn segment_overflow_guard() {
-    let mut client = BACnetClient::builder()
+    let mut client = BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .apdu_timeout_ms(2000)

@@ -1,3 +1,4 @@
+use bacnet_objects::access_control::{AccessDoorObject, AccessZoneObject};
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
@@ -6,7 +7,7 @@ use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -63,9 +64,21 @@ fn acked_transitions_network_policy_is_uniform_on_all_supported_types() {
             Box::new(MultiStateValueObject::new(1, "MSV-1", 2).unwrap()),
         ),
         (
+            "Access Zone",
+            ObjectType::ACCESS_ZONE,
+            Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
+        ),
+        (
+            "Access Door",
+            ObjectType::ACCESS_DOOR,
+            Box::new(AccessDoorObject::new(1, "DOOR-1").unwrap()),
+        ),
+        (
             "Event Enrollment",
             ObjectType::EVENT_ENROLLMENT,
-            Box::new(EventEnrollmentObject::new(1, "EE-1", 0).unwrap()),
+            Box::new(
+                EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap(),
+            ),
         ),
         (
             "Alert Enrollment",

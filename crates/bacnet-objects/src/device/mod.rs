@@ -8,7 +8,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bacnet_types::constructed::BACnetCOVSubscription;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Segmentation, ServiceSupported,
 };
@@ -18,6 +17,10 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use crate::clock::{ClockFrame, ClockReader};
 use crate::common::read_property_list_property;
 use crate::traits::BACnetObject;
+
+mod audit_recipient;
+mod metadata;
+pub use audit_recipient::{AuditRecipientChangeSink, AuditWriteSource, DeviceAuthority};
 
 /// Every service the bundled `bacnet-server` dispatch executes, as
 /// `BACnetServicesSupported` bit positions (Clause 21).
@@ -30,6 +33,9 @@ use crate::traits::BACnetObject;
 /// [`DeviceObject::set_services_supported`].
 pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::ACKNOWLEDGE_ALARM,
+    // Received notifications go to the Notification Forwarder objects
+    // (Clause 12.51); the server acknowledges each confirmed one.
+    ServiceSupported::CONFIRMED_EVENT_NOTIFICATION,
     ServiceSupported::GET_ALARM_SUMMARY,
     ServiceSupported::GET_ENROLLMENT_SUMMARY,
     ServiceSupported::SUBSCRIBE_COV,
@@ -46,6 +52,7 @@ pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::DEVICE_COMMUNICATION_CONTROL,
     ServiceSupported::CONFIRMED_TEXT_MESSAGE,
     ServiceSupported::REINITIALIZE_DEVICE,
+    ServiceSupported::UNCONFIRMED_EVENT_NOTIFICATION,
     ServiceSupported::UNCONFIRMED_TEXT_MESSAGE,
     ServiceSupported::TIME_SYNCHRONIZATION,
     ServiceSupported::WHO_HAS,
@@ -57,6 +64,8 @@ pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::LIFE_SAFETY_OPERATION,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY,
     ServiceSupported::GET_EVENT_INFORMATION,
+    // Applied to the local Channel objects (Clause 15.11).
+    ServiceSupported::WRITE_GROUP,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
     ServiceSupported::CONFIRMED_AUDIT_NOTIFICATION,
     ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION,
@@ -144,6 +153,7 @@ impl Default for DeviceConfig {
 /// BACnet Device object.
 pub struct DeviceObject {
     oid: ObjectIdentifier,
+    recipient: audit_recipient::RecipientState,
     properties: HashMap<PropertyIdentifier, PropertyValue>,
     /// Cached object list for array-indexed reads.
     object_list: Vec<ObjectIdentifier>,
@@ -154,8 +164,6 @@ pub struct DeviceObject {
     configured_services_supported: Vec<ServiceSupported>,
     /// Shared dynamic clock sample source. `None` is explicitly clockless.
     clock: Option<Arc<dyn ClockReader>>,
-    /// Active COV subscriptions maintained by the server.
-    active_cov_subscriptions: Vec<BACnetCOVSubscription>,
 }
 
 impl DeviceObject {
@@ -233,7 +241,8 @@ impl DeviceObject {
             PropertyValue::CharacterString(String::new()),
         );
 
-        // Device_Address_Binding — starts empty; populated as devices are discovered.
+        // Device_Address_Binding: stored empty. A running server serves its
+        // device bindings in place of this value (bacnet-server, #1369).
         properties.insert(
             PropertyIdentifier::DEVICE_ADDRESS_BINDING,
             PropertyValue::List(Vec::new()),
@@ -318,7 +327,9 @@ impl DeviceObject {
             ObjectType::POSITIVE_INTEGER_VALUE.to_raw(),
             ObjectType::TIMEPATTERN_VALUE.to_raw(),
             ObjectType::TIME_VALUE.to_raw(),
+            ObjectType::NOTIFICATION_FORWARDER.to_raw(),
             ObjectType::ALERT_ENROLLMENT.to_raw(),
+            ObjectType::CHANNEL.to_raw(),
             ObjectType::LIGHTING_OUTPUT.to_raw(),
             ObjectType::BINARY_LIGHTING_OUTPUT.to_raw(),
             ObjectType::NETWORK_PORT.to_raw(),
@@ -334,12 +345,12 @@ impl DeviceObject {
 
         Ok(Self {
             oid,
+            recipient: Default::default(),
             properties,
             object_list: vec![oid], // Device itself is always in the list
             protocol_object_types_supported,
             configured_services_supported: EXECUTED_SERVICES.to_vec(),
             clock: None,
-            active_cov_subscriptions: Vec::new(),
         })
     }
 
@@ -350,7 +361,9 @@ impl DeviceObject {
 
     /// Replace the advertised executed-service set (`Protocol_Services_Supported`,
     /// Clause 12.11). For deployments whose dispatch surface differs from the
-    /// bundled server's [`EXECUTED_SERVICES`].
+    /// bundled server's [`EXECUTED_SERVICES`]. This is a standalone declaration,
+    /// not a runtime dispatch switch. Raw COV presence follows these services;
+    /// a running server overrides served Device data with its own execution view.
     ///
     /// The production is closed at you-Are (bit 48); values past it are not
     /// representable and are dropped.
@@ -371,18 +384,39 @@ impl DeviceObject {
         );
     }
 
-    /// Replace the entire active COV subscriptions list.
-    pub fn set_active_cov_subscriptions(&mut self, subs: Vec<BACnetCOVSubscription>) {
-        self.active_cov_subscriptions = subs;
-    }
-
-    /// Add a single COV subscription.
-    pub fn add_cov_subscription(&mut self, sub: BACnetCOVSubscription) {
-        self.active_cov_subscriptions.push(sub);
+    /// Sync the durable Device UUID (Clause 12.11 DEVICE_UUID).
+    ///
+    /// RB-16 endpoint sync (not a fork): the caller owns the 16-byte UUID
+    /// durably (Annex AB.1.5.3); this setter only stores the supplied bytes
+    /// as an OctetString. No generation, no persistence, no version/variant
+    /// checks — startup validation elsewhere rejects only all-zero where a
+    /// real SC identity is required.
+    pub fn set_device_uuid(&mut self, uuid: [u8; 16]) {
+        self.properties.insert(
+            PropertyIdentifier::DEVICE_UUID,
+            PropertyValue::OctetString(uuid.to_vec()),
+        );
     }
 
     fn clock_frame(&self) -> Option<ClockFrame> {
         self.clock.as_ref()?.read_clock()
+    }
+
+    fn cov_property_present(&self, property: PropertyIdentifier) -> bool {
+        match property {
+            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS => {
+                self.configured_services_supported.iter().any(|service| {
+                    matches!(
+                        *service,
+                        ServiceSupported::SUBSCRIBE_COV | ServiceSupported::SUBSCRIBE_COV_PROPERTY
+                    )
+                })
+            }
+            PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => self
+                .configured_services_supported
+                .contains(&ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE),
+            _ => true,
+        }
     }
 
     fn services_supported(&self) -> Vec<u8> {
@@ -402,6 +436,10 @@ impl DeviceObject {
 }
 
 impl BACnetObject for DeviceObject {
+    fn device_authority_internal(&mut self) -> Option<DeviceAuthority<'_>> {
+        Some(DeviceAuthority(self))
+    }
+
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
@@ -418,6 +456,9 @@ impl BACnetObject for DeviceObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
+            return self.read_audit_recipient(array_index);
+        }
         if property == PropertyIdentifier::OBJECT_LIST {
             return match array_index {
                 None => {
@@ -503,13 +544,23 @@ impl BACnetObject for DeviceObject {
             });
         }
 
-        if property == PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS {
-            let mut buf = bytes::BytesMut::new();
-            bacnet_encoding::constructed::encode_cov_subscription_list(
-                &mut buf,
-                &self.active_cov_subscriptions,
-            );
-            return Ok(PropertyValue::ApplicationData(buf.to_vec()));
+        if matches!(
+            property,
+            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
+                | PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
+        ) {
+            // Standalone default: the object holds no subscription state. A
+            // running `BACnetServer` owns both live lists in its COV
+            // subscription table and projects them for network reads and
+            // `read_local`.
+            return if self.cov_property_present(property) {
+                Ok(PropertyValue::ApplicationData(Vec::new()))
+            } else {
+                Err(Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+                })
+            };
         }
 
         self.properties
@@ -524,11 +575,25 @@ impl BACnetObject for DeviceObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
+            return self.write_audit_recipient(array_index, value, _priority, None);
+        }
         if property == PropertyIdentifier::DESCRIPTION {
+            if array_index.is_some() {
+                return Err(Error::Protocol {
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
+                    code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+                });
+            }
+            // Clause 15.9: relinquishing a non-commandable writable property
+            // succeeds without changing its value when no other error exists.
+            if value == PropertyValue::Null {
+                return Ok(());
+            }
             if let PropertyValue::CharacterString(_) = &value {
                 self.properties.insert(property, value);
                 return Ok(());
@@ -538,29 +603,26 @@ impl BACnetObject for DeviceObject {
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
             });
         }
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-        })
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            array_index,
+        ))
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        let mut props: Vec<PropertyIdentifier> = self.properties.keys().copied().collect();
-        props.push(PropertyIdentifier::OBJECT_LIST);
-        props.push(PropertyIdentifier::PROPERTY_LIST);
-        props.push(PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED);
-        props.push(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED);
-        props.push(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS);
-        if self.clock_frame().is_some() {
-            props.extend([
-                PropertyIdentifier::LOCAL_DATE,
-                PropertyIdentifier::LOCAL_TIME,
-                PropertyIdentifier::UTC_OFFSET,
-                PropertyIdentifier::DAYLIGHT_SAVINGS_STATUS,
-            ]);
-        }
-        props.sort_by_key(|p| p.to_raw());
-        Cow::Owned(props)
+        // Preserve Device's legacy inclusion of PROPERTY_LIST. The wire reader
+        // still removes it and the identity rows as before.
+        Cow::Owned(
+            self.property_metadata()
+                .iter()
+                .map(|row| row.property_identifier)
+                .collect(),
+        )
     }
 
     /// Device is not createable or deleteable at runtime.
@@ -578,3 +640,6 @@ impl BACnetObject for DeviceObject {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod service_profile_tests;

@@ -1,108 +1,218 @@
-use super::event_notifications::ResolvedIntrinsicTransition;
 use super::*;
+#[path = "intrinsic_reporting_lifecycle.rs"]
+mod intrinsic;
+use crate::committed_cov::BackgroundCommit;
 
-/// Resolve the configured Event Enrollment interval into a tick period.
-///
-/// `tokio::time::interval` panics on a zero period, and that panic would land
-/// inside a spawned task — `start` would still return `Ok` while enrollment
-/// evaluation was silently dead. A configured `0` is clamped to one second
-/// instead, matching how an invalid `vendor_id` is handled: warn loudly and
-/// keep the device running. Use `enable_event_enrollment(false)` to actually
-/// disable evaluation.
-pub(super) fn event_enrollment_period(secs: u64) -> Duration {
-    if secs == 0 {
-        warn!(
-            "event_enrollment_interval_secs is 0; clamping to 1s. \
-             Use enable_event_enrollment(false) to disable Event Enrollment evaluation"
-        );
-        return Duration::from_secs(1);
-    }
-    Duration::from_secs(secs)
-}
+#[path = "lifecycle_period.rs"]
+mod period;
+use super::heap_futures::boxed;
+use super::{audit_recipient::spawn_owned, audit_recipient_routes::AuditRoutes};
+pub(super) use period::{event_enrollment_period, MonotonicClocks};
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    pub(super) async fn start_with_clock_mode_and_bindings(
+    /// Start a server: every public start and build path ends here. The
+    /// startup future is on the heap, which keeps theirs small (#953).
+    pub(super) fn start_with_clock_mode_and_bindings(
+        config: ServerConfig,
+        db: ObjectDatabase,
+        transport: T,
+        clock_config: Option<ClockConfig>,
+        configured_device_bindings: Vec<DeviceBinding>,
+    ) -> std::pin::Pin<Box<impl std::future::Future<Output = Result<Self, Error>>>> {
+        boxed(|| {
+            Self::start_on_heap(
+                config,
+                db,
+                transport,
+                clock_config,
+                configured_device_bindings,
+            )
+        })
+    }
+
+    async fn start_on_heap(
         mut config: ServerConfig,
         mut db: ObjectDatabase,
         transport: T,
         clock_config: Option<ClockConfig>,
         configured_device_bindings: Vec<DeviceBinding>,
     ) -> Result<Self, Error> {
+        if let Some(profile) = &mut config.audit_reporters {
+            profile.canonicalize()?;
+        }
         // Validate every configured route against the concrete transport before
-        // mutating the database or starting network work.
+        // mutating the database or starting network work. No binding takes a
+        // group address (#1493).
+        let is_group = |mac: &[u8]| transport.is_group_destination(mac);
         let device_bindings =
-            DeviceBindingTable::from_configured(configured_device_bindings, |mac| {
-                transport.is_broadcast_mac(mac)
-            })?;
-        let transport_max = transport.max_apdu_length() as u32;
-        config.max_apdu_length = config.max_apdu_length.min(transport_max);
-        let max_apdu = u16::try_from(config.max_apdu_length).map_err(|_| {
-            Error::Encoding(format!(
-                "invalid max_apdu_length {}; expected one of 50, 128, 206, 480, 1024, 1476",
-                config.max_apdu_length
-            ))
-        })?;
-        validate_max_apdu_length(max_apdu)?;
+            DeviceBindingTable::from_configured(configured_device_bindings, is_group)?;
+        let audit_routes = AuditRoutes::prepare(&mut db, &config, &device_bindings, &transport)?;
+        super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
+        super::network_port::validate_apdu_capacity(&mut config, &transport)?;
+        crate::local_device::validate_apdu_declaration(&db, config.max_apdu_length)?;
+        let request_tasks = super::request_tasks::RequestTasks::for_server(&config)?;
 
         if config.vendor_id == 0 {
             warn!("vendor_id is 0 (ASHRAE reserved); set a valid vendor ID for production use");
         }
 
-        let clock = clock_config.map(|config| Arc::new(ServerClock::new(config)));
-        let reader = clock
-            .as_ref()
-            .map(|clock| Arc::clone(clock) as Arc<dyn bacnet_objects::clock::ClockReader>);
-        db.set_clock_reader(reader);
-        let monotonic_origin = tokio::time::Instant::now();
-        let monotonic_clock: Arc<bacnet_objects::traits::MonotonicClock> = Arc::new(move || {
-            tokio::time::Instant::now().saturating_duration_since(monotonic_origin)
-        });
-        db.set_monotonic_clock_internal(Some(monotonic_clock));
+        let (clock, monotonic) = period::install_database_clocks(&mut db, clock_config);
+        let membership = crate::membership::install_waker(&mut db);
 
-        let mut network = NetworkLayer::new(transport);
-        let apdu_rx = network.start().await?;
+        let (network, mut apdu_rx, audit_routes, network_controls) =
+            boxed(|| super::network_port::start(&mut db, &config, transport, audit_routes)).await?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
+        // The limiter keeps this startup identity; changing Device membership
+        // later does not rebind it.
+        let device_instance = db.selected_device().map(|oid| oid.instance_number());
+        let (discovery_limiter, time_sync_limiter) = request_limiters(&config, device_instance);
         let db = Arc::new(RwLock::new(db));
-        let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-        let seg_ack_senders: Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let cov_counters = Arc::new(crate::cov::AtomicCovCounters::default());
+        let cov_table = Arc::new(RwLock::new(
+            CovSubscriptionTable::with_policy(config.cov_policy.clone(), Arc::clone(&cov_counters))
+                .with_max_apdu_length(config.max_apdu_length as usize),
+        ));
+        let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
         let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
 
         let cov_in_flight = Arc::new(Semaphore::new(255));
-        let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+        let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
         let notification_transactions = NotificationTransactions::new();
         let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
         let device_bindings = Arc::new(RwLock::new(device_bindings));
-        let comm_state = Arc::new(AtomicU8::new(0)); // 0 = Enable (default)
-        let dcc_timer: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+        let comm_state = Arc::new(CommState::default()); // ENABLE at every start
+        let dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>> =
+            Arc::new(Mutex::new(Default::default()));
+        let dcc_outcomes = Arc::new(dcc_outcomes::DccOutcomes::default());
+        let event_suppressions = Arc::new(super::event_suppression::EventSuppressions::default());
+        let mutation_decisions = Arc::new(crate::mutation::MutationDecisions::default());
 
+        let target_audit = super::audit_recipient::TargetAudit::install(
+            &mut *db.write().await,
+            &config,
+            audit_routes,
+            &network,
+            &notification_transactions,
+        );
+        let target_audit = match target_audit {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let network = Arc::try_unwrap(network).map_err(|_| {
+                    Error::Encoding("startup cleanup has an unexpected network owner".into())
+                })?;
+                boxed(|| super::network_port::StartingNetwork::from_network(network).cleanup())
+                    .await?;
+                return Err(error);
+            }
+        };
+        let network_number_task = network_controls.map(|controls| {
+            super::network_port::spawn_number_worker(
+                &network,
+                &db,
+                config.registered_network_port,
+                controls,
+                target_audit.as_ref().map(Arc::downgrade),
+            )
+        });
         let network_dispatch = Arc::clone(&network);
-        let db_dispatch = Arc::clone(&db);
-        let cov_dispatch = Arc::clone(&cov_table);
-        let seg_ack_dispatch = Arc::clone(&seg_ack_senders);
-        let seg_send_permits_dispatch = Arc::clone(&seg_send_permits);
-        let cov_in_flight_dispatch = Arc::clone(&cov_in_flight);
-        let server_tsm_dispatch = Arc::clone(&server_tsm);
-        let notification_transactions_dispatch = Arc::clone(&notification_transactions);
-        let confirmed_request_tracker_dispatch = Arc::clone(&confirmed_request_tracker);
-        let device_bindings_dispatch = Arc::clone(&device_bindings);
-        let comm_state_dispatch = Arc::clone(&comm_state);
-        let dcc_timer_dispatch = Arc::clone(&dcc_timer);
         let config_dispatch = Arc::new(config.clone());
-        let clock_dispatch = clock.clone();
+        let notification_transactions_dispatch = Arc::clone(&notification_transactions);
 
-        let dispatch_task = tokio::spawn(async move {
-            let mut apdu_rx = apdu_rx;
-            let mut seg_receivers: HashMap<SegKey, SegmentedRequestState> = HashMap::new();
+        let audit_owner = target_audit
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.owner));
+        if let Some(owner) = &audit_owner {
+            request_tasks.set_audit_owner(owner);
+        }
+        let requests = Arc::clone(&request_tasks);
+        let dispatch_context = DispatchContext {
+            services: RequestServices {
+                db: Arc::clone(&db),
+                network: Arc::clone(&network_dispatch),
+                cov_table: Arc::clone(&cov_table),
+                seg_ack_senders: Arc::clone(&seg_ack_senders),
+                seg_send_permits: Arc::clone(&seg_send_permits),
+                cov_in_flight: Arc::clone(&cov_in_flight),
+                learned_routers: Arc::clone(&learned_routers),
+                notification_transactions: Arc::clone(&notification_transactions_dispatch),
+                device_bindings: Arc::clone(&device_bindings),
+                comm_state: Arc::clone(&comm_state),
+                dcc_timer: Arc::clone(&dcc_timer),
+                dcc_outcomes: Arc::clone(&dcc_outcomes),
+                event_suppressions: Arc::clone(&event_suppressions),
+                confirmed_event_repeats: Arc::default(),
+                received_event_log: Arc::default(),
+                mutation_decisions: Arc::clone(&mutation_decisions),
+                config: Arc::clone(&config_dispatch),
+            },
+            confirmed_request_tracker: Arc::clone(&confirmed_request_tracker),
+            clock: clock.clone(),
+            discovery_limiter: discovery_limiter.clone(),
+            time_sync_limiter: time_sync_limiter.clone(),
+            request_tasks: Arc::clone(&request_tasks),
+        };
+        // A Schedule tick that writes a Command's Present_Value starts its list.
+        let schedule_runner = super::command_runs::CommandRunner::new(
+            &dispatch_context.services,
+            &request_tasks.spawner(),
+        );
+        let dispatch_task = spawn_owned(audit_owner.clone(), move || async move {
+            let mut seg_receivers: HashMap<SegRecvKey, SegmentedRequestState> = HashMap::new();
+            let mut notifications_open = true;
+            let mut ingress_open = true;
 
-            while let Some(received) = apdu_rx.recv().await {
+            loop {
+                let received = tokio::select! {
+                    result = notification_transactions_dispatch.join_next(), if notifications_open => {
+                        notifications_open = result.is_some();
+                        NotificationTransactions::observe(result);
+                        continue;
+                    }
+                    result = requests.join_next(), if !requests.is_empty() => {
+                        super::request_tasks::RequestTasks::observe(result);
+                        continue;
+                    }
+                    received = apdu_rx.recv(), if ingress_open => match received {
+                        Some(received) => received,
+                        None => {
+                            // Local/periodic notification producers outlive ingress.
+                            // Keep both join consumers active, but never poll EOF again.
+                            ingress_open = false;
+                            seg_receivers.clear();
+                            continue;
+                        }
+                    },
+                    else => break,
+                };
                 let now = Instant::now();
                 super::segmented_receive::expire_segmented_requests(&mut seg_receivers, now);
 
                 match apdu::decode_apdu(received.apdu.clone()) {
                     Ok(decoded) => {
+                        if notification_transactions_dispatch
+                            .application_sealed
+                            .load(Ordering::Acquire)
+                        {
+                            seg_receivers.clear();
+                            if matches!(
+                                decoded,
+                                Apdu::ConfirmedRequest(_) | Apdu::UnconfirmedRequest(_)
+                            ) {
+                                continue;
+                            }
+                        }
+                        // A confirmed request may only be addressed to one
+                        // device (Clause 6.3). One that arrives by local,
+                        // remote or global broadcast, or by multicast, leaves
+                        // the server TSM idle (Clause 5.4.5.1): it is neither
+                        // executed nor answered, whatever the service, and
+                        // no reassembly starts for it.
+                        if received.is_group && matches!(decoded, Apdu::ConfirmedRequest(_)) {
+                            debug!("Ignoring a ConfirmedRequest addressed to a group");
+                            continue;
+                        }
                         let source_mac = received.source_mac.clone();
                         let source_network = received.source_network.clone();
 
@@ -112,14 +222,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         // circuit — the PDU still reaches `dispatch`, whose
                         // Abort arm cancels in-flight segmented response
                         // senders and records server-TSM results (#377).
+                        // Provenance snapshot for this ingress (RB-07, by value).
+                        let provenance = received.provenance;
+                        let route = received.response_route();
                         if let Apdu::Abort(ref abt) = decoded {
                             if !abt.sent_by_server {
-                                let key = segmented_transaction_key(
+                                let abort_key = segmented_receive_key(
                                     source_mac.as_slice(),
                                     source_network.as_ref(),
                                     abt.invoke_id,
+                                    provenance,
                                 );
-                                seg_receivers.remove(&key);
+                                super::segmented_receive::remove_matching_reassemblies(
+                                    &mut seg_receivers,
+                                    &abort_key,
+                                );
                             }
                         }
 
@@ -127,11 +244,34 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         let handled = if let Apdu::ConfirmedRequest(ref req) = decoded {
                             if req.segmented {
                                 let seq = req.sequence_number.unwrap_or(0);
-                                let key = segmented_transaction_key(
+                                let key = segmented_receive_key(
                                     source_mac.as_slice(),
                                     source_network.as_ref(),
                                     req.invoke_id,
+                                    provenance,
                                 );
+                                if let Some(conflict) =
+                                    super::segmented_receive::find_receive_provenance_conflict(
+                                        &seg_receivers,
+                                        &key,
+                                    )
+                                {
+                                    seg_receivers.remove(&conflict);
+                                    warn!(
+                                        invoke_id = req.invoke_id,
+                                        "Aborting segmented request on provenance mismatch (fail-closed)"
+                                    );
+                                    Self::send_server_abort(
+                                        &network_dispatch,
+                                        &source_mac,
+                                        source_network.as_ref(),
+                                        &route,
+                                        req.invoke_id,
+                                        AbortReason::INVALID_APDU_IN_THIS_STATE,
+                                    )
+                                    .await;
+                                    continue;
+                                }
 
                                 // Clause 5.4.5.1
                                 // ConfirmedSegmentedReceivedNotSupported: a
@@ -150,6 +290,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         &network_dispatch,
                                         &source_mac,
                                         source_network.as_ref(),
+                                        &route,
                                         req.invoke_id,
                                         AbortReason::SEGMENTATION_NOT_SUPPORTED,
                                     )
@@ -172,6 +313,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         &seg_receivers,
                                     );
                                 if let Some(state) = seg_receivers.get_mut(&key) {
+                                    // Compat-mode live read: key isolates
+                                    // contexts; snapshot must match the key.
+                                    debug_assert_eq!(state.provenance, provenance);
                                     // Clause 5.4.5.2 restarts SegmentTimer
                                     // for accepted, duplicate and
                                     // out-of-order segments alike, so the
@@ -198,8 +342,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             // = TRUE, reason a local matter)
                                             // is its one generic escape, and
                                             // Clause 18.10's BUFFER_OVERFLOW
-                                            // — "a buffer capacity has been
-                                            // exceeded" — is the fit (#364).
+                                            // fits a reassembly that exceeds
+                                            // available buffer capacity (#364).
                                             warn!(
                                                 invoke_id = req.invoke_id,
                                                 accepted = state.accepted_segments,
@@ -210,6 +354,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                 &network_dispatch,
                                                 &source_mac,
                                                 source_network.as_ref(),
+                                                &route,
                                                 req.invoke_id,
                                                 AbortReason::BUFFER_OVERFLOW,
                                             )
@@ -232,6 +377,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                 &network_dispatch,
                                                 &source_mac,
                                                 source_network.as_ref(),
+                                                &route,
                                                 req.invoke_id,
                                                 AbortReason::BUFFER_OVERFLOW,
                                             )
@@ -279,6 +425,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             &network_dispatch,
                                             &source_mac,
                                             source_network.as_ref(),
+                                            &route,
                                             req.invoke_id,
                                             AbortReason::WINDOW_SIZE_OUT_OF_RANGE,
                                         )
@@ -297,6 +444,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             &network_dispatch,
                                             &source_mac,
                                             source_network.as_ref(),
+                                            &route,
                                             req.invoke_id,
                                             reason,
                                         )
@@ -320,39 +468,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                             &network_dispatch,
                                             &source_mac,
                                             source_network.as_ref(),
+                                            &route,
                                             req.invoke_id,
                                             AbortReason::BUFFER_OVERFLOW,
                                         )
                                         .await;
                                         continue;
                                     }
-                                    let actual_window_size = proposed_window_size;
-                                    let mut state = SegmentedRequestState {
-                                        payload,
-                                        last_activity: Instant::now(),
-                                        last_progress: Instant::now(),
-                                        expected_seq: 1,
-                                        initial_sequence_number: 0,
-                                        duplicate_count: 0,
-                                        last_acked_seq: 0,
-                                        window_pos: 1,
-                                        actual_window_size,
-                                        accepted_segments: 1,
-                                    };
-                                    let should_ack =
-                                        !req.more_follows || state.window_pos >= actual_window_size;
-                                    if should_ack {
-                                        state.window_pos = 0;
-                                        state.initial_sequence_number = state.last_acked_seq;
-                                        state.duplicate_count = 0;
-                                        ack_to_send = Some(SegmentAckPdu {
-                                            negative_ack: false,
-                                            sent_by_server: true,
-                                            invoke_id: req.invoke_id,
-                                            sequence_number: seq,
-                                            actual_window_size,
-                                        });
-                                    }
+                                    let (state, initial_ack) =
+                                        super::segmented_receive::initial_state(
+                                            payload,
+                                            provenance,
+                                            received
+                                                .as_ref()
+                                                .and_then(|r| r.direct_response.clone()),
+                                            req,
+                                        );
+                                    ack_to_send = initial_ack;
                                     if !req.more_follows {
                                         final_total = Some(1);
                                     }
@@ -367,6 +499,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         &network_dispatch,
                                         &source_mac,
                                         source_network.as_ref(),
+                                        &route,
                                         req.invoke_id,
                                         AbortReason::INVALID_APDU_IN_THIS_STATE,
                                     )
@@ -384,6 +517,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         &ack_buf,
                                         &source_mac,
                                         source_network.as_ref(),
+                                        &route,
                                     )
                                     .await
                                     {
@@ -396,6 +530,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                                 if let Some(total) = final_total {
                                     if let Some(state) = seg_receivers.remove(&key) {
+                                        if let Some(envelope) = received.as_mut() {
+                                            envelope.provenance = state.provenance;
+                                            envelope.direct_response = state.direct_response;
+                                        }
                                         match state.payload.complete(total) {
                                             Ok(reassembled) => {
                                                 debug!(
@@ -405,36 +543,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                     "Reassembled segmented ConfirmedRequest"
                                                 );
                                                 Self::dispatch(
-	                                                    &db_dispatch,
-	                                                    &network_dispatch,
-                                    &cov_dispatch,
-                                    &seg_ack_dispatch,
-                                    &seg_send_permits_dispatch,
-                                    &cov_in_flight_dispatch,
-                                    &server_tsm_dispatch,
-                                                    &notification_transactions_dispatch,
-	                                                    &confirmed_request_tracker_dispatch,
-	                                                    &device_bindings_dispatch,
-	                                                    &comm_state_dispatch,
-	                                                    &dcc_timer_dispatch,
-	                                                    &config_dispatch,
-	                                                    &clock_dispatch,
-	                                                    &source_mac,
-	                                                    Apdu::ConfirmedRequest(reassembled),
-	                                                    received.take().unwrap_or_else(|| {
-	                                                        warn!("received consumed twice - using empty fallback");
-	                                                        bacnet_network::layer::ReceivedApdu {
-	                                                            apdu: bytes::Bytes::new(),
-	                                                            source_mac: bacnet_types::MacAddr::new(),
-	                                                            source_network: None,
-	                                                            link_layer_group: false,
-	                                                            is_group: false,
-	                                                            data_attributes: Vec::new(),
-	                                                            reply_tx: None,
-	                                                        }
-	                                                    }),
-	                                                )
-	                                                .await;
+                                                    &dispatch_context,
+                                                    &source_mac,
+                                                    Apdu::ConfirmedRequest(reassembled),
+                                                    received.take().unwrap_or_else(|| {
+                                                        warn!("received consumed twice - using empty fallback");
+                                                        bacnet_network::layer::ReceivedApdu {
+                                                            direct_response: None,
+                                                            apdu: bytes::Bytes::new(),
+                                                            source_mac: bacnet_types::MacAddr::new(),
+                                                            ingress_network: None,
+                                                            source_network: None,
+                                                            link_layer_group: false,
+                                                            is_group: false,
+                                                            global_broadcast: false,
+                                                            data_attributes: Vec::new(),
+                                                            provenance: bacnet_transport::port::TransportProvenance::unverified(),
+                                                            reply_tx: None,
+                                                        }
+                                                    }),
+                                                )
+                                                .await;
                                             }
                                             Err(e) => {
                                                 warn!(
@@ -456,31 +585,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                         if !handled {
                             Self::dispatch(
-                                &db_dispatch,
-                                &network_dispatch,
-                                &cov_dispatch,
-                                &seg_ack_dispatch,
-                                &seg_send_permits_dispatch,
-                                &cov_in_flight_dispatch,
-                                &server_tsm_dispatch,
-                                &notification_transactions_dispatch,
-                                &confirmed_request_tracker_dispatch,
-                                &device_bindings_dispatch,
-                                &comm_state_dispatch,
-                                &dcc_timer_dispatch,
-                                &config_dispatch,
-                                &clock_dispatch,
+                                &dispatch_context,
                                 &source_mac,
                                 decoded,
                                 received.take().unwrap_or_else(|| {
                                     warn!("received consumed twice — using empty fallback");
                                     bacnet_network::layer::ReceivedApdu {
+                                        direct_response: None,
                                         apdu: bytes::Bytes::new(),
                                         source_mac: bacnet_types::MacAddr::new(),
+                                        ingress_network: None,
                                         source_network: None,
                                         link_layer_group: false,
                                         is_group: false,
+                                        global_broadcast: false,
                                         data_attributes: Vec::new(),
+                                        provenance:
+                                            bacnet_transport::port::TransportProvenance::unverified(
+                                            ),
                                         reply_tx: None,
                                     }
                                 }),
@@ -496,7 +618,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         });
 
         let cov_table_for_purge = Arc::clone(&cov_table);
-        let cov_purge_task = tokio::spawn(async move {
+        let cov_purge_task = spawn_owned(audit_owner.clone(), move || async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
@@ -508,23 +630,46 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         });
 
+        // Background commits fan COV out like a network write (#889).
+        let cov_fanout = super::cov_fanout::CovFanout::new(
+            &super::cov_notify_context::CovNotifyContext {
+                db: &db,
+                network: &network,
+                cov_table: &cov_table,
+                cov_in_flight: &cov_in_flight,
+                notification_transactions: &notification_transactions,
+                comm_state: &comm_state,
+                config: &config,
+            },
+            &event_suppressions,
+        );
+
         let fault_detection_task = if config.enable_fault_detection {
-            let db_fault = Arc::clone(&db);
-            Some(tokio::spawn(async move {
+            let fanout = cov_fanout.clone();
+            Some(spawn_owned(audit_owner.clone(), move || async move {
                 let detector = crate::fault_detection::FaultDetector::default();
                 let mut interval = tokio::time::interval(Duration::from_secs(10));
                 loop {
                     interval.tick().await;
-                    let mut db_guard = db_fault.write().await;
-                    let changes = detector.evaluate(&mut db_guard);
-                    for change in &changes {
-                        debug!(
-                            object = %change.object_id,
-                            old = change.old_reliability,
-                            new = change.new_reliability,
-                            "Fault detection: reliability changed"
-                        );
-                    }
+                    let committed = {
+                        let mut db_guard = fanout.db.write().await;
+                        // The detector mutates objects in place, so snapshot
+                        // Life Safety state up front.
+                        let mut commit = BackgroundCommit::snapshot_all(&db_guard);
+                        for change in detector.evaluate(&mut db_guard) {
+                            debug!(
+                                object = %change.object_id,
+                                old = %change.old_reliability,
+                                new = %change.new_reliability,
+                                "Fault detection: reliability changed"
+                            );
+                            commit.changed(change.object_id);
+                        }
+                        commit
+                            .finish(&fanout.db, &mut db_guard, &fanout.cov_table)
+                            .await
+                    };
+                    fanout.fire(&committed).await;
                 }
             }))
         } else {
@@ -538,58 +683,45 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // clamped interval — not the raw config value.
             Some(
                 super::event_enrollment_lifecycle::spawn_event_enrollment_task(
-                    Arc::clone(&db),
-                    Arc::clone(&network),
-                    Arc::clone(&comm_state),
-                    Arc::clone(&server_tsm),
-                    Arc::clone(&notification_transactions),
-                    Arc::clone(&device_bindings),
-                    ee_period,
-                    config.cov_retry_timeout_ms,
+                    super::event_enrollment_lifecycle::EventEnrollmentTask {
+                        db: Arc::clone(&db),
+                        network: Arc::clone(&network),
+                        comm_state: Arc::clone(&comm_state),
+                        learned_routers: Arc::clone(&learned_routers),
+                        notification_transactions: Arc::clone(&notification_transactions),
+                        device_bindings: Arc::clone(&device_bindings),
+                        suppressions: Arc::clone(&event_suppressions),
+                        period: ee_period,
+                        retry_ms: config.cov_retry_timeout_ms,
+                        local_apdu_capacity: config.max_apdu_length,
+                    },
                 ),
             )
         } else {
             None
         };
 
-        let db_trend = Arc::clone(&db);
-        let trend_log_state: crate::trend_log::TrendLogState =
-            Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-        let trend_log_task = Some(tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                interval.tick().await;
-                crate::trend_log::poll_trend_logs(&db_trend, &trend_log_state).await;
-            }
+        let trend_log_task = Some(spawn_owned(audit_owner.clone(), || {
+            crate::trend_log::run(Arc::clone(&db))
         }));
 
-        let db_schedule = Arc::clone(&db);
-        let network_schedule = Arc::clone(&network);
-        let cov_table_schedule = Arc::clone(&cov_table);
-        let cov_in_flight_schedule = Arc::clone(&cov_in_flight);
-        let notification_transactions_schedule = Arc::clone(&notification_transactions);
-        let comm_state_schedule = Arc::clone(&comm_state);
-        let schedule_config = config.clone();
-        let schedule_tick_task = Some(tokio::spawn(async move {
+        let schedule_fanout = cov_fanout.clone();
+        // The 60-second Schedule pass, and the work an application's own
+        // `add` or `remove` queued on the database (`crate::membership`).
+        let schedule_tick_task = Some(spawn_owned(audit_owner.clone(), move || async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
-                interval.tick().await;
-                let changes =
-                    crate::schedule::tick_schedules_with_life_safety_cov(&db_schedule, 0).await;
-                for change in changes {
-                    Self::fire_life_safety_cov_notifications(
-                        &db_schedule,
-                        &network_schedule,
-                        &cov_table_schedule,
-                        &cov_in_flight_schedule,
-                        &notification_transactions_schedule,
-                        &comm_state_schedule,
-                        &schedule_config,
-                        &change.object_identifier,
-                        &change.changed_properties,
-                    )
-                    .await;
-                }
+                let (db, cov_table) = (&schedule_fanout.db, &schedule_fanout.cov_table);
+                let committed = tokio::select! {
+                    _ = interval.tick() => {
+                        crate::schedule::tick_schedules_committed(db, cov_table).await
+                    }
+                    () = membership.notified() => {
+                        crate::membership::settle_committed(db, cov_table).await
+                    }
+                };
+                schedule_fanout.fire(&committed).await;
+                schedule_runner.start(committed.command_runs);
             }
         }));
 
@@ -598,123 +730,77 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // the EventNotification when the delay elapses. The per-write path
         // only *seeds* a pending transition (see `fire_event_notifications`);
         // this task is the sole confirmer, so repeated writes cannot shorten
-        // the delay (ASHRAE 135-2020 §13.2.4). Runs unconditionally like the
+        // the delay (ASHRAE 135-2020 Clause 13.3). Runs unconditionally like the
         // trend-log task — a no-pending tick is a cheap empty iteration.
         //
         // It is also what carries Reliability into event-state-detection. Per
         // Clause 13.2.2 the FAULT determination is a standing condition, so each
         // tick re-derives it from the object's current `Reliability` rather than
-        // reacting to a change event. That is why the fault detector above can
-        // keep merely *logging* its `ReliabilityChange` records: whoever writes
-        // Reliability — an object's opt-in evaluation hook, a local write, or a
-        // network write — reaches detection through this tick, and no route
-        // needs to notify anything. `enable_fault_detection` therefore governs
-        // only whether those object-owned hooks run every 10 seconds, never
-        // whether an existing Reliability is honored.
+        // reacting to a change event. Whoever writes Reliability — an object's
+        // opt-in evaluation hook, a local write, or a network write — reaches
+        // detection through this tick. The fault detector above only fans COV
+        // out for the Status_Flags change it causes (#889); it signals nothing
+        // to event detection. `enable_fault_detection` therefore governs only
+        // whether those object-owned hooks run every 10 seconds, never whether
+        // an existing Reliability is honored.
         //
         // Six of the nine wired object types have no route that can set
         // Reliability, so the fault path is correct but inert on them (#218).
-        let db_intrinsic = Arc::clone(&db);
-        let network_intrinsic = Arc::clone(&network);
-        let comm_state_intrinsic = Arc::clone(&comm_state);
-        let server_tsm_intrinsic = Arc::clone(&server_tsm);
-        let notification_transactions_intrinsic = Arc::clone(&notification_transactions);
-        let device_bindings_intrinsic = Arc::clone(&device_bindings);
-        let intrinsic_retry_ms = config.cov_retry_timeout_ms;
-        let intrinsic_reporting_task = Some(tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
-            // The countdown decrements exactly once per call, so a delayed wake
-            // must NOT burst-deliver missed ticks (each would decrement
-            // `remaining`, compressing the Time_Delay). `Delay` collapses a
-            // missed deadline into a single tick, preserving per-second
-            // granularity (ASHRAE 135-2020 §13.2.4).
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                interval.tick().await;
-                // DCC gates the outbound sender, not event-state detection or
-                // the local transition actions in Clause 13.2.2.1.4.
-                // Collect resolved transitions under a brief write lock, then
-                // drop it before sending (never hold the db lock across a
-                // network send — matches the per-write notification path).
-                //
-                // Event_Enable gates distribution only (Clause 12.12), so every
-                // built-in proposal is committed locally before a suppressed
-                // transition is omitted from the outbound work list. Legacy
-                // implementations already commit during their tick and bypass
-                // the atomic hook explicitly.
-                let fired = {
-                    let mut db = db_intrinsic.write().await;
-                    let mut out = Vec::new();
-                    for oid in db.list_objects() {
-                        let evaluated = db.get_mut(&oid).and_then(|object| {
-                            let requires_atomic_commit =
-                                object.intrinsic_reporting_requires_atomic_commit();
-                            object
-                                .tick_intrinsic_reporting()
-                                .map(|outcome| (requires_atomic_commit, outcome))
-                        });
-                        let resolved = evaluated.and_then(|(requires_atomic_commit, outcome)| {
-                            if requires_atomic_commit {
-                                Self::commit_intrinsic_transition(&mut db, &oid, outcome)
-                                    .map(ResolvedIntrinsicTransition::Committed)
-                            } else {
-                                Some(ResolvedIntrinsicTransition::Legacy(outcome))
-                            }
-                        });
-                        if let Some(resolved) = resolved {
-                            if resolved.distribute() && resolved.can_emit() {
-                                out.push((oid, resolved));
-                            }
-                        }
-                    }
-                    out
-                };
-                for (oid, resolved) in fired {
-                    Self::build_and_send_event_notification_with_bindings(
-                        &db_intrinsic,
-                        &network_intrinsic,
-                        &comm_state_intrinsic,
-                        &server_tsm_intrinsic,
-                        &notification_transactions_intrinsic,
-                        &device_bindings_intrinsic,
-                        &oid,
-                        resolved,
-                        intrinsic_retry_ms,
-                    )
-                    .await;
-                }
-            }
+        let intrinsic_reporting_task = Some(spawn_owned(audit_owner.clone(), || {
+            intrinsic::run(
+                cov_fanout.clone(),
+                Arc::clone(&learned_routers),
+                Arc::clone(&device_bindings),
+            )
+        }));
+
+        // Reports what changed while a confirmed report was outstanding, once
+        // it is acknowledged (#896).
+        let cov_revisit_task = Some(spawn_owned(audit_owner.clone(), || {
+            cov_fanout.clone().run_revisits()
         }));
 
         let binary_lighting_operation_task = Some(
             super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task(
-                Arc::clone(&db),
-                Arc::clone(&network),
-                Arc::clone(&cov_table),
-                Arc::clone(&cov_in_flight),
-                Arc::clone(&notification_transactions),
-                Arc::clone(&comm_state),
-                config.clone(),
-                monotonic_origin,
+                cov_fanout, monotonic,
             ),
         );
 
+        let broadcaster = super::broadcaster::BroadcasterState::new(
+            &network,
+            &request_tasks,
+            &config,
+            &db,
+            &comm_state,
+        );
         let server = Self {
+            target_audit,
             config,
+            discovery_limiter,
+            time_sync_limiter,
             _clock: clock,
-            network,
+            network: Some(network),
+            broadcaster,
+            transport_cleanup: None,
+            transport_cleanup_error: None,
+            network_number_task,
             db,
             cov_table,
+            cov_counters,
             seg_ack_senders,
             seg_send_permits,
             cov_in_flight,
-            server_tsm,
+            learned_routers,
             notification_transactions,
             confirmed_request_tracker,
             device_bindings,
             comm_state,
             dcc_timer,
+            dcc_outcomes,
+            event_suppressions,
+            mutation_decisions,
             dispatch_task: Some(dispatch_task),
+            request_tasks,
             cov_purge_task: Some(cov_purge_task),
             fault_detection_task,
             event_enrollment_task,
@@ -722,140 +808,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             schedule_tick_task,
             intrinsic_reporting_task,
             binary_lighting_operation_task,
+            cov_revisit_task,
             local_mac,
         };
-        let staging_oids = {
-            let database = server.db.read().await;
-            database.find_by_type(ObjectType::STAGING)
-        };
-        let staging_plans = {
-            let mut database = server.db.write().await;
-            Self::take_staging_plans(&mut database, &staging_oids)
-        };
-        Self::execute_staging_plans(
-            &server.db,
-            &server.network,
-            &server.cov_table,
-            &server.cov_in_flight,
-            &server.server_tsm,
-            &server.notification_transactions,
-            &server.device_bindings,
-            &server.comm_state,
-            &server.config,
-            staging_plans,
-        )
-        .await;
+        boxed(|| server.execute_initial_staging_plans()).await;
         Ok(server)
     }
-
-    /// Send a `'server' = TRUE` Abort back along the request's path.
-    ///
-    /// Every Abort this dispatch loop originates answers a client's request,
-    /// so the flag is always TRUE — it names the sender's role, not the
-    /// error (Clause 20.1.9.1: "TRUE when the Abort PDU is sent by a
-    /// server").
-    async fn send_server_abort(
-        network: &Arc<NetworkLayer<T>>,
-        source_mac: &MacAddr,
-        source_network: Option<&NpduAddress>,
-        invoke_id: u8,
-        abort_reason: AbortReason,
-    ) {
-        let abort_pdu = Apdu::Abort(AbortPdu {
-            sent_by_server: true,
-            invoke_id,
-            abort_reason,
-        });
-        let mut abort_buf = BytesMut::new();
-        encode_apdu(&mut abort_buf, &abort_pdu).expect("valid APDU encoding");
-        if let Err(e) =
-            Self::send_confirmed_response_apdu(network, &abort_buf, source_mac, source_network)
-                .await
-        {
-            warn!(error = %e, reason = abort_reason.to_raw(), "Failed to send Abort");
-        }
-    }
-
-    /// Get the server's local MAC address.
-    pub fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
-
-    /// Get a reference to the shared object database.
-    pub fn database(&self) -> &Arc<RwLock<ObjectDatabase>> {
-        &self.db
-    }
-
-    /// Create a cloneable handle for unsolicited I-Am announcements.
-    pub fn i_am_broadcaster(&self) -> IAmBroadcaster<T> {
-        IAmBroadcaster {
-            config: self.config.clone(),
-            network: Arc::clone(&self.network),
-            db: Arc::clone(&self.db),
-        }
-    }
-
-    /// Get the communication state per DeviceCommunicationControl.
-    ///
-    /// Returns 0 (Enable), 1 (Disable), or 2 (DisableInitiation).
-    pub fn comm_state(&self) -> u8 {
-        self.comm_state.load(Ordering::Acquire)
-    }
-
-    /// Generate a PICS document from the current object database and server configuration.
-    ///
-    /// The caller must supply a [`PicsConfig`] for fields not available from the server
-    /// (vendor name, model, firmware revision, etc.).
-    pub async fn generate_pics(&self, pics_config: &crate::pics::PicsConfig) -> crate::pics::Pics {
-        let db = self.db.read().await;
-        crate::pics::PicsGenerator::new(&db, &self.config, pics_config).generate()
-    }
-
-    /// Broadcast an I-Am for this server's Device object using the bound transport socket.
-    pub async fn broadcast_i_am(&self) -> Result<(), Error> {
-        broadcast_i_am_from(&self.config, &self.db, &self.network).await
-    }
-}
-
-impl<T: TransportPort + 'static> IAmBroadcaster<T> {
-    /// Broadcast an I-Am for this server's Device object using the bound transport socket.
-    pub async fn broadcast_i_am(&self) -> Result<(), Error> {
-        broadcast_i_am_from(&self.config, &self.db, &self.network).await
-    }
-}
-
-async fn broadcast_i_am_from<T: TransportPort + 'static>(
-    config: &ServerConfig,
-    db: &Arc<RwLock<ObjectDatabase>>,
-    network: &Arc<NetworkLayer<T>>,
-) -> Result<(), Error> {
-    let device_oid = {
-        let db = db.read().await;
-        db.list_objects()
-            .into_iter()
-            .find(|oid| oid.object_type() == ObjectType::DEVICE)
-            .ok_or_else(|| Error::Encoding("no Device object in database".into()))?
-    };
-
-    let i_am = IAmRequest {
-        object_identifier: device_oid,
-        max_apdu_length: config.max_apdu_length,
-        segmentation_supported: config.segmentation_supported,
-        vendor_id: config.vendor_id,
-    };
-
-    let mut service_buf = BytesMut::new();
-    i_am.encode(&mut service_buf);
-
-    let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-        service_choice: UnconfirmedServiceChoice::I_AM,
-        service_request: service_buf.freeze(),
-    });
-
-    let mut buf = BytesMut::new();
-    encode_apdu(&mut buf, &pdu)?;
-
-    network
-        .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
-        .await
 }

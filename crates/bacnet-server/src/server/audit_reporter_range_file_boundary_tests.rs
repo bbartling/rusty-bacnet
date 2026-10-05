@@ -1,0 +1,307 @@
+use super::*;
+use crate::server::test_transport::TestTransport;
+
+fn request(kind: Kind, data: Bytes, segmented: bool) -> ConfirmedRequestPdu {
+    ConfirmedRequestPdu {
+        segmented: false,
+        more_follows: false,
+        segmented_response_accepted: segmented,
+        max_segments: None,
+        max_apdu_length: 1476,
+        invoke_id: 77,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: kind.service(),
+        service_request: data,
+    }
+}
+
+async fn ingress(
+    server: &BACnetServer<TestTransport>,
+    req: ConfirmedRequestPdu,
+    reply_tx: Option<oneshot::Sender<Bytes>>,
+) {
+    BACnetServer::dispatch(
+        &server.test_dispatch_context(),
+        SOURCE,
+        Apdu::ConfirmedRequest(req),
+        bacnet_network::layer::ReceivedApdu {
+            direct_response: None,
+            apdu: Bytes::new(),
+            source_mac: MacAddr::from_slice(SOURCE),
+            ingress_network: None,
+            source_network: None,
+            link_layer_group: false,
+            is_group: false,
+            global_broadcast: false,
+            data_attributes: vec![],
+            provenance: bacnet_transport::port::TransportProvenance::unverified(),
+            reply_tx,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn audit_reporter_range_file_decode_and_budget_aborts_are_silent() {
+    for kind in [Kind::Range, Kind::Stream, Kind::Record] {
+        for case in ["decode", "bytes", "count"] {
+            // ReadRange's item cap is a successful page, not a Work abort.
+            if kind == Kind::Range && case == "count" {
+                continue;
+            }
+            let mut fixture = server(read_reporter()).await;
+            let reads = add_target(&fixture, kind, None, false).await;
+            let data = kind.request(1, 2);
+            let data = match case {
+                "decode" => data.slice(..data.len() - 1),
+                "bytes" => {
+                    fixture
+                        .server
+                        .config
+                        .read_range_budget
+                        .max_service_ack_bytes = 1;
+                    fixture
+                        .server
+                        .config
+                        .atomic_read_file_budget
+                        .max_service_ack_bytes = 1;
+                    data
+                }
+                "count" => {
+                    fixture
+                        .server
+                        .config
+                        .atomic_read_file_budget
+                        .max_requested_stream_octets = 1;
+                    fixture
+                        .server
+                        .config
+                        .atomic_read_file_budget
+                        .max_requested_records = 1;
+                    data
+                }
+                _ => unreachable!(),
+            };
+            let response = dispatch(&fixture.server, kind.service(), data).await;
+            match (case, response) {
+                ("decode", Apdu::Error(_) | Apdu::Reject(_)) => {}
+                ("bytes", Apdu::Abort(abort)) => {
+                    assert_eq!(abort.abort_reason, AbortReason::BUFFER_OVERFLOW)
+                }
+                ("count", Apdu::Abort(abort)) => {
+                    assert_eq!(abort.abort_reason, AbortReason::OUT_OF_RESOURCES)
+                }
+                (_, other) => panic!("{kind:?} {case}: {other:?}"),
+            }
+            settle().await;
+            assert_eq!(reads.load(Ordering::Acquire), usize::from(case == "bytes"));
+            assert!(records(&fixture).is_empty());
+            assert_idle(&fixture);
+            fixture.server.config.read_range_budget = ReadRangeBudget::default();
+            fixture.server.config.atomic_read_file_budget = AtomicReadFileBudget::default();
+            assert!(matches!(
+                dispatch(&fixture.server, kind.service(), kind.request(1, 1)).await,
+                Apdu::ComplexAck(_)
+            ));
+            settle().await;
+            assert_eq!(
+                records(&fixture),
+                vec![kind.expected(78, None)],
+                "failed requests consume no timestamp"
+            );
+            fixture.server.stop().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn audit_reporter_range_file_duplicate_and_overload_are_silent_disable_initiation_is_audited()
+{
+    use crate::server::{request_admission::Class, request_peer::canonical_requester};
+    for kind in [Kind::Range, Kind::Stream, Kind::Record] {
+        for case in ["disable initiation", "duplicate", "overload"] {
+            let mut fixture = server(read_reporter()).await;
+            let reads = add_target(&fixture, kind, None, false).await;
+            let req = request(kind, kind.request(1, 1), false);
+            let pending = if case == "duplicate" {
+                let ConfirmedRequestAdmission::New(pending) =
+                    fixture.server.confirmed_request_tracker.begin(
+                        SOURCE,
+                        None,
+                        bacnet_transport::port::TransportProvenance::unverified(),
+                        req.clone(),
+                    )
+                else {
+                    panic!("first admission")
+                };
+                Some(pending)
+            } else {
+                None
+            };
+            if case == "disable initiation" {
+                fixture
+                    .server
+                    .comm_state
+                    .set_for_test(DccState::DisableInitiation);
+            }
+            if case == "overload" {
+                for _ in 0..fixture
+                    .server
+                    .config
+                    .request_admission_policy
+                    .max_confirmed_in_flight_per_peer
+                {
+                    fixture
+                        .server
+                        .request_tasks
+                        .try_spawn(
+                            Class::Confirmed,
+                            canonical_requester(SOURCE, None),
+                            std::future::pending::<()>,
+                        )
+                        .unwrap();
+                }
+            }
+            let (tx, rx) = oneshot::channel();
+            ingress(&fixture.server, req, Some(tx)).await;
+            let response = tokio::time::timeout(Duration::from_secs(1), rx)
+                .await
+                .unwrap()
+                .ok()
+                .map(|bytes| decode_apdu(decode_npdu(bytes).unwrap().payload).unwrap());
+            match case {
+                "overload" => assert!(
+                    matches!(response, Some(Apdu::Abort(abort)) if abort.abort_reason == AbortReason::OUT_OF_RESOURCES)
+                ),
+                "disable initiation" => assert!(matches!(response, Some(Apdu::ComplexAck(_)))),
+                _ => assert!(response.is_none()),
+            }
+            settle().await;
+            assert_eq!(
+                reads.load(Ordering::Acquire),
+                usize::from(case == "disable initiation")
+            );
+            // Only the read DISABLE_INITIATION lets run is audited (Clause 16.1).
+            let records = records(&fixture);
+            assert_eq!(
+                records.len(),
+                usize::from(case == "disable initiation"),
+                "{kind:?} {case}"
+            );
+            for record in &records {
+                assert_eq!(record.operation, AuditOperation::READ, "{kind:?}");
+                assert_eq!(record.target_object, Some(kind.target()), "{kind:?}");
+            }
+            assert_idle(&fixture);
+            if let Some(pending) = pending {
+                drop(pending);
+            }
+            fixture.server.stop().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn audit_reporter_range_file_guard_release_precedes_admission_not_delivery() {
+    for kind in [Kind::Range, Kind::Stream, Kind::Record] {
+        let mut fixture = server(read_reporter()).await;
+        let reads = add_target(&fixture, kind, None, false).await;
+        fixture.transport.block.store(true, Ordering::Release);
+        let held_read = fixture.server.db.read().await;
+        {
+            let response = dispatch(&fixture.server, kind.service(), kind.request(1, 1));
+            tokio::pin!(response);
+            assert!(futures_util::poll!(&mut response).is_pending());
+            assert_eq!(reads.load(Ordering::Acquire), 1);
+            assert!(records(&fixture).is_empty());
+            assert_idle(&fixture);
+            drop(held_read);
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), response)
+                    .await
+                    .unwrap(),
+                Apdu::ComplexAck(_)
+            ));
+        }
+        settle().await;
+        assert_eq!(records(&fixture), vec![kind.expected(77, None)]);
+        assert!(fixture.server.db.try_write().is_ok());
+        fixture.server.stop().await.unwrap();
+        assert_idle(&fixture);
+    }
+}
+
+#[tokio::test]
+async fn audit_reporter_range_file_segmented_response_and_divergence_are_silent() {
+    for kind in [Kind::Range, Kind::Stream] {
+        for segmented in [false, true] {
+            let mut fixture = server(read_reporter()).await;
+            let reads = add_target(&fixture, kind, None, true).await;
+            fixture.server.config.segmentation_supported = Segmentation::BOTH;
+            let (tx, rx) = oneshot::channel();
+            ingress(
+                &fixture.server,
+                request(
+                    kind,
+                    kind.request(if kind == Kind::Range { 1 } else { 0 }, 2000),
+                    segmented,
+                ),
+                Some(tx),
+            )
+            .await;
+            let reply = tokio::time::timeout(Duration::from_secs(1), rx)
+                .await
+                .unwrap();
+            settle().await;
+            if kind == Kind::Range && !segmented {
+                // Range reduces its page byte cap before execution; a single
+                // oversized item cannot produce a page, so this is a Bytes abort.
+                let response = decode_apdu(decode_npdu(reply.unwrap()).unwrap().payload).unwrap();
+                assert!(
+                    matches!(response, Apdu::Abort(abort) if abort.abort_reason == AbortReason::BUFFER_OVERFLOW)
+                );
+            } else {
+                assert!(reply.is_err());
+                let responses = fixture.transport.responses.lock().unwrap();
+                assert!(!responses.is_empty());
+                let first =
+                    decode_apdu(decode_npdu(responses[0].clone()).unwrap().payload).unwrap();
+                if segmented {
+                    assert!(matches!(first, Apdu::ComplexAck(ack) if ack.segmented));
+                } else {
+                    assert!(
+                        matches!(first, Apdu::Abort(abort) if abort.abort_reason == AbortReason::SEGMENTATION_NOT_SUPPORTED)
+                    );
+                }
+            }
+            assert_eq!(reads.load(Ordering::Acquire), 1);
+            assert!(records(&fixture).is_empty());
+            assert_idle(&fixture);
+            fixture.server.stop().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn audit_reporter_range_file_response_send_failure_keeps_admitted_record() {
+    for kind in [Kind::Range, Kind::Stream, Kind::Record] {
+        let mut fixture = server(read_reporter()).await;
+        add_target(&fixture, kind, None, false).await;
+        fixture
+            .transport
+            .fail_response
+            .store(true, Ordering::Release);
+        ingress(
+            &fixture.server,
+            request(kind, kind.request(1, 1), false),
+            None,
+        )
+        .await;
+        settle().await;
+        assert_eq!(fixture.transport.responses.lock().unwrap().len(), 1);
+        assert_eq!(records(&fixture), vec![kind.expected(77, None)]);
+        assert_idle(&fixture);
+        fixture.server.stop().await.unwrap();
+    }
+}

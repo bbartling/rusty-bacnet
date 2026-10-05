@@ -1,5 +1,6 @@
 use super::*;
-use bacnet_types::enums::Segmentation;
+use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
+use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Resolve a device instance to its MAC address and optional routing info.
@@ -30,95 +31,65 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     // -----------------------------------------------------------------------
-    // Multi-device batch operations
+    // Discovery
     // -----------------------------------------------------------------------
 
-    /// Read a property from multiple discovered devices concurrently.
-    ///
-    /// All requests are dispatched concurrently (up to `max_concurrent`,
-    /// default 32) and results are returned in completion order. Each device
-    /// is resolved from the device table and auto-routed if behind a router.
     /// Send a WhoIs broadcast to discover devices.
-    pub async fn who_is(
-        &self,
-        low_limit: Option<u32>,
-        high_limit: Option<u32>,
-    ) -> Result<(), Error> {
-        use bacnet_services::who_is::WhoIsRequest;
-
-        let request = WhoIsRequest {
-            low_limit,
-            high_limit,
-        };
+    ///
+    /// `range` limits the devices that answer to those whose instance lies
+    /// in it; `None` asks every device. A [`DeviceInstanceRange`] holds both
+    /// limits, low no greater than high, so the request can't carry one
+    /// alone (Clause 16.10, #1483).
+    pub async fn who_is(&self, range: Option<DeviceInstanceRange>) -> Result<(), Error> {
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        WhoIsRequest { range }.encode(&mut buf);
 
         self.broadcast_global_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf)
             .await
     }
 
-    /// Send a directed (unicast) WhoIs to a specific device.
+    /// Send a directed (unicast) WhoIs to a specific device, with the same
+    /// `range` as [`Self::who_is`].
     pub async fn who_is_directed(
         &self,
         destination_mac: &[u8],
-        low_limit: Option<u32>,
-        high_limit: Option<u32>,
+        range: Option<DeviceInstanceRange>,
     ) -> Result<(), Error> {
-        use bacnet_services::who_is::WhoIsRequest;
-
-        let request = WhoIsRequest {
-            low_limit,
-            high_limit,
-        };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        WhoIsRequest { range }.encode(&mut buf);
 
         self.unconfirmed_request(destination_mac, UnconfirmedServiceChoice::WHO_IS, &buf)
             .await
     }
 
-    /// Send a WhoIs broadcast to a specific remote network.
+    /// Send a WhoIs broadcast to a specific remote network, with the same
+    /// `range` as [`Self::who_is`].
     pub async fn who_is_network(
         &self,
         dest_network: u16,
-        low_limit: Option<u32>,
-        high_limit: Option<u32>,
+        range: Option<DeviceInstanceRange>,
     ) -> Result<(), Error> {
-        use bacnet_services::who_is::WhoIsRequest;
-
-        let request = WhoIsRequest {
-            low_limit,
-            high_limit,
-        };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        WhoIsRequest { range }.encode(&mut buf);
 
         self.broadcast_network_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf, dest_network)
             .await
     }
 
-    /// Send a WhoHas broadcast to find an object by identifier or name.
+    /// Send a WhoHas broadcast to find an object by identifier or name, asking
+    /// the devices in `range`, or every device for `None` (Clause 16.9, #1483).
     pub async fn who_has(
         &self,
-        object: bacnet_services::who_has::WhoHasObject,
-        low_limit: Option<u32>,
-        high_limit: Option<u32>,
+        object: WhoHasObject,
+        range: Option<DeviceInstanceRange>,
     ) -> Result<(), Error> {
-        use bacnet_services::who_has::WhoHasRequest;
-
-        let request = WhoHasRequest {
-            low_limit,
-            high_limit,
-            object,
-        };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
+        WhoHasRequest { range, object }.encode(&mut buf)?;
 
         self.broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_HAS, &buf)
             .await
     }
 
-    /// Subscribe to COV notifications for an object on a remote device.
     /// Get a snapshot of all discovered devices.
     pub async fn discovered_devices(&self) -> Vec<DiscoveredDevice> {
         self.device_table.lock().await.all()
@@ -180,7 +151,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Malformed routing metadata is rejected deliberately: an empty
     /// `router_mac` or `remote_mac` cannot identify a next hop or a peer, so
     /// such a registration returns [`Error::Encoding`] and the table is left
-    /// unchanged (an empty SADR could never satisfy a routed lookup).
+    /// unchanged (an empty SADR could never satisfy a routed lookup). A
+    /// `remote_network` outside 1..=65534 or a `remote_mac` longer than
+    /// [`NpduAddress::MAX_MAC_LEN`] is refused the same way, since
+    /// [`BACnetClient::confirmed_request_routed`] refuses that destination.
     pub async fn add_routed_device(&self, config: RoutedDeviceConfig) -> Result<(), Error> {
         if config.router_mac.is_empty() {
             return Err(Error::Encoding(
@@ -192,6 +166,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 "remote_mac must not be empty: it is half of the routed peer's identity".into(),
             ));
         }
+        check_routed_unicast(config.remote_network, config.remote_mac.len())?;
         let oid = bacnet_types::primitives::ObjectIdentifier::new(
             bacnet_types::enums::ObjectType::DEVICE,
             config.instance,

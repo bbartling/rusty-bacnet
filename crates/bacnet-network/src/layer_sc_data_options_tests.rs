@@ -15,7 +15,7 @@ async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&[0x33; 16]);
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 
@@ -37,7 +37,8 @@ async fn sc_hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 async fn sc_data_options_reach_received_apdu_data_attributes() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let hub_vmac = [0x10; 6];
-    let mut net = NetworkLayer::new(ScTransport::new(ws_client, [0x01; 6]));
+    let mut net =
+        NetworkLayer::new(ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]));
 
     let hub_accept_task = tokio::spawn(async move {
         sc_hub_accept(&ws_hub, hub_vmac).await;

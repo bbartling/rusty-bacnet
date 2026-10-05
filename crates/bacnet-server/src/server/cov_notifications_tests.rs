@@ -1,58 +1,25 @@
 use super::cov_clock::cov_multiple_datetime;
 use super::*;
+use crate::server::test_transport::{SendLog, SendMode, TestTransport, BIP_LOCAL_MAC};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
+use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationValue};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{Date, Time};
 use bytes::Bytes;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
+use std::sync::Arc as StdArc;
 
-#[derive(Clone, Default)]
-pub(super) struct RecordingTransport {
-    sent_unicast: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>,
-    local_mac: Vec<u8>,
-}
-
-impl RecordingTransport {
-    pub(super) fn new(sent_unicast: StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>) -> Self {
-        Self {
-            sent_unicast,
-            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-        }
-    }
-}
-
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sent_unicast
-            .lock()
-            .unwrap()
-            .push((Bytes::copy_from_slice(npdu), MacAddr::from_slice(mac)));
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
+/// Records unicasts and ignores broadcasts, from a B/IP-shaped local MAC.
+pub(super) fn recording_transport() -> (TestTransport, SendLog) {
+    let transport = TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .broadcast(SendMode::Ignore)
+        .build();
+    let sent = transport.sent();
+    (transport, sent)
 }
 
 fn sample_cov_multiple_notification() -> COVNotificationMultipleRequest {
@@ -158,8 +125,8 @@ fn cov_multiple_timestamp_uses_device_local_bacnet_date_and_time() {
 
 #[tokio::test]
 async fn routed_cov_send_preserves_npdu_destination() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = NetworkLayer::new(RecordingTransport::new(StdArc::clone(&sent)));
+    let (transport, sent) = recording_transport();
+    let network = NetworkLayer::new(transport);
     let router_mac = MacAddr::from_slice(&[192, 168, 1, 1, 0xBA, 0xC0]);
     let remote = NpduAddress {
         network: 100,
@@ -172,7 +139,7 @@ async fn routed_cov_send_preserves_npdu_destination() {
         monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
         issue_confirmed_notifications: true,
         expires_at: None,
-        last_notified_value: None,
+        last_notified_observation: None,
         monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
         monitored_property_array_index: None,
         cov_increment: None,
@@ -181,14 +148,14 @@ async fn routed_cov_send_preserves_npdu_destination() {
     };
     let apdu = [0x10, 0x02, 0xAA, 0xBB];
 
-    BACnetServer::<RecordingTransport>::send_cov_apdu(&network, &apdu, &sub, true)
+    BACnetServer::<TestTransport>::send_cov_apdu(&network, &apdu, &sub, true)
         .await
         .unwrap();
 
-    let sent = sent.lock().unwrap();
+    let sent = sent.lock();
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].1, router_mac);
-    let npdu = decode_npdu(sent[0].0.clone()).unwrap();
+    assert_eq!(sent[0].mac, router_mac);
+    let npdu = decode_npdu(sent[0].npdu.clone()).unwrap();
     assert_eq!(npdu.destination, Some(remote));
     assert!(npdu.expecting_reply);
     assert_eq!(npdu.payload, Bytes::copy_from_slice(&apdu));
@@ -196,11 +163,9 @@ async fn routed_cov_send_preserves_npdu_destination() {
 
 #[tokio::test]
 async fn routed_segmented_complex_ack_preserves_npdu_destination() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
+    let (transport, sent) = recording_transport();
+    let network = Arc::new(NetworkLayer::new(transport));
+    let seg_ack_senders = Arc::new(segmented_send::SegmentedSendRegistry::default());
     let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
     let router_mac = MacAddr::from_slice(&[192, 168, 1, 1, 0xBA, 0xC0]);
     let remote = NpduAddress {
@@ -216,16 +181,24 @@ async fn routed_segmented_complex_ack_preserves_npdu_destination() {
         let remote = remote.clone();
         let router_mac = router_mac.clone();
         tokio::spawn(async move {
-            BACnetServer::<RecordingTransport>::send_segmented_complex_ack(
-                &network,
-                &seg_ack_senders,
-                &seg_send_permits,
-                router_mac.as_slice(),
-                Some(&remote),
-                0x44,
-                ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+            BACnetServer::<TestTransport>::send_segmented_complex_ack(
+                SegmentedSendResources {
+                    network: &network,
+                    seg_ack_senders: &seg_ack_senders,
+                    seg_send_permits: &seg_send_permits,
+                },
+                ResponseTarget {
+                    source_mac: router_mac.as_slice(),
+                    source_network: Some(&remote),
+                    route: &bacnet_network::response_route::ResponseRoute::unverified(),
+                },
+                ComplexAckParams {
+                    invoke_id: 0x44,
+                    service_choice: ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
+                    client_max_apdu: 50,
+                    client_max_segments: None,
+                },
                 &service_ack_data,
-                50,
                 None,
             )
             .await;
@@ -234,7 +207,7 @@ async fn routed_segmented_complex_ack_preserves_npdu_destination() {
 
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
-            if !sent.lock().unwrap().is_empty() {
+            if !sent.is_empty() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -246,10 +219,10 @@ async fn routed_segmented_complex_ack_preserves_npdu_destination() {
     handle.abort();
     let _ = handle.await;
 
-    let sent = sent.lock().unwrap();
+    let sent = sent.lock();
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].1, router_mac);
-    let npdu = decode_npdu(sent[0].0.clone()).unwrap();
+    assert_eq!(sent[0].mac, router_mac);
+    let npdu = decode_npdu(sent[0].npdu.clone()).unwrap();
     assert_eq!(npdu.destination, Some(remote));
     assert!(npdu.expecting_reply);
     match decode_apdu(npdu.payload).unwrap() {
@@ -267,10 +240,8 @@ async fn routed_segmented_complex_ack_preserves_npdu_destination() {
 
 #[tokio::test]
 async fn cov_property_multiple_subscription_uses_multiple_notification_on_change() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let (transport, sent) = recording_transport();
+    let network = Arc::new(NetworkLayer::new(transport));
 
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
@@ -291,37 +262,45 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
     {
         let mut table = cov_table.write().await;
-        table.subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
-            subscriber_network: None,
-            subscriber_process_identifier: 7,
-            monitored_object_identifier: ao_oid,
-            issue_confirmed_notifications: false,
-            expires_at: None,
-            last_notified_value: None,
-            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: CovNotificationKind::Multiple,
-            timestamped: false,
-        });
+        // A Multiple context always has a finite lifetime.
+        table
+            .admit_for_test(
+                CovSubscription {
+                    subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
+                    subscriber_network: None,
+                    subscriber_process_identifier: 7,
+                    monitored_object_identifier: ao_oid,
+                    issue_confirmed_notifications: false,
+                    expires_at: Some(Instant::now() + Duration::from_secs(300)),
+                    last_notified_observation: None,
+                    monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                    monitored_property_array_index: None,
+                    cov_increment: None,
+                    notification_kind: CovNotificationKind::Multiple,
+                    timestamped: false,
+                },
+                10,
+            )
+            .unwrap();
     }
 
-    BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &Arc::new(Semaphore::new(255)),
-        &NotificationTransactions::new(),
-        &Arc::new(AtomicU8::new(0)),
-        &ServerConfig::default(),
+    BACnetServer::<TestTransport>::fire_cov_notifications(
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &Arc::new(Semaphore::new(255)),
+            notification_transactions: &NotificationTransactions::new(),
+            comm_state: &Arc::new(CommState::default()),
+            config: &ServerConfig::default(),
+        },
         &ao_oid,
     )
     .await;
 
-    let sent = sent.lock().unwrap();
+    let sent = sent.lock();
     assert_eq!(sent.len(), 1);
-    let npdu = decode_npdu(sent[0].0.clone()).unwrap();
+    let npdu = decode_npdu(sent[0].npdu.clone()).unwrap();
     match decode_apdu(npdu.payload).unwrap() {
         Apdu::UnconfirmedRequest(req) => {
             assert_eq!(
@@ -330,7 +309,7 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
             );
             let notification =
                 COVNotificationMultipleRequest::decode(&req.service_request).unwrap();
-            assert_eq!(notification.time_remaining, 0);
+            assert!((299..=300).contains(&notification.time_remaining));
             assert_eq!(notification.timestamp, None);
             assert_eq!(
                 notification.list_of_cov_notifications[0].list_of_values[0].time_of_change,
@@ -372,10 +351,8 @@ async fn capture_timestamped_cov_multiple(
     clock_frame: Option<ClockFrame>,
     include_untimestamped: bool,
 ) -> Vec<COVNotificationMultipleRequest> {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let (transport, sent) = recording_transport();
+    let network = Arc::new(NetworkLayer::new(transport));
 
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
@@ -398,54 +375,66 @@ async fn capture_timestamped_cov_multiple(
     let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
     {
         let mut table = cov_table.write().await;
-        table.subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
-            subscriber_network: None,
-            subscriber_process_identifier: 7,
-            monitored_object_identifier: ao_oid,
-            issue_confirmed_notifications: false,
-            expires_at: Some(Instant::now() + Duration::from_secs(300)),
-            last_notified_value: None,
-            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: CovNotificationKind::Multiple,
-            timestamped: true,
-        });
+        table
+            .admit_for_test(
+                CovSubscription {
+                    subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
+                    subscriber_network: None,
+                    subscriber_process_identifier: 7,
+                    monitored_object_identifier: ao_oid,
+                    issue_confirmed_notifications: false,
+                    expires_at: Some(Instant::now() + Duration::from_secs(300)),
+                    last_notified_observation: None,
+                    monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                    monitored_property_array_index: None,
+                    cov_increment: None,
+                    notification_kind: CovNotificationKind::Multiple,
+                    timestamped: true,
+                },
+                10,
+            )
+            .unwrap();
         if include_untimestamped {
-            table.subscribe(CovSubscription {
-                subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
-                subscriber_network: None,
-                subscriber_process_identifier: 7,
-                monitored_object_identifier: ao_oid,
-                issue_confirmed_notifications: false,
-                expires_at: Some(Instant::now() + Duration::from_secs(300)),
-                last_notified_value: None,
-                monitored_property: Some(PropertyIdentifier::STATUS_FLAGS),
-                monitored_property_array_index: None,
-                cov_increment: None,
-                notification_kind: CovNotificationKind::Multiple,
-                timestamped: false,
-            });
+            table
+                .admit_for_test(
+                    CovSubscription {
+                        subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC1]),
+                        subscriber_network: None,
+                        subscriber_process_identifier: 7,
+                        monitored_object_identifier: ao_oid,
+                        issue_confirmed_notifications: false,
+                        expires_at: Some(Instant::now() + Duration::from_secs(300)),
+                        last_notified_observation: None,
+                        monitored_property: Some(PropertyIdentifier::STATUS_FLAGS),
+                        monitored_property_array_index: None,
+                        cov_increment: None,
+                        notification_kind: CovNotificationKind::Multiple,
+                        timestamped: false,
+                    },
+                    10,
+                )
+                .unwrap();
         }
     }
 
-    BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &Arc::new(Semaphore::new(255)),
-        &NotificationTransactions::new(),
-        &Arc::new(AtomicU8::new(0)),
-        &ServerConfig::default(),
+    BACnetServer::<TestTransport>::fire_cov_notifications(
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &Arc::new(Semaphore::new(255)),
+            notification_transactions: &NotificationTransactions::new(),
+            comm_state: &Arc::new(CommState::default()),
+            config: &ServerConfig::default(),
+        },
         &ao_oid,
     )
     .await;
 
-    let sent = sent.lock().unwrap();
+    let sent = sent.lock();
     sent.iter()
-        .map(|(frame, _)| {
-            let npdu = decode_npdu(frame.clone()).unwrap();
+        .map(|frame| {
+            let npdu = decode_npdu(frame.npdu.clone()).unwrap();
             let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
                 panic!("expected unconfirmed COVNotificationMultiple");
             };
@@ -490,10 +479,8 @@ async fn clockless_legacy_timestamped_cov_multiple_fails_closed() {
 
 #[tokio::test(start_paused = true)]
 async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let network = Arc::new(NetworkLayer::new(RecordingTransport::new(StdArc::clone(
-        &sent,
-    ))));
+    let (transport, sent) = recording_transport();
+    let network = Arc::new(NetworkLayer::new(transport));
     let transactions = NotificationTransactions::new();
     let ao_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
@@ -520,55 +507,68 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
             (single_mac.clone(), 7, CovNotificationKind::Single),
             (multiple_mac.clone(), 8, CovNotificationKind::Multiple),
         ] {
-            table.subscribe(CovSubscription {
-                subscriber_mac,
-                subscriber_network: None,
-                subscriber_process_identifier: process_id,
-                monitored_object_identifier: ao_oid,
-                issue_confirmed_notifications: true,
-                expires_at: None,
-                last_notified_value: None,
-                monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-                monitored_property_array_index: None,
-                cov_increment: None,
-                notification_kind,
-                timestamped: false,
-            });
+            table
+                .admit_for_test(
+                    CovSubscription {
+                        subscriber_mac,
+                        subscriber_network: None,
+                        subscriber_process_identifier: process_id,
+                        monitored_object_identifier: ao_oid,
+                        issue_confirmed_notifications: true,
+                        // A Multiple context always has a finite lifetime.
+                        expires_at: (notification_kind == CovNotificationKind::Multiple)
+                            .then(|| Instant::now() + Duration::from_secs(3600)),
+                        last_notified_observation: None,
+                        monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+                        monitored_property_array_index: None,
+                        cov_increment: None,
+                        notification_kind,
+                        timestamped: false,
+                    },
+                    0,
+                )
+                .unwrap();
         }
     }
     let config = ServerConfig {
         cov_retry_timeout_ms: 100,
+        max_apdu_length: 1474,
         ..ServerConfig::default()
     };
 
-    BACnetServer::<RecordingTransport>::fire_cov_notifications(
-        &db,
-        &network,
-        &cov_table,
-        &Arc::new(Semaphore::new(255)),
-        &transactions,
-        &Arc::new(AtomicU8::new(0)),
-        &config,
+    BACnetServer::<TestTransport>::fire_cov_notifications(
+        &crate::server::cov_notify_context::CovNotifyContext {
+            db: &db,
+            network: &network,
+            cov_table: &cov_table,
+            cov_in_flight: &Arc::new(Semaphore::new(255)),
+            notification_transactions: &transactions,
+            comm_state: &Arc::new(CommState::default()),
+            config: &config,
+        },
         &ao_oid,
     )
     .await;
     for _ in 0..32 {
-        if sent.lock().unwrap().len() >= 2 {
+        if sent.len() >= 2 {
             break;
         }
         tokio::task::yield_now().await;
     }
-    assert_eq!(sent.lock().unwrap().len(), 2);
+    assert_eq!(sent.len(), 2);
 
     let initial: Vec<(ConfirmedServiceChoice, u8)> = sent
         .lock()
-        .unwrap()
         .iter()
-        .map(|(frame, _)| {
-            let npdu = decode_npdu(frame.clone()).unwrap();
+        .map(|frame| {
+            let npdu = decode_npdu(frame.npdu.clone()).unwrap();
             let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
                 panic!("expected confirmed COV notification");
             };
+            assert_eq!(
+                request.max_apdu_length, 1024,
+                "raw1474 floors in both COV headers"
+            );
             (request.service_choice, request.invoke_id)
         })
         .collect();
@@ -578,22 +578,25 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
 
     tokio::time::advance(Duration::from_millis(101)).await;
     for _ in 0..32 {
-        if sent.lock().unwrap().len() >= 4 {
+        if sent.len() >= 4 {
             break;
         }
         tokio::task::yield_now().await;
     }
-    assert_eq!(sent.lock().unwrap().len(), 4);
+    assert_eq!(sent.len(), 4);
     let retries: Vec<(ConfirmedServiceChoice, u8)> = sent
         .lock()
-        .unwrap()
         .iter()
         .skip(2)
-        .map(|(frame, _)| {
-            let npdu = decode_npdu(frame.clone()).unwrap();
+        .map(|frame| {
+            let npdu = decode_npdu(frame.npdu.clone()).unwrap();
             let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
                 panic!("expected confirmed COV retry");
             };
+            assert_eq!(
+                request.max_apdu_length, 1024,
+                "raw1474 floors in both COV headers"
+            );
             (request.service_choice, request.invoke_id)
         })
         .collect();
@@ -610,6 +613,7 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
         };
         assert!(transactions.admit_terminal(
             source,
+            None,
             None,
             &Apdu::SimpleAck(SimpleAck {
                 invoke_id,

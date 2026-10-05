@@ -392,7 +392,8 @@ fn poll_timeout_sole_master() {
 fn mstp_max_apdu_length() {
     let (s1, _s2) = LoopbackSerial::pair();
     let transport = MstpTransport::new(s1, MstpConfig::default());
-    assert_eq!(transport.max_apdu_length(), 480);
+    assert_eq!(transport.egress_apdu_limit(), 480);
+    assert_eq!(transport.local_receive_apdu_capacity(), 480);
 }
 
 #[test]

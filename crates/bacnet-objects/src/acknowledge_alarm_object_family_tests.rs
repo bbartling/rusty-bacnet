@@ -2,6 +2,7 @@ use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
@@ -42,14 +43,14 @@ fn snapshot(object: &dyn BACnetObject) -> EventSnapshot {
     }
 }
 
-fn acked_transitions(object: &dyn BACnetObject) -> u8 {
+fn acked_transitions(object: &dyn BACnetObject) -> EventTransitionBits {
     let PropertyValue::BitString { data, .. } = object
         .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
         .unwrap()
     else {
         panic!("Acked_Transitions must be a bit string");
     };
-    bacnet_types::bitstring::unpack_octet(&data, 3)
+    EventTransitionBits::from_bacnet(&data)
 }
 
 fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
@@ -89,7 +90,11 @@ fn binary_and_multistate_families_require_exact_idempotent_correlation() {
             })
             .unwrap();
 
-        assert_eq!(acked_transitions(&*object), 0b110, "{object_name}");
+        assert_eq!(
+            acked_transitions(&*object),
+            EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL,
+            "{object_name}"
+        );
         let before = snapshot(&*object);
 
         let state_error = object
@@ -121,7 +126,11 @@ fn binary_and_multistate_families_require_exact_idempotent_correlation() {
         object
             .acknowledge_alarm_correlated_internal(EventState::OFFNORMAL, &stamp)
             .unwrap();
-        assert_eq!(acked_transitions(&*object), 0b111, "{object_name}");
+        assert_eq!(
+            acked_transitions(&*object),
+            EventTransitionBits::all(),
+            "{object_name}"
+        );
         let after = snapshot(&*object);
         assert_eq!(after.event_state, before.event_state, "{object_name}");
         assert_eq!(after.time_stamps, before.time_stamps, "{object_name}");

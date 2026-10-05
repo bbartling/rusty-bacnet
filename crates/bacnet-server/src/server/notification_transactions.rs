@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::future::Future;
+use std::future::{poll_fn, Future};
 use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
 
 use bacnet_encoding::apdu::Apdu;
 use bacnet_encoding::npdu::NpduAddress;
@@ -9,14 +10,30 @@ use bacnet_endpoint_core::coordinator::{
     Admission, AdmissionKind, AdmissionOutcome, CanonicalPeer, LeaseMetadata, LeaseOwner,
     LeaseToken, OutboundTransactionCoordinator, ReserveError,
 };
+use bacnet_objects::audit::AuditReporterStatus;
 use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::error::Error;
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 use tokio::sync::oneshot;
-use tokio::time::Duration;
+use tokio::task::{JoinError, JoinSet};
 
-use super::CovAckResult;
+use super::event_recipient_route::ConfirmedRecipientRoute;
+use super::{CommState, CovAckResult, Refusal};
+
+#[path = "notification_attempts.rs"]
+mod attempts;
+pub use attempts::run_notification_worker;
+pub(super) use attempts::{
+    run_attempts, run_notification_under_dcc, Attempt, AttemptsEnd, InitiationRestricted,
+};
+
+#[cfg(test)]
+#[path = "notification_worker_owner_tests.rs"]
+mod notification_worker_owner_tests;
 
 #[derive(Debug)]
-pub(super) enum NotificationReserveError {
+#[doc(hidden)]
+pub enum NotificationReserveError {
     Closed,
     Coordinator(ReserveError),
     StatePoisoned,
@@ -35,9 +52,11 @@ impl fmt::Display for NotificationReserveError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NotificationWorkerResult {
+#[doc(hidden)]
+pub enum NotificationWorkerResult {
     Ack,
-    Error,
+    /// The peer's Error, Reject or Abort, with what it said.
+    Error(Refusal),
     Exhausted,
     Closed,
 }
@@ -47,35 +66,400 @@ struct NotificationState {
     pending: HashMap<LeaseToken, oneshot::Sender<CovAckResult>>,
 }
 
-pub(super) struct NotificationTransactions {
+#[doc(hidden)]
+pub struct NotificationTransactions {
+    pub(super) audit_batch:
+        std::sync::OnceLock<std::sync::Weak<super::audit_batch_queue::AuditBatchQueue>>,
+    pub(super) application_sealed: std::sync::atomic::AtomicBool,
+    pub(super) audit_routes: std::sync::OnceLock<Arc<super::audit_recipient_routes::AuditRoutes>>,
+    core: Arc<NotificationCore>,
+    workers: Mutex<NotificationWorkers>,
+    audit_permits: Arc<tokio::sync::Semaphore>,
+    pub(super) audit_association:
+        std::sync::OnceLock<Arc<bacnet_objects::audit::TargetAuditAssociation>>,
+    audit_failures: std::sync::OnceLock<Vec<ReporterFailureQueue>>,
+    /// Where the requests the server's runs make in other devices wait, so
+    /// they take a bounded share of the invoke IDs leased here.
+    run_slots: crate::command_lists::RemoteSlots,
+    /// Event notifications waiting for their Device recipient's I-Am, one
+    /// queue per device, each drained by a task in this set (#1368).
+    pub(super) awaiting_recipients: Mutex<super::event_send::AwaitingRecipients>,
+}
+
+type ReporterFailureQueue = (
+    Arc<AuditReporterStatus>,
+    AuditFailureQueue<Arc<ConfirmedRecipientRoute>>,
+);
+
+#[derive(Default)]
+struct NotificationWorkers {
+    audit_owner: Option<std::sync::Weak<bacnet_objects::database::AuditOwnership>>,
+    closed: bool,
+    tasks: JoinSet<()>,
+    waiter: Option<Waker>,
+}
+
+struct AuditWorkerWake(Option<std::sync::Weak<super::audit_batch_queue::AuditBatchQueue>>);
+impl Drop for AuditWorkerWake {
+    fn drop(&mut self) {
+        if let Some(queue) = self.0.as_ref().and_then(std::sync::Weak::upgrade) {
+            queue.changed.notify_one();
+        }
+    }
+}
+
+// Operations retain transaction state, never the owner of their JoinSet.
+struct NotificationCore {
     coordinator: Arc<OutboundTransactionCoordinator>,
     state: Mutex<NotificationState>,
 }
 
+pub(super) type NotificationReservation = (NotificationOperation, oneshot::Receiver<CovAckResult>);
+
+#[path = "audit_failure_queue.rs"]
+mod audit_failure_queue;
+pub use audit_failure_queue::{AuditFailureContext, AuditFailureQueue, AuditFailureTicket};
+
 impl NotificationTransactions {
-    pub(super) fn new() -> Arc<Self> {
+    pub(super) fn install_target_audit(
+        &self,
+        association: Arc<bacnet_objects::audit::TargetAuditAssociation>,
+    ) {
+        let budget = Arc::new(tokio::sync::Semaphore::new(256));
+        let queues = association
+            .reporters()
+            .iter()
+            .map(|(_, status)| {
+                (
+                    Arc::clone(status),
+                    AuditFailureQueue::target(
+                        Arc::clone(&budget),
+                        status.configuration_epoch(),
+                        status.auditing_failure_epoch().is_some(),
+                    ),
+                )
+            })
+            .collect();
+        assert!(self.audit_failures.set(queues).is_ok());
+        assert!(self.audit_association.set(association).is_ok());
+    }
+    pub(super) fn audit_failure_queue(
+        &self,
+        status: &Arc<AuditReporterStatus>,
+    ) -> Option<&AuditFailureQueue<Arc<ConfirmedRecipientRoute>>> {
+        self.audit_failures
+            .get()?
+            .iter()
+            .find(|(current, _)| Arc::ptr_eq(current, status))
+            .map(|(_, queue)| queue)
+    }
+    pub(super) fn audit_recipient_changed(&self) {
+        if let Some(queues) = self.audit_failures.get() {
+            for (_, queue) in queues {
+                queue.recipient_changed();
+            }
+        }
+    }
+
+    pub(super) fn audit_idle(&self) -> bool {
+        self.audit_permits.available_permits() == 64
+            && self
+                .audit_failures
+                .get()
+                .into_iter()
+                .flatten()
+                .all(|(_, q)| !q.has_pending())
+    }
+    #[doc(hidden)]
+    pub fn try_admit_audit(
+        &self,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, tokio::sync::TryAcquireError> {
+        Arc::clone(&self.audit_permits).try_acquire_owned()
+    }
+
+    #[doc(hidden)]
+    pub fn new() -> Arc<Self> {
         Self::with_coordinator(Arc::new(OutboundTransactionCoordinator::new()))
     }
 
-    pub(super) fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
+    #[doc(hidden)]
+    pub fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
         Arc::new(Self {
-            coordinator,
-            state: Mutex::new(NotificationState {
-                closed: false,
-                pending: HashMap::new(),
+            audit_batch: std::sync::OnceLock::new(),
+            application_sealed: std::sync::atomic::AtomicBool::new(false),
+            audit_routes: std::sync::OnceLock::new(),
+            core: Arc::new(NotificationCore {
+                coordinator,
+                state: Mutex::new(NotificationState {
+                    closed: false,
+                    pending: HashMap::new(),
+                }),
             }),
+            workers: Mutex::new(NotificationWorkers::default()),
+            audit_permits: Arc::new(tokio::sync::Semaphore::new(64)),
+            audit_association: std::sync::OnceLock::new(),
+            audit_failures: std::sync::OnceLock::new(),
+            run_slots: crate::command_lists::RemoteSlots::default(),
+            awaiting_recipients: Mutex::default(),
         })
     }
 
-    pub(super) fn reserve(
-        self: &Arc<Self>,
+    /// Where the requests the server's runs make in other devices wait
+    /// (`crate::command_lists::RemoteSlots`).
+    pub(super) fn run_slots(&self) -> &crate::command_lists::RemoteSlots {
+        &self.run_slots
+    }
+
+    #[doc(hidden)]
+    pub fn set_audit_owner(&self, owner: &Arc<bacnet_objects::database::AuditOwnership>) {
+        self.workers.lock().unwrap().audit_owner = Some(Arc::downgrade(owner));
+    }
+    pub(super) fn audit_owner_lease(
+        &self,
+    ) -> Option<Arc<bacnet_objects::database::AuditOwnership>> {
+        self.workers
+            .lock()
+            .unwrap()
+            .audit_owner
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+    #[doc(hidden)]
+    pub fn seal_audit_owner(&self, owner: &bacnet_objects::database::AuditOwnership) {
+        let _workers = self.workers.lock().unwrap();
+        owner.seal();
+    }
+    // Silent changes still serialize with sealing/close, but have no runtime or
+    // worker requirement. The closure rechecks the concrete owner's active state.
+    pub(super) fn commit_audit_without_worker(
+        &self,
+        commit: impl FnOnce() -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let workers = self.workers.lock().unwrap();
+        if workers.closed {
+            return Err(Error::Encoding("Audit delivery owner is closed".into()));
+        }
+        commit()
+    }
+
+    #[doc(hidden)]
+    pub fn commit_audit<F: Future<Output = ()> + Send + 'static>(
+        &self,
+        prepare_commit: impl FnOnce() -> Result<F, Error>,
+    ) -> Result<(), Error> {
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| Error::Encoding("Audit changes require a Tokio runtime".into()))?;
+        let mut workers = self.workers.lock().unwrap();
+        if workers.closed {
+            return Err(Error::Encoding("Audit delivery owner is closed".into()));
+        }
+        let task = prepare_commit()?;
+        let owner = workers
+            .audit_owner
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        let wake = AuditWorkerWake(self.audit_batch.get().cloned());
+        workers.tasks.spawn_on(
+            async move {
+                let _wake = wake;
+                let _owner = owner;
+                task.await;
+            },
+            &handle,
+        );
+        let waiter = workers.waiter.take();
+        drop(workers);
+        if let Some(waiter) = waiter {
+            waiter.wake();
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+        let mut workers = self.workers.lock().unwrap();
+        if workers.closed {
+            // A rejected future may own an operation and resource guards.
+            drop(workers);
+            drop(task);
+            return;
+        }
+        let owner = workers
+            .audit_owner
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        let wake = AuditWorkerWake(self.audit_batch.get().cloned());
+        workers.tasks.spawn(async move {
+            let _wake = wake;
+            let _owner = owner;
+            task.await;
+        });
+        let waiter = workers.waiter.take();
+        drop(workers);
+        if let Some(waiter) = waiter {
+            waiter.wake();
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn close(&self) {
+        self.audit_permits.close();
+        if let Some(queue) = self.audit_batch.get().and_then(std::sync::Weak::upgrade) {
+            drop(queue.close());
+        }
+        let mut workers = self.workers.lock().unwrap();
+        // Serialize worker registration with transaction sealing. Reservation
+        // uses only the core; no future can bypass closed worker admission.
+        self.core.close();
+        workers.closed = true;
+        workers.tasks.abort_all();
+        let waiter = workers.waiter.take();
+        drop(workers);
+        if let Some(waiter) = waiter {
+            waiter.wake();
+        }
+    }
+
+    /// Dispatch is the sole consumer until joined by stop. An empty open set
+    /// waits for producer admission, including when ingress is idle. Cancelling
+    /// this future retains every outstanding join in the owner.
+    #[doc(hidden)]
+    pub async fn join_next(&self) -> Option<Result<(), JoinError>> {
+        poll_fn(|cx| {
+            let mut workers = self.workers.lock().unwrap();
+            match workers.tasks.poll_join_next(cx) {
+                Poll::Ready(None) if !workers.closed => {
+                    workers.waiter = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+                result => result,
+            }
+        })
+        .await
+    }
+
+    #[doc(hidden)]
+    pub fn observe(result: Option<Result<(), JoinError>>) {
+        if let Some(Err(error)) = result {
+            if !error.is_cancelled() {
+                tracing::warn!(%error, "Confirmed notification worker failed");
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn reserve(
+        &self,
         peer: CanonicalPeer,
         service_choice: ConfirmedServiceChoice,
     ) -> Result<(NotificationOperation, oneshot::Receiver<CovAckResult>), NotificationReserveError>
     {
+        self.core
+            .reserve(LeaseMetadata::notification(peer, service_choice))
+    }
+
+    /// Lease an invoke ID for a read this server sends, answered by an
+    /// unsegmented ComplexAck whose service data reaches the receiver
+    /// ([`LeaseMetadata::server_read`]).
+    pub(super) fn reserve_read(
+        &self,
+        peer: CanonicalPeer,
+        service_choice: ConfirmedServiceChoice,
+    ) -> Result<NotificationReservation, NotificationReserveError> {
+        self.core
+            .reserve(LeaseMetadata::server_read(peer, service_choice))
+    }
+
+    /// Admit and complete one terminal answer to a notification lease.
+    /// `local_network` is this device's known network number, if any: an
+    /// answer relayed with it as SNET matches like one sent straight from
+    /// its SADR, or a lease reserved for the routed form while the number
+    /// was unknown
+    /// ([`OutboundTransactionCoordinator::admit_from_source`], #1465).
+    #[doc(hidden)]
+    pub fn admit_terminal(
+        &self,
+        immediate_source: &[u8],
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+        apdu: &Apdu,
+    ) -> bool {
+        self.core
+            .admit_terminal(immediate_source, routed_source, local_network, apdu)
+    }
+
+    /// Completes one already-admitted terminal (session dispatch only).
+    ///
+    /// The shared-coordinator `admit` owns exact-once claim; this releases
+    /// the exact lease without re-admitting.
+    #[doc(hidden)]
+    pub fn complete_pre_admitted(&self, admission: Admission, apdu: &Apdu) -> bool {
+        self.core.complete_pre_admitted(admission, apdu)
+    }
+
+    /// Per-delivery tasks are idle; the one supervised target scheduler may remain.
+    #[cfg(test)]
+    pub(super) fn delivery_workers_idle(&self) -> bool {
+        let queue = self.audit_batch.get().and_then(std::sync::Weak::upgrade);
+        let scheduler = usize::from(queue.as_ref().is_some_and(|queue| !queue.stopped()));
+        self.workers.lock().unwrap().tasks.len() == scheduler
+            && self.audit_idle()
+            && queue.is_none_or(|queue| queue.empty())
+    }
+    #[cfg(test)]
+    pub(super) fn workers_empty(&self) -> bool {
+        self.workers.lock().unwrap().tasks.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(super) fn audit_resources(&self) -> (bool, u64, usize) {
+        let (owned, count) = self.audit_failures.get().into_iter().flatten().fold(
+            (false, 0u64),
+            |(owned, count), (_, queue)| {
+                let (current_owned, current_count) = queue.resources();
+                (owned || current_owned, count.saturating_add(current_count))
+            },
+        );
+        (owned, count, self.audit_permits.available_permits())
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_count(&self) -> usize {
+        self.core.coordinator.active_count().unwrap_or(usize::MAX)
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_closed(&self) -> bool {
+        self.core
+            .state
+            .lock()
+            .map(|state| state.closed)
+            .unwrap_or(true)
+    }
+
+    #[cfg(test)]
+    pub(super) fn release_token_for_test(&self, token: LeaseToken) {
+        self.core.release(token);
+    }
+
+    /// Take the lease's answer slot and complete its lease as an arriving
+    /// answer does, leaving the caller to send that answer when it chooses.
+    #[cfg(test)]
+    pub(super) fn claim_answer_for_test(&self, token: LeaseToken) -> oneshot::Sender<CovAckResult> {
+        let sender = self.core.state.lock().unwrap().pending.remove(&token);
+        let _ = self.core.coordinator.complete(token);
+        sender.expect("an armed answer slot")
+    }
+}
+
+impl NotificationCore {
+    pub(super) fn reserve(
+        self: &Arc<Self>,
+        metadata: LeaseMetadata,
+    ) -> Result<NotificationReservation, NotificationReserveError> {
         let token = self
             .coordinator
-            .reserve(LeaseMetadata::server_notification(peer, service_choice))
+            .reserve(metadata)
             .map_err(NotificationReserveError::Coordinator)?;
         let (sender, receiver) = oneshot::channel();
 
@@ -108,10 +492,16 @@ impl NotificationTransactions {
         &self,
         immediate_source: &[u8],
         routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
         apdu: &Apdu,
     ) -> bool {
-        let peer = canonical_inbound_peer(immediate_source, routed_source);
-        let admission = match self.coordinator.admit(&peer, apdu) {
+        let admitted = self.coordinator.admit_from_source(
+            immediate_source,
+            routed_source,
+            local_network,
+            apdu,
+        );
+        let admission = match admitted {
             Ok(AdmissionOutcome::Admitted(admission))
                 if admission.kind() == AdmissionKind::Terminal =>
             {
@@ -125,7 +515,7 @@ impl NotificationTransactions {
 
     pub(super) fn complete_pre_admitted(&self, admission: Admission, apdu: &Apdu) -> bool {
         if admission.kind() != AdmissionKind::Terminal
-            || admission.metadata().owner() != LeaseOwner::ServerNotification
+            || admission.metadata().owner() != LeaseOwner::Notification
         {
             return false;
         }
@@ -137,9 +527,27 @@ impl NotificationTransactions {
             {
                 CovAckResult::Ack
             }
-            Apdu::Error(pdu) if pdu.invoke_id == token.invoke_id() => CovAckResult::Error,
-            Apdu::Reject(pdu) if pdu.invoke_id == token.invoke_id() => CovAckResult::Error,
-            Apdu::Abort(pdu) if pdu.invoke_id == token.invoke_id() => CovAckResult::Error,
+            // Only a read lease admits one, unsegmented (#1342).
+            Apdu::ComplexAck(pdu)
+                if !pdu.segmented
+                    && pdu.invoke_id == token.invoke_id()
+                    && pdu.service_choice == admission.metadata().service_choice() =>
+            {
+                CovAckResult::Data(pdu.service_ack.clone())
+            }
+            // What the refusal said goes to the waiting worker (#1323).
+            Apdu::Error(pdu) if pdu.invoke_id == token.invoke_id() => {
+                CovAckResult::Error(Refusal::Error {
+                    class: pdu.error_class,
+                    code: pdu.error_code,
+                })
+            }
+            Apdu::Reject(pdu) if pdu.invoke_id == token.invoke_id() => {
+                CovAckResult::Error(Refusal::Reject(pdu.reject_reason))
+            }
+            Apdu::Abort(pdu) if pdu.invoke_id == token.invoke_id() => {
+                CovAckResult::Error(Refusal::Abort(pdu.abort_reason))
+            }
             _ => return false,
         };
         let sender = match self.state.lock() {
@@ -173,23 +581,28 @@ impl NotificationTransactions {
         }
     }
 
-    fn rearm(
-        &self,
-        token: LeaseToken,
-    ) -> Result<oneshot::Receiver<CovAckResult>, NotificationReserveError> {
+    fn rearm(&self, token: LeaseToken) -> Result<oneshot::Receiver<CovAckResult>, Rearm> {
         let (sender, receiver) = oneshot::channel();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| NotificationReserveError::StatePoisoned)?;
+        let Ok(mut state) = self.state.lock() else {
+            return Err(Rearm::Closed);
+        };
         if state.closed {
-            return Err(NotificationReserveError::Closed);
+            return Err(Rearm::Closed);
         }
+        // Only an answer takes the sender out while the adapter is open.
         let Some(pending) = state.pending.get_mut(&token) else {
-            return Err(NotificationReserveError::Closed);
+            return Err(Rearm::Claimed);
         };
         *pending = sender;
         Ok(receiver)
+    }
+
+    /// Take the sender back from the pending answers: whether it was still
+    /// there, rather than taken by an answer or by closing.
+    fn withdraw(&self, token: LeaseToken) -> bool {
+        self.state
+            .lock()
+            .map_or(true, |mut state| state.pending.remove(&token).is_some())
     }
 
     fn release(&self, token: LeaseToken) {
@@ -205,21 +618,6 @@ impl NotificationTransactions {
         }
         let _ = self.coordinator.cancel(token);
     }
-
-    #[cfg(test)]
-    pub(super) fn active_count(&self) -> usize {
-        self.coordinator.active_count().unwrap_or(usize::MAX)
-    }
-
-    #[cfg(test)]
-    pub(super) fn is_closed(&self) -> bool {
-        self.state.lock().map(|state| state.closed).unwrap_or(true)
-    }
-
-    #[cfg(test)]
-    pub(super) fn release_token_for_test(&self, token: LeaseToken) {
-        self.release(token);
-    }
 }
 
 impl Drop for NotificationTransactions {
@@ -228,19 +626,25 @@ impl Drop for NotificationTransactions {
     }
 }
 
-pub(super) struct NotificationOperation {
-    transactions: Arc<NotificationTransactions>,
+#[doc(hidden)]
+pub struct NotificationOperation {
+    transactions: Arc<NotificationCore>,
     token: LeaseToken,
     active: bool,
 }
 
 impl NotificationOperation {
-    pub(super) fn invoke_id(&self) -> u8 {
+    #[doc(hidden)]
+    pub fn invoke_id(&self) -> u8 {
         self.token.invoke_id()
     }
 
-    fn rearm(&self) -> Result<oneshot::Receiver<CovAckResult>, NotificationReserveError> {
+    fn rearm(&self) -> Result<oneshot::Receiver<CovAckResult>, Rearm> {
         self.transactions.rearm(self.token)
+    }
+
+    fn withdraw(&self) -> bool {
+        self.transactions.withdraw(self.token)
     }
 
     fn terminal_completed(&mut self) {
@@ -273,70 +677,21 @@ impl Drop for NotificationOperation {
     }
 }
 
-pub(super) async fn run_notification_worker<F, Fut, E>(
-    mut operation: NotificationOperation,
-    mut receiver: oneshot::Receiver<CovAckResult>,
-    timeout: Duration,
-    max_retries: u8,
-    mut send: F,
-) -> NotificationWorkerResult
-where
-    F: FnMut(u8) -> Fut,
-    Fut: Future<Output = Result<(), E>>,
-{
-    for attempt in 0..=max_retries {
-        let send_failed = send(attempt).await.is_err();
-        match tokio::time::timeout(timeout, receiver).await {
-            Ok(Ok(CovAckResult::Ack)) => {
-                operation.terminal_completed();
-                return NotificationWorkerResult::Ack;
-            }
-            Ok(Ok(CovAckResult::Error)) => {
-                operation.terminal_completed();
-                return NotificationWorkerResult::Error;
-            }
-            Ok(Err(_)) | Err(_) if attempt < max_retries => match operation.rearm() {
-                Ok(next_receiver) => receiver = next_receiver,
-                Err(_) => {
-                    operation.cancel();
-                    return NotificationWorkerResult::Closed;
-                }
-            },
-            Ok(Err(_)) => {
-                operation.cancel();
-                return NotificationWorkerResult::Closed;
-            }
-            Err(_) => {
-                if send_failed {
-                    operation.cancel();
-                } else {
-                    operation.release();
-                }
-                return NotificationWorkerResult::Exhausted;
-            }
-        }
-    }
-
-    operation.release();
-    NotificationWorkerResult::Exhausted
+/// Why an attempt's receiver couldn't be replaced.
+enum Rearm {
+    /// An answer took the sender as the timer fired; it is on its way to
+    /// the receiver already in hand.
+    Claimed,
+    /// The adapter closed.
+    Closed,
 }
 
-pub(super) fn canonical_direct_peer(mac: &[u8]) -> CanonicalPeer {
+#[doc(hidden)]
+pub fn canonical_direct_peer(mac: &[u8]) -> CanonicalPeer {
     CanonicalPeer::direct(mac)
 }
 
-pub(super) fn canonical_routed_peer(network: u16, address: &[u8]) -> CanonicalPeer {
+#[doc(hidden)]
+pub fn canonical_routed_peer(network: u16, address: &[u8]) -> CanonicalPeer {
     CanonicalPeer::routed(network, address)
-}
-
-fn canonical_inbound_peer(
-    immediate_source: &[u8],
-    routed_source: Option<&NpduAddress>,
-) -> CanonicalPeer {
-    match routed_source {
-        Some(source) if !source.mac_address.is_empty() => {
-            canonical_routed_peer(source.network, &source.mac_address)
-        }
-        _ => canonical_direct_peer(immediate_source),
-    }
 }

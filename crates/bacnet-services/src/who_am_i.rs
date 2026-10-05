@@ -1,24 +1,95 @@
-//! Who-Am-I and You-Are services per ASHRAE 135-2020 Clause 16.10.9 / 16.10.10.
+//! Who-Am-I and You-Are services per ASHRAE 135-2020 Clause 16.11.
+//!
+//! Both requests use only application tags, as in the Who-Am-I-Request and You-Are-Request
+//! productions of Clause 21.3.3.
 
+use bacnet_encoding::constructed::{check_decoded_mac_len, check_encoded_mac_len};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
+use bacnet_types::enums::ObjectType;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
+
+use bacnet_encoding::constructed::tagged::{
+    decode_app_character_string, decode_app_object_id, decode_app_primitive, decode_app_unsigned,
+    next_is_application,
+};
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// Decode the vendor ID, model name and serial number that start both requests.
+fn decode_identity(data: &[u8], context: &str) -> Result<(u16, String, String, usize), Error> {
+    let (vendor_id, offset) = decode_app_unsigned::<u16>(data, 0, &format!("{context} vendor-id"))?;
+    let (model_name, offset) =
+        decode_app_character_string(data, offset, &format!("{context} model-name"))?;
+    let (serial_number, offset) =
+        decode_app_character_string(data, offset, &format!("{context} serial-number"))?;
+    Ok((vendor_id, model_name, serial_number, offset))
+}
+
+fn encode_identity(
+    buf: &mut BytesMut,
+    vendor_id: u16,
+    model_name: &str,
+    serial_number: &str,
+) -> Result<(), Error> {
+    primitives::encode_app_unsigned(buf, u64::from(vendor_id));
+    primitives::encode_app_character_string(buf, model_name)?;
+    primitives::encode_app_character_string(buf, serial_number)
+}
 
 // ---------------------------------------------------------------------------
 // WhoAmIRequest
 // ---------------------------------------------------------------------------
 
-/// Who-Am-I-Request (empty APDU, no parameters).
+/// Who-Am-I-Request service parameters (Clause 16.11.1, Table 16-13; encoding in Clause 21.3.3).
+///
+/// Fields, in order, all application-tagged and all mandatory: vendor identifier (Unsigned16),
+/// model name (CharacterString) and serial number (CharacterString).
+///
+/// Vendor 260, model "M" and serial "S" encode as
+/// `22 01 04 72 00 4D 72 00 53`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WhoAmIRequest;
+pub struct WhoAmIRequest {
+    /// Vendor identifier of the requesting device; equals its Vendor_Identifier property.
+    pub vendor_id: u16,
+    /// Model name of the requesting device; equals its Model_Name property.
+    pub model_name: String,
+    /// Serial number of the requesting device; equals its Serial_Number property.
+    pub serial_number: String,
+}
 
 impl WhoAmIRequest {
-    pub fn encode(&self, _buf: &mut BytesMut) {}
+    /// Encode the request parameters into `buf`; fails, leaving `buf` untouched, if a character
+    /// string cannot be encoded.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        let mut scratch = BytesMut::new();
+        encode_identity(
+            &mut scratch,
+            self.vendor_id,
+            &self.model_name,
+            &self.serial_number,
+        )?;
+        buf.extend_from_slice(&scratch);
+        Ok(())
+    }
 
-    pub fn decode(_data: &[u8]) -> Result<Self, Error> {
-        Ok(Self)
+    /// Decode the request from service-request octets.
+    ///
+    /// Fails on missing, mistagged or truncated fields and on trailing data.
+    pub fn decode(data: &[u8]) -> Result<Self, Error> {
+        let (vendor_id, model_name, serial_number, offset) = decode_identity(data, "WhoAmI")?;
+        if offset != data.len() {
+            return Err(Error::decoding(offset, "WhoAmI has trailing data"));
+        }
+        Ok(Self {
+            vendor_id,
+            model_name,
+            serial_number,
+        })
     }
 }
 
@@ -26,105 +97,123 @@ impl WhoAmIRequest {
 // YouAreRequest
 // ---------------------------------------------------------------------------
 
-/// You-Are-Request service parameters.
+/// You-Are-Request service parameters (Clause 16.11.3, Table 16-14; encoding in Clause 21.3.3).
 ///
-/// ```text
-/// YouAreRequest ::= SEQUENCE {
-///     vendorID           [0] Unsigned16,
-///     modelName          [1] CharacterString,
-///     serialNumber       [2] CharacterString,
-///     deviceIdentifier   [3] ObjectIdentifier OPTIONAL,
-///     deviceMACAddress   [4] OctetString OPTIONAL
-/// }
-/// ```
+/// Fields, in order, all application-tagged: vendor identifier (Unsigned16), model name
+/// (CharacterString) and serial number (CharacterString), all mandatory; then a device
+/// identifier (ObjectIdentifier) and a device MAC address (OctetString), both optional.
+///
+/// At least one of `device_identifier` and
+/// `device_mac_address` must be present; both [`encode`](Self::encode) and
+/// [`decode`](Self::decode) reject a request with neither. The identifier, when present,
+/// must name a Device object.
+///
+/// The MAC address is the one the matching device takes on the port the request arrived on
+/// (Clauses 16.11.3.1.5 and 16.11.4; Clause 19.7.2), so it names a node on one of
+/// that device's data links. Like a `BACnetAddress` MAC it is therefore at most
+/// [`BACnetAddress::MAX_MAC_LEN`] octets in both directions (#1200): no data link this stack
+/// serves needs more, and a longer one could not be valid for any receiving device.
+///
+/// [`BACnetAddress::MAX_MAC_LEN`]: bacnet_types::constructed::BACnetAddress::MAX_MAC_LEN
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct YouAreRequest {
+    /// Vendor identifier (Unsigned16) of the device that should act on the request.
     pub vendor_id: u16,
+    /// Model name the target device reports in its Device object.
     pub model_name: String,
+    /// Serial number the target device reports in its Device object.
     pub serial_number: String,
+    /// Device object identifier to assign to the target device; `None` leaves it unchanged.
     pub device_identifier: Option<ObjectIdentifier>,
+    /// MAC address to configure on the target device, at most
+    /// [`BACnetAddress::MAX_MAC_LEN`] octets; `None` leaves it unchanged.
+    ///
+    /// [`BACnetAddress::MAX_MAC_LEN`]: bacnet_types::constructed::BACnetAddress::MAX_MAC_LEN
     pub device_mac_address: Option<Vec<u8>>,
 }
 
 impl YouAreRequest {
+    /// Encode the request parameters into `buf`.
+    ///
+    /// Fails, leaving `buf` untouched, if neither optional field is present, the identifier
+    /// is not a Device object, the MAC address is longer than 18 octets, or a character string
+    /// cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
-        // [0] vendorID
-        primitives::encode_ctx_unsigned(buf, 0, self.vendor_id as u64);
-        // [1] modelName
-        primitives::encode_ctx_character_string(buf, 1, &self.model_name)?;
-        // [2] serialNumber
-        primitives::encode_ctx_character_string(buf, 2, &self.serial_number)?;
-        // [3] deviceIdentifier OPTIONAL
-        if let Some(ref oid) = self.device_identifier {
-            primitives::encode_ctx_object_id(buf, 3, oid);
+        if self.device_identifier.is_none() && self.device_mac_address.is_none() {
+            return Err(Error::Encoding(
+                "YouAre needs a device identifier, a device MAC address, or both".into(),
+            ));
         }
-        // [4] deviceMACAddress OPTIONAL
-        if let Some(ref mac) = self.device_mac_address {
-            primitives::encode_ctx_octet_string(buf, 4, mac);
+        if let Some(oid) = &self.device_identifier {
+            if oid.object_type() != ObjectType::DEVICE {
+                return Err(Error::Encoding(
+                    "YouAre device identifier must name a Device object".into(),
+                ));
+            }
         }
+        if let Some(mac) = &self.device_mac_address {
+            check_encoded_mac_len(mac, "YouAre device-mac-address")?;
+        }
+        // Encode into a scratch buffer so a string error leaves `buf` unchanged.
+        let mut scratch = BytesMut::new();
+        encode_identity(
+            &mut scratch,
+            self.vendor_id,
+            &self.model_name,
+            &self.serial_number,
+        )?;
+        if let Some(oid) = &self.device_identifier {
+            primitives::encode_app_object_id(&mut scratch, oid);
+        }
+        if let Some(mac) = &self.device_mac_address {
+            primitives::encode_app_octet_string(&mut scratch, mac);
+        }
+        buf.extend_from_slice(&scratch);
         Ok(())
     }
 
+    /// Decode the request from service-request octets.
+    ///
+    /// Fails on missing, mistagged or truncated fields, on a request carrying neither optional
+    /// field, on a MAC address longer than 18 octets, and on trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
+        let (vendor_id, model_name, serial_number, mut offset) = decode_identity(data, "YouAre")?;
 
-        // [0] vendorID
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
-            return Err(Error::decoding(offset, "YouAre expected context tag 0"));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "YouAre truncated at vendor-id"));
-        }
-        let vendor_id = u16::try_from(primitives::decode_unsigned(&data[pos..end])?)
-            .map_err(|_| Error::decoding(pos, "YouAre vendor-id exceeds u16"))?;
-        offset = end;
-
-        // [1] modelName
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(1) {
-            return Err(Error::decoding(offset, "YouAre expected context tag 1"));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "YouAre truncated at model-name"));
-        }
-        let model_name = primitives::decode_character_string(&data[pos..end])?;
-        offset = end;
-
-        // [2] serialNumber
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(2) {
-            return Err(Error::decoding(offset, "YouAre expected context tag 2"));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "YouAre truncated at serial-number"));
-        }
-        let serial_number = primitives::decode_character_string(&data[pos..end])?;
-        offset = end;
-
-        // [3] deviceIdentifier OPTIONAL
         let mut device_identifier = None;
-        if offset < data.len() {
-            let (opt, new_off) = tags::decode_optional_context(data, offset, 3)?;
-            if let Some(content) = opt {
-                device_identifier = Some(ObjectIdentifier::decode(content)?);
-                offset = new_off;
+        if next_is_application(data, offset, tags::app_tag::OBJECT_IDENTIFIER)? {
+            let (oid, end) = decode_app_object_id(data, offset, "YouAre device-identifier")?;
+            if oid.object_type() != ObjectType::DEVICE {
+                return Err(Error::decoding(
+                    offset,
+                    "YouAre device identifier must name a Device object",
+                ));
             }
+            device_identifier = Some(oid);
+            offset = end;
         }
 
-        // [4] deviceMACAddress OPTIONAL
         let mut device_mac_address = None;
-        if offset < data.len() {
-            let (opt, new_off) = tags::decode_optional_context(data, offset, 4)?;
-            if let Some(content) = opt {
-                device_mac_address = Some(content.to_vec());
-                offset = new_off;
-            }
+        if next_is_application(data, offset, tags::app_tag::OCTET_STRING)? {
+            let what = "YouAre device-mac-address";
+            let (content, end) =
+                decode_app_primitive(data, offset, tags::app_tag::OCTET_STRING, what)?;
+            check_decoded_mac_len(content.len(), offset, what)?;
+            device_mac_address = Some(content.to_vec());
+            offset = end;
         }
-        let _ = offset;
+
+        if offset != data.len() {
+            return Err(Error::decoding(
+                offset,
+                "YouAre has trailing or unexpected data",
+            ));
+        }
+        if device_identifier.is_none() && device_mac_address.is_none() {
+            return Err(Error::decoding(
+                offset,
+                "YouAre needs a device identifier, a device MAC address, or both",
+            ));
+        }
 
         Ok(Self {
             vendor_id,
@@ -137,114 +226,5 @@ impl YouAreRequest {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use bacnet_types::enums::ObjectType;
-
-    fn encode_required_fields(
-        vendor_tag: u8,
-        vendor_id: u64,
-        model_tag: u8,
-        serial_tag: u8,
-    ) -> BytesMut {
-        let mut buf = BytesMut::new();
-        primitives::encode_ctx_unsigned(&mut buf, vendor_tag, vendor_id);
-        primitives::encode_ctx_character_string(&mut buf, model_tag, "M").unwrap();
-        primitives::encode_ctx_character_string(&mut buf, serial_tag, "S").unwrap();
-        buf
-    }
-
-    #[test]
-    fn who_am_i_round_trip() {
-        let req = WhoAmIRequest;
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf);
-        assert!(buf.is_empty());
-        let decoded = WhoAmIRequest::decode(&buf).unwrap();
-        assert_eq!(req, decoded);
-    }
-
-    #[test]
-    fn who_am_i_ignores_trailing_data() {
-        let decoded = WhoAmIRequest::decode(&[0xFF, 0x01, 0x02]).unwrap();
-        assert_eq!(WhoAmIRequest, decoded);
-    }
-
-    #[test]
-    fn you_are_round_trip() {
-        let req = YouAreRequest {
-            vendor_id: 42,
-            model_name: "TestDevice".to_string(),
-            serial_number: "SN-12345".to_string(),
-            device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap()),
-            device_mac_address: Some(vec![0xDE, 0xAD, 0xBE, 0xEF]),
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf).unwrap();
-        let decoded = YouAreRequest::decode(&buf).unwrap();
-        assert_eq!(req, decoded);
-    }
-
-    #[test]
-    fn you_are_minimal() {
-        let req = YouAreRequest {
-            vendor_id: 1,
-            model_name: "M".to_string(),
-            serial_number: "S".to_string(),
-            device_identifier: None,
-            device_mac_address: None,
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf).unwrap();
-        let decoded = YouAreRequest::decode(&buf).unwrap();
-        assert_eq!(req, decoded);
-    }
-
-    #[test]
-    fn you_are_vendor_id_must_fit_u16() {
-        let maximum = encode_required_fields(0, u64::from(u16::MAX), 1, 2);
-        assert_eq!(YouAreRequest::decode(&maximum).unwrap().vendor_id, u16::MAX);
-
-        let mut leading_zero = BytesMut::new();
-        tags::encode_tag(&mut leading_zero, 0, tags::TagClass::Context, 3);
-        leading_zero.extend_from_slice(&[0x00, 0xff, 0xff]);
-        primitives::encode_ctx_character_string(&mut leading_zero, 1, "M").unwrap();
-        primitives::encode_ctx_character_string(&mut leading_zero, 2, "S").unwrap();
-        assert_eq!(
-            YouAreRequest::decode(&leading_zero).unwrap().vendor_id,
-            u16::MAX
-        );
-
-        for value in [u64::from(u16::MAX) + 1, 65_537, u64::MAX] {
-            let data = encode_required_fields(0, value, 1, 2);
-            assert!(YouAreRequest::decode(&data).is_err());
-        }
-    }
-
-    #[test]
-    fn you_are_requires_mandatory_context_tags() {
-        for (vendor_tag, model_tag, serial_tag) in [(1, 1, 2), (0, 2, 2), (0, 1, 1)] {
-            let data = encode_required_fields(vendor_tag, 42, model_tag, serial_tag);
-            assert!(YouAreRequest::decode(&data).is_err());
-        }
-    }
-
-    #[test]
-    fn you_are_empty_input() {
-        assert!(YouAreRequest::decode(&[]).is_err());
-    }
-
-    #[test]
-    fn you_are_truncated() {
-        let req = YouAreRequest {
-            vendor_id: 42,
-            model_name: "Test".to_string(),
-            serial_number: "SN".to_string(),
-            device_identifier: None,
-            device_mac_address: None,
-        };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf).unwrap();
-        assert!(YouAreRequest::decode(&buf[..2]).is_err());
-    }
-}
+#[path = "who_am_i_tests.rs"]
+mod tests;

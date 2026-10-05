@@ -9,19 +9,37 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::clock::{ClockFrame, ClockReader};
 use crate::event_enrollment::EventEnrollmentMonitoredSource;
-use crate::traits::{BACnetObject, MonotonicClock};
+use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
+
+mod averaging_sampling;
+mod event_algorithm_inhibit;
+mod event_log;
+mod input_references;
+mod local_device;
+mod membership;
+mod network_port;
+mod trend_poll;
+pub use local_device::LocalDevice;
+#[doc(hidden)]
+pub use membership::{MembershipWaker, MembershipWork};
+use trend_poll::TrendPollSchedule;
 
 /// A collection of BACnet objects, keyed by ObjectIdentifier.
 ///
 /// Enforces Object_Name uniqueness within a device.
 /// Maintains secondary indexes for O(1) name lookup and O(1) type lookup.
 pub struct ObjectDatabase {
+    audit_owner: Option<std::sync::Weak<AuditOwnership>>,
+    network_port: Option<network_port::NetworkPortRegistration>,
     objects: HashMap<ObjectIdentifier, Box<dyn BACnetObject>>,
+    trend_poll: TrendPollSchedule,
     /// Shared Device clock reader. `None` is an explicit clockless database.
     clock: Option<Arc<dyn ClockReader>>,
     monotonic_clock: Option<Arc<MonotonicClock>>,
+    /// Bound into every object with the monotonic clock (#1384).
+    deadline_waker: Option<Arc<DeadlineWaker>>,
     /// Device-local EventNotification ordering source for clockless operation.
-    event_sequence_number: u16,
+    event_sequence: Arc<EventSequence>,
     /// Reverse index: object name → ObjectIdentifier for uniqueness enforcement.
     name_index: HashMap<String, ObjectIdentifier>,
     /// Type index: object type → set of ObjectIdentifiers for fast enumeration.
@@ -32,6 +50,8 @@ pub struct ObjectDatabase {
     /// Source ownership for custom Event Enrollment objects that implement
     /// evaluation state but not the optional object-owned source channel.
     enrollment_eval_sources: HashMap<ObjectIdentifier, EventEnrollmentMonitoredSource>,
+    /// What adding and removing objects left for the server (#1341, #1440).
+    membership: membership::MembershipQueue,
 }
 
 /// A non-consuming reservation of the database-local event sequence source.
@@ -49,6 +69,11 @@ impl EventSequenceReservation {
     }
 }
 
+mod audit_ownership;
+mod event_sequence;
+pub use audit_ownership::AuditOwnership;
+pub use event_sequence::EventSequence;
+
 impl Default for ObjectDatabase {
     fn default() -> Self {
         Self::new()
@@ -60,39 +85,53 @@ impl ObjectDatabase {
     pub fn new() -> Self {
         Self {
             objects: HashMap::new(),
+            trend_poll: TrendPollSchedule::default(),
             clock: None,
             monotonic_clock: None,
-            event_sequence_number: 0,
+            deadline_waker: None,
+            event_sequence: Arc::default(),
+            audit_owner: None,
+            network_port: None,
             name_index: HashMap::new(),
             type_index: HashMap::new(),
             invalid_enrollment_eval_state: HashSet::new(),
             enrollment_eval_sources: HashMap::new(),
+            membership: membership::MembershipQueue::default(),
         }
     }
 
     /// Add an object to the database.
     ///
-    /// Returns `Err` if another object already has the same `object_name()`.
-    /// Replacing an object with the same OID is allowed (the old object is removed).
+    /// Returns PROPERTY / DUPLICATE_NAME if another object already has the
+    /// same `object_name()`, as
+    /// [`check_name_available`](Self::check_name_available) does.
+    /// Replacing an object with the same OID is allowed unless an installed
+    /// Audit runtime protects its membership. Protection is checked before any binding.
+    ///
+    /// Once the object is in, every Pulse Converter whose Input_Reference
+    /// names it, or the object itself when it is one, has the reference
+    /// judged again (`ObjectDatabase::check_input_reference`); one whose
+    /// Reliability changes is queued for the server's COV fanout. A Schedule
+    /// holding a refused reference to it is queued for the server to retry
+    /// that reference (#1440).
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
+        self.check_network_port_membership(&object.object_identifier())?;
+        self.check_audit_membership(&object.object_identifier(), true)?;
         object.bind_clock_internal(self.clock.clone());
         object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
+        object.bind_deadline_waker_internal(self.deadline_waker.clone());
         let oid = object.object_identifier();
         let name = object.object_name().to_string();
 
         // Check for name collision with a *different* object
-        if let Some(&existing_oid) = self.name_index.get(&name) {
-            if existing_oid != oid {
-                return Err(Error::Protocol {
-                    class: ErrorClass::OBJECT.to_raw() as u32,
-                    code: ErrorCode::DUPLICATE_NAME.to_raw() as u32,
-                });
-            }
-        }
+        self.check_name_available(&oid, &name)?;
 
         // If replacing an existing object, remove its old name from the index
         // and invalidate state owned by enrollments that monitor it.
         if let Some(old) = self.objects.get(&oid) {
+            if let Some(reporter) = old.audit_reporter_internal() {
+                reporter.status_internal().configuration_changed();
+            }
             let old_name = old.object_name().to_string();
             self.name_index.remove(&old_name);
             self.invalidate_enrollments_monitoring(&oid);
@@ -101,13 +140,16 @@ impl ObjectDatabase {
         self.name_index.insert(name, oid);
         let is_new = !self.objects.contains_key(&oid);
         self.enrollment_eval_sources.remove(&oid);
+        self.trend_poll.retire(&oid);
         self.objects.insert(oid, object);
+        self.audit_membership_changed(oid, true);
         if is_new {
             self.type_index
                 .entry(oid.object_type())
                 .or_default()
                 .push(oid);
         }
+        self.membership_changed(oid, true);
         Ok(())
     }
 
@@ -119,8 +161,12 @@ impl ObjectDatabase {
 
     /// Check whether `new_name` is available for object `oid`.
     ///
-    /// Returns `Ok(())` if the name is unused or already belongs to `oid`.
-    /// Returns `Err(DUPLICATE_NAME)` if another object owns the name.
+    /// Returns `Ok(())` if the name is unused or already belongs to `oid`,
+    /// and PROPERTY / DUPLICATE_NAME if another object owns it. Clause 18.3
+    /// lists that code under the PROPERTY class, and the WriteProperty and
+    /// WritePropertyMultiple error tables (15.9.1.3.1, 15.10.1.3.1) give the
+    /// same pair; CreateObject's table (15.3.1.3.1) has no row for a name in
+    /// use, so its initial values answer as WriteProperty does.
     pub fn check_name_available(
         &self,
         oid: &ObjectIdentifier,
@@ -129,7 +175,7 @@ impl ObjectDatabase {
         if let Some(&owner) = self.name_index.get(new_name) {
             if owner != *oid {
                 return Err(Error::Protocol {
-                    class: ErrorClass::OBJECT.to_raw() as u32,
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
                     code: ErrorCode::DUPLICATE_NAME.to_raw() as u32,
                 });
             }
@@ -155,8 +201,43 @@ impl ObjectDatabase {
     }
 
     /// Get a mutable reference to an object by identifier.
-    pub fn get_mut(&mut self, oid: &ObjectIdentifier) -> Option<&mut Box<dyn BACnetObject>> {
-        self.objects.get_mut(oid)
+    pub fn get_mut(&mut self, oid: &ObjectIdentifier) -> Option<&mut (dyn BACnetObject + '_)> {
+        if let Some(object) = self.objects.get_mut(oid) {
+            Some(object.as_mut())
+        } else {
+            None
+        }
+    }
+
+    /// Install an identity-preserving adapter through scoped structural access.
+    ///
+    /// The callback must preserve the object's identifier, name and type. It is
+    /// responsible for allocating/validating before changing the slot. This hook
+    /// neither rebinds clocks nor updates indexes, and does not provide rollback.
+    /// Poll ownership is retired before invocation, even if the callback returns
+    /// an error or unwinds after modifying the slot. Slot borrows cannot escape.
+    /// An installed Audit runtime can reject protected members before the callback.
+    ///
+    /// ```compile_fail
+    /// use bacnet_objects::{database::ObjectDatabase, traits::BACnetObject};
+    /// use bacnet_types::primitives::ObjectIdentifier;
+    /// fn escape<'a>(db: &'a mut ObjectDatabase, oid: &ObjectIdentifier)
+    ///     -> Result<Option<&'a mut Box<dyn BACnetObject>>, bacnet_types::error::Error> {
+    ///     db.with_object_adapter(oid, |slot| slot)
+    /// }
+    /// ```
+    pub fn with_object_adapter<R, F>(
+        &mut self,
+        oid: &ObjectIdentifier,
+        adapt: F,
+    ) -> Result<Option<R>, Error>
+    where
+        F: for<'slot> FnOnce(&'slot mut Box<dyn BACnetObject>) -> R,
+    {
+        self.check_network_port_membership(oid)?;
+        self.check_audit_membership(oid, false)?;
+        self.trend_poll.retire(oid);
+        Ok(self.objects.get_mut(oid).map(adapt))
     }
 
     /// Whether an Event Enrollment object's private evaluator state requires a
@@ -218,12 +299,24 @@ impl ObjectDatabase {
         self.invalid_enrollment_eval_state.extend(affected);
     }
 
-    /// Remove an object by identifier.
-    pub fn remove(&mut self, oid: &ObjectIdentifier) -> Option<Box<dyn BACnetObject>> {
+    /// Remove an object by identifier. Installed Audit membership protection
+    /// returns an error before removing the object or changing indexes.
+    /// Pulse Converters whose Input_Reference names a removed object have
+    /// the reference judged again, as [`add`](Self::add) does.
+    pub fn remove(
+        &mut self,
+        oid: &ObjectIdentifier,
+    ) -> Result<Option<Box<dyn BACnetObject>>, Error> {
+        self.check_network_port_membership(oid)?;
+        self.check_audit_membership(oid, false)?;
+        self.trend_poll.retire(oid);
         if self.objects.contains_key(oid) {
             self.invalidate_enrollments_monitoring(oid);
         }
         if let Some(mut obj) = self.objects.remove(oid) {
+            if let Some(reporter) = obj.audit_reporter_internal() {
+                reporter.status_internal().configuration_changed();
+            }
             self.enrollment_eval_sources.remove(oid);
             if obj.enrollment_eval_state_internal().is_some() {
                 if obj
@@ -242,9 +335,11 @@ impl ObjectDatabase {
             if let Some(type_set) = self.type_index.get_mut(&oid.object_type()) {
                 type_set.retain(|o| o != oid);
             }
-            Some(obj)
+            self.audit_membership_changed(*oid, false);
+            self.membership_changed(*oid, false);
+            Ok(Some(obj))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -284,15 +379,31 @@ impl ObjectDatabase {
     /// Bind one process-local monotonic source to every contained object.
     #[doc(hidden)]
     pub fn set_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
+        self.trend_poll.clear();
         self.monotonic_clock = clock;
         for object in self.objects.values_mut() {
             object.bind_monotonic_clock_internal(self.monotonic_clock.clone());
         }
     }
 
+    /// Bind the waker objects call when a write arms a monotonic deadline to
+    /// every contained object, and to each one added later.
+    #[doc(hidden)]
+    pub fn set_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
+        self.deadline_waker = waker;
+        for object in self.objects.values_mut() {
+            object.bind_deadline_waker_internal(self.deadline_waker.clone());
+        }
+    }
+
     /// Read one coherent sample from the database's shared clock.
     pub fn clock_frame(&self) -> Option<ClockFrame> {
         self.clock.as_ref()?.read_clock()
+    }
+
+    #[doc(hidden)]
+    pub fn event_sequence_internal(&self) -> Arc<EventSequence> {
+        Arc::clone(&self.event_sequence)
     }
 
     /// Consume the next Device-local EventNotification sequence number.
@@ -314,18 +425,14 @@ impl ObjectDatabase {
     #[doc(hidden)]
     pub fn reserve_event_sequence_number(&self) -> EventSequenceReservation {
         EventSequenceReservation {
-            number: self.event_sequence_number,
+            number: self.event_sequence.current(),
         }
     }
 
     /// Consume an exact reservation if it is still current.
     #[doc(hidden)]
     pub fn confirm_event_sequence_number(&mut self, reservation: EventSequenceReservation) -> bool {
-        if reservation.number != self.event_sequence_number {
-            return false;
-        }
-        self.event_sequence_number = self.event_sequence_number.wrapping_add(1);
-        true
+        self.event_sequence.confirm(reservation.number)
     }
 
     /// Visit every `(ObjectIdentifier, &mut dyn BACnetObject)` pair.
@@ -355,364 +462,7 @@ impl ObjectDatabase {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::borrow::Cow;
+mod tests;
 
-    use super::*;
-    use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
-    use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
-    use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
-    use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
-    use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier};
-    use bacnet_types::error::Error;
-    use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
-
-    #[test]
-    fn all_nine_builtin_intrinsic_families_implement_atomic_commit() {
-        let mut objects: Vec<Box<dyn BACnetObject>> = vec![
-            Box::new(AnalogInputObject::new(1, "AI", 0).unwrap()),
-            Box::new(AnalogOutputObject::new(1, "AO", 0).unwrap()),
-            Box::new(AnalogValueObject::new(1, "AV", 0).unwrap()),
-            Box::new(BinaryInputObject::new(1, "BI").unwrap()),
-            Box::new(BinaryOutputObject::new(1, "BO").unwrap()),
-            Box::new(BinaryValueObject::new(1, "BV").unwrap()),
-            Box::new(MultiStateInputObject::new(1, "MSI", 3).unwrap()),
-            Box::new(MultiStateOutputObject::new(1, "MSO", 3).unwrap()),
-            Box::new(MultiStateValueObject::new(1, "MSV", 3).unwrap()),
-        ];
-
-        for object in &mut objects {
-            assert!(
-                object.intrinsic_reporting_requires_atomic_commit(),
-                "{} must opt into the atomic server path",
-                object.object_name()
-            );
-            object
-                .commit_event_transition_internal(EventTransitionCommit {
-                    change: EventStateChange {
-                        from: EventState::NORMAL,
-                        to: EventState::OFFNORMAL,
-                    },
-                    coordinate: EventTransition::ToOffnormal,
-                    ack_required: true,
-                    timestamp: BACnetTimeStamp::SequenceNumber(73),
-                    message_text: None,
-                })
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "{} must implement the shared commit hook: {error:?}",
-                        object.object_name()
-                    )
-                });
-
-            assert_eq!(
-                object
-                    .read_property(PropertyIdentifier::EVENT_STATE, None)
-                    .unwrap(),
-                PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw()),
-                "{} Event_State",
-                object.object_name()
-            );
-            assert_eq!(
-                object
-                    .read_property(PropertyIdentifier::ACKED_TRANSITIONS, None)
-                    .unwrap(),
-                PropertyValue::BitString {
-                    unused_bits: 5,
-                    data: vec![0x60],
-                },
-                "{} Acked_Transitions",
-                object.object_name()
-            );
-        }
-    }
-
-    #[test]
-    fn event_sequence_wraps_and_is_database_local() {
-        let mut first = ObjectDatabase::new();
-        let mut second = ObjectDatabase::new();
-
-        assert_eq!(first.next_event_sequence_number(), 0);
-        assert_eq!(first.next_event_sequence_number(), 1);
-        assert_eq!(second.next_event_sequence_number(), 0);
-
-        first.event_sequence_number = u16::MAX;
-        assert_eq!(first.next_event_sequence_number(), u16::MAX);
-        assert_eq!(first.next_event_sequence_number(), 0);
-        assert_eq!(second.next_event_sequence_number(), 1);
-    }
-
-    #[test]
-    fn event_sequence_reservation_is_non_consuming_until_confirmed() {
-        let mut db = ObjectDatabase::new();
-
-        let reservation = db.reserve_event_sequence_number();
-        assert_eq!(reservation.number(), 0);
-        assert_eq!(db.reserve_event_sequence_number().number(), 0);
-        assert!(db.confirm_event_sequence_number(reservation));
-        assert_eq!(db.reserve_event_sequence_number().number(), 1);
-    }
-
-    /// Minimal test object.
-    struct TestObject {
-        oid: ObjectIdentifier,
-        name: String,
-    }
-
-    impl BACnetObject for TestObject {
-        fn object_identifier(&self) -> ObjectIdentifier {
-            self.oid
-        }
-
-        fn object_name(&self) -> &str {
-            &self.name
-        }
-
-        fn read_property(
-            &self,
-            property: PropertyIdentifier,
-            _array_index: Option<u32>,
-        ) -> Result<PropertyValue, Error> {
-            if property == PropertyIdentifier::OBJECT_NAME {
-                Ok(PropertyValue::CharacterString(self.name.clone()))
-            } else {
-                Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
-                })
-            }
-        }
-
-        fn write_property(
-            &mut self,
-            _property: PropertyIdentifier,
-            _array_index: Option<u32>,
-            _value: PropertyValue,
-            _priority: Option<u8>,
-        ) -> Result<(), Error> {
-            Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-            })
-        }
-
-        fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-            Cow::Borrowed(&[PropertyIdentifier::OBJECT_NAME])
-        }
-    }
-
-    fn make_test_object(instance: u32) -> Box<dyn BACnetObject> {
-        Box::new(TestObject {
-            oid: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap(),
-            name: format!("AI-{instance}"),
-        })
-    }
-
-    fn make_test_object_typed(
-        object_type: ObjectType,
-        instance: u32,
-        name: &str,
-    ) -> Box<dyn BACnetObject> {
-        Box::new(TestObject {
-            oid: ObjectIdentifier::new(object_type, instance).unwrap(),
-            name: name.to_string(),
-        })
-    }
-
-    #[test]
-    fn add_and_get() {
-        let mut db = ObjectDatabase::new();
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-        db.add(make_test_object(1)).unwrap();
-        assert_eq!(db.len(), 1);
-
-        let obj = db.get(&oid).unwrap();
-        assert_eq!(obj.object_name(), "AI-1");
-    }
-
-    #[test]
-    fn get_nonexistent_returns_none() {
-        let db = ObjectDatabase::new();
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 99).unwrap();
-        assert!(db.get(&oid).is_none());
-    }
-
-    #[test]
-    fn read_property_via_database() {
-        let mut db = ObjectDatabase::new();
-        db.add(make_test_object(1)).unwrap();
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-        let obj = db.get(&oid).unwrap();
-        let val = obj
-            .read_property(PropertyIdentifier::OBJECT_NAME, None)
-            .unwrap();
-        assert_eq!(val, PropertyValue::CharacterString("AI-1".into()));
-    }
-
-    #[test]
-    fn remove_object() {
-        let mut db = ObjectDatabase::new();
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-        db.add(make_test_object(1)).unwrap();
-        assert_eq!(db.len(), 1);
-        let removed = db.remove(&oid);
-        assert!(removed.is_some());
-        assert_eq!(db.len(), 0);
-    }
-
-    #[test]
-    fn list_objects() {
-        let mut db = ObjectDatabase::new();
-        db.add(make_test_object(1)).unwrap();
-        db.add(make_test_object(2)).unwrap();
-        let oids = db.list_objects();
-        assert_eq!(oids.len(), 2);
-    }
-
-    #[test]
-    fn find_by_type_returns_matching_objects() {
-        let mut db = ObjectDatabase::new();
-        db.add(make_test_object_typed(ObjectType::ANALOG_INPUT, 1, "AI-1"))
-            .unwrap();
-        db.add(make_test_object_typed(ObjectType::ANALOG_INPUT, 2, "AI-2"))
-            .unwrap();
-        db.add(make_test_object_typed(ObjectType::BINARY_INPUT, 1, "BI-1"))
-            .unwrap();
-        db.add(make_test_object_typed(ObjectType::ANALOG_OUTPUT, 1, "AO-1"))
-            .unwrap();
-
-        let ai_oids = db.find_by_type(ObjectType::ANALOG_INPUT);
-        assert_eq!(ai_oids.len(), 2);
-        for oid in &ai_oids {
-            assert_eq!(oid.object_type(), ObjectType::ANALOG_INPUT);
-        }
-
-        let bi_oids = db.find_by_type(ObjectType::BINARY_INPUT);
-        assert_eq!(bi_oids.len(), 1);
-        assert_eq!(bi_oids[0].object_type(), ObjectType::BINARY_INPUT);
-        assert_eq!(bi_oids[0].instance_number(), 1);
-
-        let ao_oids = db.find_by_type(ObjectType::ANALOG_OUTPUT);
-        assert_eq!(ao_oids.len(), 1);
-    }
-
-    #[test]
-    fn find_by_type_returns_empty_for_no_matches() {
-        let mut db = ObjectDatabase::new();
-        db.add(make_test_object_typed(ObjectType::ANALOG_INPUT, 1, "AI-1"))
-            .unwrap();
-
-        let results = db.find_by_type(ObjectType::BINARY_VALUE);
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn find_by_type_on_empty_database() {
-        let db = ObjectDatabase::new();
-        let results = db.find_by_type(ObjectType::ANALOG_INPUT);
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn iter_objects_yields_all_entries() {
-        let mut db = ObjectDatabase::new();
-        db.add(make_test_object_typed(ObjectType::ANALOG_INPUT, 1, "AI-1"))
-            .unwrap();
-        db.add(make_test_object_typed(ObjectType::BINARY_INPUT, 1, "BI-1"))
-            .unwrap();
-
-        let items: Vec<_> = db.iter_objects().collect();
-        assert_eq!(items.len(), 2);
-
-        // Verify we can access object data without a second lookup
-        for (oid, obj) in &items {
-            assert_eq!(oid.object_type(), obj.object_identifier().object_type());
-            assert!(!obj.object_name().is_empty());
-        }
-    }
-
-    #[test]
-    fn iter_objects_on_empty_database() {
-        let db = ObjectDatabase::new();
-        assert_eq!(db.iter_objects().count(), 0);
-    }
-
-    #[test]
-    fn duplicate_name_rejected() {
-        let mut db = ObjectDatabase::new();
-        db.add(make_test_object_typed(
-            ObjectType::ANALOG_INPUT,
-            1,
-            "Sensor",
-        ))
-        .unwrap();
-        // Different OID, same name → must fail
-        let result = db.add(make_test_object_typed(
-            ObjectType::ANALOG_INPUT,
-            2,
-            "Sensor",
-        ));
-        assert!(result.is_err());
-        assert_eq!(db.len(), 1); // original still there
-    }
-
-    #[test]
-    fn replace_same_oid_allowed() {
-        let mut db = ObjectDatabase::new();
-        db.add(make_test_object_typed(
-            ObjectType::ANALOG_INPUT,
-            1,
-            "Sensor",
-        ))
-        .unwrap();
-        // Same OID, same or different name → allowed (replacement)
-        db.add(make_test_object_typed(
-            ObjectType::ANALOG_INPUT,
-            1,
-            "Sensor-v2",
-        ))
-        .unwrap();
-        assert_eq!(db.len(), 1);
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-        assert_eq!(db.get(&oid).unwrap().object_name(), "Sensor-v2");
-    }
-
-    #[test]
-    fn find_by_name_works() {
-        let mut db = ObjectDatabase::new();
-        db.add(make_test_object_typed(ObjectType::ANALOG_INPUT, 1, "Temp"))
-            .unwrap();
-        db.add(make_test_object_typed(ObjectType::BINARY_INPUT, 1, "Alarm"))
-            .unwrap();
-
-        let obj = db.find_by_name("Temp").unwrap();
-        assert_eq!(obj.object_identifier().instance_number(), 1);
-        assert_eq!(
-            obj.object_identifier().object_type(),
-            ObjectType::ANALOG_INPUT
-        );
-
-        assert!(db.find_by_name("NonExistent").is_none());
-    }
-
-    #[test]
-    fn remove_frees_name() {
-        let mut db = ObjectDatabase::new();
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-        db.add(make_test_object_typed(
-            ObjectType::ANALOG_INPUT,
-            1,
-            "Sensor",
-        ))
-        .unwrap();
-        db.remove(&oid);
-        // Name should now be available for a different object
-        db.add(make_test_object_typed(
-            ObjectType::ANALOG_INPUT,
-            2,
-            "Sensor",
-        ))
-        .unwrap();
-        assert_eq!(db.len(), 1);
-    }
-}
+#[cfg(test)]
+mod network_port_tests;

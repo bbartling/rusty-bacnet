@@ -4,7 +4,7 @@ use super::*;
 use bacnet_encoding::apdu::{decode_apdu, ConfirmedRequest};
 use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::AbortReason;
 
 struct ImmediateReplyTransport {
@@ -36,6 +36,10 @@ impl TransportPort for ImmediateReplyTransport {
             .await
             .push(Bytes::copy_from_slice(npdu));
         Ok(())
+    }
+
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
     }
 
     fn local_mac(&self) -> &[u8] {
@@ -445,10 +449,12 @@ async fn unsupported_confirmed_request_uses_immediate_reply_channel() {
 
     inbound_tx
         .send(ReceivedNpdu {
+            direct_response: None,
             npdu: request.freeze(),
             source_mac: router_mac,
             link_layer_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: Some(reply_tx),
         })
         .await

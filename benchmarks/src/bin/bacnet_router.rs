@@ -2,17 +2,18 @@
 //!
 //! Parses a comma-separated port spec and starts a router connecting them.
 //! Format: `bip:<ip>:<port>:<broadcast>:<network>,bip:<ip>:<port>:<broadcast>:<network>`
+#![allow(clippy::print_stdout, clippy::print_stderr)] // benchmark binaries report progress and results on the console
 
 use std::net::Ipv4Addr;
 
-use bacnet_network::router::{BACnetRouter, RouterPort};
+use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use bacnet_transport::bip::BipTransport;
 use clap::Parser;
 
 #[derive(Parser)]
 #[command(name = "bacnet-router", about = "BACnet multi-port router")]
 struct Args {
-    /// Comma-separated port specs: bip:<ip>:<port>:<broadcast>:<network>
+    /// Comma-separated port specs: bip:IP:PORT:BROADCAST:NETWORK
     #[arg(long)]
     ports: String,
 }
@@ -71,7 +72,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         networks
     );
 
-    let (_router, mut local_rx) = BACnetRouter::start(router_ports).await?;
+    let StartedRouter {
+        router: _router,
+        apdus: mut local_rx,
+        ..
+    } = BACnetRouter::start(router_ports, RouterOptions::new()).await?;
 
     eprintln!("Router running");
 

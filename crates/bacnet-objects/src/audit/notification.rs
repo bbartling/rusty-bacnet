@@ -21,7 +21,30 @@ pub trait AuditLogNotificationSink: Send + Sync {
         apdu_timeout_ms: u32,
     ) -> Result<(), Error>;
 
-    /// Check the durable completed-confirmed ledger without mutating it.
+    /// Store a batch and report whether retained record content changed.
+    /// Custom sinks must opt in to change reporting before they can forward.
+    fn store_notifications_with_change(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+    ) -> Result<bool, Error> {
+        self.store_notifications(notifications, apdu_timeout_ms)?;
+        Ok(false)
+    }
+
+    /// Store records and receipt atomically, reporting record changes separately
+    /// from receipt-only commits. A duplicate must always report `false`.
+    fn store_confirmed_notifications_with_change(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+        receipt: CompletedAuditReceipt,
+    ) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
+        self.store_confirmed_notifications(notifications, apdu_timeout_ms, receipt)
+            .map(|outcome| (outcome, false))
+    }
+
+    /// Check the durable completed confirmed receipts without mutating them.
     fn has_completed_confirmed_receipt(
         &self,
         _key: &[u8],
@@ -40,6 +63,53 @@ pub trait AuditLogNotificationSink: Send + Sync {
         self.store_notifications(notifications, apdu_timeout_ms)?;
         Ok(ConfirmedAuditNotificationOutcome::Stored)
     }
+
+    /// Stage a batch whose commit the caller awaits without the database
+    /// guard (#1270): with `receipt` as
+    /// [`store_confirmed_notifications_with_change`](Self::store_confirmed_notifications_with_change)
+    /// stores it, without as
+    /// [`store_notifications_with_change`](Self::store_notifications_with_change)
+    /// does. Nothing changes in memory until
+    /// [`finish_notification_batch`](Self::finish_notification_batch) takes
+    /// the committed batch.
+    ///
+    /// The default stores the batch at once and returns
+    /// [`AuditBatchStage::Done`], so a sink that does not stage keeps its
+    /// commit where it was.
+    fn stage_notification_batch(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+        receipt: Option<CompletedAuditReceipt>,
+    ) -> Result<AuditBatchStage, Error> {
+        match receipt {
+            Some(receipt) => self
+                .store_confirmed_notifications_with_change(notifications, apdu_timeout_ms, receipt)
+                .map(|(outcome, changed)| AuditBatchStage::Done(outcome, changed)),
+            None => self
+                .store_notifications_with_change(notifications, apdu_timeout_ms)
+                .map(|changed| {
+                    AuditBatchStage::Done(ConfirmedAuditNotificationOutcome::Stored, changed)
+                }),
+        }
+    }
+
+    /// Take a batch [`stage_notification_batch`](Self::stage_notification_batch)
+    /// staged, once its commit has run: the batch's outcome and whether its
+    /// retained records changed, or the commit's error with memory unchanged.
+    ///
+    /// The default fails with DEVICE / OPERATIONAL_PROBLEM, since the default
+    /// stage never stages.
+    fn finish_notification_batch(
+        &mut self,
+        staged: StagedAuditBatch,
+    ) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
+        let _ = staged;
+        Err(Error::Protocol {
+            class: ErrorClass::DEVICE.to_raw() as u32,
+            code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+        })
+    }
 }
 
 impl AuditLogObject {
@@ -47,7 +117,7 @@ impl AuditLogObject {
         &mut self,
         notifications: &[BACnetAuditNotification],
         apdu_timeout_ms: u32,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         if !self.log_enable {
             return Err(Error::Protocol {
                 class: ErrorClass::SERVICES.to_raw() as u32,
@@ -66,7 +136,7 @@ impl AuditLogObject {
         if changed {
             self.commit_and_apply(prospective)?;
         }
-        Ok(())
+        Ok(changed && self.buffer_size != 0)
     }
 
     fn store_confirmed_notification_batch(
@@ -74,7 +144,7 @@ impl AuditLogObject {
         notifications: &[BACnetAuditNotification],
         apdu_timeout_ms: u32,
         receipt: CompletedAuditReceipt,
-    ) -> Result<ConfirmedAuditNotificationOutcome, Error> {
+    ) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
         if !self.log_enable {
             return Err(Error::Protocol {
                 class: ErrorClass::SERVICES.to_raw() as u32,
@@ -91,20 +161,21 @@ impl AuditLogObject {
             receipt.key(),
             receipt.completed_at_unix_millis(),
         )? {
-            return Ok(ConfirmedAuditNotificationOutcome::Duplicate);
+            return Ok((ConfirmedAuditNotificationOutcome::Duplicate, false));
         }
 
         let mut prospective = self.snapshot_for_next_generation()?;
-        self.apply_notification_batch(&mut prospective, notifications, apdu_timeout_ms)?;
+        let changed =
+            self.apply_notification_batch(&mut prospective, notifications, apdu_timeout_ms)?;
         let outcome = receipt::insert(&mut prospective.completed_receipts, receipt)?;
         if outcome == ConfirmedAuditNotificationOutcome::Duplicate {
-            return Ok(outcome);
+            return Ok((outcome, false));
         }
         self.commit_and_apply(prospective)?;
-        Ok(outcome)
+        Ok((outcome, changed && self.buffer_size != 0))
     }
 
-    fn apply_notification_batch(
+    pub(super) fn apply_notification_batch(
         &self,
         prospective: &mut AuditLogSnapshot,
         notifications: &[BACnetAuditNotification],
@@ -154,6 +225,24 @@ impl AuditLogNotificationSink for AuditLogObject {
         apdu_timeout_ms: u32,
     ) -> Result<(), Error> {
         self.store_notification_batch(notifications, apdu_timeout_ms)
+            .map(|_| ())
+    }
+
+    fn store_notifications_with_change(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+    ) -> Result<bool, Error> {
+        self.store_notification_batch(notifications, apdu_timeout_ms)
+    }
+
+    fn store_confirmed_notifications_with_change(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+        receipt: CompletedAuditReceipt,
+    ) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
+        self.store_confirmed_notification_batch(notifications, apdu_timeout_ms, receipt)
     }
 
     fn has_completed_confirmed_receipt(
@@ -171,6 +260,23 @@ impl AuditLogNotificationSink for AuditLogObject {
         receipt: CompletedAuditReceipt,
     ) -> Result<ConfirmedAuditNotificationOutcome, Error> {
         self.store_confirmed_notification_batch(notifications, apdu_timeout_ms, receipt)
+            .map(|(outcome, _)| outcome)
+    }
+
+    fn stage_notification_batch(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+        receipt: Option<CompletedAuditReceipt>,
+    ) -> Result<AuditBatchStage, Error> {
+        AuditLogObject::stage_notification_batch(self, notifications, apdu_timeout_ms, receipt)
+    }
+
+    fn finish_notification_batch(
+        &mut self,
+        staged: StagedAuditBatch,
+    ) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
+        AuditLogObject::finish_notification_batch(self, staged)
     }
 }
 

@@ -5,7 +5,7 @@ use super::*;
 // ---------------------------------------------------------------------------
 
 /// An incoming COV notification from a server.
-#[pyclass(name = "CovNotification", frozen)]
+#[pyclass(name = "CovNotification", module = "rusty_bacnet", frozen)]
 pub struct PyCovNotification {
     inner: ReceivedCOVNotification,
 }
@@ -59,6 +59,9 @@ impl PyCovNotification {
     }
 
     /// List of property values as dicts with `property_id`, `array_index`, `value`.
+    ///
+    /// Each value decodes as a `read_property` result does; octets whose
+    /// framing is broken come back as `bytes`.
     #[getter]
     fn values(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let list = PyList::empty(py);
@@ -71,17 +74,21 @@ impl PyCovNotification {
                 },
             )?;
             dict.set_item("array_index", pv.property_array_index)?;
-            if !pv.value.is_empty() {
-                match decode_application_value(&pv.value, 0) {
-                    Ok((val, _)) => {
-                        dict.set_item("value", PyPropertyValue::from_rust(val))?;
-                    }
-                    Err(_) => {
-                        dict.set_item("value", PyBytes::new(py, &pv.value))?;
-                    }
+            match decode_read_value(
+                self.inner
+                    .notification
+                    .monitored_object_identifier
+                    .object_type(),
+                pv.property_identifier,
+                pv.property_array_index,
+                &pv.value,
+            ) {
+                Ok(val) => {
+                    dict.set_item("value", val)?;
                 }
-            } else {
-                dict.set_item("value", py.None())?;
+                Err(_) => {
+                    dict.set_item("value", PyBytes::new(py, &pv.value))?;
+                }
             }
             list.append(dict)?;
         }
@@ -100,6 +107,12 @@ impl PyCovNotification {
             self.inner.notification.time_remaining
         )
     }
+
+    /// Refuses `copy` and `pickle`: a notification as received, with no
+    /// constructor to rebuild it. See [`super::not_picklable`].
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Err(super::not_picklable(slf.as_any()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +120,7 @@ impl PyCovNotification {
 // ---------------------------------------------------------------------------
 
 /// Async iterator yielding COV notifications from a broadcast channel.
-#[pyclass(name = "CovNotificationIterator")]
+#[pyclass(name = "CovNotificationIterator", module = "rusty_bacnet")]
 pub struct PyCovNotificationIterator {
     rx: Arc<tokio::sync::Mutex<broadcast::Receiver<ReceivedCOVNotification>>>,
 }
@@ -126,9 +139,15 @@ impl PyCovNotificationIterator {
         slf
     }
 
+    /// Refuses `copy` and `pickle`: a live subscription to this client's
+    /// notifications. See [`super::not_picklable`].
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Err(super::not_picklable(slf.as_any()))
+    }
+
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let rx = self.rx.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mut guard = rx.lock().await;
             loop {
                 match guard.recv().await {
@@ -136,7 +155,11 @@ impl PyCovNotificationIterator {
                         return Ok(PyCovNotification { inner: notif });
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        eprintln!("COV notification iterator lagged, skipped {n} messages");
+                        #[allow(clippy::print_stderr)]
+                        // no logging path in this crate; warn the Python user on stderr
+                        {
+                            eprintln!("COV notification iterator lagged, skipped {n} messages");
+                        }
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => {

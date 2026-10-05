@@ -30,13 +30,13 @@ fn write_present(object: &mut BinaryLightingOutputObject, value: u32, priority: 
         .unwrap();
 }
 
-fn write_direct(object: &mut BinaryLightingOutputObject, priority: u8, value: PropertyValue) {
+fn command(object: &mut BinaryLightingOutputObject, priority: u8, value: PropertyValue) {
     object
         .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(priority as u32),
-            value,
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            value,
+            Some(priority),
         )
         .unwrap();
 }
@@ -75,7 +75,7 @@ fn assert_property_error(error: Error, expected: ErrorCode) {
 }
 
 #[test]
-fn same_priority_direct_values_win_after_both_operation_kinds() {
+fn same_priority_commands_win_after_both_operation_kinds() {
     for operation in [3, 4] {
         for incoming in [
             PropertyValue::Enumerated(OFF),
@@ -83,7 +83,7 @@ fn same_priority_direct_values_win_after_both_operation_kinds() {
             PropertyValue::Null,
         ] {
             let mut object = armed(operation);
-            write_direct(&mut object, 8, incoming.clone());
+            command(&mut object, 8, incoming.clone());
 
             assert_eq!(slot(&object, 8), incoming);
             assert_eq!(
@@ -96,13 +96,13 @@ fn same_priority_direct_values_win_after_both_operation_kinds() {
 }
 
 #[test]
-fn higher_priority_direct_write_completes_old_slot_then_installs_incoming() {
+fn higher_priority_command_completes_old_slot_then_installs_incoming() {
     for (operation, completed_slot) in [
         (3, PropertyValue::Enumerated(OFF)),
         (4, PropertyValue::Null),
     ] {
         let mut object = armed(operation);
-        write_direct(&mut object, 4, PropertyValue::Enumerated(ON));
+        command(&mut object, 4, PropertyValue::Enumerated(ON));
 
         assert_eq!(slot(&object, 8), completed_slot);
         assert_eq!(slot(&object, 4), PropertyValue::Enumerated(ON));
@@ -114,14 +114,14 @@ fn higher_priority_direct_write_completes_old_slot_then_installs_incoming() {
 }
 
 #[test]
-fn lower_priority_direct_write_preserves_each_operation_and_remaining_time() {
+fn lower_priority_command_preserves_each_operation_and_remaining_time() {
     for (operation, completed_slot) in [
         (3, PropertyValue::Enumerated(OFF)),
         (4, PropertyValue::Null),
     ] {
         let mut object = armed(operation);
         assert!(!object.advance_time_internal(Duration::from_millis(1_500)));
-        write_direct(&mut object, 10, PropertyValue::Enumerated(ON));
+        command(&mut object, 10, PropertyValue::Enumerated(ON));
 
         assert_eq!(slot(&object, 8), PropertyValue::Enumerated(ON));
         assert_eq!(slot(&object, 10), PropertyValue::Enumerated(ON));
@@ -136,11 +136,41 @@ fn lower_priority_direct_write_preserves_each_operation_and_remaining_time() {
 }
 
 #[test]
-fn invalid_direct_writes_preserve_each_operation_and_remaining_time() {
+fn read_only_array_writes_preserve_each_operation_and_remaining_time() {
     for operation in [3, 4] {
         let mut object = armed(operation);
         assert!(!object.advance_time_internal(Duration::from_millis(1_500)));
-        let blink_count = object.binary_lighting_blink_count_internal();
+        let blink_count = object.lighting_blink_count_internal();
+
+        let before = read(&object, PropertyIdentifier::PRIORITY_ARRAY);
+        for index in [
+            None,
+            Some(0),
+            Some(1),
+            Some(4),
+            Some(8),
+            Some(10),
+            Some(16),
+            Some(17),
+        ] {
+            for value in [
+                PropertyValue::Enumerated(OFF),
+                PropertyValue::Enumerated(ON),
+                PropertyValue::Null,
+            ] {
+                assert_property_error(
+                    object
+                        .write_property(PropertyIdentifier::PRIORITY_ARRAY, index, value, None)
+                        .unwrap_err(),
+                    ErrorCode::WRITE_ACCESS_DENIED,
+                );
+                assert_eq!(read(&object, PropertyIdentifier::PRIORITY_ARRAY), before);
+                assert_eq!(
+                    read(&object, PropertyIdentifier::PRESENT_VALUE),
+                    PropertyValue::Enumerated(ON)
+                );
+            }
+        }
 
         assert_property_error(
             object
@@ -151,7 +181,7 @@ fn invalid_direct_writes_preserve_each_operation_and_remaining_time() {
                     None,
                 )
                 .unwrap_err(),
-            ErrorCode::VALUE_OUT_OF_RANGE,
+            ErrorCode::WRITE_ACCESS_DENIED,
         );
         assert_property_error(
             object
@@ -162,7 +192,7 @@ fn invalid_direct_writes_preserve_each_operation_and_remaining_time() {
                     None,
                 )
                 .unwrap_err(),
-            ErrorCode::INVALID_DATA_TYPE,
+            ErrorCode::WRITE_ACCESS_DENIED,
         );
         assert_property_error(
             object
@@ -173,12 +203,12 @@ fn invalid_direct_writes_preserve_each_operation_and_remaining_time() {
                     None,
                 )
                 .unwrap_err(),
-            ErrorCode::INVALID_ARRAY_INDEX,
+            ErrorCode::WRITE_ACCESS_DENIED,
         );
 
         assert_eq!(slot(&object, 8), PropertyValue::Enumerated(ON));
         assert_eq!(slot(&object, 4), PropertyValue::Null);
-        assert_eq!(object.binary_lighting_blink_count_internal(), blink_count);
+        assert_eq!(object.lighting_blink_count_internal(), blink_count);
         assert_eq!(
             read(&object, PropertyIdentifier::EGRESS_ACTIVE),
             PropertyValue::Boolean(true)

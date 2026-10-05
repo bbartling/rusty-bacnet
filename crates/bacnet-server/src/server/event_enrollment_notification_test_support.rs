@@ -1,5 +1,8 @@
 use super::super::*;
+use crate::server::test_transport::{SendMode, SentFrame, TestTransport, BIP_LOCAL_MAC};
 use bacnet_encoding::apdu::decode_apdu;
+use bacnet_encoding::constructed::decode_bacnet_property_value;
+use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -7,40 +10,36 @@ use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{EventNotificationRequest, NotificationParameters};
-use bacnet_transport::port::TransportPort;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, FaultParameters,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, EventType, Reliability};
-use bacnet_types::primitives::BACnetTimeStamp;
+use bacnet_types::primitives::{BACnetTimeStamp, StatusFlags};
 use bytes::Bytes;
 use std::borrow::Cow;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 
+/// Captures the broadcast EventNotifications a [`TestTransport`] sends and
+/// ignores unicasts. While `lock_probe` names a database, each broadcast first
+/// proves that database's guard is released, and only then is recorded.
 #[derive(Clone, Default)]
-pub(super) struct RecordingTransport {
+pub(super) struct NotificationCapture {
     pub(super) sent: StdArc<StdMutex<Vec<Bytes>>>,
     pub(super) lock_probe: StdArc<StdMutex<Option<StdArc<tokio::sync::RwLock<ObjectDatabase>>>>>,
 }
 
-impl TransportPort for RecordingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
+impl NotificationCapture {
+    pub(super) fn transport(&self) -> TestTransport {
+        let capture = self.clone();
+        TestTransport::builder()
+            .local_mac(&BIP_LOCAL_MAC)
+            .unicast(SendMode::Ignore)
+            .on_send(move |frame| capture.clone().record(frame))
+            .build()
     }
 
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
+    async fn record(self, frame: SentFrame) -> Result<(), Error> {
         let database = self.lock_probe.lock().unwrap().clone();
         if let Some(database) = database {
             assert!(
@@ -48,12 +47,8 @@ impl TransportPort for RecordingTransport {
                 "Event Enrollment database guard must be released before network I/O"
             );
         }
-        self.sent.lock().unwrap().push(Bytes::copy_from_slice(npdu));
+        self.sent.lock().unwrap().push(frame.npdu);
         Ok(())
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xBA, 0xC0]
     }
 }
 
@@ -195,20 +190,18 @@ pub(super) fn enrollment(
     target: Option<ObjectIdentifier>,
     parameters: BACnetEventParameter,
 ) -> EventEnrollmentObject {
-    let mut enrollment = EventEnrollmentObject::new(
-        instance,
-        format!("enrollment-{instance}"),
-        event_type.to_raw(),
-    )
-    .unwrap();
-    enrollment.set_object_property_reference(target.map(|oid| {
-        BACnetDeviceObjectPropertyReference::new_local(
-            oid,
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        )
-    }));
+    let mut enrollment =
+        EventEnrollmentObject::new(instance, format!("enrollment-{instance}"), event_type).unwrap();
+    enrollment
+        .set_object_property_reference(target.map(|oid| {
+            BACnetDeviceObjectPropertyReference::new_local(
+                oid,
+                PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            )
+        }))
+        .unwrap();
     enrollment.set_event_parameters(parameters);
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(bacnet_types::bitstring::EventTransitionBits::all());
     enrollment
 }
 
@@ -233,11 +226,13 @@ pub(super) fn add_server_context(db: &mut ObjectDatabase, recipients: bool) {
     .unwrap();
 
     let mut notification_class = NotificationClass::new(0, "NC-0").unwrap();
-    notification_class.ack_required = [true; 3];
+    notification_class.ack_required = EventTransitionBits::all();
     if recipients {
-        notification_class.add_destination(
-            crate::server::event_notifications_tests::local_broadcast_destination(),
-        );
+        notification_class
+            .add_destination(
+                crate::server::event_notifications_tests::local_broadcast_destination(),
+            )
+            .unwrap();
     }
     db.add(Box::new(notification_class)).unwrap();
 }
@@ -245,28 +240,21 @@ pub(super) fn add_server_context(db: &mut ObjectDatabase, recipients: bool) {
 pub(super) async fn start_server(
     mut db: ObjectDatabase,
     recipients: bool,
-) -> (
-    BACnetServer<RecordingTransport>,
-    StdArc<StdMutex<Vec<Bytes>>>,
-) {
+) -> (BACnetServer<TestTransport>, StdArc<StdMutex<Vec<Bytes>>>) {
     add_server_context(&mut db, recipients);
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let lock_probe = StdArc::new(StdMutex::new(None));
+    let capture = NotificationCapture::default();
     let server = BACnetServer::start_clockless(
         ServerConfig {
             event_enrollment_interval_secs: 1,
             ..ServerConfig::default()
         },
         db,
-        RecordingTransport {
-            sent: StdArc::clone(&sent),
-            lock_probe: StdArc::clone(&lock_probe),
-        },
+        capture.transport(),
     )
     .await
     .unwrap();
-    *lock_probe.lock().unwrap() = Some(StdArc::clone(server.database()));
-    (server, sent)
+    *capture.lock_probe.lock().unwrap() = Some(StdArc::clone(server.database()));
+    (server, capture.sent)
 }
 
 pub(super) fn drain_notifications(sent: &StdMutex<Vec<Bytes>>) -> Vec<EventNotificationRequest> {
@@ -283,7 +271,7 @@ pub(super) fn drain_notifications(sent: &StdMutex<Vec<Bytes>>) -> Vec<EventNotif
                 request.service_choice,
                 UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION
             );
-            EventNotificationRequest::decode(&request.service_request)
+            decode_event_notification(&request.service_request)
                 .expect("decode EventNotification service request")
         })
         .collect()
@@ -331,12 +319,9 @@ pub(super) fn assert_committed_reliability_notifications(
         expected_instances
     );
     for (offset, notification) in notifications.iter().enumerate() {
-        assert_eq!(
-            notification.event_type,
-            EventType::CHANGE_OF_RELIABILITY.to_raw()
-        );
-        assert_eq!(notification.from_state, from.to_raw());
-        assert_eq!(notification.to_state, to.to_raw());
+        assert_eq!(notification.event_type, EventType::CHANGE_OF_RELIABILITY);
+        assert_eq!(notification.from_state, from);
+        assert_eq!(notification.to_state, to);
         assert!(notification.ack_required);
         assert_eq!(notification.message_text, None);
         let Some(NotificationParameters::ChangeOfReliability {
@@ -349,12 +334,16 @@ pub(super) fn assert_committed_reliability_notifications(
         };
         assert_eq!(
             *status_flags,
-            if to == EventState::FAULT { 0b1100 } else { 0 }
+            if to == EventState::FAULT {
+                StatusFlags::IN_ALARM | StatusFlags::FAULT
+            } else {
+                StatusFlags::empty()
+            }
         );
         let mut properties = Vec::new();
         let mut position = 0;
         while position < property_values.len() {
-            let (property, next) = BACnetPropertyValue::decode(property_values, position).unwrap();
+            let (property, next) = decode_bacnet_property_value(property_values, position).unwrap();
             assert!(next > position);
             properties.push(property.property_identifier);
             position = next;
@@ -424,7 +413,7 @@ async fn event_enrollment_reliability_omits_only_unavailable_monitored_entries()
     let mut identifiers = Vec::new();
     let mut position = 0;
     while position < property_values.len() {
-        let (property, next) = BACnetPropertyValue::decode(property_values, position).unwrap();
+        let (property, next) = decode_bacnet_property_value(property_values, position).unwrap();
         identifiers.push(property.property_identifier);
         position = next;
     }

@@ -25,6 +25,16 @@ pub(crate) fn connect_message_error(msg: &ScMessage) -> Option<ErrorCode> {
         Some(ErrorCode::INCONSISTENT_PARAMETERS)
     } else if msg.payload[..6] == [0; 6] || msg.payload[..6] == [0xff; 6] {
         Some(ErrorCode::PARAMETER_OUT_OF_RANGE)
+    } else if msg.payload[6..22] == [0; 16] {
+        // Local peer-admission policy, not UUID version/variant validation.
+        // For Connect-Accept this is only a local diagnostic: AB.2 forbids
+        // responding to response messages, so the handshake discards silently.
+        Some(ErrorCode::PARAMETER_OUT_OF_RANGE)
+    } else if msg.payload[22..24] == [0; 2] || msg.payload[24..26] == [0; 2] {
+        // Local zero-only receive-admission policy, not a universal positive
+        // capacity floor or a relationship between Max-BVLC and Max-NPDU.
+        // As with identity errors, Connect-Accept is discarded without reply.
+        Some(ErrorCode::PARAMETER_OUT_OF_RANGE)
     } else if msg.dest_options.iter().any(|option| option.must_understand) {
         // Known-option shape/placement validation remains separate work.
         Some(ErrorCode::HEADER_NOT_UNDERSTOOD)
@@ -79,4 +89,112 @@ pub(crate) fn validate_connect_request(
     let mut buf = BytesMut::new();
     encode_sc_message(&mut buf, &nak);
     Err(Some(buf.freeze()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sc_frame::{
+        connect_test_support::valid_connect, decode_sc_message, encode_sc_message,
+    };
+    use bytes::BytesMut;
+
+    #[test]
+    fn zero_limits_rejection_is_receive_admission_not_codec_policy() {
+        for function in [6, 7] {
+            for limits in [[0, 0, 0x10, 0], [0x20, 0, 0, 0], [0; 4]] {
+                let mut wire = valid_connect(function, [0x22; 6]);
+                wire[26..30].copy_from_slice(&limits);
+                let message = decode_sc_message(&wire).unwrap();
+                let mut encoded = BytesMut::new();
+                encode_sc_message(&mut encoded, &message);
+                assert_eq!(&encoded[..], wire, "generic syntax preserves zero limits");
+                assert_eq!(
+                    connect_message_error(&message),
+                    Some(ErrorCode::PARAMETER_OUT_OF_RANGE)
+                );
+                #[cfg(feature = "sc-tls")]
+                if function == 7 {
+                    assert_eq!(validate_connect_request(&message, &wire), Ok(()));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn positive_limits_remain_independent_without_a_serviceability_floor() {
+        for function in [6, 7] {
+            for (bvlc, npdu) in [
+                (1u16, 1u16),
+                (1, 65535),
+                (65535, 1),
+                (65535, 65535),
+                (1200, 480),
+                (300, 1476),
+                (1476, 1476),
+            ] {
+                let mut wire = valid_connect(function, [0x22; 6]);
+                wire[26..28].copy_from_slice(&bvlc.to_be_bytes());
+                wire[28..30].copy_from_slice(&npdu.to_be_bytes());
+                assert_eq!(
+                    connect_message_error(&decode_sc_message(&wire).unwrap()),
+                    None
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn zero_uuid_rejection_is_receive_admission_not_codec_policy() {
+        for function in [6, 7] {
+            let mut wire = valid_connect(function, [0x22; 6]);
+            wire[10..26].fill(0);
+            let message = decode_sc_message(&wire).unwrap();
+            let mut encoded = BytesMut::new();
+            encode_sc_message(&mut encoded, &message);
+            assert_eq!(&encoded[..], wire, "generic syntax must preserve nil UUID");
+            assert_eq!(
+                connect_message_error(&message),
+                Some(ErrorCode::PARAMETER_OUT_OF_RANGE),
+                "function {function}"
+            );
+        }
+    }
+
+    #[test]
+    fn nonzero_uuid_bits_remain_opaque() {
+        for function in [6, 7] {
+            for position in 0..16 {
+                for value in [1, 2, 4, 8, 0x10, 0x20, 0x40, 0x80, 0xff] {
+                    let mut wire = valid_connect(function, [0x22; 6]);
+                    wire[10..26].fill(0);
+                    wire[10 + position] = value;
+                    assert_eq!(
+                        connect_message_error(&decode_sc_message(&wire).unwrap()),
+                        None
+                    );
+                }
+            }
+            let mut wire = valid_connect(function, [0x22; 6]);
+            wire[10..26].fill(0xff);
+            assert_eq!(
+                connect_message_error(&decode_sc_message(&wire).unwrap()),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn zero_uuid_precedes_mu_for_local_connect_diagnostics() {
+        for function in [6, 7] {
+            let mut wire = valid_connect(function, [0x22; 6]);
+            wire[10..26].fill(0);
+            wire[1] = 2;
+            wire.insert(4, 0x5e);
+            assert_eq!(
+                connect_message_error(&decode_sc_message(&wire).unwrap()),
+                Some(ErrorCode::PARAMETER_OUT_OF_RANGE)
+            );
+        }
+    }
 }

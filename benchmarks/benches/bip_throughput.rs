@@ -1,3 +1,4 @@
+//! Criterion suite: ReadProperty and WriteProperty throughput over BACnet/IP on loopback.
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use tokio::runtime::Runtime;
 

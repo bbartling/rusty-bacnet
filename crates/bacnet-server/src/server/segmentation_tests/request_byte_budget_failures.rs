@@ -6,58 +6,16 @@ use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_transport::port::ReceivedNpdu;
 use request_peer_quota::{assert_positive_ack, assert_server_abort, next_routed_apdu};
 use request_reassembly::{
-    inject_routed_segment, present_value, write_property_payload, RoutedInjectionTransport,
+    inject_routed_segment, present_value, routed_injection_transport, write_property_payload,
 };
 use std::sync::atomic::AtomicUsize;
 use tokio::time::timeout;
 
-#[derive(Default)]
-struct SendControl {
-    block_next: AtomicBool,
-    fail_next: AtomicBool,
-    started: Notify,
-    release: Notify,
-}
-
-struct ControlledTransport {
-    inner: RoutedInjectionTransport,
-    control: Arc<SendControl>,
-}
-
-impl TransportPort for ControlledTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(npdu, mac).await?;
-        let fail = self.control.fail_next.swap(false, Ordering::SeqCst);
-        if self.control.block_next.swap(false, Ordering::SeqCst) {
-            self.control.started.notify_one();
-            self.control.release.notified().await;
-        }
-        if fail {
-            return Err(Error::Encoding(
-                "injected send failure after recording attempt".into(),
-            ));
-        }
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-}
-
 struct Fixture {
-    server: BACnetServer<ControlledTransport>,
+    server: BACnetServer<TestTransport>,
     incoming: mpsc::Sender<ReceivedNpdu>,
-    sent: SentFrames,
-    control: Arc<SendControl>,
+    sent: SendLog,
+    control: TestTransportHandle,
     router: MacAddr,
     remote: NpduAddress,
     index: usize,
@@ -65,13 +23,8 @@ struct Fixture {
 
 impl Fixture {
     async fn start() -> Self {
-        let sent = StdArc::new(StdMutex::new(Vec::new()));
-        let (inner, incoming) = RoutedInjectionTransport::new(Arc::clone(&sent));
-        let control = Arc::new(SendControl::default());
-        let transport = ControlledTransport {
-            inner,
-            control: Arc::clone(&control),
-        };
+        let (transport, incoming, sent) = routed_injection_transport();
+        let control = transport.handle();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(
             CharacterStringValueObject::new(1, "CSV-1").unwrap(),
@@ -128,12 +81,12 @@ impl Fixture {
     }
 
     fn block_and_fail_next_send(&self) {
-        self.control.block_next.store(true, Ordering::SeqCst);
-        self.control.fail_next.store(true, Ordering::SeqCst);
+        self.control.block_next_send();
+        self.control.fail_next_send();
     }
 
     async fn wait_blocked(&self) {
-        timeout(Duration::from_secs(2), self.control.started.notified())
+        timeout(Duration::from_secs(2), self.control.wait_blocked())
             .await
             .expect("send did not start");
     }
@@ -164,7 +117,7 @@ async fn request_byte_budget_routed_abort_removes_current_before_failed_send_and
         "current saved owners released BEFORE Abort await"
     );
     assert_server_abort(f.reply().await, 0, AbortReason::BUFFER_OVERFLOW);
-    f.control.release.notify_one();
+    f.control.release_sends(1);
     f.segment(0, next[0], true, &[1]).await;
     assert_server_abort(f.reply().await, 0, AbortReason::INVALID_APDU_IN_THIS_STATE);
     // Refill only the capacity released by request 0. Failed Abort must neither
@@ -206,7 +159,7 @@ async fn request_byte_budget_final_ack_attempt_precedes_consuming_release_before
         0,
         "do not complete before final ACK attempt finishes"
     );
-    f.control.release.notify_one();
+    f.control.release_sends(1);
     // ACK failure still continues completion as before. This next input's ACK
     // proves the loop passed consuming completion; the service remains blocked.
     f.segment(2, 0, true, &[9]).await;

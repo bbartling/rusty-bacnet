@@ -87,15 +87,15 @@ fn value_object_relinquish_default() {
 }
 
 #[test]
-fn value_object_priority_array_direct_write() {
+fn value_object_priority_array_tracks_present_value_commands() {
     let mut obj = IntegerValueObject::new(1, "IV-1").unwrap();
 
-    // Write directly to priority array slot 5
+    // Command Present_Value at priority 5
     obj.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Signed(77),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Signed(77),
+        Some(5),
     )
     .unwrap();
 
@@ -113,10 +113,10 @@ fn value_object_priority_array_direct_write() {
 
     // Relinquish slot 5
     obj.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Null,
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(5),
     )
     .unwrap();
 
@@ -129,8 +129,9 @@ fn value_object_priority_array_direct_write() {
 
 #[test]
 fn value_object_unknown_property() {
+    // Table 12-50 has no Active_Text row.
     let obj = IntegerValueObject::new(1, "IV-1").unwrap();
-    let result = obj.read_property(PropertyIdentifier::UNITS, None);
+    let result = obj.read_property(PropertyIdentifier::ACTIVE_TEXT, None);
     assert!(result.is_err());
 }
 

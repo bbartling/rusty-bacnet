@@ -1,3 +1,4 @@
+use super::segmentation_context::{ConfirmedWait, SegmentedRequestLimits};
 use super::*;
 use bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE;
 
@@ -31,17 +32,17 @@ impl core::fmt::Display for LengthBoundedBy {
 /// Reject a maximum transmittable length no conformant device could accept.
 ///
 /// Clause 5.2.1.2 derives this length as the smallest of the local capability,
-/// the internetwork limit, and "(c) the maximum APDU size accepted by the
-/// remote peer device, which must be at least 50 octets". Below that floor no
+/// the internetwork limit, and the peer's receive capacity, whose minimum
+/// is 50 octets. Below that floor no
 /// conformant APDU can be formed at all. Clause 20.1.2.5 gives the same number
-/// a name, spelling the lowest max-APDU-length-accepted code `B'0000'` as "Up
-/// to MinimumMessageSize (50 octets)".
+/// a name: MinimumMessageSize, the 50-octet capacity represented by the
+/// lowest max-APDU-length-accepted code `B'0000'`.
 ///
 /// The check is a floor, not membership of the six values Clause 20.1.2.5
 /// encodes. A discovered peer's length comes from I-Am's `Max APDU Length
 /// Accepted`, an Unsigned octet count rather than the four-bit code, and
-/// Clause 20.1.2.5 notes the true value "may be larger than indicated in this
-/// parameter" — so 600 and 1500 are legitimate and must not be rejected.
+/// Clause 20.1.2.5 allows actual capacity to exceed the encoded value,
+/// so 600 and 1500 are legitimate and must not be rejected.
 ///
 /// Failing rather than clamping up to 50 keeps the client from inventing a
 /// capability the peer never claimed: a device advertising less than 50 is
@@ -74,6 +75,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Returns the service response data (empty for SimpleAck). Automatically
     /// uses segmented transfer when the payload exceeds the remote device's
     /// max APDU length.
+    ///
+    /// A confirmed request goes to one device, so a `destination_mac` that
+    /// reaches a group of nodes ([`TransportPort::is_group_destination`]:
+    /// the link's broadcast MAC, or on B/IP the limited broadcast, the
+    /// configured broadcast IP or a multicast address at any port), which
+    /// would make it a local broadcast (Clause 6.3), fails with
+    /// [`Error::Encoding`] before any transaction state is taken (#1479). So
+    /// does a routed target that names this client's own network with such a
+    /// MAC, since it goes local.
     pub async fn confirmed_request(
         &self,
         destination_mac: &[u8],
@@ -94,6 +104,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// The NPDU is sent as a unicast to `router_mac` with DNET/DADR set so
     /// the router forwards it to `dest_network`/`dest_mac`.
+    ///
+    /// A confirmed request goes to one device, so `dest_network` must be in
+    /// 1..=65534 and `dest_mac` must hold 1 to
+    /// [`NpduAddress::MAX_MAC_LEN`] octets. DNET 0 names no network, DNET
+    /// 65535 and an empty DADR address a broadcast, and any of them fails
+    /// with [`Error::Encoding`] before path or transaction state is taken.
+    /// Every routed confirmed entry point, such as the `_to_device` and
+    /// `_from_device` methods, applies the same rule.
+    ///
+    /// Once the client has learned its own network's number, a
+    /// `dest_network` naming it is this network. After those checks the
+    /// request goes to `dest_mac` as a local request, with no DNET and not
+    /// through `router_mac` (#1358). An answer from `dest_mac` with no SNET
+    /// completes it, and so does one a router relays back with `dest_network`
+    /// as its SNET and `dest_mac` as its SADR (#1465), since both name the
+    /// same station.
     pub async fn confirmed_request_routed(
         &self,
         router_mac: &[u8],
@@ -120,6 +146,40 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
+        // A destination that is not one device (#1278), or a DADR or local
+        // source MAC that no router could carry (#1267), fails here, before
+        // the path gate is reserved or awaited and before TSM registration.
+        // A routed target on this client's own network is then sent as the
+        // local target it is (#1358); the peer's limits still come from the
+        // device-table row of the target as named.
+        let named = target;
+        if let ConfirmedTarget::Routed {
+            dest_network,
+            dest_mac,
+            ..
+        } = named
+        {
+            check_routed_unicast(dest_network, dest_mac.len())?;
+        }
+        let target = named.localized(self.network.local_network_number().get());
+        // With no DNET, a group destination is a local broadcast, which
+        // carries no confirmed request (Clause 6.3, #1479).
+        if let ConfirmedTarget::Local { mac } = target {
+            if self.network.transport().is_group_destination(mac) {
+                return Err(Error::Encoding(
+                    "a confirmed request goes to one device, not to a broadcast or group \
+                     address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
+                     Clause 6.3)"
+                        .into(),
+                ));
+            }
+        }
+        let routed_forwarded_npci_len = match target {
+            ConfirmedTarget::Local { .. } => None,
+            ConfirmedTarget::Routed { dest_mac, .. } => {
+                Some(forwarded_npci_len(dest_mac.len(), self.local_mac.len())?)
+            }
+        };
         // The lease serializes one active request per (immediate router, DNET)
         // and remains live through every return path, including cancellation.
         let path_lease = match target {
@@ -134,21 +194,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .await?,
             ),
         };
-        let (routed_path_max_apdu, routed_forwarded_npci_len) = match (path_lease.as_ref(), target)
-        {
-            (
-                Some(lease),
-                ConfirmedTarget::Routed {
-                    dest_mac,
-                    dest_network: _,
-                    router_mac: _,
-                },
-            ) => (
-                Some(lease.max_apdu(dest_mac.len(), self.local_mac.len())?),
-                Some(lease.forwarded_npci_len(dest_mac.len(), self.local_mac.len())?),
-            ),
-            _ => (None, None),
-        };
+        let routed_path_max_apdu = path_lease
+            .as_ref()
+            .zip(routed_forwarded_npci_len)
+            .map(|(lease, npci_len)| lease.max_apdu(npci_len));
         let transaction_peer = target.transaction_peer();
         let tsm_mac = transaction_peer.tsm_mac;
         let unsegmented_apdu_size = 4 + service_data.len();
@@ -160,7 +209,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // SNET/SADR of the NPDU that carried its I-Am identifies it
             // (Clause 5.2.1.2 term (c) binds the peer's Max APDU Length
             // Accepted regardless of how the peer is reached).
-            let (device, peer_segmentation) = match target {
+            let (device, peer_segmentation) = match named {
                 ConfirmedTarget::Local { mac } => {
                     (dt.get_by_mac(mac), dt.local_peer_segmentation(mac))
                 }
@@ -223,10 +272,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     target,
                     service_choice,
                     service_data,
-                    remote_max_apdu,
-                    remote_max_segments,
-                    routed_forwarded_npci_len,
-                    path_lease.as_ref(),
+                    SegmentedRequestLimits {
+                        remote_max_apdu,
+                        remote_max_segments,
+                        routed_forwarded_npci_len,
+                        routed_path_lease: path_lease.as_ref(),
+                    },
                 )
                 .await;
         }
@@ -308,13 +359,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let response = self
             .wait_for_confirmed_response(
-                target,
-                &tsm_mac,
-                invoke_id,
-                &owner,
+                ConfirmedWait {
+                    target,
+                    tsm_mac: &tsm_mac,
+                    invoke_id,
+                    owner: &owner,
+                    retry_apdu: Some(&buf),
+                },
                 registration.response,
                 registration.progress,
-                Some(&buf),
             )
             .await;
         if response.is_ok() {
@@ -328,17 +381,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Wait through AWAIT_CONFIRMATION and SEGMENTED_CONF without allowing
     /// their timers to cancel each other's phase.
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn wait_for_confirmed_response(
         &self,
-        target: ConfirmedTarget<'_>,
-        tsm_mac: &MacAddr,
-        invoke_id: u8,
-        owner: &TransactionOwner,
+        wait_for: ConfirmedWait<'_>,
         mut response_rx: oneshot::Receiver<TsmResponse>,
         mut progress_rx: tokio::sync::watch::Receiver<TransactionProgress>,
-        retry_apdu: Option<&[u8]>,
     ) -> Result<TsmResponse, Error> {
+        let ConfirmedWait {
+            target,
+            tsm_mac,
+            invoke_id,
+            owner,
+            retry_apdu,
+        } = wait_for;
         let (request_timeout, segment_timeout, max_retries) = {
             let tsm = self.tsm.lock().await;
             let config = tsm.config();
@@ -562,7 +617,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub(super) fn target_transport_max_apdu_length(&self, target: ConfirmedTarget<'_>) -> u16 {
         self.network
             .transport()
-            .max_apdu_length()
+            .egress_apdu_limit()
             .saturating_sub(target.additional_npdu_header_len())
     }
 
@@ -635,6 +690,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Broadcast an unconfirmed request to a specific remote network.
+    ///
+    /// Once the client has learned its own network's number, a
+    /// `dest_network` naming it is this network, and the request goes as a
+    /// local broadcast with no DNET (#1358).
     pub async fn broadcast_network_unconfirmed(
         &self,
         service_choice: UnconfirmedServiceChoice,
@@ -649,6 +708,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
+        if self.network.local_network_number().get() == Some(dest_network) {
+            return self
+                .network
+                .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
+                .await;
+        }
         self.network
             .broadcast_to_network(&buf, dest_network, false, NetworkPriority::NORMAL)
             .await

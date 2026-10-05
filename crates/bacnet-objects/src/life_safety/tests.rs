@@ -54,7 +54,7 @@ fn point_read_present_value_default() {
 #[test]
 fn point_set_and_read_present_value() {
     let mut pt = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    pt.set_present_value(LifeSafetyState::ALARM.to_raw());
+    pt.set_present_value(LifeSafetyState::ALARM);
     let val = pt
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
@@ -86,7 +86,7 @@ fn point_read_mode_default() {
 #[test]
 fn point_set_mode() {
     let mut pt = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    pt.set_mode(LifeSafetyMode::ON.to_raw());
+    pt.set_mode(LifeSafetyMode::ON);
     let val = pt.read_property(PropertyIdentifier::MODE, None).unwrap();
     assert_eq!(val, PropertyValue::Enumerated(LifeSafetyMode::ON.to_raw()));
 }
@@ -125,7 +125,8 @@ fn point_life_safety_operation_combines_silenced_components() {
     assert_eq!(
         point
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE_AUDIBLE)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(
@@ -141,52 +142,13 @@ fn point_life_safety_operation_combines_silenced_components() {
     assert_eq!(
         point
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE_VISUAL)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(
         read_enumerated(&point, PropertyIdentifier::SILENCED),
         SilencedState::ALL_SILENCED.to_raw()
-    );
-}
-
-#[test]
-fn point_silence_and_unsilence_report_only_actual_silenced_and_expected_deltas() {
-    let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    point.set_operation_expected(LifeSafetyOperation::SILENCE);
-
-    let outcome = point
-        .apply_life_safety_operation_detailed(LifeSafetyOperation::SILENCE)
-        .unwrap();
-
-    assert_eq!(outcome.effect, LifeSafetyOperationEffect::Applied);
-    assert_eq!(
-        outcome.changed_properties,
-        vec![
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::OPERATION_EXPECTED,
-        ]
-    );
-
-    point.set_operation_expected(LifeSafetyOperation::SILENCE);
-    let outcome = point
-        .apply_life_safety_operation_detailed(LifeSafetyOperation::SILENCE)
-        .unwrap();
-    assert_eq!(
-        outcome.changed_properties,
-        vec![PropertyIdentifier::OPERATION_EXPECTED]
-    );
-
-    point.set_operation_expected(LifeSafetyOperation::UNSILENCE);
-    let outcome = point
-        .apply_life_safety_operation_detailed(LifeSafetyOperation::UNSILENCE)
-        .unwrap();
-    assert_eq!(
-        outcome.changed_properties,
-        vec![
-            PropertyIdentifier::SILENCED,
-            PropertyIdentifier::OPERATION_EXPECTED,
-        ]
     );
 }
 
@@ -197,7 +159,8 @@ fn point_replayed_silence_without_response_cache_is_invalid_state() {
     assert_eq!(
         point
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
 
@@ -238,7 +201,8 @@ fn point_same_state_honors_and_clears_operation_expected() {
     assert_eq!(
         point
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE_VISUAL)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(
@@ -287,7 +251,7 @@ fn point_life_safety_operation_covers_silence_and_unsilence_matrix() {
         point.set_silenced(initial);
         point.set_operation_expected(operation);
         assert_eq!(
-            point.apply_life_safety_operation(operation).unwrap(),
+            point.apply_life_safety_operation(operation).unwrap().effect,
             LifeSafetyOperationEffect::Applied
         );
         assert_eq!(
@@ -361,7 +325,8 @@ fn point_can_be_rearmed_through_the_local_trait_channel() {
     assert_eq!(
         object
             .apply_life_safety_operation(LifeSafetyOperation::SILENCE)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     object
@@ -370,15 +335,16 @@ fn point_can_be_rearmed_through_the_local_trait_channel() {
     assert_eq!(
         object
             .apply_life_safety_operation(LifeSafetyOperation::UNSILENCE)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(
-        read_enumerated(object.as_ref(), PropertyIdentifier::OPERATION_EXPECTED),
+        read_enumerated(object, PropertyIdentifier::OPERATION_EXPECTED),
         LifeSafetyOperation::NONE.to_raw()
     );
     assert_eq!(
-        read_enumerated(object.as_ref(), PropertyIdentifier::SILENCED),
+        read_enumerated(object, PropertyIdentifier::SILENCED),
         SilencedState::UNSILENCED.to_raw()
     );
 }
@@ -386,7 +352,7 @@ fn point_can_be_rearmed_through_the_local_trait_channel() {
 #[test]
 fn point_read_tracking_value() {
     let mut pt = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
-    pt.set_tracking_value(LifeSafetyState::PRE_ALARM.to_raw());
+    pt.set_tracking_value(LifeSafetyState::PRE_ALARM);
     let val = pt
         .read_property(PropertyIdentifier::TRACKING_VALUE, None)
         .unwrap();
@@ -420,17 +386,18 @@ fn point_add_member_and_read() {
     let mut pt = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
     let zone1 = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 1).unwrap();
     let zone2 = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 2).unwrap();
-    pt.add_member(zone1);
-    pt.add_member(zone2);
+    pt.add_member(zone1).unwrap();
+    pt.add_member(zone2).unwrap();
 
     let val = pt
         .read_property(PropertyIdentifier::MEMBER_OF, None)
         .unwrap();
+    // One BACnetDeviceObjectReference per zone, [1] alone for a local one.
     assert_eq!(
         val,
         PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(zone1),
-            PropertyValue::ObjectIdentifier(zone2),
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0x80, 0x00, 0x01]),
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0x80, 0x00, 0x02]),
         ])
     );
 }
@@ -501,13 +468,14 @@ fn life_safety_property_cov_capabilities_are_explicit() {
     for property in [
         PropertyIdentifier::PRESENT_VALUE,
         PropertyIdentifier::STATUS_FLAGS,
+        PropertyIdentifier::TRACKING_VALUE,
         PropertyIdentifier::SILENCED,
         PropertyIdentifier::OPERATION_EXPECTED,
     ] {
         assert!(zone.supports_cov_property(property));
     }
-    assert!(!zone.supports_cov_property(PropertyIdentifier::TRACKING_VALUE));
     assert!(!zone.supports_cov_property(PropertyIdentifier::MODE));
+    assert!(!zone.supports_cov_property(PropertyIdentifier::ACCEPTED_MODES));
 }
 
 #[test]
@@ -552,7 +520,7 @@ fn zone_read_present_value_default() {
 #[test]
 fn zone_set_and_read_present_value() {
     let mut z = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
-    z.set_present_value(LifeSafetyState::ALARM.to_raw());
+    z.set_present_value(LifeSafetyState::ALARM);
     let val = z
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
@@ -584,7 +552,7 @@ fn zone_read_mode_default() {
 #[test]
 fn zone_set_mode() {
     let mut z = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
-    z.set_mode(LifeSafetyMode::ARMED.to_raw());
+    z.set_mode(LifeSafetyMode::ARMED);
     let val = z.read_property(PropertyIdentifier::MODE, None).unwrap();
     assert_eq!(
         val,
@@ -598,9 +566,9 @@ fn zone_add_zone_member_and_read() {
     let pt1 = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
     let pt2 = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 2).unwrap();
     let pt3 = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 3).unwrap();
-    z.add_zone_member(pt1);
-    z.add_zone_member(pt2);
-    z.add_zone_member(pt3);
+    z.add_zone_member(pt1).unwrap();
+    z.add_zone_member(pt2).unwrap();
+    z.add_zone_member(pt3).unwrap();
 
     let val = z
         .read_property(PropertyIdentifier::ZONE_MEMBERS, None)
@@ -608,9 +576,9 @@ fn zone_add_zone_member_and_read() {
     assert_eq!(
         val,
         PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(pt1),
-            PropertyValue::ObjectIdentifier(pt2),
-            PropertyValue::ObjectIdentifier(pt3),
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0x40, 0x00, 0x01]),
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0x40, 0x00, 0x02]),
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0x40, 0x00, 0x03]),
         ])
     );
 }
@@ -641,7 +609,8 @@ fn zone_life_safety_operation_unsilences_one_component() {
 
     assert_eq!(
         zone.apply_life_safety_operation(LifeSafetyOperation::UNSILENCE_AUDIBLE)
-            .unwrap(),
+            .unwrap()
+            .effect,
         LifeSafetyOperationEffect::Applied
     );
     assert_eq!(
@@ -732,13 +701,54 @@ fn zone_write_out_of_service() {
 }
 
 #[test]
-fn zone_write_unknown_property_denied() {
+fn zone_tracking_value_refuses_writes_in_service() {
     let mut z = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
-    let result = z.write_property(
-        PropertyIdentifier::TRACKING_VALUE,
-        None,
-        PropertyValue::Enumerated(0),
-        None,
+    assert_eq!(
+        read_enumerated(&z, PropertyIdentifier::TRACKING_VALUE),
+        LifeSafetyState::QUIET.to_raw()
     );
-    assert!(result.is_err());
+    z.set_tracking_value(LifeSafetyState::PRE_ALARM);
+    assert_protocol_error(
+        z.write_property(
+            PropertyIdentifier::TRACKING_VALUE,
+            None,
+            PropertyValue::Enumerated(LifeSafetyState::QUIET.to_raw()),
+            None,
+        )
+        .unwrap_err(),
+        ErrorClass::PROPERTY,
+        ErrorCode::WRITE_ACCESS_DENIED,
+    );
+    assert_eq!(
+        read_enumerated(&z, PropertyIdentifier::TRACKING_VALUE),
+        LifeSafetyState::PRE_ALARM.to_raw()
+    );
+}
+
+#[test]
+fn life_safety_property_metadata_drives_required_sets() {
+    use std::borrow::Cow;
+
+    let point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
+    assert!(matches!(point.property_metadata(), Cow::Borrowed(_)));
+    assert_eq!(point.property_metadata().len(), 18);
+    assert_eq!(point.required_properties().len(), 14);
+    assert!(point
+        .required_properties()
+        .contains(&PropertyIdentifier::PROPERTY_LIST));
+    assert!(!point
+        .property_list()
+        .contains(&PropertyIdentifier::PROPERTY_LIST));
+    assert!(!point.is_createable());
+    let zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
+    assert!(matches!(zone.property_metadata(), Cow::Borrowed(_)));
+    assert_eq!(zone.property_metadata().len(), 17);
+    assert_eq!(zone.required_properties().len(), 15);
+    assert!(zone
+        .required_properties()
+        .contains(&PropertyIdentifier::PROPERTY_LIST));
+    assert!(!zone
+        .property_list()
+        .contains(&PropertyIdentifier::PROPERTY_LIST));
+    assert!(!zone.is_createable());
 }

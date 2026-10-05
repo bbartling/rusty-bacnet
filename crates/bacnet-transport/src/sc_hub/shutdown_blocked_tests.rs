@@ -15,18 +15,30 @@ pub(super) struct ControlledPeer {
 impl ControlledPeer {
     pub async fn open(tls: &TestTls, hub: &CountedHub) -> Self {
         let (server, ws, address, accepted) = tls.pair().await;
+        let verified_leaf = super::certificate_bindings::VerifiedLeaf::from_verified_chain(
+            server.get_ref().get_ref().1.peer_certificates(),
+        );
         let (write, read) = server.split();
         let sink = Arc::new(Mutex::new(write));
         let deadline = Arc::new(deadlines::ConnectDeadline::new(
             accepted + Duration::from_secs(5),
         ));
         let admission = connection::Admission::new(hub.active.clone(), Duration::from_secs(10));
+        // Real mutual-TLS pair: the client certificate is CA-verified.
         let operation = deadlines::serve(
-            address,
-            ([0x10; 6], [0x10; 16]),
-            read,
-            sink.clone(),
-            hub.clients.clone(),
+            super::context::PeerConnection {
+                addr: address,
+                read,
+                write: sink.clone(),
+                verified_leaf,
+            },
+            super::context::HubConnectionContext {
+                hub: ([0x10; 6], [0x10; 16]),
+                clients: hub.clients.clone(),
+                admission: hub.admission.clone(),
+                graceful: hub.hub.tasks.graceful_ctx(),
+                timing: hub.hub.tasks.timing,
+            },
             deadline.clone(),
             || {},
         );
@@ -175,7 +187,7 @@ async fn stop_cancels_live_heartbeat_sweep_waiting_on_sink() {
     let socket = Arc::downgrade(&peer.sink);
     let held = peer.sink.lock_owned().await;
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::time::advance(Duration::from_secs(90)).await;
     poll_io(async {
         loop {
             if hub

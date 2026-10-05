@@ -7,7 +7,7 @@ use bacnet_objects::life_safety::{
     LifeSafetyPointResetExecutor, LifeSafetyResetError, LifeSafetyZoneObject,
     LifeSafetyZoneResetCommit, LifeSafetyZoneResetContext, LifeSafetyZoneResetExecutor,
 };
-use bacnet_objects::traits::LifeSafetyOperationEffect;
+use bacnet_objects::traits::{LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, LifeSafetyOperation, LifeSafetyState, ObjectType, PropertyIdentifier,
@@ -17,6 +17,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::*;
+use crate::life_safety_cov::LifeSafetyCovChange;
 
 fn request(
     operation: LifeSafetyOperation,
@@ -56,8 +57,8 @@ fn targeted_reset_variants_apply_to_point_and_zone() {
     ] {
         let point_oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
         let mut point = LifeSafetyPointObject::new(1, "point").unwrap();
-        point.set_present_value(LifeSafetyState::ALARM.to_raw());
-        point.set_tracking_value(LifeSafetyState::FAULT.to_raw());
+        point.set_present_value(LifeSafetyState::ALARM);
+        point.set_tracking_value(LifeSafetyState::FAULT);
         point.set_silenced(SilencedState::ALL_SILENCED);
         point.set_operation_expected(operation);
         point.set_reset_executor(Arc::new(move |context| {
@@ -81,7 +82,8 @@ fn targeted_reset_variants_apply_to_point_and_zone() {
 
         let zone_oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 1).unwrap();
         let mut zone = LifeSafetyZoneObject::new(1, "zone").unwrap();
-        zone.set_present_value(LifeSafetyState::FAULT_ALARM.to_raw());
+        zone.set_present_value(LifeSafetyState::FAULT_ALARM);
+        zone.set_tracking_value(LifeSafetyState::FAULT);
         zone.set_silenced(SilencedState::VISIBLE_SILENCED);
         zone.set_operation_expected(operation);
         zone.set_reset_executor(Arc::new(move |context| {
@@ -91,12 +93,14 @@ fn targeted_reset_variants_apply_to_point_and_zone() {
                     object_identifier: zone_oid,
                     operation,
                     present_value: LifeSafetyState::FAULT_ALARM,
+                    tracking_value: LifeSafetyState::FAULT,
                     silenced: SilencedState::VISIBLE_SILENCED,
                     operation_expected: operation,
                 }
             );
             Ok(LifeSafetyZoneResetCommit {
                 present_value: Some(LifeSafetyState::SUPERVISORY),
+                tracking_value: Some(LifeSafetyState::QUIET),
                 silenced: None,
             })
         }));
@@ -106,11 +110,25 @@ fn targeted_reset_variants_apply_to_point_and_zone() {
         db.add(Box::new(zone)).unwrap();
         assert_eq!(
             handle_life_safety_operation(&mut db, &request(operation, Some(point_oid))).unwrap(),
-            vec![point_oid]
+            vec![LifeSafetyCovChange {
+                object_identifier: point_oid,
+                changed_properties: vec![
+                    PropertyIdentifier::PRESENT_VALUE,
+                    PropertyIdentifier::SILENCED,
+                    PropertyIdentifier::OPERATION_EXPECTED
+                ]
+            }]
         );
         assert_eq!(
             handle_life_safety_operation(&mut db, &request(operation, Some(zone_oid))).unwrap(),
-            vec![zone_oid]
+            vec![LifeSafetyCovChange {
+                object_identifier: zone_oid,
+                changed_properties: vec![
+                    PropertyIdentifier::PRESENT_VALUE,
+                    PropertyIdentifier::TRACKING_VALUE,
+                    PropertyIdentifier::OPERATION_EXPECTED
+                ]
+            }]
         );
         assert_eq!(
             read(&db, point_oid, PropertyIdentifier::PRESENT_VALUE),
@@ -120,6 +138,10 @@ fn targeted_reset_variants_apply_to_point_and_zone() {
             read(&db, point_oid, PropertyIdentifier::TRACKING_VALUE),
             LifeSafetyState::FAULT.to_raw(),
             "an omitted update remains unchanged"
+        );
+        assert_eq!(
+            read(&db, zone_oid, PropertyIdentifier::TRACKING_VALUE),
+            LifeSafetyState::QUIET.to_raw()
         );
         assert_eq!(
             read(&db, zone_oid, PropertyIdentifier::SILENCED),
@@ -174,9 +196,12 @@ impl BACnetObject for ResetHookSpy {
     fn apply_life_safety_operation(
         &mut self,
         _operation: LifeSafetyOperation,
-    ) -> Result<LifeSafetyOperationEffect, Error> {
+    ) -> Result<LifeSafetyOperationOutcome, Error> {
         self.calls.fetch_add(1, Ordering::AcqRel);
-        Ok(LifeSafetyOperationEffect::Applied)
+        Ok(LifeSafetyOperationOutcome {
+            effect: LifeSafetyOperationEffect::Applied,
+            changed_properties: vec![],
+        })
     }
 }
 
@@ -227,7 +252,7 @@ fn targetless_reset_attempts_only_ordered_point_and_zone_candidates() {
 
     let point_success_oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
     let mut point_success = LifeSafetyPointObject::new(1, "point-success").unwrap();
-    point_success.set_present_value(LifeSafetyState::ALARM.to_raw());
+    point_success.set_present_value(LifeSafetyState::ALARM);
     point_success.set_operation_expected(LifeSafetyOperation::RESET);
     point_success.set_reset_executor(make_point_executor(
         point_success_oid,
@@ -260,7 +285,7 @@ fn targetless_reset_attempts_only_ordered_point_and_zone_candidates() {
 
     let zone_success_oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 1).unwrap();
     let mut zone_success = LifeSafetyZoneObject::new(1, "zone-success").unwrap();
-    zone_success.set_present_value(LifeSafetyState::FAULT.to_raw());
+    zone_success.set_present_value(LifeSafetyState::FAULT);
     zone_success.set_operation_expected(LifeSafetyOperation::RESET);
     zone_success.set_reset_executor(make_zone_executor(
         zone_success_oid,
@@ -308,7 +333,16 @@ fn targetless_reset_attempts_only_ordered_point_and_zone_candidates() {
     let changed =
         handle_life_safety_operation(&mut db, &request(LifeSafetyOperation::RESET, None)).unwrap();
 
-    assert_eq!(changed, vec![point_success_oid, zone_success_oid]);
+    assert_eq!(
+        changed,
+        [point_success_oid, zone_success_oid].map(|oid| LifeSafetyCovChange {
+            object_identifier: oid,
+            changed_properties: vec![
+                PropertyIdentifier::PRESENT_VALUE,
+                PropertyIdentifier::OPERATION_EXPECTED
+            ],
+        })
+    );
     assert_eq!(
         *order.lock().unwrap(),
         vec![

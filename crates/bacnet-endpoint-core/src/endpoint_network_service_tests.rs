@@ -127,10 +127,44 @@ impl TransportPort for CaptureTransport {
             .await
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        1476
+    }
+
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
+
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        mac == BROADCAST_MAC
+    }
+
+    /// Its broadcast MAC, and every group form a B/IP link with broadcast
+    /// address 192.168.1.255 recognises (#1479).
+    fn is_group_destination(&self, mac: &[u8]) -> bool {
+        mac == BROADCAST_MAC
+            || bacnet_transport::bip::BipTransport::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                0xBAC0,
+                std::net::Ipv4Addr::new(192, 168, 1, 255),
+            )
+            .is_group_destination(mac)
+    }
 }
+
+/// The capture link's broadcast MAC, as on MS/TP.
+const BROADCAST_MAC: [u8; 1] = [0xff];
+
+/// The B/IP group forms the capture link recognises: the limited broadcast
+/// and the configured broadcast IP at this port and another, and IPv4
+/// multicast.
+const BIP_GROUPS: [[u8; 6]; 5] = [
+    [255, 255, 255, 255, 0xBA, 0xC0],
+    [255, 255, 255, 255, 0xBA, 0xC1],
+    [192, 168, 1, 255, 0xBA, 0xC1],
+    [224, 0, 0, 1, 0xBA, 0xC0],
+    [239, 255, 255, 250, 0x07, 0x6C],
+];
 
 fn encoded_unconfirmed_request() -> Vec<u8> {
     let mut encoded = BytesMut::new();
@@ -166,21 +200,29 @@ fn encoded_confirmed_request() -> Vec<u8> {
     encoded.to_vec()
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn assert_command(
-    egress: &EndpointEgress,
-    handle: &mut CaptureHandle,
+/// One send through the endpoint egress and the wire it must produce.
+struct CommandCase {
     destination: EndpointApduDestination,
     expected_link_destination: LinkDestination,
     expected_npdu_destination: Option<NpduAddress>,
     attribute_type: u8,
     expecting_reply: bool,
     priority: NetworkPriority,
-) {
+}
+
+async fn assert_command(egress: &EndpointEgress, handle: &mut CaptureHandle, case: CommandCase) {
+    let CommandCase {
+        destination,
+        expected_link_destination,
+        expected_npdu_destination,
+        attribute_type,
+        expecting_reply,
+        priority,
+    } = case;
     let apdu = encoded_unconfirmed_request();
     let data_attributes = vec![DataAttribute {
         option_type: attribute_type,
-        must_understand: attribute_type % 2 == 0,
+        must_understand: attribute_type.is_multiple_of(2),
         data: vec![attribute_type, attribute_type.wrapping_add(1)],
     }];
 
@@ -222,14 +264,16 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
     assert_command(
         &egress,
         &mut handle,
-        EndpointApduDestination::Direct {
-            destination_mac: MacAddr::from_slice(&[0x10]),
+        CommandCase {
+            destination: EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(&[0x10]),
+            },
+            expected_link_destination: LinkDestination::Unicast(MacAddr::from_slice(&[0x10])),
+            expected_npdu_destination: None,
+            attribute_type: 1,
+            expecting_reply: true,
+            priority: NetworkPriority::URGENT,
         },
-        LinkDestination::Unicast(MacAddr::from_slice(&[0x10])),
-        None,
-        1,
-        true,
-        NetworkPriority::URGENT,
     )
     .await;
     let routed_destination = NpduAddress {
@@ -239,16 +283,18 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
     assert_command(
         &egress,
         &mut handle,
-        EndpointApduDestination::Routed {
-            destination_network: routed_destination.network,
-            destination_mac: routed_destination.mac_address.clone(),
-            router_mac: MacAddr::from_slice(&[0x21]),
+        CommandCase {
+            destination: EndpointApduDestination::Routed {
+                destination_network: routed_destination.network,
+                destination_mac: routed_destination.mac_address.clone(),
+                router_mac: MacAddr::from_slice(&[0x21]),
+            },
+            expected_link_destination: LinkDestination::Unicast(MacAddr::from_slice(&[0x21])),
+            expected_npdu_destination: Some(routed_destination),
+            attribute_type: 2,
+            expecting_reply: false,
+            priority: NetworkPriority::CRITICAL_EQUIPMENT,
         },
-        LinkDestination::Unicast(MacAddr::from_slice(&[0x21])),
-        Some(routed_destination),
-        2,
-        false,
-        NetworkPriority::CRITICAL_EQUIPMENT,
     )
     .await;
     let unknown_router_destination = NpduAddress {
@@ -258,56 +304,64 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
     assert_command(
         &egress,
         &mut handle,
-        EndpointApduDestination::RoutedViaLocalBroadcast {
-            destination_network: unknown_router_destination.network,
-            destination_mac: unknown_router_destination.mac_address.clone(),
+        CommandCase {
+            destination: EndpointApduDestination::RoutedViaLocalBroadcast {
+                destination_network: unknown_router_destination.network,
+                destination_mac: unknown_router_destination.mac_address.clone(),
+            },
+            expected_link_destination: LinkDestination::Broadcast,
+            expected_npdu_destination: Some(unknown_router_destination),
+            attribute_type: 3,
+            expecting_reply: true,
+            priority: NetworkPriority::LIFE_SAFETY,
         },
-        LinkDestination::Broadcast,
-        Some(unknown_router_destination),
-        3,
-        true,
-        NetworkPriority::LIFE_SAFETY,
     )
     .await;
     assert_command(
         &egress,
         &mut handle,
-        EndpointApduDestination::LocalBroadcast,
-        LinkDestination::Broadcast,
-        None,
-        4,
-        false,
-        NetworkPriority::NORMAL,
-    )
-    .await;
-    assert_command(
-        &egress,
-        &mut handle,
-        EndpointApduDestination::RemoteBroadcast {
-            destination_network: 400,
+        CommandCase {
+            destination: EndpointApduDestination::LocalBroadcast,
+            expected_link_destination: LinkDestination::Broadcast,
+            expected_npdu_destination: None,
+            attribute_type: 4,
+            expecting_reply: false,
+            priority: NetworkPriority::NORMAL,
         },
-        LinkDestination::Broadcast,
-        Some(NpduAddress {
-            network: 400,
-            mac_address: MacAddr::new(),
-        }),
-        5,
-        true,
-        NetworkPriority::URGENT,
     )
     .await;
     assert_command(
         &egress,
         &mut handle,
-        EndpointApduDestination::GlobalBroadcast,
-        LinkDestination::Broadcast,
-        Some(NpduAddress {
-            network: 0xffff,
-            mac_address: MacAddr::new(),
-        }),
-        6,
-        false,
-        NetworkPriority::CRITICAL_EQUIPMENT,
+        CommandCase {
+            destination: EndpointApduDestination::RemoteBroadcast {
+                destination_network: 400,
+            },
+            expected_link_destination: LinkDestination::Broadcast,
+            expected_npdu_destination: Some(NpduAddress {
+                network: 400,
+                mac_address: MacAddr::new(),
+            }),
+            attribute_type: 5,
+            expecting_reply: true,
+            priority: NetworkPriority::URGENT,
+        },
+    )
+    .await;
+    assert_command(
+        &egress,
+        &mut handle,
+        CommandCase {
+            destination: EndpointApduDestination::GlobalBroadcast,
+            expected_link_destination: LinkDestination::Broadcast,
+            expected_npdu_destination: Some(NpduAddress {
+                network: 0xffff,
+                mac_address: MacAddr::new(),
+            }),
+            attribute_type: 6,
+            expecting_reply: false,
+            priority: NetworkPriority::CRITICAL_EQUIPMENT,
+        },
     )
     .await;
 
@@ -328,7 +382,17 @@ async fn effective_group_destinations_reject_confirmed_and_malformed_apdus_witho
             destination_network: 400,
         },
         EndpointApduDestination::GlobalBroadcast,
-    ] {
+    ]
+    .into_iter()
+    // With no DNET, the link's broadcast MAC, or any other group address, is
+    // a local broadcast (#1479).
+    .chain(
+        std::iter::once(&BROADCAST_MAC[..])
+            .chain(BIP_GROUPS.iter().map(|mac| &mac[..]))
+            .map(|mac| EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(mac),
+            }),
+    ) {
         for apdu in [encoded_confirmed_request(), vec![0xff]] {
             assert!(matches!(
                 egress
@@ -349,8 +413,99 @@ async fn effective_group_destinations_reject_confirmed_and_malformed_apdus_witho
         Err(mpsc::error::TryRecvError::Empty)
     ));
 
+    // An Unconfirmed-Request still goes to the broadcast MAC.
+    egress
+        .send_apdu(
+            encoded_unconfirmed_request(),
+            EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(&BROADCAST_MAC),
+            },
+            false,
+            NetworkPriority::NORMAL,
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let captured = timeout(WAIT, handle.sent.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        captured.destination,
+        LinkDestination::Unicast(MacAddr::from_slice(&BROADCAST_MAC))
+    );
+
     endpoint.stop().await.unwrap();
     assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+}
+
+/// A routed destination with no DADR is a remote broadcast, so a confirmed
+/// request to it is refused by the network layer, naming its PDU type, and
+/// nothing goes out (#1479). The routed form through a known router still
+/// sends an Unconfirmed-Request there; the local-broadcast form refuses an
+/// empty DADR outright and points to the remote-broadcast send.
+#[tokio::test]
+async fn routed_destinations_without_a_dadr_refuse_all_but_an_unconfirmed_request() {
+    let (transport, mut handle) = capture_transport();
+    let mut endpoint = EndpointIngress::new(transport, 8);
+    let ingress = endpoint.start().await.unwrap();
+    let egress = ingress.egress;
+    let routed = EndpointApduDestination::Routed {
+        destination_network: 400,
+        destination_mac: MacAddr::new(),
+        router_mac: MacAddr::from_slice(&[0x40]),
+    };
+    let via_broadcast = EndpointApduDestination::RoutedViaLocalBroadcast {
+        destination_network: 400,
+        destination_mac: MacAddr::new(),
+    };
+    let send = |apdu, destination| {
+        egress.send_apdu(
+            apdu,
+            destination,
+            false,
+            NetworkPriority::NORMAL,
+            Vec::new(),
+        )
+    };
+    for (apdu, destination, refusal) in [
+        (
+            encoded_confirmed_request(),
+            routed.clone(),
+            "not PDU type CONFIRMED_REQUEST",
+        ),
+        (
+            encoded_confirmed_request(),
+            via_broadcast.clone(),
+            "use broadcast_to_network",
+        ),
+        (
+            encoded_unconfirmed_request(),
+            via_broadcast,
+            "use broadcast_to_network",
+        ),
+    ] {
+        let message = send(apdu, destination).await.unwrap_err().to_string();
+        assert!(message.contains(refusal), "{message}");
+    }
+    assert!(matches!(
+        handle.sent.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    send(encoded_unconfirmed_request(), routed).await.unwrap();
+    let captured = timeout(WAIT, handle.sent.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        captured.destination,
+        LinkDestination::Unicast(MacAddr::from_slice(&[0x40]))
+    );
+    let npdu = decode_npdu(captured.npdu).unwrap();
+    assert_eq!(
+        npdu.destination,
+        Some(NpduAddress {
+            network: 400,
+            mac_address: MacAddr::new(),
+        })
+    );
+
+    endpoint.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -396,4 +551,95 @@ async fn routed_via_local_broadcast_accepts_confirmed_request_for_ultimate_unica
 
     endpoint.stop().await.unwrap();
     assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn only_destinations_on_the_known_local_network_are_localized() {
+    let station = || MacAddr::from_slice(&[0x30]);
+    let named = |network| {
+        [
+            EndpointApduDestination::Routed {
+                destination_network: network,
+                destination_mac: station(),
+                router_mac: MacAddr::from_slice(&[0x09]),
+            },
+            EndpointApduDestination::RoutedViaLocalBroadcast {
+                destination_network: network,
+                destination_mac: station(),
+            },
+            EndpointApduDestination::RemoteBroadcast {
+                destination_network: network,
+            },
+        ]
+    };
+    let direct = EndpointApduDestination::Direct {
+        destination_mac: station(),
+    };
+    let [unicast, via_broadcast, broadcast] = named(300);
+    assert_eq!(unicast.localized(Some(300)), direct);
+    assert_eq!(via_broadcast.localized(Some(300)), direct);
+    assert_eq!(
+        broadcast.localized(Some(300)),
+        EndpointApduDestination::LocalBroadcast
+    );
+    // Another network, and every network while the number is unknown, keeps
+    // its DNET; destinations naming no network never change.
+    for local_network in [Some(301), None] {
+        for destination in named(300) {
+            assert_eq!(destination.clone().localized(local_network), destination);
+        }
+    }
+    for destination in [
+        direct.clone(),
+        EndpointApduDestination::LocalBroadcast,
+        EndpointApduDestination::GlobalBroadcast,
+    ] {
+        assert_eq!(destination.clone().localized(Some(300)), destination);
+    }
+}
+
+/// The egress frames each destination as its caller names it, even one
+/// naming the published local number: answers keep the route their request
+/// arrived by, and only the senders that start traffic localize it (#1403).
+#[tokio::test]
+async fn the_egress_sends_a_destination_as_named_once_a_number_is_published() {
+    let (transport, mut handle) = capture_transport();
+    let mut endpoint = EndpointIngress::new(transport, 2);
+    let ingress = endpoint.start().await.unwrap();
+    let egress = ingress.egress;
+    let slot = egress.local_network_number().clone();
+    slot.publish(bacnet_types::network_number::NetworkNumber::configured(300).unwrap());
+    assert_eq!(egress.local_network_number().get(), Some(300));
+    let destination = NpduAddress {
+        network: 300,
+        mac_address: MacAddr::from_slice(&[0x30]),
+    };
+    egress
+        .send_apdu(
+            encoded_confirmed_request(),
+            EndpointApduDestination::Routed {
+                destination_network: destination.network,
+                destination_mac: destination.mac_address.clone(),
+                router_mac: MacAddr::from_slice(&[0x09]),
+            },
+            false,
+            NetworkPriority::NORMAL,
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let captured = timeout(WAIT, handle.sent.recv())
+        .await
+        .expect("routed send timed out")
+        .expect("capture channel closed");
+    assert_eq!(
+        captured.destination,
+        LinkDestination::Unicast(MacAddr::from_slice(&[0x09]))
+    );
+    assert_eq!(
+        decode_npdu(captured.npdu).unwrap().destination,
+        Some(destination)
+    );
+
+    endpoint.stop().await.unwrap();
 }

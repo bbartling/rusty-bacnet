@@ -16,9 +16,8 @@ use bacnet_objects::binary_value::BinaryValueObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
 use bacnet_transport::bip::BipTransport;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
@@ -132,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // --- WhoIs discovery ---
-    client.who_is(None, None).await?;
+    client.who_is(None).await?;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let devices = client.discovered_devices().await;
     println!("\nDiscovered {} device(s):", devices.len());

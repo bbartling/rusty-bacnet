@@ -1,0 +1,256 @@
+# DeviceCommunicationControl local authorization
+
+Configured servers now **deny DCC by default**, including valid ENABLE and
+DISABLE_INITIATION requests with the correct configured password. A password
+alone no longer enables the service. This is stricter **local operator policy**,
+not a BACnet-mandated default and not authentication of a source principal.
+
+| Rust `server::DccPolicy` | Python keyword-only `dcc_policy` | Authorization |
+|---|---|---|
+| `DenyAll` (default) | `"deny_all"` (default) | Deny valid supported modes |
+| `RequirePassword` | `"require_password"` | Explicit opt-in; require a configured nonempty `dcc_password` and matching request password |
+| `LegacyPermissive` | `"legacy_permissive"` | **INSECURE compatibility opt-in**: preserve optional-password behavior |
+
+LegacyPermissive does **not** bypass a configured password. Without one, any
+requester whose request reaches the handler can change communications. Do not
+mistake this compatibility option, a shared password, a routed address, or an SC
+VMAC for authenticated source identity. Exact address restriction below is not
+principal authentication. Full auditing and broader abuse protection remain future work under
+the partial, separate #522 scope.
+
+## Migration
+
+Rust: set `ServerConfig::dcc_policy` or call `.dcc_policy(DccPolicy::RequirePassword)`
+alongside `.dcc_password(...)` on the generic, B/IP or SC builder. Exhaustive
+`ServerConfig` literals must add the new field (or an appropriate default update).
+The default is DenyAll, even for applications already setting `dcc_password`.
+
+Python: pass `dcc_policy="require_password"` alongside `dcc_password=...` to
+`BACnetServer`. The new argument is keyword-only; existing positional password
+and ReinitializeDevice arguments retain their positions. Exact lower-case values
+above are accepted; unknown strings raise `ValueError`, nonstrings `TypeError`.
+RequirePassword with absent or empty configuration fails before startup/dial
+(Python constructor: `ValueError`; Rust startup/build: configuration error).
+DenyAll and LegacyPermissive introduce no password-length restrictions.
+
+ReinitializeDevice's separate password and handler are unchanged.
+
+## Ordering and side effects
+
+### Optional exact-source restriction
+
+`ServerConfig::dcc_source_restriction` defaults to `None`, preserving existing
+policy behavior. Generic, B/IP and SC builders expose `.dcc_source_restriction(...)`.
+Use `Some(DccSourceRestriction::new(entries)?)` with `DccSource::Direct(Vec<u8>)`
+or `DccSource::Routed { network, address: Vec<u8> }`. Exhaustive Rust config
+literals need `dcc_source_restriction: None` (or a suitable default update).
+The validated list permits at most 256 entries and 1–18 octets per address
+(`BACnetAddress::MAX_MAC_LEN`, #1157); routed networks must be 1–65534. The
+network layer delivers no longer source address (#1141), and no built-in
+transport's MAC is longer, so a longer entry could never match and is refused
+rather than kept as a dead entry. These are static local limits, not transport
+support promises. No CIDR, prefixes, ranges or dynamic callbacks are supported.
+
+Python's keyword-only `dcc_source_restriction` accepts `None` or a list of
+`(network_or_none, address_bytes)` tuples: for example `[(7, b"\x2a")]` permits
+the claimed routed address 42 on network 7; `[(None, b"\x7f\x00\x00\x01\xba\xc0")]`
+permits that exact direct IPv4-plus-UDP-port address. `[]` explicitly denies all
+sources; it is **not** equivalent to `None`. Configuration is copied at construction.
+Invalid limits raise `ValueError`, invalid types `TypeError`, and out-of-u16
+network values may raise `OverflowError`.
+
+A configured list, including empty, requires explicit `RequirePassword` and a
+nonempty password. Other policies reject configuration before transport startup
+or SC dialing (Python constructor, Rust build/start), never silently ignoring it.
+Direct entries only match requests without a routed source. Routed entries match
+the exact network and full source address, not the immediate router's MAC.
+Once the server knows its own network's number, a routed entry naming that number
+also matches a request with no routed source from the link MAC equal to the
+entry's address (#1458): network numbers are unique, so the entry names a station
+on this link. While the number is unknown, such an entry matches only the routed
+form it spells out. This widening goes one way only, unlike a Device binding,
+which also takes such a relayed request as its direct station (#1404): a direct
+entry still matches no routed source, because any node on the link can claim this
+network's number and the station's MAC as SNET and SADR.
+Malformed routed identities fail closed rather than falling back to direct matching.
+All address bytes participate, independently of the 32-byte DEBUG truncation.
+Claimed addresses are spoofable and unauthenticated, **including SC VMACs**.
+An allowed address still needs the correct password; a shared password plus an
+address match does not establish principal identity or authenticated-SC provenance.
+
+### Optional global DISABLE_INITIATION rate policy
+
+`ServerConfig::dcc_disable_rate_limit: Option<DccDisableRateLimit>` defaults to
+`None` (**OFF**), preserving all existing authorization, including explicit
+LegacyPermissive. Generic, B/IP and SC builders expose `.dcc_disable_rate_limit(...)`.
+Use `Some(DccDisableRateLimit::default())` for an initial/maximum burst of **3**
+tokens and **one token per 20 seconds**. Public fields `capacity: u32` (1–65535)
+and `refill_interval_ms: u64` (1–86400000) are configurable local operator limits.
+Invalid values fail validation before transport startup/SC dialing. Exhaustive
+Rust config literals need `dcc_disable_rate_limit: None` or a default update.
+
+Python's keyword-only `dcc_disable_rate_limit: tuple[int, int] | None = None`
+accepts `(capacity, refill_interval_ms)`; pass `(3, 20000)` for the enabled defaults.
+The constructor validates and copies configuration before any transport work.
+Invalid bounds raise `ValueError`; wrong types raise `TypeError`, and integers
+outside the native unsigned representation may raise `OverflowError`.
+
+This is **one shared bucket per native server**, never a per-source table.
+All locally authorized DISABLE_INITIATION requests, including repeated requests
+with the same mode/duration and explicit LegacyPermissive requests, spend one token.
+Changing claimed direct/routed identities or immediate peers does not obtain a new
+budget. Enabling the limiter never enables DCC: DenyAll remains the default policy.
+Authorized **ENABLE is exempt**: it neither checks nor charges the bucket, nor
+resets its balance/refill progress. Existing #521 request-admission limits still apply.
+
+Refill uses Tokio monotonic elapsed time, with fractional nanosecond accounting,
+saturating at capacity and discarding surplus while full. Denied checks preserve
+elapsed progress. There is no refill task, wall-clock dependency or persistence.
+Admission and charge are serialized in one short blocking critical section with
+no await. **A charge is not refunded if the admitted handler is cancelled before
+the timer/state commit.** Such incomplete handlers still produce no completed-handler
+counter/event. Rate denial produces the existing SERVICES/SERVICE_REQUEST_DENIED,
+`policy_denied_total` and `policy_denied` DEBUG event without new telemetry fields.
+
+Each new native server starts full. Stop does not replenish that instance's bucket.
+Python stop drops the native server; each successful subsequent start on the same
+Python wrapper creates a **new native lifetime and fresh full bucket**. No bucket
+state is kept in the wrapper. An operator able to restart a server can reset the
+budget; this policy does not constrain that authority.
+
+This is not all-attempt, ingress, CPU, flood or password-guessing protection:
+decoding/password checks and earlier authorization denials remain unthrottled by
+this policy. It does not authenticate sources, provide fair allocation, or complete #522.
+
+### Validation and timer order
+
+Existing admission, duplicate handling and DCC ingress discards are unchanged.
+After admission: decode, existing constant-time password check, deprecated DISABLE
+rejection, then local policy and optional source restriction for ENABLE/DISABLE_INITIATION,
+then optional rate admission for DISABLE_INITIATION, then live state/timer
+commit. Missing/wrong configured passwords return SECURITY/PASSWORD_FAILURE even
+under DenyAll or for DISABLE. Otherwise denied valid requests return
+SERVICES/SERVICE_REQUEST_DENIED. Unknown-mode decoding/encoding errors retain
+their existing precedence. Deprecated DISABLE remains denied in **every** policy.
+Malformed, wrong-password, deprecated-mode, DenyAll and source-denied requests
+never check or charge the rate bucket.
+
+Denial happens before the live timer lock, cancellation or state mutation.
+Repeated denied requests cannot create, cancel or extend a timer, including when
+its expiry is waiting for the same lock; denied ENABLE cannot clear state 2.
+Admitted requests preserve existing behavior: absent duration is indefinite,
+zero schedules immediate expiry, positive values use minutes, and subsequent
+admitted requests replace the timer. Existing ENABLE timer handling is retained.
+These are compatibility semantics, **not new timer conformance evidence**:
+ASHRAE 135-2020 §16.1 specifies ignoring duration for ENABLE; this slice does not
+change that existing implementation nuance. Explicit stop still cancels and
+joins the owned timer.
+
+Decode-accepted ENABLE remains eligible for protected recovery capacity regardless
+of policy, password or source restriction. It can occupy that capacity until the handler denies it;
+there is no pre-admission authorization. Capacity exhaustion may still Abort
+before handler validation. [Request admission](request-admission.md) and the
+completed bounded #521 acceptance remain unchanged, not reopened.
+
+## Source and limits
+
+### Standalone SC loopback evidence
+
+`cargo nextest run -p bacnet-server --locked --features sc-tls sc_dcc_mtls` exercises
+the real standalone `BACnetServer::sc_builder`, TLS WebSocket transport and SC
+hub on `127.0.0.1:0`. Test-only certificates and distinct endpoint keys are
+generated in memory. The hub requires client certificates; clients verify the
+hub certificate. Missing/untrusted client credentials and missing server trust
+are rejected, while trusted peers complete SC connection establishment and
+successful ReadProperty exchanges before DCC assertions.
+
+The tests check exact DCC response identity, error class/code and five-counter
+deltas: default denial (including a correct configured password), password
+precedence, deprecated DISABLE, explicit RequirePassword with exact direct VMAC
+or routed-source restrictions, an empty restriction, and the shared three-token
+disable budget. They cover earlier malformed/password/deprecated/source failures
+not consuming that budget, authorized ENABLE exemption without a reset, and
+repeated denials leaving state and the same live timer intact even with its lock
+held. Existing absent/zero/ENABLE-duration behavior is characterized, not corrected.
+Fixture shutdown is joined on success and on an injected assertion failure.
+
+Mutual TLS authenticates each TLS endpoint to the hub, **not a DCC principal to
+the BACnet server**. The server receives claimed VMAC/NPDU source addresses;
+these tests do not bind them to certificates. Matching routed claims through
+different certified peers demonstrate address-policy behavior, not principal
+authentication. This evidence does not qualify reconnect/failover, external
+interoperability, a combined endpoint, full auditing or completion of #522.
+
+Local licensed ASHRAE 135-2020 §16.1 (printed 759–760) supplies the existing
+optional-password and deprecated-DISABLE rules; §18.6 (printed 795) describes
+SERVICE_REQUEST_DENIED for lack of authorization. The three configuration modes,
+nonempty startup requirement, deny-all default and optional rate limits are operator policy, not new
+normative claims. This does not expand authenticated-SC, physical-transport,
+full-conformance, Audit/#125, EventLog integration, additional #181 fault-family
+or GATE0007 qualification.
+
+## Audit records
+
+With target Audit configured (see [target Audit Reporters](target-audit-reporters.md)),
+each DeviceCommunicationControl change the server carries out is reported, as
+Clause 19.6 and Table 19-5 map the service (#1387). An accepted DISABLE_INITIATION
+writes one DEVICE_DISABLE_COMM record, and an accepted ENABLE one DEVICE_ENABLE_COMM
+record, both naming the requester as source with its invoke ID. A timed disable
+that runs out writes one DEVICE_ENABLE_COMM record with this device as its source
+and no invoke ID; an ENABLE's own duration changes nothing when it ends, so it
+writes none. Each record names this Device as its target, with no target object,
+property or value, and no Result. A refused request (password, DISABLE, policy,
+source or rate denial) writes nothing.
+
+The record goes through the Reporter that monitors the local Device object, and
+needs its DEVICE_DISABLE_COMM or DEVICE_ENABLE_COMM operation bit. It honours
+`Maximum_Send_Delay`, and a record dropped for want of a send slot is summarized
+as AUDITING_FAILURE. The record is admitted with the change, under the timer
+owner, so records follow the order changes take effect in. The disable's record
+goes out under DISABLE_INITIATION, which exempts audit notifications.
+
+## Completed-handler observability
+
+Rust `BACnetServer::dcc_outcome_counters()` returns `DccOutcomeCounters`.
+Python `await server.dcc_outcome_counters()` returns the corresponding typed
+dictionary. Its five stable fields are `accepted_total`, `policy_denied_total`,
+`password_failure_total`, `deprecated_denied_total`, and `malformed_total`.
+Each is an independently sampled cumulative `u64` (Python `int`), saturating
+at `2**64 - 1`. New server lifetimes start at zero; snapshots are not an atomic
+whole view. Rust snapshots remain readable after stop; Python raises
+`RuntimeError("server not started")` before start and after stop.
+
+Exactly one counter increments per completed admitted DCC handler, independently
+of tracing filters. The dedicated structured DEBUG target
+`bacnet_server::dcc_outcome` emits one event at that same completion boundary,
+before response construction/send or any further await. `accepted` means live
+state/timer replacement committed, not successful response delivery or the
+current communication state. Other outcomes follow existing validation order:
+decode failure → `malformed`; configured password failure → `password_failure`;
+deprecated DISABLE → `deprecated_denied`; unknown mode → `malformed`; valid mode
+refused by local policy → `policy_denied`.
+
+Event fields are fixed: `outcome`, `invoke_id`, `service` (17), optional
+`decoded_mode` (raw u32) and `duration_minutes` (u16), `source_kind`
+(`claimed_direct` / `claimed_routed`), `claimed_source_mac`,
+`source_mac_truncated`, optional `claimed_snet`, `claimed_sadr`, and
+`sadr_truncated`. Missing routed SADR is an empty string, distinguished by source
+kind and absent SNET. Each address is at most 32 bytes rendered as 64 lowercase
+hex characters, with its own truncation flag. Both immediate and routed claims
+are included when present. These are untrusted address claims, **not** authenticated
+identity or canonical principals. Failed decoding exposes no decoded metadata.
+Passwords, password-presence flags, request/error text and payloads are excluded.
+No address formatting occurs when the DEBUG target is disabled.
+
+This is bounded local operational telemetry, **not** a durable audit log or
+BACnet Audit service. There is no internal history, queue, task, destination or
+new callback API; the Python accessor installs no logger/subscriber or trace
+bridge. Standard tracing subscribers are caller-owned and may filter, discard,
+backpressure, or perform arbitrary work. Event delivery, global concurrent
+ordering, event-rate limiting and flood resistance are not guaranteed. Counters and
+events exclude duplicates, pre-handler admission/shutdown/Abort-fallback
+rejections, handlers cancelled before completion, timer expiry, and response
+delivery failures after commit. Existing admission counters cover their separate
+admission boundary. Source mismatch reuses `policy_denied_total` and the existing
+`policy_denied` DEBUG event/schema, without new counters. This remains partial
+#522 work, not full auditing, general abuse protection or principal authentication; #521 remains closed.

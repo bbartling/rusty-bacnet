@@ -1,15 +1,17 @@
-//! Program object (type 16) per ASHRAE 135-2020 Clause 12.
+//! Program object (type 16) per ASHRAE 135-2020 Clause 12.22.
 //!
 //! The Program object represents an application program running within
 //! a BACnet device. It exposes the program's lifecycle state.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
+
+mod metadata;
 
 /// Maximum valid program state value (unloaded = 5).
 const PROGRAM_STATE_MAX: u32 = 5;
@@ -24,7 +26,7 @@ pub struct ProgramObject {
     reason_for_halt: u32,
     status_flags: StatusFlags,
     out_of_service: bool,
-    reliability: u32,
+    reliability: Reliability,
 }
 
 impl ProgramObject {
@@ -40,7 +42,7 @@ impl ProgramObject {
             reason_for_halt: 0,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
 
@@ -124,24 +126,20 @@ impl BACnetObject for ProgramObject {
                     Err(common::invalid_data_type_error())
                 }
             }
-            _ => Err(common::write_access_denied_error()),
+            _ => Err(crate::common::unhandled_write_error(
+                self.property_metadata().as_ref(),
+                property,
+                _array_index,
+            )),
         }
     }
 
+    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
+        metadata::for_object(self)
+    }
+
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PROGRAM_STATE,
-            PropertyIdentifier::PROGRAM_CHANGE,
-            PropertyIdentifier::REASON_FOR_HALT,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::RELIABILITY,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 }
 

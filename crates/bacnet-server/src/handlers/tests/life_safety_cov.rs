@@ -1,11 +1,11 @@
 use super::*;
 
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
-use bacnet_services::common::PropertyReference;
 use bacnet_services::cov::SubscribeCOVPropertyRequest;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
+use bacnet_types::constructed::PropertyReference;
 
 fn life_safety_db() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
@@ -35,7 +35,7 @@ fn property_request(oid: ObjectIdentifier, property: PropertyIdentifier) -> Byte
         cov_increment: None,
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
     encoded
 }
 
@@ -59,16 +59,19 @@ fn life_safety_single_property_cov_uses_explicit_capability_and_error_taxonomy()
         (point_oid(), PropertyIdentifier::TRACKING_VALUE),
         (point_oid(), PropertyIdentifier::SILENCED),
         (zone_oid(), PropertyIdentifier::OPERATION_EXPECTED),
+        // The zone serves Tracking_Value too, so it is subscribable (#1092).
+        (zone_oid(), PropertyIdentifier::TRACKING_VALUE),
     ] {
         handle_subscribe_cov_property(&mut table, &db, &mac, &property_request(oid, property))
             .unwrap();
     }
 
+    // Accepted_Modes is readable but outside the COV surface.
     let error = handle_subscribe_cov_property(
         &mut table,
         &db,
         &mac,
-        &property_request(zone_oid(), PropertyIdentifier::TRACKING_VALUE),
+        &property_request(zone_oid(), PropertyIdentifier::ACCEPTED_MODES),
     )
     .unwrap_err();
     assert_protocol(error, ErrorClass::PROPERTY, ErrorCode::NOT_COV_PROPERTY);
@@ -90,11 +93,11 @@ fn life_safety_single_property_cov_uses_explicit_capability_and_error_taxonomy()
     )
     .unwrap_err();
     assert_protocol(error, ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY);
-    assert_eq!(table.len(), 3);
+    assert_eq!(table.len(), 4);
 }
 
 #[test]
-fn life_safety_multiple_property_cov_rejection_is_atomic() {
+fn life_safety_multiple_property_cov_rejection_keeps_the_earlier_reference() {
     let db = life_safety_db();
     for (oid, property, code) in [
         (
@@ -104,7 +107,7 @@ fn life_safety_multiple_property_cov_rejection_is_atomic() {
         ),
         (
             zone_oid(),
-            PropertyIdentifier::TRACKING_VALUE,
+            PropertyIdentifier::ACCEPTED_MODES,
             ErrorCode::NOT_COV_PROPERTY,
         ),
         (
@@ -142,17 +145,39 @@ fn life_safety_multiple_property_cov_rejection_is_atomic() {
             }],
         };
 
-        let error = handle_subscribe_cov_property_multiple_request_endpoint(
+        let refusal = handle_subscribe_cov_property_multiple_request_endpoint(
             &mut table,
             &db,
             &[1, 2, 3],
             None,
+            None,
             request,
         )
         .unwrap_err();
+        let error = &refusal.error;
 
-        assert_protocol(error, ErrorClass::PROPERTY, code);
-        assert!(table.is_empty());
+        // The error names the second reference, the one refused (#1047).
+        assert!(
+            matches!(
+                error,
+                Error::Structured { class, code: actual_code, detail }
+                    if *class == ErrorClass::PROPERTY.to_raw() as u32
+                        && *actual_code == code.to_raw() as u32
+                        && **detail == ErrorDetail::FirstFailedSubscription(
+                            BACnetObjectPropertyReference::new(oid, property.to_raw())
+                        )
+            ),
+            "{error:?}"
+        );
+        // The first reference, processed before the refusal, stays (#1058).
+        assert_eq!(refusal.refused, Some(1));
+        assert_eq!(refusal.committed.len(), 1);
+        assert_eq!(table.len(), 1);
+        assert!(table.is_current(&refusal.committed[0]));
+        assert_eq!(
+            refusal.committed[0].monitored_property,
+            Some(PropertyIdentifier::SILENCED)
+        );
     }
 }
 
@@ -165,12 +190,12 @@ fn life_safety_property_cancellation_bypasses_current_capability_checks() {
         monitored_object_identifier: zone_oid(),
         issue_confirmed_notifications: None,
         lifetime: None,
-        monitored_property_identifier: PropertyIdentifier::TRACKING_VALUE,
+        monitored_property_identifier: PropertyIdentifier::ACCEPTED_MODES,
         monitored_property_array_index: None,
         cov_increment: None,
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded);
+    request.encode(&mut encoded).unwrap();
 
     let initial =
         handle_subscribe_cov_property_with_initial(&mut table, &db, &[1], &encoded).unwrap();

@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::event::LimitEnable;
+use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::EventState;
 
 // --- AnalogValue ---
@@ -16,7 +16,7 @@ fn av_read_present_value_default() {
 #[test]
 fn av_set_present_value() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-    av.set_present_value(42.5);
+    av.set_relinquish_default(42.5).unwrap();
     let val = av
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap();
@@ -47,11 +47,12 @@ fn av_write_with_priority() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
 
     // Write at priority 8
-    av.write_property(
+    av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(55.0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
 
@@ -78,11 +79,12 @@ fn av_relinquish_falls_to_default() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
 
     // Write at priority 16 (lowest)
-    av.write_property(
+    av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(75.0),
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -92,11 +94,12 @@ fn av_relinquish_falls_to_default() {
     );
 
     // Relinquish (write Null)
-    av.write_property(
+    av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Null,
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
 
@@ -112,18 +115,20 @@ fn av_relinquish_falls_to_default() {
 fn av_higher_priority_wins() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
 
-    av.write_property(
+    av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(10.0),
         Some(16),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
-    av.write_property(
+    av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(90.0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
 
@@ -177,11 +182,12 @@ fn av_priority_array_index_u32_max_out_of_bounds() {
 #[test]
 fn av_write_with_priority_zero_rejected() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-    let result = av.write_property(
+    let result = av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(50.0),
         Some(0),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -189,11 +195,12 @@ fn av_write_with_priority_zero_rejected() {
 #[test]
 fn av_write_with_priority_17_rejected() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-    let result = av.write_property(
+    let result = av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(50.0),
         Some(17),
+        &crate::command_source::test_origin(),
     );
     assert!(result.is_err());
 }
@@ -202,11 +209,12 @@ fn av_write_with_priority_17_rejected() {
 fn av_write_with_all_valid_priorities() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
     for prio in 1..=16u8 {
-        av.write_property(
+        av.write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(prio as f32),
             Some(prio),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     }
@@ -218,13 +226,14 @@ fn av_write_with_all_valid_priorities() {
 }
 
 #[test]
-fn av_direct_priority_array_write_value() {
+fn av_present_value_priority_write_value() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-    av.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Real(42.0),
+    av.write_property_from(
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Real(42.0),
+        Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -240,20 +249,22 @@ fn av_direct_priority_array_write_value() {
 }
 
 #[test]
-fn av_direct_priority_array_relinquish() {
+fn av_present_value_priority_relinquish() {
     let mut av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
-    av.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Real(42.0),
+    av.write_property_from(
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Real(42.0),
+        Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
-    av.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Null,
+    av.write_property_from(
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Null,
+        Some(5),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     assert_eq!(
@@ -334,7 +345,7 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )
@@ -351,11 +362,11 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
     .unwrap();
 
     // Normal value — no transition
-    av.set_present_value(50.0);
+    av.set_relinquish_default(50.0).unwrap();
     assert!(av.evaluate_intrinsic_reporting().is_none());
 
     // Go above high limit
-    av.set_present_value(81.0);
+    av.set_relinquish_default(81.0).unwrap();
     let proposal = av.evaluate_intrinsic_reporting().unwrap();
     let outcome = crate::event::commit_test_proposal(&mut av, proposal);
     let change = outcome.change;
@@ -370,7 +381,7 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
     );
 
     // Drop below deadband threshold → back to NORMAL
-    av.set_present_value(77.0);
+    av.set_relinquish_default(77.0).unwrap();
     let change = av.evaluate_intrinsic_reporting().unwrap().change;
     assert_eq!(change.to, EventState::NORMAL);
 }
@@ -404,7 +415,7 @@ fn av_intrinsic_reporting_after_priority_write() {
         None,
         PropertyValue::BitString {
             unused_bits: 6,
-            data: vec![LimitEnable::BOTH.to_bits()],
+            data: vec![LimitEnable::all().to_bacnet()],
         },
         None,
     )
@@ -421,11 +432,12 @@ fn av_intrinsic_reporting_after_priority_write() {
     .unwrap();
 
     // Write a high value via priority array
-    av.write_property(
+    av.write_property_from(
         PropertyIdentifier::PRESENT_VALUE,
         None,
         PropertyValue::Real(85.0),
         Some(8),
+        &crate::command_source::test_origin(),
     )
     .unwrap();
     let change = av.evaluate_intrinsic_reporting().unwrap().change;
@@ -618,7 +630,7 @@ fn av_is_writable_property_mirrors_write_property() {
     use crate::traits::BACnetObject;
     let av = AnalogValueObject::new(1, "av-1", 95).unwrap();
     // Commandable (same as AO).
-    assert!(av.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
+    assert!(!av.is_writable_property(PropertyIdentifier::PRIORITY_ARRAY));
     assert!(av.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     // Event properties.
     assert!(av.is_writable_property(PropertyIdentifier::LIMIT_ENABLE));

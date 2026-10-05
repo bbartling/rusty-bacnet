@@ -3,6 +3,9 @@ use crate::sc_frame::{decode_sc_bvlc_result, ScBvlcResult, ScOption};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use tokio::time::{timeout, Duration};
 
+#[path = "mu_liveness_tests.rs"]
+mod mu_liveness_tests;
+
 pub(super) async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     let data = ws_hub.recv().await.unwrap();
     let req = decode_sc_message(&data).unwrap();
@@ -10,7 +13,7 @@ pub(super) async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&[0x33; 16]);
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 
@@ -51,7 +54,7 @@ pub(super) async fn start_transport() -> (
     LoopbackWebSocket,
 ) {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, [0x10; 6]).await;
         ws_hub

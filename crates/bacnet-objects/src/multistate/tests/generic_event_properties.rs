@@ -285,8 +285,8 @@ fn mso_event_properties_round_trip_and_match_pics() {
     assert_event_properties_round_trip(&mut mso, "MSO");
 }
 
-/// Clause 13.3: "If no value is available for this parameter, then it takes on
-/// the value of the pTimeDelay parameter." An object that was never written a
+/// Clause 13.3 supplies pTimeDelay when pTimeDelayNormal is absent.
+/// An object that was never written a
 /// Time_Delay_Normal reads back the effective (fallback) delay.
 #[test]
 fn multistate_time_delay_normal_defaults_to_time_delay_when_unwritten() {
@@ -456,10 +456,8 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
         &mut MultiStateInputObject::new(1, "MSI-1", 3).unwrap() as &mut dyn BACnetObject,
         &mut MultiStateValueObject::new(1, "MSV-1", 3).unwrap() as &mut dyn BACnetObject,
     ] {
-        let value = PropertyValue::List(vec![
-            PropertyValue::Unsigned(2),
-            PropertyValue::Unsigned(99),
-        ]);
+        let value =
+            PropertyValue::List(vec![PropertyValue::Unsigned(2), PropertyValue::Unsigned(3)]);
         object
             .write_property(PropertyIdentifier::ALARM_VALUES, None, value.clone(), None)
             .unwrap();
@@ -482,14 +480,17 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
             ),
             ErrorCode::INVALID_DATA_TYPE,
         );
-        assert_property_error(
+        crate::common::assert_list_element_refused(
             object.write_property(
                 PropertyIdentifier::ALARM_VALUES,
                 None,
                 PropertyValue::List(vec![PropertyValue::Enumerated(2)]),
                 None,
             ),
+            ErrorClass::PROPERTY,
             ErrorCode::INVALID_DATA_TYPE,
+            1,
+            "a mistyped element",
         );
         assert_eq!(
             object
@@ -498,14 +499,17 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
             value,
             "a rejected wrong-element write must preserve the prior list"
         );
-        assert_property_error(
+        crate::common::assert_list_element_refused(
             object.write_property(
                 PropertyIdentifier::ALARM_VALUES,
                 None,
                 PropertyValue::List(vec![PropertyValue::Unsigned(u32::MAX as u64 + 1)]),
                 None,
             ),
+            ErrorClass::PROPERTY,
             ErrorCode::VALUE_OUT_OF_RANGE,
+            1,
+            "an overflowing element",
         );
         assert_eq!(
             object
@@ -514,9 +518,31 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
             value,
             "an overflowing element must leave the prior list intact"
         );
+        // A state the object doesn't have is refused at its element (#1429).
+        for (states, element) in [(vec![2, 4], 2), (vec![0, 1], 1)] {
+            crate::common::assert_list_element_refused(
+                object.write_property(
+                    PropertyIdentifier::ALARM_VALUES,
+                    None,
+                    PropertyValue::List(states.into_iter().map(PropertyValue::Unsigned).collect()),
+                    None,
+                ),
+                ErrorClass::PROPERTY,
+                ErrorCode::VALUE_OUT_OF_RANGE,
+                element,
+                "a state past Number_Of_States",
+            );
+            assert_eq!(
+                object
+                    .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                    .unwrap(),
+                value,
+                "an out-of-range state must leave the prior list intact"
+            );
+        }
         let boundary = PropertyValue::List(
             (0..MAX_ALARM_VALUES)
-                .map(|value| PropertyValue::Unsigned(value as u64))
+                .map(|value| PropertyValue::Unsigned(value as u64 % 3 + 1))
                 .collect(),
         );
         object
@@ -532,16 +558,14 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
                 .map(|value| PropertyValue::Unsigned(value as u64))
                 .collect(),
         );
-        match object
-            .write_property(PropertyIdentifier::ALARM_VALUES, None, overlong, None)
-            .unwrap_err()
-        {
-            Error::Protocol { class, code } => {
-                assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
-                assert_eq!(code, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32);
-            }
-            other => panic!("expected resource-cap error, got {other:?}"),
-        }
+        // The first value past the cap is the one that does not fit.
+        crate::common::assert_list_element_refused(
+            object.write_property(PropertyIdentifier::ALARM_VALUES, None, overlong, None),
+            ErrorClass::RESOURCES,
+            ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+            MAX_ALARM_VALUES as u32 + 1,
+            "one value over the cap",
+        );
         assert_eq!(
             object
                 .read_property(PropertyIdentifier::ALARM_VALUES, None)
@@ -633,8 +657,8 @@ fn recommissioning_alarm_values_while_offnormal_returns_to_normal() {
 
 /// BACnetNotifyType is a closed {alarm(0), event(1), ack-notification(2)}
 /// production (Clause 21). An out-of-production write is PROPERTY /
-/// VALUE_OUT_OF_RANGE (Clause 15.9.1.3: "The value provided is outside the
-/// range of values that the property can take on") and leaves the stored
+/// VALUE_OUT_OF_RANGE (Clause 15.9.1.3 rejects values outside the property's
+/// permitted range) and leaves the stored
 /// value untouched.
 #[test]
 fn mso_notify_type_rejects_out_of_production_values() {
@@ -676,8 +700,8 @@ fn mso_notify_type_rejects_out_of_production_values() {
 /// BACnetEventTransitionBits is a 3-bit production (Clause 21); its canonical
 /// encoding is one content octet with 5 unused bits, which is what the read
 /// path emits. A write declaring any other shape is PROPERTY /
-/// INVALID_DATA_ENCODING (Clause 15.9.1.3: "The encoding is not valid for the
-/// datatype of the property") — including an 8-bit string that would
+/// INVALID_DATA_ENCODING (Clause 15.9.1.3 covers encodings incompatible with
+/// the property's datatype) — including an 8-bit string that would
 /// previously have been silently masked to three bits.
 #[test]
 fn mso_event_enable_rejects_noncanonical_bit_strings() {

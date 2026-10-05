@@ -1,4 +1,9 @@
 use super::*;
+use crate::present_value_access::PresentValueAccess;
+use crate::property_metadata::PropertyMetadata;
+
+#[path = "value/metadata.rs"]
+mod metadata;
 
 // ---------------------------------------------------------------------------
 // BinaryValue (type 5)
@@ -6,47 +11,66 @@ use super::*;
 
 /// BACnet Binary Value object.
 ///
-/// Commandable binary value with 16-level priority array.
 /// Uses Enumerated values: 0 = inactive, 1 = active.
 pub struct BinaryValueObject {
+    audit_policy: crate::audit::ObjectAuditPolicy,
     oid: ObjectIdentifier,
     name: String,
     description: String,
     present_value: u32, // 0 = inactive, 1 = active
     out_of_service: bool,
     status_flags: StatusFlags,
+    access: PresentValueAccess,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
-    /// Reliability: 0 = NO_FAULT_DETECTED.
-    reliability: u32,
-    reliability_before_out_of_service: Option<u32>,
+    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
+    reliability: Reliability,
+    reliability_before_out_of_service: Option<Reliability>,
     reliability_inhibit: common::ReliabilityInhibitState,
     active_text: String,
     inactive_text: String,
     /// CHANGE_OF_STATE event detector.
     event_detector: ChangeOfStateDetector,
-    /// Event_Detection_Enable (Clause 12.8). Clause 13.2.2.1: "If the
-    /// Event_Detection_Enable property is FALSE, then this state machine is not evaluated."
+    /// Event_Detection_Enable (Clause 12.8). A FALSE value suspends
+    /// event-state-machine evaluation under Clause 13.2.2.1.
     event_detection_enable: bool,
     pub(crate) event_history: EventHistory,
-    /// Value source tracking (optional per spec — exposed via VALUE_SOURCE property).
-    value_source: common::ValueSourceTracking,
+    /// Implemented paired command-source tracking (Clause 19.5).
+    value_source: crate::command_source::ValueSourceTracking,
 }
 
 impl BinaryValueObject {
-    /// Create a new Binary Value object.
+    /// Provision independently optional Audit properties before registration.
+    /// Raw object configuration bypasses server notification ownership; use
+    /// BACnetServer::write_local or WP/WPM for live property mutations.
+    pub fn set_audit_policy(&mut self, policy: crate::audit::ObjectAuditPolicy) {
+        self.audit_policy = policy;
+    }
+
+    /// Create a new Binary Value object with a commandable Present_Value.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
+        Self::with_access(instance, name, PresentValueAccess::Commandable)
+    }
+
+    /// Create a new Binary Value object whose Present_Value is written as `access` says.
+    pub fn with_access(
+        instance: u32,
+        name: impl Into<String>,
+        access: PresentValueAccess,
+    ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::BINARY_VALUE, instance)?;
         Ok(Self {
+            audit_policy: crate::audit::ObjectAuditPolicy::default(),
             oid,
             name: name.into(),
             description: String::new(),
             present_value: 0, // inactive
             out_of_service: false,
             status_flags: StatusFlags::empty(),
+            access,
             priority_array: [None; 16],
             relinquish_default: 0,
-            reliability: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             active_text: "Active".into(),
@@ -57,7 +81,7 @@ impl BinaryValueObject {
             },
             event_detection_enable: true,
             event_history: EventHistory::default(),
-            value_source: common::ValueSourceTracking::default(),
+            value_source: crate::command_source::ValueSourceTracking::default(),
         })
     }
 
@@ -77,6 +101,9 @@ impl BinaryValueObject {
     /// after the store, Present_Value is resolved anew from the priority
     /// array so an empty array falls back to the new default immediately.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
+        if self.access != PresentValueAccess::Commandable {
+            return Err(common::unknown_property_error());
+        }
         if value > 1 {
             return Err(common::value_out_of_range_error());
         }
@@ -84,9 +111,31 @@ impl BinaryValueObject {
         self.recalculate_present_value();
         Ok(())
     }
+
+    fn checked_present_value(value: PropertyValue) -> Result<u32, Error> {
+        let PropertyValue::Enumerated(e) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if e > 1 {
+            return Err(common::value_out_of_range_error());
+        }
+        Ok(e)
+    }
 }
 
 impl BACnetObject for BinaryValueObject {
+    fn audit_policy_authority_internal(
+        &mut self,
+    ) -> Option<crate::audit::AuditPolicyAuthority<'_>> {
+        Some(crate::audit::AuditPolicyAuthority::new(
+            &mut self.audit_policy,
+        ))
+    }
+
+    fn audit_object_policy_internal(&self) -> crate::audit::ObjectAuditPolicy {
+        self.audit_policy
+    }
+
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
@@ -106,15 +155,6 @@ impl BACnetObject for BinaryValueObject {
         reliability,
         event_detection_enable,
         ChangeOfStateDetector::ALGORITHM
-    );
-    impl_intrinsic_write_rollback!(
-        event_detector,
-        event_detection_enable,
-        event_history,
-        reliability_inhibit,
-        reliability,
-        out_of_service,
-        reliability_before_out_of_service
     );
 
     fn acknowledge_alarm_correlated_internal(
@@ -140,12 +180,25 @@ impl BACnetObject for BinaryValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        if metadata::excludes(self, property) {
+            return Err(common::unknown_property_error());
+        }
+        if let Some(result) = self
+            .value_source
+            .read(property, array_index, &self.priority_array)
+        {
+            return result;
+        }
+
+        if let Some(result) = self.audit_policy.read(property, array_index) {
+            return result;
+        }
         if property == PropertyIdentifier::STATUS_FLAGS {
             return Ok(common::compute_status_flags(
                 self.status_flags,
                 self.reliability,
                 self.out_of_service,
-                self.event_detector.event_state.to_raw(),
+                self.event_detector.event_state,
             ));
         }
         if let Some(value) = self.reliability_inhibit.read(property) {
@@ -179,15 +232,6 @@ impl BACnetObject for BinaryValueObject {
             p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            p if p == PropertyIdentifier::VALUE_SOURCE => {
-                Ok(self.value_source.value_source.clone())
-            }
-            p if p == PropertyIdentifier::LAST_COMMAND_TIME => Ok(PropertyValue::Unsigned(
-                match self.value_source.last_command_time {
-                    BACnetTimeStamp::SequenceNumber(n) => u64::from(n),
-                    _ => 0,
-                },
-            )),
             p if p == PropertyIdentifier::ACTIVE_TEXT => {
                 Ok(PropertyValue::CharacterString(self.active_text.clone()))
             }
@@ -209,6 +253,45 @@ impl BACnetObject for BinaryValueObject {
         }
     }
 
+    fn write_property_from(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+        origin: &crate::command_source::CommandOrigin,
+    ) -> Result<(), Error> {
+        if matches!(
+            property,
+            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
+        ) && array_index.is_some()
+        {
+            return Err(common::property_is_not_an_array_error());
+        }
+        if property == PropertyIdentifier::VALUE_SOURCE
+            && self.access == PresentValueAccess::Commandable
+        {
+            return self.value_source.correct(value, priority, origin);
+        }
+        if property == PropertyIdentifier::PRESENT_VALUE {
+            return match self.access {
+                PresentValueAccess::Commandable => {
+                    crate::command_source::write_sourced_priority!(
+                        self,
+                        value,
+                        priority,
+                        origin,
+                        Self::checked_present_value
+                    )
+                }
+                PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
+                    self.write_property(property, array_index, value, priority)
+                }
+            };
+        }
+        self.write_property(property, array_index, value, priority)
+    }
+
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
@@ -216,29 +299,35 @@ impl BACnetObject for BinaryValueObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        common::write_priority_array_direct!(self, property, array_index, value, |v| {
-            if let PropertyValue::Enumerated(e) = v {
-                if e > 1 {
-                    Err(common::value_out_of_range_error())
-                } else {
-                    Ok(e)
-                }
-            } else {
-                Err(common::invalid_data_type_error())
-            }
-        });
+        if metadata::excludes(self, property) {
+            return Err(common::unknown_property_error());
+        }
+        if let Some(result) = self
+            .audit_policy
+            .write(property, array_index, &value, priority)
+        {
+            return result;
+        }
+
         if property == PropertyIdentifier::PRESENT_VALUE {
-            return common::write_priority_array!(self, value, priority, |v| {
-                if let PropertyValue::Enumerated(e) = v {
-                    if e > 1 {
-                        Err(common::value_out_of_range_error())
-                    } else {
-                        Ok(e)
-                    }
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            });
+            if self.access == PresentValueAccess::Commandable {
+                return Err(common::write_access_denied_error());
+            }
+            if array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
+                return Err(common::write_access_denied_error());
+            }
+            // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
+            if value == PropertyValue::Null {
+                return Ok(());
+            }
+            self.present_value = Self::checked_present_value(value)?;
+            return Ok(());
+        }
+        if property == PropertyIdentifier::VALUE_SOURCE {
+            return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::ACTIVE_TEXT {
             if let PropertyValue::CharacterString(s) = value {
@@ -269,7 +358,8 @@ impl BACnetObject for BinaryValueObject {
                 self.event_detection_enable = v;
                 if !v {
                     self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
-                    self.event_detector.acked_transitions = 0b111;
+                    self.event_detector.acked_transitions =
+                        bacnet_types::bitstring::EventTransitionBits::all();
                     self.event_detector.pending = None;
                     self.event_detector.fault_reliability = None;
                     self.event_history.reset();
@@ -283,6 +373,13 @@ impl BACnetObject for BinaryValueObject {
                 return self.set_relinquish_default(e);
             }
             return Err(common::invalid_data_type_error());
+        }
+        // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+        if let Some(result) =
+            self.event_history
+                .write(property, array_index, &value, self.event_detection_enable)
+        {
+            return result;
         }
         if let Some(result) = write_generic_event_properties!(self, property, value) {
             return result;
@@ -302,7 +399,7 @@ impl BACnetObject for BinaryValueObject {
             property,
             &value,
         ) {
-            return result;
+            return result.map(|_| ());
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;
@@ -310,10 +407,9 @@ impl BACnetObject for BinaryValueObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        // Clause 12.8, while Out_Of_Service is TRUE: "the Present_Value property and
-        // the Reliability property, if present and capable of taking on values other
-        // than NO_FAULT_DETECTED, shall be writable to allow simulating specific
-        // conditions or for testing purposes".
+        // Clause 12.8 requires simulation/test writes while Out_Of_Service is TRUE:
+        // Present_Value is writable, as is Reliability when that property exists
+        // and supports values beyond NO_FAULT_DETECTED.
         // `is_writable_property` stays statically true because it describes capability.
         if let Some(result) = self.reliability_inhibit.write_client_reliability(
             self.out_of_service,
@@ -323,45 +419,26 @@ impl BACnetObject for BinaryValueObject {
         ) {
             return result;
         }
-        Err(common::write_access_denied_error())
+        Err(crate::common::unhandled_write_error(
+            self.property_metadata().as_ref(),
+            property,
+            array_index,
+        ))
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        metadata::for_object(self)
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        static PROPS: &[PropertyIdentifier] = &[
-            PropertyIdentifier::OBJECT_IDENTIFIER,
-            PropertyIdentifier::OBJECT_NAME,
-            PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::OBJECT_TYPE,
-            PropertyIdentifier::PRESENT_VALUE,
-            PropertyIdentifier::STATUS_FLAGS,
-            PropertyIdentifier::EVENT_STATE,
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::TIME_DELAY,
-            PropertyIdentifier::TIME_DELAY_NORMAL,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
-            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
-            PropertyIdentifier::OUT_OF_SERVICE,
-            PropertyIdentifier::PRIORITY_ARRAY,
-            PropertyIdentifier::RELINQUISH_DEFAULT,
-            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
-            PropertyIdentifier::RELIABILITY,
-            PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
-            PropertyIdentifier::ACTIVE_TEXT,
-            PropertyIdentifier::INACTIVE_TEXT,
-            PropertyIdentifier::ALARM_VALUE,
-        ];
-        Cow::Borrowed(PROPS)
+        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
     fn is_createable(&self) -> bool {
         true
     }
 
-    fn set_reliability_internal(&mut self, reliability: u32) -> Result<(), Error> {
+    fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
         }
@@ -372,26 +449,21 @@ impl BACnetObject for BinaryValueObject {
         Ok(())
     }
 
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
-        self.reliability_inhibit.enabled()
+    fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {
+        match self.access {
+            PresentValueAccess::Commandable => {
+                Err(common::optional_functionality_not_supported_error())
+            }
+            _ if self.out_of_service => Err(common::write_access_denied_error()),
+            PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
+                self.present_value = Self::checked_present_value(value)?;
+                Ok(())
+            }
+        }
     }
 
-    fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
-        // Mirrors the BinaryValue `write_property` arms. Same set as
-        // BinaryOutput (commandable + common + text + generic event
-        // properties). The event set became writable with #229: Clause 12.8
-        // requires the supported Event_Enable value set to include (T, T, T),
-        // and these detectors default to (F, F, F) with, previously, no
-        // commissioning path at all.
-        common::is_commandable_property_writable(property)
-            || common::is_common_writable(property)
-            || common::is_generic_event_property_writable(property)
-            || property == PropertyIdentifier::ACTIVE_TEXT
-            || property == PropertyIdentifier::INACTIVE_TEXT
-            || property == PropertyIdentifier::ALARM_VALUE
-            || property == PropertyIdentifier::RELIABILITY
-            || property == PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT
-            || property == PropertyIdentifier::EVENT_DETECTION_ENABLE
+    fn reliability_evaluation_inhibited_internal(&self) -> bool {
+        self.reliability_inhibit.enabled()
     }
 }
 

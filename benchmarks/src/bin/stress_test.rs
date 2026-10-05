@@ -1,4 +1,5 @@
 //! BACnet stress testing suite — find breaking points across transports.
+#![allow(clippy::print_stdout, clippy::print_stderr)] // benchmark binaries report progress and results on the console
 
 use clap::{Parser, Subcommand};
 

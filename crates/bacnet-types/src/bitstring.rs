@@ -25,6 +25,7 @@ use crate::enums::{AuditOperation, ObjectType, ServiceSupported};
 use crate::error::{Error, Result};
 
 pub use crate::primitives::StatusFlags;
+pub use days_of_week::DaysOfWeek;
 pub use priority_filter::BACnetPriorityFilter;
 
 mod priority_filter;
@@ -45,7 +46,7 @@ fn wire_bit(data: &[u8], n: usize) -> bool {
 /// …), while the wire wants the first defined bit in the most significant bit
 /// of the octet. Reversing the byte is that whole conversion: bit 0 lands at
 /// `0x80`, bit 1 at `0x40`, and the result is left-aligned for any width.
-pub fn pack_octet(bits_lsb0: u8) -> u8 {
+fn pack_octet(bits_lsb0: u8) -> u8 {
     bits_lsb0.reverse_bits()
 }
 
@@ -54,7 +55,7 @@ pub fn pack_octet(bits_lsb0: u8) -> u8 {
 ///
 /// Masking (rather than trusting the peer's declared unused-bit count) keeps
 /// nonconformant padding out of the value; an empty payload reads as zero.
-pub fn unpack_octet(data: &[u8], defined_bits: u32) -> u8 {
+fn unpack_octet(data: &[u8], defined_bits: u32) -> u8 {
     let mask = if defined_bits >= 8 {
         u8::MAX
     } else {
@@ -106,6 +107,9 @@ macro_rules! impl_named_bit_display {
         }
     };
 }
+
+// Declared after `impl_named_bit_display!` so the module can use the macro.
+mod days_of_week;
 
 /// Write `Display` items as ` A | B | C ` (or `()` when empty).
 fn write_joined<T: core::fmt::Display>(
@@ -188,6 +192,37 @@ impl LimitEnable {
 }
 
 impl_named_bit_display!(LimitEnable);
+
+bitflags::bitflags! {
+    /// `BACnetLogStatus` — the 3-bit string a log object records when its own
+    /// status or operation changes (Clause 21).
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+    pub struct LogStatus: u8 {
+        /// Logging is disabled (bit 0).
+        const LOG_DISABLED = 1 << 0;
+        /// The buffer was purged (bit 1).
+        const BUFFER_PURGED = 1 << 1;
+        /// Logging was interrupted, so earlier samples may be missing (bit 2).
+        const LOG_INTERRUPTED = 1 << 2;
+    }
+}
+
+impl LogStatus {
+    /// Decode from a BACnet bit-string payload (MSB-first); bits past the
+    /// three defined ones are dropped.
+    pub fn from_bacnet(data: &[u8]) -> Self {
+        Self::from_bits_truncate(unpack_octet(data, 3))
+    }
+
+    /// Encode to the single Clause 20.2.10 wire octet (`unused_bits: 5`):
+    /// `LOG_DISABLED` at `0x80`, `BUFFER_PURGED` at `0x40`, `LOG_INTERRUPTED`
+    /// at `0x20`. Undefined bits a value may retain are never sent.
+    pub fn to_bacnet(self) -> u8 {
+        pack_octet(self.bits() & Self::all().bits())
+    }
+}
+
+impl_named_bit_display!(LogStatus);
 
 /// `BACnetServicesSupported` — the `protocol-services-supported` bit string,
 /// one bit per protocol service (Clause 21).
@@ -488,7 +523,7 @@ mod tests {
         // inversion, only literal wire bytes can.
         assert_eq!(pack_octet(0b001), 0x80); // TO_OFFNORMAL / monday
         assert_eq!(pack_octet(0b100), 0x20); // TO_NORMAL
-        assert_eq!(pack_octet(0b0100_0000), 0x02); // sunday (7-bit valid_days)
+        assert_eq!(pack_octet(0b0100_0000), 0x02); // sunday (7-bit DaysOfWeek)
         assert_eq!(unpack_octet(&[0x80], 3), 0b001);
         assert_eq!(unpack_octet(&[0x20], 3), 0b100);
         assert_eq!(unpack_octet(&[0xFE], 7), 0x7F); // all seven days
@@ -502,6 +537,29 @@ mod tests {
         );
         assert_eq!(EventTransitionBits::TO_OFFNORMAL.to_bacnet(), 0x80);
         assert_eq!(LimitEnable::LOW_LIMIT_ENABLE.to_bacnet(), 0x80);
+    }
+
+    #[test]
+    fn log_status_follows_the_bit0_first_wire_order() {
+        // Literal wire octets: log-disabled is bit 0, so the top bit.
+        for (status, octet) in [
+            (LogStatus::LOG_DISABLED, 0x80),
+            (LogStatus::BUFFER_PURGED, 0x40),
+            (LogStatus::LOG_INTERRUPTED, 0x20),
+            (LogStatus::LOG_DISABLED | LogStatus::BUFFER_PURGED, 0xC0),
+            (LogStatus::empty(), 0x00),
+        ] {
+            assert_eq!(status.to_bacnet(), octet, "{status}");
+            assert_eq!(LogStatus::from_bacnet(&[octet]), status);
+        }
+        // Undefined bits are neither sent nor read back.
+        assert_eq!(LogStatus::from_bits_retain(0xF9).to_bacnet(), 0x80);
+        assert_eq!(LogStatus::from_bacnet(&[0x9F]), LogStatus::LOG_DISABLED);
+        assert_eq!(LogStatus::from_bacnet(&[]), LogStatus::empty());
+        assert_eq!(
+            format!("{}", LogStatus::LOG_DISABLED | LogStatus::LOG_INTERRUPTED),
+            "LOG_DISABLED | LOG_INTERRUPTED"
+        );
     }
 
     #[test]

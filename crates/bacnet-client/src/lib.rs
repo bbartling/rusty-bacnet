@@ -7,4 +7,11 @@ pub mod segmentation;
 pub mod tsm;
 
 #[doc(hidden)]
-pub use endpoint_requester::EndpointRequester;
+pub use endpoint_requester::{
+    EndpointOperationAck, EndpointOperationOutcome, EndpointOperationRequest, EndpointReadAck,
+    EndpointReadRequest, EndpointRequester, PreparedEndpointOperation,
+};
+mod read_property;
+mod read_range;
+
+mod endpoint_rpm;

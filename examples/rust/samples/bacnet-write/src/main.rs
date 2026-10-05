@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
-use bacnet_services::who_is::WhoIsRequest;
+use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest};
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bvll::encode_bip_mac;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, UnconfirmedServiceChoice};
@@ -101,27 +101,6 @@ fn default_broadcast(interface: Ipv4Addr) -> Ipv4Addr {
         Ipv4Addr::BROADCAST
     } else {
         subnet_broadcast(interface)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
-        assert_eq!(
-            default_broadcast(Ipv4Addr::UNSPECIFIED),
-            Ipv4Addr::BROADCAST
-        );
-    }
-
-    #[test]
-    fn default_broadcast_uses_slash_24_for_bound_interface() {
-        assert_eq!(
-            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
-            Ipv4Addr::new(192, 168, 204, 255)
-        );
     }
 }
 
@@ -265,8 +244,12 @@ async fn read_current_command_priority(
         )
         .await
         .ok()?;
-    match decode_prop(&ack.property_value)? {
-        PropertyValue::Unsigned(v) if (1..=16).contains(&(v as u8)) => Some(v as u8),
+    decode_current_command_priority(&ack.property_value)
+}
+
+fn decode_current_command_priority(bytes: &[u8]) -> Option<u8> {
+    match decode_prop(bytes)? {
+        PropertyValue::Unsigned(v) => u8::try_from(v).ok().filter(|p| (1..=16).contains(p)),
         _ => None,
     }
 }
@@ -308,10 +291,14 @@ async fn discover_device(
         return;
     }
 
-    let whois = WhoIsRequest {
-        low_limit: Some(args.device),
-        high_limit: Some(args.device),
+    let range = match DeviceInstanceRange::single(args.device) {
+        Ok(range) => range,
+        Err(e) => {
+            eprintln!("ERROR: --device: {e}");
+            process::exit(1);
+        }
     };
+    let whois = WhoIsRequest { range: Some(range) };
     let mut whois_buf = BytesMut::new();
     whois.encode(&mut whois_buf);
 
@@ -323,7 +310,7 @@ async fn discover_device(
         eprintln!("ERROR: local Who-Is failed: {e}");
         process::exit(1);
     }
-    if let Err(e) = client.who_is(Some(args.device), Some(args.device)).await {
+    if let Err(e) = client.who_is(Some(range)).await {
         eprintln!("ERROR: global Who-Is failed: {e}");
         process::exit(1);
     }
@@ -617,4 +604,79 @@ async fn main() {
 
     let _ = client.stop().await;
     println!("\nDone — full write cycle verified.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::UNSPECIFIED),
+            Ipv4Addr::BROADCAST
+        );
+    }
+
+    #[test]
+    fn default_broadcast_uses_slash_24_for_bound_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
+            Ipv4Addr::new(192, 168, 204, 255)
+        );
+    }
+
+    #[test]
+    fn current_command_priority_accepts_only_unsigned_priorities() {
+        for priority in 1u8..=16 {
+            let mut bytes = BytesMut::new();
+            encode_property_value(&mut bytes, &PropertyValue::Unsigned(u64::from(priority)))
+                .unwrap();
+            assert_eq!(decode_current_command_priority(&bytes), Some(priority));
+        }
+        for value in [
+            0,
+            17,
+            255,
+            256,
+            257,
+            272,
+            65_537,
+            (1u64 << 32) + 1,
+            u64::MAX,
+        ] {
+            let mut bytes = BytesMut::new();
+            encode_property_value(&mut bytes, &PropertyValue::Unsigned(value)).unwrap();
+            assert_eq!(decode_current_command_priority(&bytes), None, "{value}");
+        }
+        for value in [
+            PropertyValue::Null,
+            PropertyValue::Signed(1),
+            PropertyValue::Enumerated(1),
+            PropertyValue::Real(1.0),
+        ] {
+            let mut bytes = BytesMut::new();
+            encode_property_value(&mut bytes, &value).unwrap();
+            assert_eq!(decode_current_command_priority(&bytes), None, "{value:?}");
+        }
+        assert_eq!(decode_current_command_priority(&[]), None);
+        assert_eq!(decode_current_command_priority(&[0x22, 0x01]), None);
+    }
+
+    #[test]
+    fn overwide_priority_cannot_explain_a_failed_write() {
+        let mut bytes = BytesMut::new();
+        encode_property_value(&mut bytes, &PropertyValue::Unsigned(257)).unwrap();
+        let snapshot = PointSnapshot {
+            present_value: PropertyValue::Real(2.0),
+            priority_slot: Some(PropertyValue::Real(5.0)),
+            current_priority: decode_current_command_priority(&bytes),
+        };
+        assert!(!verify_write_taken(
+            &snapshot,
+            &PropertyValue::Real(5.0),
+            8,
+            0.05,
+        ));
+    }
 }

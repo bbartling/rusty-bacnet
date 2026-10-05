@@ -21,18 +21,31 @@ pub enum TagClass {
 
 /// Application tag numbers.
 pub mod app_tag {
+    /// Application tag number for Null (no content octets).
     pub const NULL: u8 = 0;
+    /// Application tag number for Boolean (value carried in the tag length field).
     pub const BOOLEAN: u8 = 1;
+    /// Application tag number for Unsigned integer.
     pub const UNSIGNED: u8 = 2;
+    /// Application tag number for Signed integer (two's complement).
     pub const SIGNED: u8 = 3;
+    /// Application tag number for IEEE-754 single-precision float.
     pub const REAL: u8 = 4;
+    /// Application tag number for IEEE-754 double-precision float.
     pub const DOUBLE: u8 = 5;
+    /// Application tag number for Octet string.
     pub const OCTET_STRING: u8 = 6;
+    /// Application tag number for Character string (leading charset octet).
     pub const CHARACTER_STRING: u8 = 7;
+    /// Application tag number for Bit string (leading unused-bits octet).
     pub const BIT_STRING: u8 = 8;
+    /// Application tag number for Enumerated value.
     pub const ENUMERATED: u8 = 9;
+    /// Application tag number for Date (year, month, day, weekday octets).
     pub const DATE: u8 = 10;
+    /// Application tag number for Time (hour, minute, second, hundredths octets).
     pub const TIME: u8 = 11;
+    /// Application tag number for Object identifier (10-bit type, 22-bit instance).
     pub const OBJECT_IDENTIFIER: u8 = 12;
 }
 
@@ -159,10 +172,16 @@ pub const MAX_CONTEXT_NESTING_DEPTH: usize = 32;
 
 /// Decode a tag from `data` starting at `offset`.
 ///
-/// Returns the decoded [`Tag`] and the new offset past the tag header.
+/// Returns the decoded [`Tag`] and the new offset past the tag header. The
+/// data ending before the header does is [`DecodingKind::Missing`]: a caller
+/// asks for a tag only where a member is due. A malformed header (a reserved
+/// form, tag number or length encoding) is [`DecodingKind::InvalidTag`].
+///
+/// [`DecodingKind::Missing`]: bacnet_types::error::DecodingKind::Missing
+/// [`DecodingKind::InvalidTag`]: bacnet_types::error::DecodingKind::InvalidTag
 pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
     if offset >= data.len() {
-        return Err(Error::decoding(
+        return Err(Error::missing(
             offset,
             "tag decode: offset beyond buffer length",
         ));
@@ -179,16 +198,16 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
     };
     let lvt = initial & 0x07;
     if class == TagClass::Application && lvt > 5 {
-        return Err(Error::decoding(offset, "reserved application tag L/V/T"));
+        return Err(Error::invalid_tag(offset, "reserved application tag L/V/T"));
     }
 
     if tag_number == 0x0F {
         if pos >= data.len() {
-            return Err(Error::decoding(pos, "truncated extended tag number"));
+            return Err(Error::missing(pos, "truncated extended tag number"));
         }
         tag_number = data[pos];
         if !(15..=254).contains(&tag_number) {
-            return Err(Error::decoding(
+            return Err(Error::invalid_tag(
                 pos,
                 format!("invalid extended tag number {tag_number}"),
             ));
@@ -227,14 +246,14 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
         lvt as u32
     } else {
         if pos >= data.len() {
-            return Err(Error::decoding(pos, "truncated extended length"));
+            return Err(Error::missing(pos, "truncated extended length"));
         }
         let ext = data[pos];
         pos += 1;
 
         match ext {
             0..=4 => {
-                return Err(Error::decoding(
+                return Err(Error::invalid_tag(
                     pos - 1,
                     format!("non-canonical extended tag length {ext}"),
                 ));
@@ -242,11 +261,11 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
             5..=253 => ext as u32,
             254 => {
                 if pos + 2 > data.len() {
-                    return Err(Error::decoding(pos, "truncated 2-byte extended length"));
+                    return Err(Error::missing(pos, "truncated 2-byte extended length"));
                 }
                 let len = u16::from_be_bytes([data[pos], data[pos + 1]]) as u32;
                 if len < 254 {
-                    return Err(Error::decoding(
+                    return Err(Error::invalid_tag(
                         pos,
                         format!("non-canonical 2-byte extended tag length {len}"),
                     ));
@@ -256,12 +275,12 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
             }
             255 => {
                 if pos + 4 > data.len() {
-                    return Err(Error::decoding(pos, "truncated 4-byte extended length"));
+                    return Err(Error::missing(pos, "truncated 4-byte extended length"));
                 }
                 let len =
                     u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
                 if len < 65_536 {
-                    return Err(Error::decoding(
+                    return Err(Error::invalid_tag(
                         pos,
                         format!("non-canonical 4-byte extended tag length {len}"),
                     ));
@@ -273,7 +292,7 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
     };
 
     if length > MAX_TAG_LENGTH {
-        return Err(Error::decoding(
+        return Err(Error::overflow(
             offset,
             format!("tag length ({length}) exceeds sanity limit ({MAX_TAG_LENGTH})"),
         ));
@@ -296,7 +315,16 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
 /// Reads from `offset` (immediately after the opening tag) through the
 /// matching closing tag, handling nested opening/closing tags.
 ///
-/// Returns the enclosed bytes and the offset past the closing tag.
+/// Returns the enclosed bytes and the offset past the closing tag. A member
+/// inside whose contents run past the end of `data` is
+/// [`Error::BufferTooShort`], as it is outside a frame; any other fault is
+/// [`Error::Decoding`]: a malformed tag or a closing tag that doesn't match
+/// ([`DecodingKind::InvalidTag`]), no closing tag before the data ends
+/// ([`DecodingKind::Missing`]), or an opening tag nested too deep, which is
+/// one the walk can't take ([`DecodingKind::InvalidTag`]).
+///
+/// [`DecodingKind::InvalidTag`]: bacnet_types::error::DecodingKind::InvalidTag
+/// [`DecodingKind::Missing`]: bacnet_types::error::DecodingKind::Missing
 pub fn extract_context_value(
     data: &[u8],
     offset: usize,
@@ -313,7 +341,7 @@ pub fn extract_context_value(
 
         if tag.is_opening {
             if depth == MAX_CONTEXT_NESTING_DEPTH {
-                return Err(Error::decoding(
+                return Err(Error::invalid_tag(
                     pos,
                     format!(
                         "context tag nesting depth exceeds maximum ({MAX_CONTEXT_NESTING_DEPTH})"
@@ -326,7 +354,7 @@ pub fn extract_context_value(
         } else if tag.is_closing {
             let expected = open_tags[depth - 1];
             if tag.number != expected {
-                return Err(Error::decoding(
+                return Err(Error::invalid_tag(
                     pos,
                     format!(
                         "closing tag {} does not match opening tag {expected}",
@@ -347,19 +375,13 @@ pub fn extract_context_value(
                 .checked_add(tag.length as usize)
                 .ok_or_else(|| Error::decoding(new_pos, "tag length overflow"))?;
             if content_end > data.len() {
-                return Err(Error::decoding(
-                    new_pos,
-                    format!(
-                        "tag data overflows buffer: need {} bytes at offset {new_pos}",
-                        tag.length
-                    ),
-                ));
+                return Err(Error::buffer_too_short(content_end, data.len()));
             }
             pos = content_end;
         }
     }
 
-    Err(Error::decoding(
+    Err(Error::missing(
         offset,
         format!("missing closing tag {tag_number}"),
     ))
@@ -381,11 +403,11 @@ pub fn extract_context_value(
 /// Known limitation: a payload that itself contains the target tag's opening
 /// or closing octet pattern (e.g. as unrelated content bytes) unbalances the
 /// walk; such payloads cannot round-trip through this path.
-pub fn extract_raw_context<'a>(
-    data: &'a [u8],
+pub fn extract_raw_context(
+    data: &[u8],
     offset: usize,
     tag_number: u8,
-) -> Result<(&'a [u8], usize), Error> {
+) -> Result<(&[u8], usize), Error> {
     let wide = tag_number > 14;
     let open_first = if wide { 0xFE } else { (tag_number << 4) | 0x0E };
     let close_first = if wide { 0xFF } else { (tag_number << 4) | 0x0F };
@@ -413,38 +435,10 @@ pub fn extract_raw_context<'a>(
         pos += 1;
     }
 
-    Err(Error::decoding(
+    Err(Error::missing(
         value_start,
         format!("missing closing tag {tag_number}"),
     ))
-}
-
-/// Try to decode an optional context-tagged primitive value.
-///
-/// Peeks at the next tag; if it matches the expected context tag number,
-/// returns the content slice and advances the offset. Otherwise returns
-/// `(None, offset)` unchanged.
-pub fn decode_optional_context(
-    data: &[u8],
-    offset: usize,
-    tag_number: u8,
-) -> Result<(Option<&[u8]>, usize), Error> {
-    if offset >= data.len() {
-        return Ok((None, offset));
-    }
-
-    let (tag, new_pos) = decode_tag(data, offset)?;
-    if tag.is_context(tag_number) {
-        let end = new_pos
-            .checked_add(tag.length as usize)
-            .ok_or_else(|| Error::decoding(new_pos, "tag length overflow"))?;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        Ok((Some(&data[new_pos..end]), end))
-    } else {
-        Ok((None, offset))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -755,31 +749,6 @@ mod tests {
         assert!(!tag.is_context(1));
     }
 
-    #[test]
-    fn decode_optional_context_present() {
-        // Context tag 0, length 1, value byte 42
-        let data = [0x09, 42];
-        let (value, pos) = decode_optional_context(&data, 0, 0).unwrap();
-        assert_eq!(value, Some(&[42u8][..]));
-        assert_eq!(pos, 2);
-    }
-
-    #[test]
-    fn decode_optional_context_absent() {
-        // Context tag 1, but we're looking for tag 0
-        let data = [0x19, 42];
-        let (value, pos) = decode_optional_context(&data, 0, 0).unwrap();
-        assert!(value.is_none());
-        assert_eq!(pos, 0); // offset unchanged
-    }
-
-    #[test]
-    fn decode_optional_context_empty_buffer() {
-        let (value, pos) = decode_optional_context(&[], 0, 0).unwrap();
-        assert!(value.is_none());
-        assert_eq!(pos, 0);
-    }
-
     // --- Edge case tests ---
 
     #[test]
@@ -872,17 +841,13 @@ mod tests {
 
     #[test]
     fn extract_context_value_tag_data_overflows_buffer() {
-        // Opening tag 0, a data tag claiming 100 bytes of content but only 2 available
+        // Opening tag 0, a data tag claiming 100 bytes of content but only 2
+        // available: a short buffer, as the same member outside a frame is.
         let data = [0x0E, 0x25, 100, 0x01, 0x02, 0x0F];
-        let result = extract_context_value(&data, 1, 0);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn decode_optional_context_content_overflows() {
-        // Context tag 0, length 4, but only 2 content bytes available
-        let data = [0x0C, 0x01, 0x02]; // ctx 0, len 4, only 2 bytes
-        assert!(decode_optional_context(&data, 0, 0).is_err());
+        assert!(matches!(
+            extract_context_value(&data, 1, 0),
+            Err(Error::BufferTooShort { need: 103, have: 6 })
+        ));
     }
 
     #[test]

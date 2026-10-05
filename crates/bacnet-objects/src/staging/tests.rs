@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_encoding::constructed::encode_device_object_reference;
 
 fn reference(object_type: ObjectType, instance: u32) -> BACnetDeviceObjectReference {
     BACnetDeviceObjectReference {
@@ -169,6 +170,48 @@ fn construction_accepts_two_and_three_stages_and_rejects_all_config_boundaries()
         ErrorClass::PROPERTY,
         ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     );
+}
+
+#[test]
+fn target_references_refuse_a_non_device_device_identifier() {
+    // Another object type in the device member is no Device (#1285): it is
+    // refused as out of range before the remote-device rule applies.
+    let not_a_device = || BACnetDeviceObjectReference {
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 10).unwrap()),
+        object_identifier: ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 9).unwrap(),
+    };
+    let mut configured = config();
+    configured.target_references[0] = not_a_device();
+    assert_protocol_error(
+        StagingObject::new(4, "not a device", configured)
+            .err()
+            .unwrap(),
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    let mut object = StagingObject::new(1, "STG-1", config()).unwrap();
+    let before = object
+        .read_property(PropertyIdentifier::TARGET_REFERENCES, None)
+        .unwrap();
+    let element = |reference: &BACnetDeviceObjectReference| {
+        let mut encoded = BytesMut::new();
+        encode_device_object_reference(&mut encoded, reference);
+        PropertyValue::ApplicationData(encoded.to_vec())
+    };
+    // The whole array keeps its two elements, so only the device member is
+    // at fault; then the one element by index.
+    let whole = PropertyValue::List(vec![
+        element(&not_a_device()),
+        element(&reference(ObjectType::BINARY_VALUE, 2)),
+    ]);
+    for (index, written) in [(None, whole), (Some(1), element(&not_a_device()))] {
+        let error = object
+            .write_property(PropertyIdentifier::TARGET_REFERENCES, index, written, None)
+            .unwrap_err();
+        assert_protocol_error(error, ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE);
+    }
+    let after = object.read_property(PropertyIdentifier::TARGET_REFERENCES, None);
+    assert_eq!(after.unwrap(), before);
 }
 
 #[test]
@@ -415,7 +458,7 @@ fn whole_configuration_array_writes_preserve_shape_and_reapply_targets() {
     let mut object = StagingObject::new(1, "STG-1", config()).unwrap();
     object.take_staging_write_plan_internal();
 
-    let stages = vec![
+    let stages = [
         stage(12.0, &[true, false], 1.0),
         stage(22.0, &[false, true], 2.0),
         stage(32.0, &[true, true], 1.0),
@@ -458,7 +501,7 @@ fn whole_configuration_array_writes_preserve_shape_and_reapply_targets() {
         PropertyValue::CharacterString("Two".into())
     );
 
-    let references = vec![
+    let references = [
         reference(ObjectType::BINARY_OUTPUT, 9),
         reference(ObjectType::BINARY_LIGHTING_OUTPUT, 10),
     ];
@@ -626,12 +669,13 @@ fn metadata_and_property_list_are_truthful_and_non_intrinsic() {
         PropertyIdentifier::PRIORITY_FOR_WRITING,
         PropertyIdentifier::MIN_PRES_VALUE,
         PropertyIdentifier::MAX_PRES_VALUE,
+        PropertyIdentifier::COV_INCREMENT,
     ] {
         assert!(list.contains(&required), "missing {required:?}");
     }
     assert!(object.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     assert!(!object.is_writable_property(PropertyIdentifier::PRESENT_STAGE));
-    assert!(!object.supports_cov());
+    assert!(object.supports_cov());
 
     let mut unnamed = config();
     unnamed.stage_names = None;
@@ -645,5 +689,47 @@ fn metadata_and_property_list_are_truthful_and_non_intrinsic() {
             .unwrap_err(),
         ErrorClass::PROPERTY,
         ErrorCode::UNKNOWN_PROPERTY,
+    );
+}
+
+#[test]
+fn staging_cov_increment_and_reported_present_stage() {
+    use crate::traits::CovReportedProperty::Trigger;
+    let mut object = StagingObject::new(1, "STG-1", config()).unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::COV_INCREMENT, None)
+            .unwrap(),
+        PropertyValue::Real(0.0)
+    );
+    assert_eq!(object.cov_increment(), Some(0.0));
+    assert!(object.is_writable_property(PropertyIdentifier::COV_INCREMENT));
+    object
+        .write_property(
+            PropertyIdentifier::COV_INCREMENT,
+            None,
+            PropertyValue::Real(1.5),
+            None,
+        )
+        .unwrap();
+    assert_eq!(object.cov_increment(), Some(1.5));
+    for (value, code) in [
+        (PropertyValue::Real(-1.0), ErrorCode::VALUE_OUT_OF_RANGE),
+        (PropertyValue::Real(f32::NAN), ErrorCode::VALUE_OUT_OF_RANGE),
+        (PropertyValue::Unsigned(1), ErrorCode::INVALID_DATA_TYPE),
+    ] {
+        assert_protocol_error(
+            object
+                .write_property(PropertyIdentifier::COV_INCREMENT, None, value, None)
+                .unwrap_err(),
+            ErrorClass::PROPERTY,
+            code,
+        );
+    }
+    assert_eq!(object.cov_increment(), Some(1.5));
+    // Table 13-1: a Present_Stage change triggers a report and is carried.
+    assert_eq!(
+        object.cov_reported_properties(),
+        [Trigger(PropertyIdentifier::PRESENT_STAGE)]
     );
 }

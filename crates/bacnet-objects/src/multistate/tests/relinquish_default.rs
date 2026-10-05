@@ -78,7 +78,7 @@ fn mso_msv_relinquish_default_write_recaptures_present_value() {
 
 /// Number_Of_States-shrink interplay, pinned: Clause 12.19 / Table 12-22 leave any
 /// adjustment of Priority_Array / Relinquish_Default / Present_Value /
-/// Feedback_Value "a local matter" when the state count shrinks below stored
+/// Feedback_Value to local policy when the state count shrinks below stored
 /// values, so the local count setter does not auto-adjust them — a stale
 /// Relinquish_Default keeps driving Present_Value until the application
 /// resolves the configuration, with CONFIGURATION_ERROR reported meanwhile.
@@ -107,6 +107,14 @@ fn mso_relinquish_default_is_not_range_locked_after_store() {
             .unwrap(),
         PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
     );
-    // The local API does not add a Number_Of_States network write arm.
-    assert!(!mso.is_writable_property(PropertyIdentifier::NUMBER_OF_STATES));
+    // The local API adds no Number_Of_States write arm of its own; the row
+    // is writable only through a whole State_Text write (#1443).
+    assert!(mso
+        .write_property(
+            PropertyIdentifier::NUMBER_OF_STATES,
+            None,
+            PropertyValue::Unsigned(3),
+            None
+        )
+        .is_err());
 }

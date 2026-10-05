@@ -1,5 +1,5 @@
 //! Time_Delay / Time_Delay_Normal honoring in the Event Enrollment evaluator
-//! (#163; ASHRAE 135-2020 Clauses 13.2.4, 13.3).
+//! (#163; ASHRAE 135-2020 Clause 13.3).
 //!
 //! Delays are SECONDS in the standard; the pending countdown stores passes
 //! via `ceil(delay_secs / interval_secs)` (never-fire-early). Most tests
@@ -47,18 +47,19 @@ fn setup_oor(
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay,
         low_limit,
         high_limit,
         deadband,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     ee.set_time_delay_normal(tdn);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
@@ -100,7 +101,7 @@ fn event_state(db: &ObjectDatabase, ee_oid: &ObjectIdentifier) -> EventState {
 
 /// TD=3: the indication-conditioned transition waits three seeded passes and
 /// fires on the fourth — and the observable `Event_State` holds at NORMAL
-/// while the delay counts down (Clause 13.2.4).
+/// while the delay counts down (Clause 13.3).
 ///
 /// Delay 3 firing exactly at pass 4 — never later, on a path where every
 /// pass is a fresh qualifying observation — also pins the no-restart rule:
@@ -163,8 +164,7 @@ fn time_delay_normal_gates_only_the_return_to_normal() {
 }
 
 /// Absent Time_Delay_Normal, NORMAL-direction transitions wait pTimeDelay
-/// (the normative fallback: "it takes on the value of the pTimeDelay
-/// parameter").
+/// (the required fallback uses the offnormal delay for the normal direction too).
 #[test]
 fn absent_time_delay_normal_falls_back_to_time_delay() {
     let (mut db, ee_oid, ai_oid) = setup_oor(85.0, 80.0, 20.0, 2.0, 2, None);
@@ -299,7 +299,8 @@ fn parameter_change_mid_pending_cancels_and_regates() {
     // Rewrite Event_Parameters with a longer delay, as a config client's
     // framed wire write would deliver it (the write arm also accepts the
     // structured value directly; the framed path is the network-faithful one).
-    let mut scratch = EventEnrollmentObject::new(1, "scratch", 0).unwrap();
+    let mut scratch =
+        EventEnrollmentObject::new(1, "scratch", EventType::CHANGE_OF_BITSTRING).unwrap();
     scratch.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 5,
         low_limit: 20.0,
@@ -377,17 +378,17 @@ fn change_of_state_delays_both_directions() {
     let bi_oid = bi.object_identifier();
     db.add(Box::new(bi)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(3, "EE-COS", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(3, "EE-COS", EventType::CHANGE_OF_STATE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 2,
         list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -485,7 +486,7 @@ fn params_round_trip_does_not_resume_stale_countdown() {
     // Params A->B (different limits, same delay) while the monitored object
     // is GONE: the pass cannot complete — but the cancellation must stick.
     set_oor_params(&mut db, &ee_oid, 3, 21.0, 81.0);
-    let removed = db.remove(&ai_oid).expect("fixture AI present");
+    let removed = db.remove(&ai_oid).unwrap().expect("fixture AI present");
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 
     // Params B->A, monitored object restored. The re-gated countdown must
@@ -537,7 +538,8 @@ fn set_oor_params(
     low: f32,
     high: f32,
 ) {
-    let mut scratch = EventEnrollmentObject::new(1, "scratch", 0).unwrap();
+    let mut scratch =
+        EventEnrollmentObject::new(1, "scratch", EventType::CHANGE_OF_BITSTRING).unwrap();
     scratch.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: td,
         low_limit: low,
@@ -572,7 +574,7 @@ fn fingerprint_covers_monitored_reference() {
     let base = super::super::params_fingerprint(
         &params,
         2,
-        EventType::OUT_OF_RANGE.to_raw(),
+        EventType::OUT_OF_RANGE,
         &monitored(ai1, pv, None),
     )
     .unwrap();
@@ -581,7 +583,7 @@ fn fingerprint_covers_monitored_reference() {
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai2, pv, None),
         )
         .unwrap(),
@@ -592,7 +594,7 @@ fn fingerprint_covers_monitored_reference() {
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai1, cf, None),
         )
         .unwrap(),
@@ -603,7 +605,7 @@ fn fingerprint_covers_monitored_reference() {
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai1, pv, Some(0)),
         )
         .unwrap(),
@@ -613,14 +615,14 @@ fn fingerprint_covers_monitored_reference() {
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai1, pv, Some(0)),
         )
         .unwrap(),
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai1, pv, Some(1)),
         )
         .unwrap(),
@@ -631,7 +633,7 @@ fn fingerprint_covers_monitored_reference() {
         super::super::params_fingerprint(
             &params,
             2,
-            EventType::OUT_OF_RANGE.to_raw(),
+            EventType::OUT_OF_RANGE,
             &monitored(ai1, pv, None),
         )
         .unwrap(),
@@ -665,19 +667,20 @@ fn retarget_mid_pending_cancels_and_regates() {
     ai2.set_present_value(86.0);
     let ai2_oid = ai2.object_identifier();
     db.add(Box::new(ai2)).unwrap();
-    db.remove(&ee_oid);
-    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    db.remove(&ee_oid).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai2_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 3,
         low_limit: 20.0,
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
     // Inject the transplanted countdown as-is (fingerprint still names the
     // OLD monitored reference — the mismatch the evaluator must cancel).

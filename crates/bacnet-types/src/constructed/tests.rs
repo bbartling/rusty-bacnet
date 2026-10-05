@@ -1,94 +1,6 @@
 use super::*;
 use crate::enums::{ObjectType, PropertyIdentifier};
 
-// --- BACnetDateRange ---
-
-#[test]
-fn date_range_encode_decode_round_trip() {
-    let range = BACnetDateRange {
-        start_date: Date {
-            year: 124,
-            month: 1,
-            day: 1,
-            day_of_week: 1,
-        },
-        end_date: Date {
-            year: 124,
-            month: 12,
-            day: 31,
-            day_of_week: 2,
-        },
-    };
-    let encoded = range.encode();
-    assert_eq!(encoded.len(), 8);
-    let decoded = BACnetDateRange::decode(&encoded).unwrap();
-    assert_eq!(range, decoded);
-}
-
-#[test]
-fn date_range_encode_decode_all_unspecified() {
-    let range = BACnetDateRange {
-        start_date: Date {
-            year: Date::UNSPECIFIED,
-            month: Date::UNSPECIFIED,
-            day: Date::UNSPECIFIED,
-            day_of_week: Date::UNSPECIFIED,
-        },
-        end_date: Date {
-            year: Date::UNSPECIFIED,
-            month: Date::UNSPECIFIED,
-            day: Date::UNSPECIFIED,
-            day_of_week: Date::UNSPECIFIED,
-        },
-    };
-    let encoded = range.encode();
-    let decoded = BACnetDateRange::decode(&encoded).unwrap();
-    assert_eq!(range, decoded);
-}
-
-#[test]
-fn date_range_buffer_too_short() {
-    // 7 bytes — one short
-    let result = BACnetDateRange::decode(&[0; 7]);
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        Error::BufferTooShort { need, have } => {
-            assert_eq!(need, 8);
-            assert_eq!(have, 7);
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
-#[test]
-fn date_range_buffer_empty() {
-    let result = BACnetDateRange::decode(&[]);
-    assert!(result.is_err());
-}
-
-#[test]
-fn date_range_extra_bytes_ignored() {
-    let range = BACnetDateRange {
-        start_date: Date {
-            year: 100,
-            month: 6,
-            day: 15,
-            day_of_week: 5,
-        },
-        end_date: Date {
-            year: 100,
-            month: 6,
-            day: 30,
-            day_of_week: 6,
-        },
-    };
-    let encoded = range.encode();
-    let mut extended = encoded.to_vec();
-    extended.extend_from_slice(&[0xFF, 0xFF]); // extra bytes
-    let decoded = BACnetDateRange::decode(&extended).unwrap();
-    assert_eq!(range, decoded);
-}
-
 // --- BACnetWeekNDay ---
 
 #[test]
@@ -242,7 +154,7 @@ fn bacnet_recipient_address_variant() {
 fn bacnet_destination_construction() {
     let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap();
     let dest = BACnetDestination {
-        valid_days: 0b0111_1111, // all days
+        valid_days: DaysOfWeek::all(),
         from_time: Time {
             hour: 0,
             minute: 0,
@@ -258,11 +170,11 @@ fn bacnet_destination_construction() {
         recipient: BACnetRecipient::Device(dev_oid),
         process_identifier: 1,
         issue_confirmed_notifications: true,
-        transitions: 0b0000_0111, // all transitions
+        transitions: EventTransitionBits::all(),
     };
-    assert_eq!(dest.valid_days & 0x7F, 0x7F);
+    assert_eq!(dest.valid_days, DaysOfWeek::all());
     assert!(dest.issue_confirmed_notifications);
-    assert_eq!(dest.transitions & 0x07, 0x07);
+    assert_eq!(dest.transitions, EventTransitionBits::all());
 }
 
 // --- LogDatum ---
@@ -327,12 +239,15 @@ fn log_record_with_status_flags() {
             second: 0,
             hundredths: 0,
         },
-        log_datum: LogDatum::LogStatus(0b010), // buffer-purged
-        status_flags: Some(0b0100),            // FAULT set
+        log_datum: LogDatum::LogStatus(crate::bitstring::LogStatus::BUFFER_PURGED),
+        status_flags: Some(crate::primitives::StatusFlags::FAULT),
     };
-    assert_eq!(record.status_flags, Some(0b0100));
+    assert_eq!(
+        record.status_flags,
+        Some(crate::primitives::StatusFlags::FAULT)
+    );
     match record.log_datum {
-        LogDatum::LogStatus(s) => assert_eq!(s, 0b010),
+        LogDatum::LogStatus(s) => assert_eq!(s, crate::bitstring::LogStatus::BUFFER_PURGED),
         _ => panic!("wrong datum variant"),
     }
 }
@@ -389,7 +304,7 @@ fn special_event_inline_calendar_entry() {
                 second: 0,
                 hundredths: 0,
             },
-            value: vec![0x10, 0x00], // raw-tagged Null
+            value: PropertyValue::Null,
         }],
         event_priority: 16, // lowest priority
     };
@@ -491,12 +406,86 @@ fn value_source_none_variant() {
 
 #[test]
 fn value_source_object_variant() {
-    let dev_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
-    let vs = BACnetValueSource::Object(dev_oid);
-    match vs {
-        BACnetValueSource::Object(oid) => assert_eq!(oid.instance_number(), 1),
-        _ => panic!("wrong variant"),
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
+    let object = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 7).unwrap();
+    for device_identifier in [None, Some(device)] {
+        let reference = BACnetDeviceObjectReference {
+            device_identifier,
+            object_identifier: object,
+        };
+        let source = BACnetValueSource::Object(reference.clone());
+        assert_eq!(source, BACnetValueSource::Object(reference));
     }
+}
+
+#[test]
+fn device_object_reference_device_identifier_must_be_a_device() {
+    let object = ObjectIdentifier::new(ObjectType::ACCESS_DOOR, 7).unwrap();
+    let reference = |device_identifier| BACnetDeviceObjectReference {
+        device_identifier,
+        object_identifier: object,
+    };
+    assert!(reference(None).device_identifier_is_device());
+    for instance in [0, 9, ObjectIdentifier::MAX_INSTANCE] {
+        let device = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
+        assert!(reference(Some(device)).device_identifier_is_device());
+    }
+    for object_type in [ObjectType::ANALOG_VALUE, ObjectType::ACCESS_DOOR] {
+        let other = ObjectIdentifier::new(object_type, 9).unwrap();
+        assert!(!reference(Some(other)).device_identifier_is_device());
+    }
+}
+
+#[test]
+fn device_object_property_reference_device_identifier_must_be_a_device() {
+    let object = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 7).unwrap();
+    let local = BACnetDeviceObjectPropertyReference::new_local(object, 85);
+    assert!(local.device_identifier_is_device());
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap();
+    assert!(
+        BACnetDeviceObjectPropertyReference::new_remote(object, 85, device)
+            .device_identifier_is_device()
+    );
+    for object_type in [ObjectType::ANALOG_VALUE, ObjectType::CHANNEL] {
+        let other = ObjectIdentifier::new(object_type, 9).unwrap();
+        let reference = BACnetDeviceObjectPropertyReference::new_remote(object, 85, other);
+        assert!(!reference.device_identifier_is_device());
+    }
+}
+
+#[test]
+fn a_reference_to_the_reserved_instance_is_unset() {
+    let oid = |object_type, instance| ObjectIdentifier::new(object_type, instance).unwrap();
+    let reserved = ObjectIdentifier::WILDCARD_INSTANCE;
+    let unset = BACnetObjectPropertyReference::new(oid(ObjectType::ACCUMULATOR, reserved), 85);
+    assert!(unset.is_unset());
+    assert!(BACnetObjectPropertyReference::new_indexed(unset.object_identifier, 87, 3).is_unset());
+    assert!(
+        !BACnetObjectPropertyReference::new(oid(ObjectType::ACCUMULATOR, reserved - 1), 85)
+            .is_unset()
+    );
+
+    // Device-qualified: the object or the Device at the reserved instance.
+    let object = oid(ObjectType::ANALOG_INPUT, 7);
+    let local = BACnetDeviceObjectPropertyReference::new_local(object, 85);
+    assert!(!local.is_unset());
+    assert!(!BACnetDeviceObjectPropertyReference::new_remote(
+        object,
+        85,
+        oid(ObjectType::DEVICE, 9)
+    )
+    .is_unset());
+    assert!(BACnetDeviceObjectPropertyReference::new_remote(
+        object,
+        85,
+        oid(ObjectType::DEVICE, reserved)
+    )
+    .is_unset());
+    assert!(BACnetDeviceObjectPropertyReference::new_local(
+        oid(ObjectType::ANALOG_INPUT, reserved),
+        85
+    )
+    .is_unset());
 }
 
 #[test]
@@ -507,4 +496,41 @@ fn value_source_address_variant() {
         BACnetValueSource::Address(a) => assert_eq!(a, addr),
         _ => panic!("wrong variant"),
     }
+}
+
+#[test]
+fn access_rule_new_sets_each_specifier_from_its_reference() {
+    use crate::enums::{AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier};
+
+    let schedule = ObjectIdentifier::new(ObjectType::SCHEDULE, 1).unwrap();
+    let time_range = BACnetDeviceObjectPropertyReference::new_local(
+        schedule,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    );
+    let point = BACnetDeviceObjectReference::from(
+        ObjectIdentifier::new(ObjectType::ACCESS_POINT, 2).unwrap(),
+    );
+
+    let specified = BACnetAccessRule::new(Some(time_range.clone()), Some(point.clone()), true);
+    assert_eq!(
+        specified,
+        BACnetAccessRule {
+            time_range_specifier: AccessRuleTimeRangeSpecifier::SPECIFIED,
+            time_range: Some(time_range),
+            location_specifier: AccessRuleLocationSpecifier::SPECIFIED,
+            location: Some(point),
+            enable: true,
+        }
+    );
+
+    let open = BACnetAccessRule::new(None, None, false);
+    assert_eq!(
+        open.time_range_specifier,
+        AccessRuleTimeRangeSpecifier::ALWAYS
+    );
+    assert_eq!(open.location_specifier, AccessRuleLocationSpecifier::ALL);
+    assert_eq!(
+        (open.time_range, open.location, open.enable),
+        (None, None, false)
+    );
 }

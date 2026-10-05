@@ -8,6 +8,10 @@ dynamic = ["version"]
 description = "Python bindings for the Rusty BACnet protocol stack (ASHRAE 135-2020)"
 requires-python = ">=3.11"
 license = {text = "MIT"}
+# The release workflow generates this file (scripts/release/third_party_notices.py)
+# before building, and checks that every wheel and the sdist carry it. Local
+# builds don't have it; maturin 1.15 skips a license file that doesn't exist.
+license-files = ["THIRD-PARTY-NOTICES"]
 authors = [{name = "Justin Scott", email = "jscott3201@gmail.com"}]
 keywords = ["bacnet", "building-automation", "ashrae", "iot", "protocol"]
 classifiers = [
@@ -17,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: MIT License",
     "Topic :: System :: Networking",
     "Topic :: Home Automation",

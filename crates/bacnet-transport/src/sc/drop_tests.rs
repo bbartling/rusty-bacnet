@@ -8,7 +8,7 @@ async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&[0x33; 16]);
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 
@@ -28,18 +28,13 @@ async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
 async fn assert_closed_without_post_drop_heartbeat(ws_hub: &LoopbackWebSocket, context: &str) {
     timeout(Duration::from_secs(1), async {
-        loop {
-            match ws_hub.recv().await {
-                Ok(data) => {
-                    let msg = decode_sc_message(&data).unwrap();
-                    assert_ne!(
-                        msg.function,
-                        ScFunction::HeartbeatAck,
-                        "{context} must not leave SC answering heartbeats"
-                    );
-                }
-                Err(_) => break,
-            }
+        while let Ok(data) = ws_hub.recv().await {
+            let msg = decode_sc_message(&data).unwrap();
+            assert_ne!(
+                msg.function,
+                ScFunction::HeartbeatAck,
+                "{context} must not leave SC answering heartbeats"
+            );
         }
     })
     .await
@@ -67,7 +62,7 @@ async fn start_loopback_sc(
     hub_vmac: Vmac,
 ) -> (ScTransport<LoopbackWebSocket>, LoopbackWebSocket) {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, client_vmac);
+    let mut transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
         ws_hub

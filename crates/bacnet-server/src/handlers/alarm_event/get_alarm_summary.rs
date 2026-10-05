@@ -5,6 +5,7 @@
 
 use super::super::*;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::NotifyType;
 
 const ALARM_SUMMARY_SIGNATURE: [PropertyIdentifier; 3] = [
@@ -15,8 +16,8 @@ const ALARM_SUMMARY_SIGNATURE: [PropertyIdentifier; 3] = [
 
 struct AlarmSummaryProjection {
     object_identifier: ObjectIdentifier,
-    event_state: u32,
-    acknowledged_transitions: (u8, Vec<u8>),
+    event_state: EventState,
+    acknowledged_transitions: EventTransitionBits,
 }
 
 enum AlarmSummaryProjectionResult {
@@ -53,9 +54,12 @@ impl AlarmSummaryProjection {
             }
         }
 
-        let event_state =
-            read_enumerated(object, object_identifier, PropertyIdentifier::EVENT_STATE)?;
-        if event_state == EventState::NORMAL.to_raw() {
+        let event_state = EventState::from_raw(read_enumerated(
+            object,
+            object_identifier,
+            PropertyIdentifier::EVENT_STATE,
+        )?);
+        if event_state == EventState::NORMAL {
             return Ok(AlarmSummaryProjectionResult::Excluded);
         }
 
@@ -76,8 +80,8 @@ impl AlarmSummaryProjection {
 
 /// Handle a GetAlarmSummary request.
 ///
-/// Clause 13.10 selects event-initiating objects whose Event_State is not
-/// NORMAL and whose Notify_Type is ALARM. As a local strict-projection policy,
+/// Clause 13.10 summarizes alarms only: objects with Notify_Type ALARM that
+/// are currently out of NORMAL. As a local strict-projection policy,
 /// malformed advertised candidate fields fail the service instead of being
 /// replaced with fabricated values.
 pub fn handle_get_alarm_summary(db: &ObjectDatabase, buf: &mut BytesMut) -> Result<(), Error> {
@@ -92,13 +96,61 @@ pub fn handle_get_alarm_summary(db: &ObjectDatabase, buf: &mut BytesMut) -> Resu
         };
         entries.push(AlarmSummaryEntry {
             object_identifier: projection.object_identifier,
-            alarm_state: EventState::from_raw(projection.event_state),
+            alarm_state: projection.event_state,
             acknowledged_transitions: projection.acknowledged_transitions,
         });
     }
 
     let ack = GetAlarmSummaryAck { entries };
     ack.encode(buf);
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(crate) enum AlarmSummaryFailure {
+    Work,
+    Bytes,
+    Service(Error),
+}
+
+/// Transactional service encoding under the caller's database read guard.
+pub(crate) fn handle_get_alarm_summary_budgeted(
+    db: &ObjectDatabase,
+    buf: &mut BytesMut,
+    budget: crate::server::GetAlarmSummaryBudget,
+) -> Result<(), AlarmSummaryFailure> {
+    use bacnet_services::alarm_summary::{AlarmSummaryEntry, GetAlarmSummaryAck};
+
+    // This is deliberately all objects, before ANY object callback or projection.
+    if db.len() > budget.max_objects {
+        return Err(AlarmSummaryFailure::Work);
+    }
+    let mut scratch = BytesMut::new();
+    let mut entry_buf = BytesMut::new();
+    for (_, object) in db.iter_objects() {
+        let projection =
+            match AlarmSummaryProjection::read(object).map_err(AlarmSummaryFailure::Service)? {
+                AlarmSummaryProjectionResult::NotEventInitiating
+                | AlarmSummaryProjectionResult::Excluded => continue,
+                AlarmSummaryProjectionResult::Projected(projection) => projection,
+            };
+        // Strict projection bounds this triple: object ID, u32 enum, three bits.
+        // Reuse the service codec, retaining only one entry rather than the set.
+        entry_buf.clear();
+        GetAlarmSummaryAck {
+            entries: vec![AlarmSummaryEntry {
+                object_identifier: projection.object_identifier,
+                alarm_state: projection.event_state,
+                acknowledged_transitions: projection.acknowledged_transitions,
+            }],
+        }
+        .encode(&mut entry_buf);
+        if entry_buf.len() > budget.max_service_ack_bytes - scratch.len() {
+            return Err(AlarmSummaryFailure::Bytes);
+        }
+        scratch.extend_from_slice(&entry_buf);
+    }
+    buf.extend_from_slice(&scratch);
     Ok(())
 }
 
@@ -132,7 +184,7 @@ fn read_enumerated(
 fn read_acknowledged_transitions(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,
-) -> Result<(u8, Vec<u8>), Error> {
+) -> Result<EventTransitionBits, Error> {
     match read_required(
         object,
         object_identifier,
@@ -141,7 +193,7 @@ fn read_acknowledged_transitions(
         PropertyValue::BitString { unused_bits, data }
             if unused_bits == 5 && data.len() == 1 && data[0] & 0x1f == 0 =>
         {
-            Ok((unused_bits, data))
+            Ok(EventTransitionBits::from_bacnet(&data))
         }
         _ => Err(operational_problem(
             object_identifier,

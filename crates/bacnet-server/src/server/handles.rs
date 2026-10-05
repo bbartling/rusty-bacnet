@@ -1,0 +1,172 @@
+use super::*;
+
+impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Return the last bound local MAC snapshot, including after stop.
+    /// This retained address does not assert that the transport is still active.
+    pub fn local_mac(&self) -> &[u8] {
+        &self.local_mac
+    }
+
+    /// Get a reference to the shared object database.
+    ///
+    /// Objects read through this handle return raw standalone data. A built-in
+    /// Device follows its declared service profile, with absent or empty COV lists.
+    /// Served Device definitions and live lists belong to the executor: use
+    /// [`read_local`](Self::read_local) for that view. Normal Device mutation and
+    /// replacement cannot change the served execution profile.
+    /// Install Device objects before startup: changing their membership through
+    /// this handle does not rebind the discovery limiter's startup identity.
+    pub fn database(&self) -> &Arc<RwLock<ObjectDatabase>> {
+        &self.db
+    }
+
+    /// Read one local property through the server's ReadProperty evaluator.
+    ///
+    /// With multiple Device objects, the lowest instance is selected for Device
+    /// wildcard reads and the live COV lists, independent of insertion order.
+    /// Other Device objects receive empty COV lists. Every served Device uses
+    /// the executor's services, COV presence and property definitions, even after
+    /// public profile mutation, replacement or custom object installation.
+    ///
+    /// This is the live local read boundary: it applies the same Device
+    /// wildcard resolution, `UNKNOWN_OBJECT` and `PROPERTY_IS_NOT_AN_ARRAY`
+    /// checks, and value source as network ReadProperty. The selected Device's
+    /// `Active_COV_Subscriptions` (ordinary and single-property subscriptions)
+    /// and `Active_COV_Multiple_Subscriptions` (SubscribeCOVPropertyMultiple
+    /// contexts) are projected from the COV subscription table at one sampled
+    /// instant, returned as their encoded `BACnetLIST of BACnetCOVSubscription`
+    /// and `BACnetLIST of BACnetCOVMultipleSubscription`
+    /// (`PropertyValue::ApplicationData`). After [`stop`](Self::stop) the
+    /// server services no subscriptions, so both properties read as empty lists.
+    ///
+    /// The selected Device's `Device_Address_Binding` lists the server's device
+    /// bindings at the time of the read (#1369): each configured
+    /// [`DeviceBinding`] and each device whose I-Am was heard in the last ten
+    /// minutes, in Device instance order, as a `PropertyValue::List` whose
+    /// items are encoded BACnetAddressBindings
+    /// (`PropertyValue::ApplicationData`). A device on this network has
+    /// network number 0. The bindings outlast `stop`, so they still read then.
+    ///
+    /// A Group's `Present_Value` is rebuilt from its members, whose rows count
+    /// against the ReadPropertyMultiple work limit
+    /// ([`ReadPropertyMultipleBudget::max_result_elements`](crate::server::ReadPropertyMultipleBudget))
+    /// as for network ReadProperty; past it the read fails with
+    /// [`Error::Abort`] carrying OUT_OF_RESOURCES.
+    pub async fn read_local(
+        &self,
+        oid: &ObjectIdentifier,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        let db = self.db.read().await;
+        let lookup_oid =
+            handlers::resolve_read_target(&db, oid, self.config.registered_network_port);
+        let view = crate::device_view::DeviceReadContext::new(
+            &db,
+            crate::device_view::DeviceExecution::FullServer,
+        )
+        .with_work_limit(
+            self.config
+                .read_property_multiple_budget
+                .max_result_elements,
+        );
+        let plan =
+            handlers::plan_read_property(&db, Some(&view), lookup_oid, property, array_index)
+                .map_err(|failure| match failure {
+                    handlers::ReadFailure::Service(error) => error,
+                    handlers::ReadFailure::Work | handlers::ReadFailure::Bytes => Error::Abort {
+                        reason: AbortReason::OUT_OF_RESOURCES.to_raw(),
+                    },
+                })?;
+        use super::requests::confirmed_response::{active_cov_snapshot, address_bindings};
+        let live = match plan.live_cov(&db) {
+            Some(selection) if self.dispatch_task.is_none() => {
+                let bindings = address_bindings(&self.device_bindings, selection).await;
+                Some(
+                    crate::cov::active::LiveDeviceCov::stopped(selection)
+                        .with_address_bindings(selection, bindings),
+                )
+            }
+            Some(selection) => {
+                let tables = super::requests::confirmed_response::LiveTables {
+                    cov: &self.cov_table,
+                    bindings: &self.device_bindings,
+                };
+                Some(active_cov_snapshot(&db, tables, selection).await)
+            }
+            None => None,
+        };
+        let view = view.with_live(live.as_ref());
+        handlers::read_property_value(&db, Some(&view), plan)
+    }
+
+    /// Write one local property from its encoded value: the octets a network
+    /// WriteProperty would carry for it.
+    ///
+    /// The octets take the steps the WriteProperty handler takes before an
+    /// object sees a value. An array index is refused as it is over the
+    /// network (UNKNOWN_PROPERTY for a property the object doesn't hold,
+    /// PROPERTY_IS_NOT_AN_ARRAY for one that isn't an array), and the octets
+    /// are decoded with that handler's per-property framing, which hands a
+    /// Schedule's Effective_Period or a Staging's Stages to the object in the
+    /// form it decodes. The value then takes the [`write_local`](Self::write_local)
+    /// path, with its COV, event and audit work. A value read with
+    /// [`read_local`](Self::read_local) and encoded therefore writes back, and
+    /// any value a network client could write is accepted here.
+    ///
+    /// Like `write_local`, it must be awaited inside a Tokio runtime, failing
+    /// before anything is written outside one, and a caller dropped once the
+    /// write has committed skips none of the work the write owes (#1367).
+    pub async fn write_local_encoded(
+        &self,
+        oid: &ObjectIdentifier,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: &[u8],
+        priority: Option<u8>,
+        source: crate::LocalCommandSource,
+    ) -> Result<(), Error> {
+        self.active_network()?;
+        let value = {
+            let db = self.db.read().await;
+            let object = db.get(oid).ok_or_else(|| Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+            })?;
+            handlers::gate_and_decode_write(object, property, array_index, value)?
+        };
+        self.write_local(oid, property, array_index, value, priority, source)
+            .await
+    }
+
+    /// Create a cloneable handle for unsolicited I-Am announcements.
+    pub fn i_am_broadcaster(&self) -> IAmBroadcaster<T> {
+        IAmBroadcaster {
+            state: Arc::downgrade(&self.broadcaster),
+        }
+    }
+
+    /// Get the communication state per DeviceCommunicationControl.
+    ///
+    /// The server refuses the deprecated DISABLE, so this is
+    /// [`DccState::Enable`] or [`DccState::DisableInitiation`].
+    pub fn comm_state(&self) -> DccState {
+        self.comm_state.get()
+    }
+
+    /// Generate PICS from the database and the server's effective Device execution view.
+    /// Standalone [`PicsGenerator`](crate::pics::PicsGenerator) keeps raw-object semantics.
+    ///
+    /// The caller must supply a [`PicsConfig`](crate::pics::PicsConfig) for fields not available from the server
+    /// (vendor name, model, firmware revision, etc.).
+    pub async fn generate_pics(&self, pics_config: &crate::pics::PicsConfig) -> crate::pics::Pics {
+        let db = self.db.read().await;
+        crate::pics::PicsGenerator::new(&db, &self.config, pics_config)
+            .for_server()
+            .generate()
+    }
+}
+
+#[cfg(test)]
+#[path = "local_encoded_writes_tests.rs"]
+mod local_encoded_writes_tests;

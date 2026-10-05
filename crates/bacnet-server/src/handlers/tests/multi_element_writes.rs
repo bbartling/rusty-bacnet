@@ -30,12 +30,13 @@ fn write_raw(
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     handle_write_property(db, &buf).map(|_| ())
 }
 
 /// Read a property over the wire and loop-decode the flattened result the
-/// same way the write path decodes (single element → scalar, else `List`).
+/// way the write path decodes a property that is not a list (single element
+/// → scalar, else `List`).
 fn read_prop(
     db: &ObjectDatabase,
     oid: ObjectIdentifier,
@@ -104,8 +105,9 @@ fn assert_refused(
 // unassigned application tag 13) fails the decode loop as PROPERTY /
 // INVALID_DATA_ENCODING; a whole extra decodable element reaches the arm and
 // fails its shape check as INVALID_DATA_TYPE; a TLV-truncated tail never
-// survives the service request's own framing walk. An empty payload is
-// refused outright.
+// survives the service request's own framing walk. An empty payload is an
+// empty list for a list property and refused for the rest
+// (list_value_writes.rs).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -241,22 +243,6 @@ fn well_formed_trailing_element_reaches_scalar_arm_as_list_and_is_refused() {
     );
 }
 
-#[test]
-fn empty_property_value_is_refused() {
-    let mut db = make_db_with_msi();
-    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-
-    assert_refused(
-        &mut db,
-        oid,
-        PropertyIdentifier::ALARM_VALUES,
-        Vec::new(),
-        ErrorCode::INVALID_DATA_ENCODING,
-        PropertyValue::List(vec![]),
-        "empty propertyValue",
-    );
-}
-
 // ---------------------------------------------------------------------------
 // DateTime-paired value properties (#182): a BACnetDateTime writes as
 // application-tagged Date + Time, which the decode loop delivers to the
@@ -308,8 +294,7 @@ fn datetime_value_present_value_and_priority_array_over_the_wire() {
         datetime_pv()
     );
 
-    // A priority-array ENTRY write of a different datetime: indexed write to
-    // slot 2 wins over the earlier priority-16 command.
+    // A direct Priority_Array write must not replace the valid priority-16 command.
     let later = PropertyValue::List(vec![
         PropertyValue::Date(TEST_DATE),
         PropertyValue::Time(Time {
@@ -317,17 +302,20 @@ fn datetime_value_present_value_and_priority_array_over_the_wire() {
             ..TEST_TIME
         }),
     ]);
-    write_raw(
+    let error = write_raw(
         &mut db,
         oid,
         PropertyIdentifier::PRIORITY_ARRAY,
         Some(2),
         encode_value(later.clone()),
     )
-    .unwrap();
+    .unwrap_err();
+    assert!(
+        matches!(error, Error::Protocol { class, code } if class == u32::from(ErrorClass::PROPERTY.to_raw()) && code == u32::from(ErrorCode::WRITE_ACCESS_DENIED.to_raw()))
+    );
     assert_eq!(
         read_prop(&db, oid, PropertyIdentifier::PRESENT_VALUE),
-        later
+        datetime_pv()
     );
 }
 

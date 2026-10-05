@@ -1,7 +1,13 @@
+use std::num::NonZeroUsize;
+
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Read a property from a remote device.
+    ///
+    /// The ACK must match the requested object, property and array index.
+    /// Device/Network Port wildcard requests accept only a same-type concrete
+    /// peer-reported object; malformed or mismatched ACKs return a decoding error.
     pub async fn read_property(
         &self,
         destination_mac: &[u8],
@@ -23,7 +29,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .confirmed_request(destination_mac, ConfirmedServiceChoice::READ_PROPERTY, &buf)
             .await?;
 
-        bacnet_services::read_property::ReadPropertyACK::decode(&response_data)
+        crate::read_property::decode_ack(&request, &response_data)
     }
 
     /// Read a property from a discovered device, auto-routing if needed.
@@ -97,14 +103,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             )
             .await?;
 
-        bacnet_services::read_property::ReadPropertyACK::decode(&response_data)
+        crate::read_property::decode_ack(&request, &response_data)
     }
 
     /// Read multiple properties from one or more objects on a remote device.
     pub async fn read_property_multiple(
         &self,
         destination_mac: &[u8],
-        specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+        specs: Vec<bacnet_types::constructed::ReadAccessSpecification>,
     ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
         use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
 
@@ -112,7 +118,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             list_of_read_access_specs: specs,
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let response_data = self
             .confirmed_request(
@@ -129,7 +135,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub async fn read_property_multiple_from_device(
         &self,
         device_instance: u32,
-        specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+        specs: Vec<bacnet_types::constructed::ReadAccessSpecification>,
     ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
 
@@ -140,7 +146,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 list_of_read_access_specs: specs,
             };
             let mut buf = BytesMut::new();
-            request.encode(&mut buf);
+            request.encode(&mut buf)?;
 
             let response_data = self
                 .confirmed_request_routed(
@@ -161,18 +167,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Read one property from multiple discovered devices concurrently.
     ///
     /// All reads are dispatched concurrently (up to `max_concurrent`,
-    /// default 32). Results are returned in completion order.
+    /// default 32). The nonzero limit prevents a stalled batch. Results are
+    /// returned in completion order; `request_index` identifies the original input
+    /// occurrence, including duplicates. Dropping the future cancels pending requests
+    /// and returns no partial vector.
     pub async fn read_property_from_devices(
         &self,
         requests: Vec<DeviceReadRequest>,
-        max_concurrent: Option<usize>,
+        max_concurrent: Option<NonZeroUsize>,
     ) -> Vec<DeviceReadResult> {
         use futures_util::stream::{self, StreamExt};
 
-        let concurrency = max_concurrent.unwrap_or(DEFAULT_BATCH_CONCURRENCY);
+        let concurrency = max_concurrent.map_or(DEFAULT_BATCH_CONCURRENCY, NonZeroUsize::get);
 
-        stream::iter(requests)
-            .map(|req| async move {
+        stream::iter(requests.into_iter().enumerate())
+            .map(|(request_index, req)| async move {
                 let result = self
                     .read_property_from_device(
                         req.device_instance,
@@ -182,6 +191,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     )
                     .await;
                 DeviceReadResult {
+                    request_index,
                     device_instance: req.device_instance,
                     result,
                 }
@@ -195,22 +205,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// Sends an RPM to each device concurrently. This is the most efficient
     /// way to poll many properties across many devices — RPM batches within
-    /// a single device, and this method batches across devices.
+    /// a single device, and this method batches across devices. A nonzero limit
+    /// bounds concurrency (None uses 32). Results use completion order and carry the
+    /// original input occurrence in `request_index`. Dropping the future cancels
+    /// pending requests and returns no partial vector.
     pub async fn read_property_multiple_from_devices(
         &self,
         requests: Vec<DeviceRpmRequest>,
-        max_concurrent: Option<usize>,
+        max_concurrent: Option<NonZeroUsize>,
     ) -> Vec<DeviceRpmResult> {
         use futures_util::stream::{self, StreamExt};
 
-        let concurrency = max_concurrent.unwrap_or(DEFAULT_BATCH_CONCURRENCY);
+        let concurrency = max_concurrent.map_or(DEFAULT_BATCH_CONCURRENCY, NonZeroUsize::get);
 
-        stream::iter(requests)
-            .map(|req| async move {
+        stream::iter(requests.into_iter().enumerate())
+            .map(|(request_index, req)| async move {
                 let result = self
                     .read_property_multiple_from_device(req.device_instance, req.specs)
                     .await;
                 DeviceRpmResult {
+                    request_index,
                     device_instance: req.device_instance,
                     result,
                 }
@@ -240,7 +254,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             priority,
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let _ = self
             .confirmed_request(
@@ -265,7 +279,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             list_of_write_access_specs: specs,
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let _ = self
             .confirmed_request(
@@ -292,6 +306,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         property_value: Vec<u8>,
         priority: Option<u8>,
     ) -> Result<(), Error> {
+        bacnet_services::write_property::validate_priority(priority)?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
 
         if let Some((dnet, dadr)) = routing {
@@ -305,7 +320,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 priority,
             };
             let mut buf = BytesMut::new();
-            request.encode(&mut buf);
+            request.encode(&mut buf)?;
 
             let _ = self
                 .confirmed_request_routed(
@@ -336,47 +351,47 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         device_instance: u32,
         specs: Vec<bacnet_services::wpm::WriteAccessSpecification>,
     ) -> Result<(), Error> {
+        use bacnet_services::wpm::WritePropertyMultipleRequest;
+        let request = WritePropertyMultipleRequest {
+            list_of_write_access_specs: specs,
+        };
+        let mut buf = BytesMut::new();
+        request.encode(&mut buf)?;
         let (mac, routing) = self.resolve_device(device_instance).await?;
-
         if let Some((dnet, dadr)) = routing {
-            use bacnet_services::wpm::WritePropertyMultipleRequest;
-
-            let request = WritePropertyMultipleRequest {
-                list_of_write_access_specs: specs,
-            };
-            let mut buf = BytesMut::new();
-            request.encode(&mut buf);
-
-            let _ = self
-                .confirmed_request_routed(
-                    &mac,
-                    dnet,
-                    &dadr,
-                    ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
-                    &buf,
-                )
-                .await?;
-            Ok(())
+            self.confirmed_request_routed(
+                &mac,
+                dnet,
+                &dadr,
+                ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+                &buf,
+            )
+            .await?;
         } else {
-            self.write_property_multiple(&mac, specs).await
+            self.confirmed_request(&mac, ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE, &buf)
+                .await?;
         }
+        Ok(())
     }
 
     /// Write one property on multiple discovered devices concurrently.
     ///
     /// All writes are dispatched concurrently (up to `max_concurrent`,
-    /// default 32). Results are returned in completion order.
+    /// default 32). The nonzero limit prevents a stalled batch. Results are
+    /// returned in completion order; `request_index` identifies the original input
+    /// occurrence, including duplicates. Dropping the future cancels pending requests
+    /// and returns no partial vector.
     pub async fn write_property_to_devices(
         &self,
         requests: Vec<DeviceWriteRequest>,
-        max_concurrent: Option<usize>,
+        max_concurrent: Option<NonZeroUsize>,
     ) -> Vec<DeviceWriteResult> {
         use futures_util::stream::{self, StreamExt};
 
-        let concurrency = max_concurrent.unwrap_or(DEFAULT_BATCH_CONCURRENCY);
+        let concurrency = max_concurrent.map_or(DEFAULT_BATCH_CONCURRENCY, NonZeroUsize::get);
 
-        stream::iter(requests)
-            .map(|req| async move {
+        stream::iter(requests.into_iter().enumerate())
+            .map(|(request_index, req)| async move {
                 let result = self
                     .write_property_to_device(
                         req.device_instance,
@@ -388,6 +403,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     )
                     .await;
                 DeviceWriteResult {
+                    request_index,
                     device_instance: req.device_instance,
                     result,
                 }

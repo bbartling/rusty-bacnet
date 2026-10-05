@@ -1,0 +1,152 @@
+//! Keeping an unshared UDP port to its socket, as far as each OS allows.
+//!
+//! A B/IP or B/IPv6 socket on an ephemeral port binds the wildcard address
+//! without SO_REUSEADDR (#892). How private that leaves the port depends on
+//! the OS:
+//!
+//! - Linux refuses any other bind to the port, whatever options it sets.
+//! - Windows lets another socket bind a more specific address on the same port
+//!   (127.0.0.1:P beside a wildcard 0.0.0.0:P) and take the unicast sent
+//!   there, unless the first socket set SO_EXCLUSIVEADDRUSE, which this module
+//!   does (#950).
+//! - macOS and the other BSDs refuse a plain bind there, but a socket that sets
+//!   SO_REUSEADDR itself may still bind the more specific address. They have
+//!   no option to stop it, so that case remains.
+
+use std::io;
+
+#[cfg(test)]
+use crate::port::{ReceivedNpdu, TransportPort};
+#[cfg(test)]
+use bacnet_types::error::Error;
+#[cfg(test)]
+use tokio::sync::mpsc;
+
+/// Keep an unshared socket's port to itself. Call it before `bind`.
+///
+/// Sets SO_EXCLUSIVEADDRUSE, which refuses every other bind to the port while
+/// this socket is open.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub(crate) fn claim_exclusive(socket: &socket2::Socket) -> io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        setsockopt, WSAGetLastError, SOCKET, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+    };
+
+    let enabled: i32 = 1;
+    // SAFETY: the socket handle is open for the call's duration, and the
+    // option value points to a live BOOL (i32) of the length passed.
+    let result = unsafe {
+        setsockopt(
+            socket.as_raw_socket() as SOCKET,
+            SOL_SOCKET,
+            SO_EXCLUSIVEADDRUSE,
+            (&enabled as *const i32).cast(),
+            std::mem::size_of::<i32>() as i32,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        // SAFETY: reads the calling thread's last Winsock error; no arguments.
+        Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }))
+    }
+}
+
+/// Keep an unshared socket's port to itself. Call it before `bind`.
+///
+/// Nothing to set: Linux already refuses other binds, and macOS and the BSDs
+/// have no option for the SO_REUSEADDR case the module docs describe.
+#[cfg(not(windows))]
+pub(crate) fn claim_exclusive(_socket: &socket2::Socket) -> io::Result<()> {
+    Ok(())
+}
+
+/// Whether a bind failed because another socket holds the port. Tests whose
+/// configuration must name a port before the transport binds it probe for a
+/// free one, and another process can take it in between (#1032); this is the
+/// failure they retry on. An explicit B/IP or B/IPv6 port sets SO_REUSEADDR,
+/// and Windows refuses that bind with `WSAEACCES` rather than
+/// `WSAEADDRINUSE` when the holder did not share the port. Only an OS error
+/// counts, so a transport's own `AddrInUse` (a VMAC collision) does not.
+///
+/// On macOS a holder bound to a specific address does not fail the wildcard
+/// bind at all; as the module docs say, nothing there reports that case.
+#[cfg(test)]
+pub(crate) fn lost_to_another_socket(err: &io::Error) -> bool {
+    err.raw_os_error().is_some()
+        && (err.kind() == io::ErrorKind::AddrInUse
+            || (cfg!(windows) && err.kind() == io::ErrorKind::PermissionDenied))
+}
+
+/// How many times a test that can lose its port to another socket runs, each
+/// time on a fresh port.
+#[cfg(test)]
+pub(crate) const ATTEMPTS: usize = 8;
+
+/// Whether `err`, from run `attempt` of such a test, is a bind that another
+/// socket beat to the port, so the test may go again on a fresh one (#1032,
+/// #1068, #1070, #1095). Never on the last run: a node that really kept its
+/// port fails every run, and the last one reports it.
+#[cfg(test)]
+pub(crate) fn lost_port(attempt: usize, err: &io::Error) -> bool {
+    attempt < ATTEMPTS && lost_to_another_socket(err)
+}
+
+/// Starts a stopped `transport` again, for the restart tests. The restart
+/// rebinds the port the first start was given, and another process can take
+/// it while the transport is stopped (#1070). `None` means it did, and the
+/// test goes again from its first start, which binds a fresh port; the last
+/// run keeps the bind's error, so a transport that really kept its port fails
+/// every run.
+///
+/// For a transport whose first start let the OS choose the port, the restart
+/// binds it without SO_REUSEADDR, and every OS refuses such a bind while
+/// another socket holds the port. The macOS gap in
+/// [`lost_to_another_socket`] needs a SO_REUSEADDR bind, so it does not apply.
+#[cfg(test)]
+pub(crate) async fn restart(
+    transport: &mut impl TransportPort,
+    attempt: usize,
+) -> Option<Result<mpsc::Receiver<ReceivedNpdu>, Error>> {
+    match transport.start().await {
+        Err(Error::Transport(ref err)) if lost_port(attempt, err) => None,
+        started => Some(started),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+
+    /// A plain bind of 127.0.0.1:P beside the claimed 0.0.0.0:P fails on
+    /// every OS; on Windows only because of the claim.
+    #[test]
+    fn a_claimed_wildcard_port_refuses_a_specific_address_bind() {
+        let socket =
+            socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, None).unwrap();
+        super::claim_exclusive(&socket).unwrap();
+        socket
+            .bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)).into())
+            .unwrap();
+        let port = socket.local_addr().unwrap().as_socket().unwrap().port();
+        assert!(UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).is_err());
+        drop(socket);
+        // UDP has no TIME_WAIT: the port is free as soon as its owner closes.
+        UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+    }
+
+    /// A port held by another socket reruns every run but the last, so a
+    /// leak still fails the test.
+    #[test]
+    fn a_lost_port_reruns_every_run_but_the_last() {
+        let holder = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let err = UdpSocket::bind(holder.local_addr().unwrap()).unwrap_err();
+        assert!((1..super::ATTEMPTS).all(|attempt| super::lost_port(attempt, &err)));
+        assert!(!super::lost_port(super::ATTEMPTS, &err));
+        // An AddrInUse the transport made up, not the OS, is never a lost port.
+        let made_up = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+        assert!(!super::lost_port(1, &made_up));
+    }
+}

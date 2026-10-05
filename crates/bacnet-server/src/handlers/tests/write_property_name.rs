@@ -28,8 +28,24 @@ fn encode_name_write(oid: ObjectIdentifier, name: &str) -> Vec<u8> {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     buf.to_vec()
+}
+
+/// A name another object holds is PROPERTY / DUPLICATE_NAME, the pair the
+/// WriteProperty and WritePropertyMultiple error tables give (Clauses
+/// 15.9.1.3.1 and 15.10.1.3.1).
+fn assert_duplicate_name<T: std::fmt::Debug>(result: Result<T, Error>) {
+    match result {
+        Err(Error::Protocol { class, code }) => assert_eq!(
+            (
+                ErrorClass::from_raw(class as u16),
+                ErrorCode::from_raw(code as u16)
+            ),
+            (ErrorClass::PROPERTY, ErrorCode::DUPLICATE_NAME)
+        ),
+        other => panic!("expected PROPERTY / DUPLICATE_NAME, got {other:?}"),
+    }
 }
 
 /// Two objects with distinct names live in the database.
@@ -50,8 +66,7 @@ fn write_object_name_rejects_duplicate() {
 
     // Renaming A to "BV-B" (owned by B) must be rejected up front.
     let buf = encode_name_write(oid_a, "BV-B");
-    let result = handle_write_property(&mut db, &buf);
-    assert!(result.is_err(), "duplicate Object_Name must be rejected");
+    assert_duplicate_name(handle_write_property(&mut db, &buf));
 
     // Index untouched: A is still "BV-A", B still owns "BV-B".
     assert!(db.find_by_name("BV-A").is_some());
@@ -89,7 +104,7 @@ fn write_object_name_rename_refreshes_index() {
 #[test]
 fn event_enrollment_name_write_refreshes_index_and_rejects_duplicate() {
     let mut db = ObjectDatabase::new();
-    let enrollment = EventEnrollmentObject::new(1, "EE-A", 0).unwrap();
+    let enrollment = EventEnrollmentObject::new(1, "EE-A", EventType::CHANGE_OF_BITSTRING).unwrap();
     let occupied = BinaryValueObject::new(1, "Occupied").unwrap();
     let oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
@@ -103,13 +118,10 @@ fn event_enrollment_name_write_refreshes_index_and_rejects_duplicate() {
         oid
     );
 
-    match handle_write_property(&mut db, &encode_name_write(oid, "Occupied")) {
-        Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::OBJECT.to_raw() as u32);
-            assert_eq!(code, ErrorCode::DUPLICATE_NAME.to_raw() as u32);
-        }
-        other => panic!("expected DUPLICATE_NAME, got {other:?}"),
-    }
+    assert_duplicate_name(handle_write_property(
+        &mut db,
+        &encode_name_write(oid, "Occupied"),
+    ));
     assert_eq!(db.get(&oid).unwrap().object_name(), "EE-Renamed");
     assert_eq!(
         db.find_by_name("EE-Renamed").unwrap().object_identifier(),
@@ -138,7 +150,7 @@ fn write_object_name_empty_or_wrong_type_still_rejected() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     assert!(handle_write_property(&mut db, &buf).is_err());
     assert_eq!(db.get(&oid_a).unwrap().object_name(), "BV-A");
     assert!(db.find_by_name("BV-A").is_some());
@@ -175,7 +187,7 @@ fn write_property_multiple_name_rename_refreshes_index() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     handle_write_property_multiple(&mut db, &buf).unwrap();
 
@@ -214,12 +226,9 @@ fn write_property_multiple_failed_attempt_is_mutation_free_and_prefix_index_stay
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
-    assert!(
-        handle_write_property_multiple(&mut db, &buf).is_err(),
-        "duplicate Object_Name in WPM must be rejected"
-    );
+    assert_duplicate_name(handle_write_property_multiple(&mut db, &buf));
     assert_eq!(db.get(&oid_a).unwrap().object_name(), "BV-A");
     assert_eq!(db.get(&oid_b).unwrap().object_name(), "BV-B");
     assert!(db.find_by_name("BV-A").is_some());
@@ -253,7 +262,7 @@ fn write_property_multiple_failed_attempt_is_mutation_free_and_prefix_index_stay
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(
         handle_write_property_multiple(&mut db, &buf).is_err(),
@@ -286,7 +295,7 @@ fn remove_after_rename_frees_current_name_only() {
     assert!(db.find_by_name("BV-A").is_none());
     assert!(db.find_by_name("BV-A2").is_some());
 
-    db.remove(&oid_a);
+    db.remove(&oid_a).unwrap();
     assert!(
         db.find_by_name("BV-A2").is_none(),
         "remove frees current name"
@@ -344,7 +353,7 @@ fn write_property_multiple_cross_object_name_move() {
         ],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     handle_write_property_multiple(&mut db, &buf).unwrap();
     assert_eq!(db.get(&oid_a).unwrap().object_name(), "BV-A2");
@@ -388,8 +397,7 @@ fn create_object_with_object_name_initial_value_refreshes_index() {
     let created_oid = obj.object_identifier();
     assert_eq!(db.get(&created_oid).unwrap().object_name(), "Custom-Name");
     assert!(
-        db.find_by_name(&format!("{:?}-{}", ObjectType::BINARY_VALUE, 1))
-            .is_none(),
+        db.find_by_name("BINARY_VALUE-1").is_none(),
         "default name must be freed after rename"
     );
 }
@@ -417,9 +425,12 @@ fn create_object_duplicate_object_name_initial_value_rejected_and_rolled_back() 
     let mut buf = BytesMut::new();
     req.encode(&mut buf);
 
-    assert!(
-        handle_create_object(&mut db, &buf, &mut BytesMut::new()).is_err(),
-        "duplicate Object_Name initial value must be rejected"
+    // CreateObject's table (15.3.1.3.1) has no row for a name in use; the
+    // initial value is refused as WriteProperty refuses it, PROPERTY /
+    // DUPLICATE_NAME, naming its position in the list.
+    assert_eq!(
+        super::list_refusal(handle_create_object(&mut db, &buf, &mut BytesMut::new())),
+        (ErrorClass::PROPERTY, ErrorCode::DUPLICATE_NAME, 1)
     );
     assert_eq!(
         db.len(),

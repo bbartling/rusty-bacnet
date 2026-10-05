@@ -1,7 +1,11 @@
 //! Who-Has and I-Have services per ASHRAE 135-2020 Clause 16.9.
 
+use crate::who_is::{DeviceInstanceRange, WireLimits};
+use bacnet_encoding::constructed::tagged::{
+    decode_app_character_string, decode_app_object_id, decode_ctx_character_string,
+    decode_ctx_object_id, expect_end, next_is_context,
+};
 use bacnet_encoding::primitives;
-use bacnet_encoding::tags;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
@@ -13,29 +17,27 @@ use bytes::BytesMut;
 /// The object to search for: by identifier or by name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WhoHasObject {
-    /// Search by object identifier ([2] context tag).
+    /// Search by object identifier (\[2\] context tag).
     Identifier(ObjectIdentifier),
-    /// Search by object name ([3] context tag).
+    /// Search by object name (\[3\] context tag).
     Name(String),
 }
 
 /// Who-Has-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhoHasRequest {
-    pub low_limit: Option<u32>,
-    pub high_limit: Option<u32>,
+    /// The devices that should answer; `None` asks every device.
+    pub range: Option<DeviceInstanceRange>,
+    /// Object being searched for, by identifier or by name.
     pub object: WhoHasObject,
 }
 
 impl WhoHasRequest {
+    /// Encode the request parameters into `buf`; fails if the object name cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
-        // [0] low-limit (optional)
-        if let Some(low) = self.low_limit {
-            primitives::encode_ctx_unsigned(buf, 0, low as u64);
-        }
-        // [1] high-limit (optional)
-        if let Some(high) = self.high_limit {
-            primitives::encode_ctx_unsigned(buf, 1, high as u64);
+        // [0] low limit and [1] high limit, both or neither
+        if let Some(range) = self.range {
+            range.encode(buf);
         }
         // CHOICE: [2] object-identifier OR [3] object-name
         match &self.object {
@@ -49,59 +51,32 @@ impl WhoHasRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// on octets after the object, and, as a Who-Is does, on one limit without the other or a
+    /// low limit above the high one (#1483). The request is unconfirmed, so a receiver drops
+    /// it unanswered rather than reading one limit as a request for every device.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        // [0] low-limit (optional)
-        let mut low_limit = None;
-        let (opt, new_offset) = tags::decode_optional_context(data, offset, 0)?;
-        if let Some(content) = opt {
-            let low_limit_raw = primitives::decode_unsigned(content)?;
-            low_limit = Some(u32::try_from(low_limit_raw).map_err(|_| {
-                Error::decoding(
-                    offset,
-                    format!("WhoHas low-limit {low_limit_raw} exceeds u32"),
-                )
-            })?);
-            offset = new_offset;
-        }
-
-        // [1] high-limit (optional)
-        let mut high_limit = None;
-        let (opt, new_offset) = tags::decode_optional_context(data, offset, 1)?;
-        if let Some(content) = opt {
-            let high_limit_raw = primitives::decode_unsigned(content)?;
-            high_limit = Some(u32::try_from(high_limit_raw).map_err(|_| {
-                Error::decoding(
-                    offset,
-                    format!("WhoHas high-limit {high_limit_raw} exceeds u32"),
-                )
-            })?);
-            offset = new_offset;
-        }
+        // [0] low limit and [1] high limit, both or neither
+        let limits = WireLimits::decode(data, "WhoHas")?;
+        let offset = limits.end;
 
         // CHOICE: [2] object-identifier OR [3] object-name
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "WhoHas truncated at object choice"));
-        }
-
-        let object = if tag.is_context(2) {
-            WhoHasObject::Identifier(ObjectIdentifier::decode(&data[pos..end])?)
-        } else if tag.is_context(3) {
-            let s = primitives::decode_character_string(&data[pos..end])?;
-            WhoHasObject::Name(s)
+        let (object, end) = if next_is_context(data, offset, 2)? {
+            let (oid, end) = decode_ctx_object_id(data, offset, 2, "WhoHas object-identifier")?;
+            (WhoHasObject::Identifier(oid), end)
+        } else if next_is_context(data, offset, 3)? {
+            let (name, end) = decode_ctx_character_string(data, offset, 3, "WhoHas object-name")?;
+            (WhoHasObject::Name(name), end)
         } else {
             return Err(Error::decoding(
                 offset,
                 "WhoHas expected context tag 2 or 3",
             ));
         };
+        expect_end(data, end, end, "WhoHas")?;
 
         Ok(Self {
-            low_limit,
-            high_limit,
+            range: limits.range("WhoHas")?,
             object,
         })
     }
@@ -114,12 +89,16 @@ impl WhoHasRequest {
 /// I-Have-Request service parameters (APPLICATION-tagged).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IHaveRequest {
+    /// Device object of the responding device.
     pub device_identifier: ObjectIdentifier,
+    /// Identifier of the object that was found.
     pub object_identifier: ObjectIdentifier,
+    /// Name of the object that was found.
     pub object_name: String,
 }
 
 impl IHaveRequest {
+    /// Encode the request parameters into `buf`; fails if the object name cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         primitives::encode_app_object_id(buf, &self.device_identifier);
         primitives::encode_app_object_id(buf, &self.object_identifier);
@@ -127,31 +106,14 @@ impl IHaveRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// on a member under any tag but its application tag, and on octets after the name.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IHave truncated at device-id"));
-        }
-        let device_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IHave truncated at object-id"));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IHave truncated at object-name"));
-        }
-        let object_name = primitives::decode_character_string(&data[pos..end])?;
+        let (device_identifier, offset) = decode_app_object_id(data, 0, "IHave device-identifier")?;
+        let (object_identifier, offset) =
+            decode_app_object_id(data, offset, "IHave object-identifier")?;
+        let (object_name, end) = decode_app_character_string(data, offset, "IHave object-name")?;
+        expect_end(data, end, end, "IHave")?;
 
         Ok(Self {
             device_identifier,
@@ -164,13 +126,13 @@ impl IHaveRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_encoding::tags;
     use bacnet_types::enums::ObjectType;
 
     #[test]
     fn who_has_by_id_round_trip() {
         let req = WhoHasRequest {
-            low_limit: None,
-            high_limit: None,
+            range: None,
             object: WhoHasObject::Identifier(
                 ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
             ),
@@ -184,8 +146,7 @@ mod tests {
     #[test]
     fn who_has_by_name_with_limits() {
         let req = WhoHasRequest {
-            low_limit: Some(1000),
-            high_limit: Some(2000),
+            range: Some(DeviceInstanceRange::new(1000, 2000).unwrap()),
             object: WhoHasObject::Name("Zone Temperature".into()),
         };
         let mut buf = BytesMut::new();
@@ -205,17 +166,23 @@ mod tests {
             buf
         };
 
+        // The shared readers' wording names the member, its tag and the value.
         for (low, high, field, value) in [
-            (4_294_967_296, 4_294_967_296, "low-limit", 4_294_967_296_u64),
-            (1, 4_294_967_297, "high-limit", 4_294_967_297),
-            (u64::MAX, u64::MAX, "low-limit", u64::MAX),
+            (
+                4_294_967_296,
+                4_294_967_296,
+                "low limit: [0]",
+                4_294_967_296_u64,
+            ),
+            (1, 4_294_967_297, "high limit: [1]", 4_294_967_297),
+            (u64::MAX, u64::MAX, "low limit: [0]", u64::MAX),
         ] {
             let encoded = encode_request(low, high);
             let error = WhoHasRequest::decode(&encoded).unwrap_err();
             assert!(
                 error
                     .to_string()
-                    .contains(&format!("WhoHas {field} {value}")),
+                    .contains(&format!("WhoHas {field} value {value} exceeds u32")),
                 "unexpected error for {field} {value}: {error}"
             );
         }
@@ -227,8 +194,9 @@ mod tests {
         }
         primitives::encode_ctx_object_id(&mut leading_zero, 2, &object_identifier);
         let decoded = WhoHasRequest::decode(&leading_zero).unwrap();
-        assert_eq!(decoded.low_limit, Some(u32::MAX));
-        assert_eq!(decoded.high_limit, Some(u32::MAX));
+        // Past the highest instance, but taken as written.
+        let range = decoded.range.unwrap();
+        assert_eq!((range.low(), range.high()), (u32::MAX, u32::MAX));
     }
 
     #[test]
@@ -256,8 +224,7 @@ mod tests {
     #[test]
     fn test_decode_who_has_truncated_1_byte() {
         let req = WhoHasRequest {
-            low_limit: None,
-            high_limit: None,
+            range: None,
             object: WhoHasObject::Identifier(
                 ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
             ),
@@ -270,8 +237,7 @@ mod tests {
     #[test]
     fn test_decode_who_has_truncated_2_bytes() {
         let req = WhoHasRequest {
-            low_limit: None,
-            high_limit: None,
+            range: None,
             object: WhoHasObject::Identifier(
                 ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
             ),

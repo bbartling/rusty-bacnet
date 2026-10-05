@@ -28,7 +28,7 @@ async fn cov_subscribe_and_notification() {
     .unwrap();
     db.add(Box::new(dev)).unwrap();
 
-    let mut server = BACnetServer::builder()
+    let mut server = BACnetServer::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .database(db)

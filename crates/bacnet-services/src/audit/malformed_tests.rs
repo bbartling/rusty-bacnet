@@ -1,7 +1,10 @@
 use super::*;
 use bacnet_encoding::{constructed::encode_recipient, primitives, tags};
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
-use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, RejectReason,
+};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 use bacnet_types::MacAddr;
 
@@ -106,11 +109,11 @@ fn minimal_notification_has_no_per_item_sequence_wrapper() {
     let mut expected = BytesMut::new();
     tags::encode_opening_tag(&mut expected, 0);
     tags::encode_opening_tag(&mut expected, 2);
-    encode_recipient(&mut expected, &notification.source_device);
+    encode_recipient(&mut expected, &notification.source_device).unwrap();
     tags::encode_closing_tag(&mut expected, 2);
     primitives::encode_ctx_enumerated(&mut expected, 4, 0);
     tags::encode_opening_tag(&mut expected, 10);
-    encode_recipient(&mut expected, &notification.target_device);
+    encode_recipient(&mut expected, &notification.target_device).unwrap();
     tags::encode_closing_tag(&mut expected, 10);
     tags::encode_closing_tag(&mut expected, 0);
     assert_eq!(encoded, expected.as_ref());
@@ -260,31 +263,32 @@ fn target_priority_enforces_inclusive_one_to_sixteen_range() {
         .position(|bytes| bytes == [0xd9, 1])
         .unwrap();
     encoded[priority + 1] = 0;
-    assert!(AuditNotificationRequest::decode(&encoded).is_err());
+    assert_eq!(
+        AuditNotificationRequest::decode(&encoded)
+            .unwrap_err()
+            .reject_reason(),
+        Some(RejectReason::PARAMETER_OUT_OF_RANGE)
+    );
 }
 
 #[test]
-fn raw_values_must_be_nonempty_structural_tlv_and_encoding_is_atomic() {
-    for raw in [Vec::new(), vec![0x21]] {
-        let mut notification = minimal_notification(AuditOperation::WRITE);
-        notification.target_value = Some(raw);
-        let request = AuditNotificationRequest {
-            notifications: vec![notification],
-        };
-        let mut output = BytesMut::from(&b"prefix"[..]);
-        assert!(request.encode(&mut output).is_err());
-        assert_eq!(output.as_ref(), b"prefix");
+fn raw_values_require_structural_tlv_and_encoding_is_atomic() {
+    for raw in [vec![0x21], vec![0x0e, 0xd1, 0, 0x0f]] {
+        for target in [false, true] {
+            let mut notification = minimal_notification(AuditOperation::WRITE);
+            if target {
+                notification.target_value = Some(raw.clone());
+            } else {
+                notification.current_value = Some(raw.clone());
+            }
+            let request = AuditNotificationRequest {
+                notifications: vec![notification],
+            };
+            let mut output = BytesMut::from(&b"prefix"[..]);
+            assert!(request.encode(&mut output).is_err());
+            assert_eq!(output.as_ref(), b"prefix");
+        }
     }
-
-    let mut notification = minimal_notification(AuditOperation::WRITE);
-    notification.target_value = Some(vec![0x00]);
-    let mut empty = encode_one(notification);
-    let raw = empty
-        .windows(3)
-        .position(|bytes| bytes == [0xee, 0x00, 0xef])
-        .unwrap();
-    empty.remove(raw + 1);
-    assert!(AuditNotificationRequest::decode(&empty).is_err());
 
     let mut notification = minimal_notification(AuditOperation::WRITE);
     notification.target_value = Some(vec![0x00]);
@@ -405,7 +409,7 @@ fn encode_query_ack(datum: BACnetAuditLogDatum) -> Vec<u8> {
 
 #[test]
 fn query_ack_rejects_unsigned_boolean_and_top_level_malformations() {
-    let canonical = encode_query_ack(BACnetAuditLogDatum::LogStatus(0));
+    let canonical = encode_query_ack(BACnetAuditLogDatum::LogStatus(LogStatus::empty()));
     let sequence = canonical
         .windows(2)
         .position(|bytes| bytes == [0x09, 1])
@@ -443,7 +447,7 @@ fn query_ack_rejects_unsigned_boolean_and_top_level_malformations() {
 
 #[test]
 fn query_ack_rejects_malformed_date_time_and_datum_choices() {
-    let canonical = encode_query_ack(BACnetAuditLogDatum::LogStatus(0b010));
+    let canonical = encode_query_ack(BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED));
 
     let date = canonical.iter().position(|byte| *byte == 0xa4).unwrap();
     let mut invalid_date = canonical.clone();
@@ -490,7 +494,7 @@ fn query_ack_nested_notification_requires_complete_consumption() {
 fn query_ack_record_list_accepts_limit_and_rejects_one_more() {
     let record = BACnetAuditLogRecordResult {
         sequence_number: 0,
-        record: query_ack(BACnetAuditLogDatum::LogStatus(0))
+        record: query_ack(BACnetAuditLogDatum::LogStatus(LogStatus::empty()))
             .records
             .pop()
             .unwrap()

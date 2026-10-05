@@ -5,6 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
 description = "BACnet command-line tool for device discovery, reading, and writing"
 keywords = ["bacnet", "building-automation", "cli", "hvac"]
 categories = ["command-line-utilities", "network-programming"]
@@ -33,7 +35,6 @@ rustyline = "18"
 # SC-TLS optional deps
 tokio-rustls = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
-rustls-native-certs = { workspace = true, optional = true }
 rustls-pki-types = { version = "1", optional = true }
 
 # Pcap optional deps
@@ -43,19 +44,34 @@ libc = { version = "0.2", optional = true }
 owo-colors = "4.3.0"
 if-addrs = "0.15"
 
+# Terminal UI (`bacnet tui`). ratatui without its calendar widget (which pulls
+# in the `time` crate), macros, or `underline-color`, whose weak references to
+# the other backends would lock about 60 crates that are never built.
+# crossterm is the version ratatui re-exports; it is named here only to turn
+# on `event-stream`, and the code imports it as `ratatui::crossterm`.
+ratatui = { version = "0.30.2", optional = true, default-features = false, features = ["crossterm", "layout-cache"] }
+crossterm = { version = "0.29", optional = true, features = ["event-stream"] }
+futures-util = { workspace = true, optional = true }
+
 [dev-dependencies]
 bacnet-objects.workspace = true
 bacnet-server.workspace = true
+rcgen.workspace = true
+futures-util.workspace = true
+insta = "1.48"
+tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 default = []
+# The full-screen terminal UI (`bacnet tui`). Opt-in until the TUI epic ships in
+# 0.13.0 (#975): release builds and a plain `cargo install` leave it out.
+tui = ["dep:ratatui", "dep:crossterm", "dep:futures-util"]
 sc-tls = [
     "bacnet-client/sc-tls",
     "bacnet-transport/sc-tls",
-    "tokio-rustls",
-    "rustls",
-    "rustls-native-certs",
-    "rustls-pki-types",
+    "dep:tokio-rustls",
+    "dep:rustls",
+    "dep:rustls-pki-types",
 ]
 pcap = ["dep:pcap", "dep:ctrlc", "dep:libc"]
 

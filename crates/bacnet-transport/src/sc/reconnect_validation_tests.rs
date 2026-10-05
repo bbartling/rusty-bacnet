@@ -78,7 +78,14 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
     let state = transport.connection_state_changes();
 
     for max_retries in [0, 10, u32::MAX] {
-        for (initial_delay_ms, max_delay_ms) in [(0, 1), (1, 0), (0, 0), (2, 1)] {
+        for (initial_delay_ms, max_delay_ms) in [
+            (0, 1),
+            (1, 0),
+            (0, 0),
+            (2, 1),
+            (1, 86_400_001),
+            (1, u64::MAX),
+        ] {
             transport = transport.with_reconnect(ScReconnectConfig {
                 initial_delay_ms,
                 max_delay_ms,
@@ -105,7 +112,7 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
                 assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
                 assert_eq!(transport.local_mac(), vmac);
                 assert_eq!(transport.device_uuid, uuid);
-                assert_eq!(transport.max_apdu_length(), DEFAULT_MAX_APDU_LENGTH);
+                assert_eq!(transport.egress_apdu_limit(), DEFAULT_MAX_APDU_LENGTH);
             }
         }
     }
@@ -142,7 +149,7 @@ async fn hub_accept(hub: &LoopbackWebSocket, vmac: Vmac) {
     let request = decode_sc_message(&request).unwrap();
     assert_eq!(request.function, ScFunction::ConnectRequest);
     let mut payload = Vec::from(vmac);
-    payload.extend_from_slice(&[0; 16]);
+    payload.extend_from_slice(&[0x33; 16]);
     payload.extend_from_slice(&1476u16.to_be_bytes());
     payload.extend_from_slice(&1476u16.to_be_bytes());
     let accept = ScMessage {
@@ -160,12 +167,77 @@ async fn hub_accept(hub: &LoopbackWebSocket, vmac: Vmac) {
 }
 
 #[tokio::test(start_paused = true)]
+async fn failing_connectors_obey_reconnect_budget_plus_single_failover_allowance() {
+    for max_retries in [0, 1, 3, 10] {
+        for with_failover in [false, true] {
+            let config = ScReconnectConfig {
+                initial_delay_ms: 2,
+                max_delay_ms: 7,
+                max_retries,
+            };
+            config.validate().unwrap();
+            let (primary, primary_hub) = LoopbackWebSocket::pair();
+            let primary_dials = Arc::new(AtomicUsize::new(0));
+            let failover_dials = Arc::new(AtomicUsize::new(0));
+            let mut transport = ScTransport::new(primary, [0x22; 6])
+                .with_device_uuid([1; 16])
+                .with_reconnect(config)
+                .with_connector({
+                    let dials = primary_dials.clone();
+                    move || {
+                        dials.fetch_add(1, Ordering::SeqCst);
+                        async { Err(Error::Encoding("primary dial failed".into())) }
+                    }
+                });
+            if with_failover {
+                transport = transport.with_failover_connector({
+                    let dials = failover_dials.clone();
+                    move || {
+                        dials.fetch_add(1, Ordering::SeqCst);
+                        async { Err(Error::Encoding("failover dial failed".into())) }
+                    }
+                });
+            }
+
+            let (started, ()) =
+                tokio::join!(transport.start(), hub_accept(&primary_hub, [0x10; 6]));
+            let _rx = started.unwrap();
+            assert_eq!(primary_dials.load(Ordering::SeqCst), 0);
+            assert_eq!(failover_dials.load(Ordering::SeqCst), 0);
+            drop(primary_hub);
+
+            // Join the existing receive task: a transient Disconnected state is
+            // not proof that all retries (or the failover allowance) have ended.
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                transport.recv_task.as_mut().unwrap(),
+            )
+            .await
+            .expect("reconnect budget did not terminate")
+            .unwrap();
+            let _ = transport.recv_task.take();
+            let primary_count = primary_dials.load(Ordering::SeqCst);
+            let failover_count = failover_dials.load(Ordering::SeqCst);
+            assert_eq!(primary_count, max_retries as usize);
+            assert_eq!(failover_count, usize::from(with_failover));
+            assert!(primary_count + failover_count <= max_retries as usize + 1);
+            assert_eq!(
+                transport.connection().unwrap().lock().await.state,
+                ScConnectionState::Disconnected
+            );
+            transport.stop().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn zero_retries_skips_active_hub_retry_but_allows_initial_failover_and_restoration() {
     let (primary, primary_hub) = LoopbackWebSocket::pair();
     let (failover, failover_hub) = LoopbackWebSocket::pair();
     let dials = Arc::new(AtomicUsize::new(0));
     let (hub_tx, mut hub_rx) = mpsc::unbounded_channel();
     let mut transport = ScTransport::new(primary, [0x22; 6])
+        .with_device_uuid([1; 16])
         .with_failover(failover)
         .with_connect_timeout_ms(500)
         .with_reconnect(ScReconnectConfig {
@@ -249,4 +321,226 @@ async fn wait_for_hub<W: WebSocketPort>(transport: &ScTransport<W>, vmac: Vmac) 
     })
     .await
     .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn nil_accept_failover_and_failed_primary_probe_preserve_active_identity_and_limits() {
+    check_invalid_accept_failover_and_primary_probe(10..26).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn zero_limits_accept_failover_and_failed_primary_probe_preserve_active_identity_and_limits()
+{
+    for field in [26..28, 28..30, 26..30] {
+        check_invalid_accept_failover_and_primary_probe(field).await;
+    }
+}
+
+async fn check_invalid_accept_failover_and_primary_probe(field: std::ops::Range<usize>) {
+    use crate::sc_frame::connect_test_support::valid_connect;
+
+    let (primary, primary_hub) = LoopbackWebSocket::pair();
+    let (failover, failover_hub) = LoopbackWebSocket::pair();
+    let (hub_tx, mut hub_rx) = mpsc::unbounded_channel();
+    let vmac = [0x22; 6];
+    let uuid = [0x12; 16];
+    let mut transport = ScTransport::new(primary, vmac)
+        .with_device_uuid(uuid)
+        .with_failover(failover)
+        .with_connect_timeout_ms(500)
+        .with_reconnect(ScReconnectConfig {
+            initial_delay_ms: 1000,
+            max_delay_ms: 1000,
+            max_retries: 0,
+        })
+        .with_connector(move || {
+            let (client, hub) = LoopbackWebSocket::pair();
+            hub_tx.send(hub).unwrap();
+            async { Ok(client) }
+        });
+    let mut state = transport.connection_state_changes();
+    let primary_reject = async {
+        let request = primary_hub.recv().await.unwrap();
+        let mut nil = valid_connect(7, [0x10; 6]);
+        nil[2..4].copy_from_slice(&request[2..4]);
+        nil[field.clone()].fill(0);
+        primary_hub.send(&nil).await.unwrap();
+        // The raw primary socket is retained for restoration by this API;
+        // an invalid Accept must not produce a response during its connect wait.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), primary_hub.recv())
+                .await
+                .is_err()
+        );
+    };
+    let failover_accept = async {
+        let request = failover_hub.recv().await.unwrap();
+        assert_eq!(&request[4..10], &vmac);
+        assert_eq!(&request[10..26], &uuid);
+        let mut wire = valid_connect(7, [0x20; 6]);
+        wire[2..4].copy_from_slice(&request[2..4]);
+        let valid = wire.clone();
+        wire[field.clone()].fill(0);
+        failover_hub.send(&wire).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), failover_hub.recv())
+                .await
+                .is_err()
+        );
+        assert_eq!(*state.borrow(), ScConnectionState::Connecting);
+        failover_hub.send(&valid).await.unwrap();
+    };
+    let (started, (), ()) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(transport.start(), primary_reject, failover_accept)
+    })
+    .await
+    .unwrap();
+    let _rx = started.unwrap();
+    wait_for_hub(&transport, [0x20; 6]).await;
+    let conn = transport.connection().unwrap().clone();
+    let before = conn.lock().await.clone();
+    let effective_limit = transport.egress_apdu_limit();
+    assert_eq!(*state.borrow_and_update(), ScConnectionState::Connected);
+
+    let probe_hub = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let request = probe_hub.recv().await.unwrap();
+    assert_eq!(&request[4..10], &vmac);
+    assert_eq!(&request[10..26], &uuid);
+    let mut nil = valid_connect(7, [0x10; 6]);
+    nil[2..4].copy_from_slice(&request[2..4]);
+    nil[26..30].copy_from_slice(&[0, 16, 0, 1]); // poison limits if committed early
+    nil[field].fill(0);
+    probe_hub.send(&nil).await.unwrap();
+    // A failed invalid-only restoration must neither publish the primary nor
+    // disconnect the failover. It must keep the failover's larger limits.
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), probe_hub.recv())
+            .await
+            .unwrap()
+            .is_err()
+    );
+    {
+        let after = conn.lock().await;
+        assert_eq!(after.state, ScConnectionState::Connected);
+        assert_eq!(after.local_vmac, before.local_vmac);
+        assert_eq!(after.device_uuid, before.device_uuid);
+        assert_eq!(after.hub_vmac, before.hub_vmac);
+        assert_eq!(after.hub_device_uuid, before.hub_device_uuid);
+        assert_eq!(after.hub_max_bvlc_length, before.hub_max_bvlc_length);
+        assert_eq!(after.hub_max_apdu_length, before.hub_max_apdu_length);
+        assert_eq!(after.next_message_id, before.next_message_id);
+        assert_eq!(
+            after.pending_connect_message_id,
+            before.pending_connect_message_id
+        );
+        assert_eq!(after.connect_retry_allowed, before.connect_retry_allowed);
+    }
+    assert_eq!(transport.egress_apdu_limit(), effective_limit);
+    assert!(
+        !state.has_changed().unwrap(),
+        "failed primary probe published state"
+    );
+    transport
+        .send_unicast(&[1, 2, 3], &[0x44; 6])
+        .await
+        .unwrap();
+    let data = failover_hub.recv().await.unwrap();
+    assert_eq!(
+        data[0], 1,
+        "invalid probe must not disconnect the active failover"
+    );
+    assert_eq!(&data[data.len() - 3..], &[1, 2, 3]);
+
+    let restored = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    hub_accept(&restored, [0x10; 6]).await;
+    wait_for_hub(&transport, [0x10; 6]).await;
+    assert_eq!(transport.local_mac(), vmac);
+    assert_eq!(conn.lock().await.device_uuid, uuid);
+    transport.stop().await.unwrap();
+    assert!(transport.recv_task.is_none());
+    assert!(transport.restore_disconnect_task.lock().unwrap().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn nil_accept_reconnect_probe_times_out_then_redials_without_reseeding() {
+    check_invalid_accept_reconnect_probe(10..26).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn zero_limits_accept_reconnect_probe_times_out_then_redials_without_reseeding() {
+    for field in [26..28, 28..30, 26..30] {
+        check_invalid_accept_reconnect_probe(field).await;
+    }
+}
+
+async fn check_invalid_accept_reconnect_probe(field: std::ops::Range<usize>) {
+    use crate::sc_frame::connect_test_support::valid_connect;
+
+    let (primary, primary_hub) = LoopbackWebSocket::pair();
+    let (hub_tx, mut hub_rx) = mpsc::unbounded_channel();
+    let mut transport = ScTransport::new(primary, [0x22; 6])
+        .with_device_uuid([0x12; 16])
+        .with_connect_timeout_ms(500)
+        .with_reconnect(ScReconnectConfig {
+            initial_delay_ms: 1000,
+            max_delay_ms: 1000,
+            max_retries: 2,
+        })
+        .with_connector(move || {
+            let (client, hub) = LoopbackWebSocket::pair();
+            hub_tx.send(hub).unwrap();
+            async { Ok(client) }
+        });
+    let (started, ()) = tokio::join!(transport.start(), hub_accept(&primary_hub, [0x10; 6]));
+    let _rx = started.unwrap();
+    let state = transport.connection_state_changes();
+    let conn = transport.connection().unwrap().clone();
+    let before = conn.lock().await.clone();
+    drop(primary_hub);
+
+    let nil_hub = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let request = nil_hub.recv().await.unwrap();
+    assert_eq!(&request[4..10], &before.local_vmac);
+    assert_eq!(&request[10..26], &before.device_uuid);
+    let mut nil = valid_connect(7, [0x44; 6]);
+    nil[2..4].copy_from_slice(&request[2..4]);
+    nil[26..30].copy_from_slice(&[0, 16, 0, 1]);
+    nil[field].fill(0);
+    nil_hub.send(&nil).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_secs(1), nil_hub.recv())
+        .await
+        .unwrap()
+        .is_err());
+    assert_ne!(*state.borrow(), ScConnectionState::Connected);
+    {
+        let after = conn.lock().await;
+        assert_eq!(after.local_vmac, before.local_vmac);
+        assert_eq!(after.device_uuid, before.device_uuid);
+        assert_eq!(after.hub_max_bvlc_length, before.hub_max_bvlc_length);
+        assert_eq!(after.hub_max_apdu_length, before.hub_max_apdu_length);
+        assert_ne!(after.hub_device_uuid, Some([0; 16]));
+    }
+    let good_hub = tokio::time::timeout(Duration::from_secs(2), hub_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let request = good_hub.recv().await.unwrap();
+    assert_eq!(&request[4..10], &before.local_vmac);
+    assert_eq!(&request[10..26], &before.device_uuid);
+    let mut good = valid_connect(7, [0x44; 6]);
+    good[2..4].copy_from_slice(&request[2..4]);
+    good_hub.send(&good).await.unwrap();
+    wait_for_hub(&transport, [0x44; 6]).await;
+    assert_eq!(conn.lock().await.hub_device_uuid, Some([0x33; 16]));
+    transport.stop().await.unwrap();
+    assert!(transport.recv_task.is_none());
 }

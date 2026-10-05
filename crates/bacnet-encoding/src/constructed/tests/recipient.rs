@@ -3,6 +3,7 @@
 //! MAC broadcast), an 8-entry list round-trip, and negatives.
 
 use super::*;
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::primitives::Time;
 
@@ -19,13 +20,13 @@ fn device_destination() -> BACnetDestination {
     // valid_days: all seven days -> MSB-first fill octet 0xFE.
     // transitions: all three -> 0xE0.
     BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: t(0, 0, 0, 0),
         to_time: t(23, 59, 59, 99),
         recipient: BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap()),
         process_identifier: 1,
         issue_confirmed_notifications: true,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     }
 }
 
@@ -33,7 +34,7 @@ fn device_destination() -> BACnetDestination {
 fn destination_device_form_golden() {
     let dest = device_destination();
     let mut buf = BytesMut::new();
-    encode_destination(&mut buf, &dest);
+    encode_destination(&mut buf, &dest).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -55,7 +56,12 @@ fn destination_device_form_golden() {
 fn destination_address_form_golden() {
     // Address recipient on a nonzero network with a 6-octet MAC.
     let dest = BACnetDestination {
-        valid_days: 0b0011_1110, // Tue..Sat -> MSB-first 0b0111_1100
+        // Tue..Sat -> MSB-first 0b0111_1100
+        valid_days: DaysOfWeek::TUESDAY
+            | DaysOfWeek::WEDNESDAY
+            | DaysOfWeek::THURSDAY
+            | DaysOfWeek::FRIDAY
+            | DaysOfWeek::SATURDAY,
         from_time: t(8, 0, 0, 0),
         to_time: t(17, 0, 0, 0),
         recipient: BACnetRecipient::Address(BACnetAddress {
@@ -64,10 +70,10 @@ fn destination_address_form_golden() {
         }),
         process_identifier: 42,
         issue_confirmed_notifications: false,
-        transitions: 0b0000_0001, // TO_OFFNORMAL only -> 0x80
+        transitions: EventTransitionBits::TO_OFFNORMAL, // -> 0x80
     };
     let mut buf = BytesMut::new();
-    encode_destination(&mut buf, &dest);
+    encode_destination(&mut buf, &dest).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -93,7 +99,7 @@ fn destination_address_form_golden() {
 fn destination_broadcast_address_golden() {
     // Broadcast address: nonzero network number AND zero-length MAC.
     let dest = BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: t(0, 0, 0, 0),
         to_time: t(23, 59, 59, 99),
         recipient: BACnetRecipient::Address(BACnetAddress {
@@ -102,10 +108,10 @@ fn destination_broadcast_address_golden() {
         }),
         process_identifier: 0,
         issue_confirmed_notifications: false,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     };
     let mut buf = BytesMut::new();
-    encode_destination(&mut buf, &dest);
+    encode_destination(&mut buf, &dest).unwrap();
     assert_eq!(
         buf.as_ref(),
         &[
@@ -145,7 +151,7 @@ fn destination_list_eight_entries_round_trip() {
         })
         .collect();
     let mut buf = BytesMut::new();
-    encode_destination_list(&mut buf, &entries);
+    encode_destination_list(&mut buf, &entries).unwrap();
     // 4 device-form entries (24 bytes each) + 4 address-form entries
     // (32 bytes each: 13-byte recipient incl. 6-octet MAC in extended-length
     // octet string).
@@ -157,9 +163,28 @@ fn destination_list_eight_entries_round_trip() {
 #[test]
 fn destination_list_empty_encodes_to_nothing() {
     let mut buf = BytesMut::new();
-    encode_destination_list(&mut buf, &[]);
+    encode_destination_list(&mut buf, &[]).unwrap();
     assert!(buf.is_empty());
     assert!(decode_destination_list(&buf).unwrap().is_empty());
+}
+
+#[test]
+fn destination_pad_bits_are_dropped() {
+    // A peer that sets the unused pad bits still gets the defined bits only:
+    // 0xFF with unused_bits 1 is every day, and with unused_bits 5 every
+    // transition.
+    let base = device_destination();
+    let mut buf = BytesMut::new();
+    primitives::encode_app_bit_string(&mut buf, 1, &[0xFF]);
+    primitives::encode_app_time(&mut buf, &base.from_time);
+    primitives::encode_app_time(&mut buf, &base.to_time);
+    encode_recipient(&mut buf, &base.recipient).unwrap();
+    primitives::encode_app_unsigned(&mut buf, base.process_identifier as u64);
+    primitives::encode_app_boolean(&mut buf, base.issue_confirmed_notifications);
+    primitives::encode_app_bit_string(&mut buf, 5, &[0xFF]);
+    let (decoded, end) = decode_destination(&buf, 0).unwrap();
+    assert_eq!(decoded, base);
+    assert_eq!(end, buf.len());
 }
 
 // --- Negatives -----------------------------------------------------------------
@@ -206,7 +231,7 @@ fn destination_address_opening_without_closing_rejected() {
 fn destination_truncated_members_rejected() {
     let dest = device_destination();
     let mut buf = BytesMut::new();
-    encode_destination(&mut buf, &dest);
+    encode_destination(&mut buf, &dest).unwrap();
     for cut in 1..buf.len() {
         assert!(
             decode_destination(&buf[..cut], 0).is_err(),
@@ -235,7 +260,7 @@ fn destination_wrong_width_valid_days_rejected() {
         // from/to time + recipient + process id + confirmed + transitions
         primitives::encode_app_time(&mut tail, &base.from_time);
         primitives::encode_app_time(&mut tail, &base.to_time);
-        encode_recipient(&mut tail, &base.recipient);
+        encode_recipient(&mut tail, &base.recipient).unwrap();
         primitives::encode_app_unsigned(&mut tail, base.process_identifier as u64);
         primitives::encode_app_boolean(&mut tail, base.issue_confirmed_notifications);
         primitives::encode_app_bit_string(&mut tail, 5, &[0xE0]);
@@ -283,7 +308,7 @@ fn destination_wrong_width_transitions_rejected() {
     primitives::encode_app_bit_string(&mut head, 1, &[0xFE]);
     primitives::encode_app_time(&mut head, &base.from_time);
     primitives::encode_app_time(&mut head, &base.to_time);
-    encode_recipient(&mut head, &base.recipient);
+    encode_recipient(&mut head, &base.recipient).unwrap();
     primitives::encode_app_unsigned(&mut head, base.process_identifier as u64);
     primitives::encode_app_boolean(&mut head, base.issue_confirmed_notifications);
 
@@ -297,7 +322,7 @@ fn destination_wrong_width_transitions_rejected() {
         // two content octets
         {
             let mut b = BytesMut::new();
-            primitives::encode_app_bit_string(&mut b, -5i8 as u8 & 0xFF, &[0xE0, 0x00]);
+            primitives::encode_app_bit_string(&mut b, -5i8 as u8, &[0xE0, 0x00]);
             b.to_vec()
         },
         // wrong unused-bits count (1 — the valid-days count)
@@ -328,4 +353,116 @@ fn destination_network_number_over_unsigned16_rejected() {
     primitives::encode_app_octet_string(&mut buf, &[1, 2, 3]);
     tags::encode_closing_tag(&mut buf, 1);
     assert!(decode_destination(&buf, 0).is_err());
+}
+
+/// An address recipient on network 1000 whose MAC is `len` octets.
+fn address_with_mac(len: usize) -> BACnetRecipient {
+    BACnetRecipient::Address(BACnetAddress {
+        network_number: 1000,
+        mac_address: bacnet_types::MacAddr::from_slice(&vec![0xA5; len]),
+    })
+}
+
+/// The wire form of [`address_with_mac`], built from the primitives because
+/// `encode_recipient` refuses a MAC past the bound.
+fn raw_address_recipient(len: usize) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+    tags::encode_opening_tag(&mut buf, 1);
+    primitives::encode_app_unsigned(&mut buf, 1000);
+    primitives::encode_app_octet_string(&mut buf, &vec![0xA5; len]);
+    tags::encode_closing_tag(&mut buf, 1);
+    buf.to_vec()
+}
+
+/// [`device_destination`]'s wire form with `recipient` as its recipient octets.
+fn raw_destination(recipient: &[u8]) -> Vec<u8> {
+    let base = device_destination();
+    let mut buf = BytesMut::new();
+    primitives::encode_app_bit_string(&mut buf, 1, &[0xFE]);
+    primitives::encode_app_time(&mut buf, &base.from_time);
+    primitives::encode_app_time(&mut buf, &base.to_time);
+    buf.extend_from_slice(recipient);
+    primitives::encode_app_unsigned(&mut buf, base.process_identifier as u64);
+    primitives::encode_app_boolean(&mut buf, base.issue_confirmed_notifications);
+    primitives::encode_app_bit_string(&mut buf, 5, &[0xE0]);
+    buf.to_vec()
+}
+
+#[test]
+fn recipient_mac_bound_holds_in_both_directions() {
+    // 18 octets, B/IPv6's IPv6 address and UDP port, is the longest MAC this
+    // stack uses (`BACnetAddress::MAX_MAC_LEN`). Every recipient, configured
+    // (#1124) or carried by a service or report (#1156), decodes up to it and
+    // refuses one octet more, and the encoder refuses what the decoder would.
+    let longest = address_with_mac(BACnetAddress::MAX_MAC_LEN);
+    let raw = raw_address_recipient(BACnetAddress::MAX_MAC_LEN);
+    let mut buf = BytesMut::new();
+    encode_recipient(&mut buf, &longest).unwrap();
+    assert_eq!(&buf[..], &raw[..]);
+    assert_eq!(
+        decode_recipient(&raw, 0).unwrap(),
+        (longest.clone(), raw.len())
+    );
+    let longest_destination = BACnetDestination {
+        recipient: longest,
+        ..device_destination()
+    };
+    let wire = raw_destination(&raw);
+    let mut buf = BytesMut::new();
+    encode_destination_list(&mut buf, std::slice::from_ref(&longest_destination)).unwrap();
+    assert_eq!(&buf[..], &wire[..]);
+    assert_eq!(
+        decode_destination_list(&wire).unwrap(),
+        [longest_destination]
+    );
+
+    for len in [BACnetAddress::MAX_MAC_LEN + 1, 64, 255] {
+        let raw = raw_address_recipient(len);
+        assert!(
+            matches!(decode_recipient(&raw, 0), Err(Error::Decoding { .. })),
+            "{len}-octet MAC"
+        );
+        assert!(decode_destination(&raw_destination(&raw), 0).is_err());
+        let mut list = BytesMut::new();
+        encode_destination(&mut list, &device_destination()).unwrap();
+        list.extend_from_slice(&raw_destination(&raw));
+        assert!(
+            decode_destination_list(&list).is_err(),
+            "{len}-octet MAC in a list"
+        );
+
+        // Each encoder refuses before writing anything.
+        let too_long = BACnetDestination {
+            recipient: address_with_mac(len),
+            ..device_destination()
+        };
+        let mut buf = BytesMut::from(&[0xAA][..]);
+        assert!(matches!(
+            encode_recipient(&mut buf, &too_long.recipient),
+            Err(Error::Encoding(_))
+        ));
+        assert!(encode_destination(&mut buf, &too_long).is_err());
+        assert!(encode_destination_list(&mut buf, &[device_destination(), too_long]).is_err());
+        assert_eq!(&buf[..], &[0xAA], "{len}-octet MAC left output behind");
+    }
+}
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let address = BACnetDestination {
+        recipient: BACnetRecipient::Address(BACnetAddress {
+            network_number: 0x1234,
+            mac_address: vec![0xAA, 0xBB].into(),
+        }),
+        ..device_destination()
+    };
+    let mut framed = 0;
+    for destination in [device_destination(), address] {
+        let mut wire = BytesMut::new();
+        encode_destination(&mut wire, &destination).unwrap();
+        framed += super::assert_members_cut_short("BACnetDestination", &wire, |data| {
+            decode_destination(data, 0)
+        });
+    }
+    assert!(framed > 0);
 }

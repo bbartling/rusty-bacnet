@@ -1,21 +1,70 @@
 //! BACnet half-router — forwards APDUs between BACnet networks.
 //!
-//! Per ASHRAE 135-2020 Clause 6.4, a BACnet router connects two or more
-//! BACnet networks. It forwards messages between them by manipulating
-//! the NPDU source/destination fields and decrementing the hop count.
+//! A BACnet router (ASHRAE 135-2020 Clause 6.6) sits on several BACnet
+//! networks at once and relays messages among them, rewriting the NPDU
+//! source/destination fields and decrementing the hop count as it goes.
 //!
 //! This implementation supports:
 //! - Forwarding APDUs between directly-connected networks
 //! - Who-Is-Router-To-Network / I-Am-Router-To-Network messages
 //! - Reject-Message-To-Network for unknown routes
 //! - Learned routes from I-Am-Router-To-Network announcements
+//!
+//! Local application delivery follows the shared
+//! [receive-queue contract](crate::layer#receive-queue-admission), independently
+//! of forwarding and inline network-message handling.
+//!
+//! # Routing-claim trust model (RB-06)
+//!
+//! Classic BACnet routing claims are unauthenticated: an ingress port, next-hop
+//! MAC or advertised network is not proof that a peer is authorized to control
+//! that route. These local mitigations do not prevent route poisoning or
+//! authenticate a claim (Clauses 6.4 and 6.6.3):
+//! - Direct routes cannot be overwritten by learning, changed by rejects, or
+//!   changed by Initialize-Routing-Table management updates.
+//! - Standard convergence applies 6.6.3.2 last-wins immediately: each new
+//!   I-Am-Router / Init-ACK advertisement updates routing information, with
+//!   flap warnings retained. Same-port refreshes and absent learning stay
+//!   immediate; I-Could-Be-Router remains absent-only.
+//! - Hardened convergence (`RouterTable::new_hardened`, explicit opt-in only)
+//!   holds cross-port learned moves for a second same-(network, port) claim
+//!   within 60s inclusive. Repeats in separate messages suffice; duplicates in
+//!   one message cannot corroborate. The old route forwards while pending.
+//!   Alternation resets the slot; single-shot advertisers need the 60s reaper
+//!   plus a fresh claim. Corroboration is dampening, not identity assurance.
+//! - Initialize-Routing-Table updates are management writes (6.4.7/6.6.3.8):
+//!   nonzero Port ID replaces/appends the learned entry, Port ID 0 purges it,
+//!   immediately in wire order. They never create/alter direct routes. Wire
+//!   controls pass [`control_policy::ControlGate`] (RB-09); direct immunity
+//!   stays safety scoping, not auth. LOCAL table calls bypass policy.
+//! - A query (Number of Ports 0) never mutates and answers with the complete
+//!   table in ascending-DNET bounded portions (6.6.3.9); wire Port IDs are
+//!   `port_index + 1` (0 stays the purge trigger).
+//! - Hardened pending holds one challenger per learned network (bounded by live
+//!   learned routes). Slots expire lazily on the next claim plus the 60s aging
+//!   reaper; apply/refresh/removal/aging/direct/manual edits clear the slot.
+//! - Freshness is split: `last_seen` (control confirmation) drives 300s expiry;
+//!   `last_used` (forwarding use) never extends it. Busy/Available touch
+//!   neither. Traffic no longer pins a dead route past the rescue.
+//! - Unknown DNETs solicit once per 5s per DNET (coalesced, max 256 pending,
+//!   30s entry age, reserved never solicited) then fail the caller with
+//!   NOT_DIRECTLY_CONNECTED (6.6.3.1/6.5 retryable); packets are never buffered.
+//!   `stop` cancels pending discovery.
+//! - Disconnect never removes routes (PTP unimplemented). Reject transitions
+//!   are dampened per (ingress port, network) with a 30s hold-down; no-op
+//!   rejects never extend busy deadlines. [`RouterTable::claim_snapshot`]
+//!   stays count-only saturating and never affects decisions.
 
+mod local_delivery;
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::port::{DataAttribute, TransportPort};
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
+use bacnet_types::enums::NetworkMessageType;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{BufMut, Bytes, BytesMut};
@@ -23,14 +72,25 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::layer::{is_group_delivery, ReceivedApdu};
-use crate::router_table::{ReachabilityStatus, RouterTable};
+use crate::layer::{AdmissionReceiver, QueueAdmissionCounters, ReceivedApdu};
+use crate::layer::{AdmissionSender, ReceivedNetworkControl};
+use crate::router_table::RouterTable;
+use bacnet_transport::port::TransportProvenance;
 
 mod control_messages;
+pub mod control_policy;
+mod dispatch;
 mod forwarding;
+mod local_control;
+mod options;
+mod reject;
 
-use control_messages::handle_network_message;
-use forwarding::{forward_broadcast, forward_unicast, send_reject};
+pub use control_policy::{ControlAuthContext, ControlAuthorizer, ControlClass};
+pub use control_policy::{ControlDecisionCounters, ControlGate, ControlPolicy};
+pub use control_policy::{ControlServiceCounters, ControlTrust};
+use dispatch::PortDispatch;
+use local_control::{LocalControl, OwnAddresses};
+pub use options::{LocalApduReceiver, NetworkControlReceiver, RouterOptions, StartedRouter};
 
 /// A send request to be forwarded on a port.
 #[derive(Debug)]
@@ -47,18 +107,176 @@ enum SendRequest {
 }
 
 impl SendRequest {
-    fn unicast(npdu: Bytes, mac: MacAddr) -> Self {
+    fn broadcast(npdu: Bytes) -> Self {
+        Self::broadcast_with_attributes(npdu, &[])
+    }
+
+    /// Ingress-triggered unicast: carries the ingress data attributes instead
+    /// of silently dropping them (RB-03). Locally-originated messages with no
+    /// ingress attributes pass an empty slice.
+    fn unicast_with_attributes(
+        npdu: Bytes,
+        mac: MacAddr,
+        data_attributes: &[DataAttribute],
+    ) -> Self {
         Self::Unicast {
             npdu,
             mac,
-            data_attributes: Vec::new(),
+            data_attributes: data_attributes.to_vec(),
         }
     }
 
-    fn broadcast(npdu: Bytes) -> Self {
+    /// Ingress-triggered broadcast: carries the ingress data attributes
+    /// instead of silently dropping them (RB-03). Locally-originated
+    /// messages with no ingress attributes use [`Self::broadcast`].
+    fn broadcast_with_attributes(npdu: Bytes, data_attributes: &[DataAttribute]) -> Self {
         Self::Broadcast {
             npdu,
+            data_attributes: data_attributes.to_vec(),
+        }
+    }
+}
+
+/// Bounded unknown-destination discovery (RB-06, Clauses 6.5/6.6.3.1).
+///
+/// Per-DNET single inflight Who-Is solicitation: simultaneous unknowns coalesce
+/// to one broadcast, rate-limited to one per DNET per 5s, entries expire after
+/// 30s via the aging reaper, at most 256 pending DNETs, reserved never
+/// solicited. The caller still fails with NOT_DIRECTLY_CONNECTED (honest
+/// retryable); packets are never buffered and no per-packet retries occur.
+/// `cancel` (via [`BACnetRouter::stop`]) drops all pending discovery.
+const DISCOVERY_COOLDOWN: Duration = Duration::from_secs(5);
+const DISCOVERY_MAX_AGE: Duration = Duration::from_secs(30);
+const DISCOVERY_MAX_PENDING: usize = 256;
+
+#[derive(Debug, Default)]
+pub(crate) struct DiscoveryTracker {
+    last_solicited: HashMap<u16, Instant>,
+    cancelled: bool,
+}
+
+impl DiscoveryTracker {
+    /// Decide whether an unknown `dnet` should solicit now; records it if so.
+    pub(crate) fn should_solicit_at(&mut self, dnet: u16, now: Instant) -> bool {
+        if self.cancelled || dnet == 0 || dnet == 0xFFFF {
+            return false;
+        }
+        if let Some(last) = self.last_solicited.get(&dnet) {
+            if now.duration_since(*last) < DISCOVERY_COOLDOWN {
+                return false;
+            }
+        } else if self.last_solicited.len() >= DISCOVERY_MAX_PENDING {
+            return false;
+        }
+        self.last_solicited.insert(dnet, now);
+        true
+    }
+
+    /// Wall-clock wrapper for dispatch paths.
+    pub(crate) fn should_solicit(&mut self, dnet: u16) -> bool {
+        self.should_solicit_at(dnet, Instant::now())
+    }
+
+    /// Reap entries older than 30s; returns the reaped DNETs ascending.
+    pub(crate) fn expire_at(&mut self, now: Instant) -> Vec<u16> {
+        let mut out: Vec<u16> = self
+            .last_solicited
+            .iter()
+            .filter(|(_, last)| now.duration_since(**last) > DISCOVERY_MAX_AGE)
+            .map(|(net, _)| *net)
+            .collect();
+        out.sort_unstable();
+        for net in &out {
+            self.last_solicited.remove(net);
+        }
+        out
+    }
+
+    /// Cancel all pending discovery (router stop).
+    pub(crate) fn cancel(&mut self) {
+        self.cancelled = true;
+        self.last_solicited.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.last_solicited.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
+}
+
+/// Immutable ingress facts carried to the network-message admission point
+/// ([`dispatch::dispatch_network_message`] / `handle_network_message`).
+///
+/// This is a plain record of what arrived, free of trust assertions: ingress port
+/// identity, the immediate link peer (`source_mac`), link-layer group flag,
+/// data-link attributes, and the decoded NPDU envelope (source/destination,
+/// hop count, message type, vendor ID). It asserts no provenance or trust —
+/// a claimed SNET/SADR is carried, never verified here.
+///
+/// RB-07 threads [`TransportProvenance`] here; RB-09 [`control_policy`]
+/// consumes it at the same admission point for protected-control decisions.
+#[derive(Debug, Clone)]
+pub(super) struct IngressContext {
+    /// Dispatch index of the ingress port.
+    pub port_idx: usize,
+    /// BACnet network number assigned to the ingress port.
+    pub port_network: u16,
+    /// Immediate link peer that sent the frame (SA), not the routed origin.
+    pub source_mac: MacAddr,
+    /// Whether the frame arrived via a data-link multicast/broadcast.
+    pub link_layer_group: bool,
+    /// Data-link attributes supplied with the frame, if any.
+    pub data_attributes: Vec<DataAttribute>,
+    /// Honest transport + origin provenance, immutable by value (RB-07).
+    /// Threaded, never decided on here.
+    pub provenance: TransportProvenance,
+    /// Decoded NPDU, including envelope (source/destination, hop count,
+    /// message type, vendor ID) and control payload.
+    pub npdu: Npdu,
+}
+
+#[cfg(test)]
+impl IngressContext {
+    /// In-memory test ingress: link-broadcast delivery with no attributes.
+    pub(super) fn test_local(
+        port_idx: usize,
+        port_network: u16,
+        source_mac: &[u8],
+        npdu: Npdu,
+    ) -> Self {
+        Self {
+            port_idx,
+            port_network,
+            source_mac: MacAddr::from_slice(source_mac),
+            link_layer_group: true,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
+            npdu,
+        }
+    }
+
+    /// In-memory test ingress with explicit provenance (RB-07).
+    #[cfg(test)]
+    pub(super) fn test_local_with_provenance(
+        port_idx: usize,
+        port_network: u16,
+        source_mac: &[u8],
+        npdu: Npdu,
+        provenance: TransportProvenance,
+    ) -> Self {
+        Self {
+            port_idx,
+            port_network,
+            source_mac: MacAddr::from_slice(source_mac),
+            link_layer_group: true,
+            data_attributes: Vec::new(),
+            provenance,
+            npdu,
         }
     }
 }
@@ -76,26 +294,128 @@ pub struct RouterPort<T: TransportPort> {
 /// The router holds multiple ports, each bound to a different BACnet network.
 /// When an NPDU arrives on one port with a destination network that maps to
 /// another port, the router forwards the message.
+/// See the [receive-queue contract](crate::layer#receive-queue-admission) for
+/// raw/tracked local receivers, admission limits, counters and lifecycle.
 pub struct BACnetRouter {
     /// Shared routing table.
     table: Arc<Mutex<RouterTable>>,
+    /// Bounded unknown-destination discovery (per-DNET coalescing).
+    discovery: Arc<Mutex<DiscoveryTracker>>,
+    /// RB-09 wire-control gate (permissive default, hardened opt-in).
+    control: Arc<control_policy::ControlGate>,
     /// Dispatch tasks (one per port).
     dispatch_tasks: Vec<JoinHandle<()>>,
     /// Sender tasks (one per port, owns the transport for outgoing messages).
     sender_tasks: Vec<JoinHandle<()>>,
     /// Background task that purges stale learned routes.
     aging_task: Option<JoinHandle<()>>,
+    /// NPDUs refused for a link-layer source MAC, DLEN or SLEN past
+    /// `NpduAddress::MAX_MAC_LEN`.
+    address_length_drops: Arc<AtomicU64>,
+    /// NPDUs dropped for a DADR beside DNET 0xFFFF (#1379).
+    global_broadcast_dadr_drops: Arc<AtomicU64>,
+    /// Broadcast NPDUs dropped for an APDU other than an
+    /// Unconfirmed-Request (#1491).
+    broadcast_pdu_type_drops: Arc<AtomicU64>,
+    /// Last sequence given to a control for the router's own consumer.
+    network_control_ingress_sequence: Arc<AtomicU64>,
 }
 
 impl BACnetRouter {
-    /// Create and start a router from a list of ports.
+    /// Create and start a router from a list of ports, set up as `options`
+    /// asks (#1220).
     ///
-    /// Returns the router and a receiver for APDUs destined to local
-    /// applications (messages without remote destination or where this
-    /// router is the final hop).
-    pub async fn start<T: TransportPort + 'static>(
+    /// Returns the router with its local APDU receiver, for messages without
+    /// a remote destination or for which this router is the final hop, plus
+    /// the network-control receiver when the options ask for it.
+    /// [`RouterOptions::new`] is the plain router; see [`RouterOptions`] for
+    /// the tracked APDU receiver, the wire-control policy and the
+    /// network-control receiver, which combine freely.
+    ///
+    /// Fails if two ports share a network number or a transport fails to
+    /// start.
+    pub async fn start<T, A, C>(
+        ports: Vec<RouterPort<T>>,
+        options: RouterOptions<A, C>,
+    ) -> Result<StartedRouter<A, C>, Error>
+    where
+        T: TransportPort + 'static,
+        A: LocalApduReceiver,
+        C: NetworkControlReceiver,
+    {
+        let (control_tx, network_control) = if options.wants_network_control() {
+            let (tx, rx, counters) = AdmissionReceiver::channel(C::TRACKED);
+            (Some(tx), Some(C::from_queue(rx, counters)))
+        } else {
+            (None, None)
+        };
+        let gate = Arc::new(options.control_gate());
+        let (router, rx, counters) =
+            Self::start_dispatch(ports, A::TRACKED, gate, control_tx).await?;
+        Ok(StartedRouter {
+            router,
+            apdus: A::from_queue(rx, counters),
+            network_control,
+        })
+    }
+
+    /// Count-only RB-09 decision totals (allow/deny/policy-deny per class).
+    pub fn control_snapshot(&self) -> control_policy::ControlDecisionCounters {
+        self.control.snapshot()
+    }
+
+    /// NPDUs refused on any port since start because an address in them was
+    /// past [`NpduAddress::MAX_MAC_LEN`](bacnet_encoding::npdu::NpduAddress::MAX_MAC_LEN):
+    /// their DLEN or SLEN (#1141), or the link-layer source MAC the port's
+    /// transport reported (#1198). Saturates at `u64::MAX`.
+    ///
+    /// Such an NPDU is neither forwarded nor delivered locally, and a network
+    /// message in it changes no route. When its DLEN or SLEN is the long one
+    /// and it names a specific DNET, the router also answers the sender with
+    /// Reject-Message-To-Network reason 6, `ADDRESSING_ERROR` (Clause 6.4.4),
+    /// the way it rejects a DNET it cannot reach. A global broadcast, or an
+    /// NPDU without a DNET, is only dropped. So is a frame from an over-long
+    /// link-layer source MAC: that is a fault in the transport, not in the
+    /// NPDU, and the router sends nothing back to such a MAC. No built-in
+    /// transport reports one.
+    pub fn address_length_drops(&self) -> u64 {
+        self.address_length_drops.load(Ordering::Relaxed)
+    }
+
+    /// NPDUs dropped on any port since start because their DNET was 0xFFFF
+    /// and they also carried a DADR (#1379). Saturates at `u64::MAX`.
+    ///
+    /// DNET 0xFFFF already names every device on every network (Clauses
+    /// 6.2.2 and 6.3.2), so a DADR beside it contradicts it. The router does
+    /// not pass such an NPDU on to its other ports, deliver it locally,
+    /// act on a network message in it, or answer it with a reject: a
+    /// global broadcast never draws one. The address lengths are within
+    /// bounds, so the drop is counted here and not in
+    /// [`Self::address_length_drops`].
+    pub fn global_broadcast_dadr_drops(&self) -> u64 {
+        self.global_broadcast_dadr_drops.load(Ordering::Relaxed)
+    }
+
+    /// NPDUs dropped on any port since start because they were addressed to
+    /// a broadcast, global (DNET 0xFFFF) or remote (a DNET with DLEN 0), and
+    /// carried an APDU other than an Unconfirmed-Request (#1491). Saturates
+    /// at `u64::MAX`.
+    ///
+    /// Only an Unconfirmed-Request may go to a broadcast network address
+    /// (Clause 6.3). Anything else belongs to one peer's transaction, so the
+    /// router neither passes it on to any network nor delivers it locally,
+    /// and answers it with no reject. The PDU type comes from the first APDU
+    /// octet, with no decode; network messages are not affected.
+    pub fn broadcast_pdu_type_drops(&self) -> u64 {
+        self.broadcast_pdu_type_drops.load(Ordering::Relaxed)
+    }
+
+    async fn start_dispatch<T: TransportPort + 'static>(
         mut ports: Vec<RouterPort<T>>,
-    ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>), Error> {
+        track_depth: bool,
+        control: Arc<control_policy::ControlGate>,
+        network_control: Option<AdmissionSender<ReceivedNetworkControl>>,
+    ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
         let mut table = RouterTable::new();
 
         // Reject duplicate network numbers
@@ -117,7 +437,8 @@ impl BACnetRouter {
         }
 
         let table = Arc::new(Mutex::new(table));
-        let (local_tx, local_rx) = mpsc::channel(256);
+        let discovery = Arc::new(Mutex::new(DiscoveryTracker::default()));
+        let (local_tx, local_rx, counters) = AdmissionReceiver::channel(track_depth);
 
         // Start each transport, set up send channels
         let mut port_receivers = Vec::new();
@@ -211,206 +532,69 @@ impl BACnetRouter {
         }
 
         let mut dispatch_tasks = Vec::new();
+        let address_length_drops = Arc::new(AtomicU64::new(0));
+        let global_broadcast_dadr_drops = Arc::new(AtomicU64::new(0));
+        let broadcast_pdu_type_drops = Arc::new(AtomicU64::new(0));
+        let network_control_ingress_sequence = Arc::new(AtomicU64::new(0));
+        let local_control = Arc::new(LocalControl::new(
+            OwnAddresses::new(
+                port_networks
+                    .iter()
+                    .zip(&port_local_macs)
+                    .map(|(&network, mac)| NpduAddress {
+                        network,
+                        mac_address: mac.clone(),
+                    })
+                    .collect(),
+            ),
+            network_control,
+            Arc::clone(&network_control_ingress_sequence),
+        ));
 
-        for (port_idx, mut rx) in port_receivers.into_iter().enumerate() {
-            let table = Arc::clone(&table);
-            let local_tx = local_tx.clone();
-            let send_txs = Arc::clone(&send_txs);
-            let port_network = port_networks[port_idx];
-            let local_mac = port_local_macs[port_idx].clone();
-
-            let task = tokio::spawn(async move {
-                while let Some(received) = rx.recv().await {
-                    match decode_npdu(received.npdu.clone()) {
-                        Ok(npdu) => {
-                            if npdu.is_network_message {
-                                // Proprietary network messages (type >= 0x80) with DNET
-                                // should be forwarded, not processed locally.
-                                let is_proprietary =
-                                    npdu.message_type.map(|t| t >= 0x80).unwrap_or(false);
-                                let has_remote_dest = npdu
-                                    .destination
-                                    .as_ref()
-                                    .is_some_and(|d| d.network != 0xFFFF);
-                                if is_proprietary && has_remote_dest {
-                                    // Fall through to normal DNET routing below
-                                } else {
-                                    handle_network_message(
-                                        &table,
-                                        &send_txs,
-                                        port_idx,
-                                        port_network,
-                                        &received.source_mac,
-                                        &npdu,
-                                    )
-                                    .await;
-                                    continue;
-                                }
-                            }
-
-                            if let Some(ref dest) = npdu.destination {
-                                let dest_net = dest.network;
-
-                                // Global broadcast — forward to all other ports
-                                if dest_net == 0xFFFF {
-                                    forward_broadcast(
-                                        &send_txs,
-                                        port_idx,
-                                        port_network,
-                                        &received.source_mac,
-                                        &npdu,
-                                        &received.data_attributes,
-                                    );
-
-                                    // Deliver locally as well
-                                    let apdu = ReceivedApdu {
-                                        apdu: npdu.payload,
-                                        source_mac: received.source_mac,
-                                        source_network: npdu.source,
-                                        link_layer_group: received.link_layer_group,
-                                        is_group: true,
-                                        data_attributes: received.data_attributes,
-                                        reply_tx: received.reply_tx,
-                                    };
-                                    let _ = local_tx.send(apdu).await;
-                                    continue;
-                                }
-
-                                // Route lookup for destination network
-                                let (route, reachability) = {
-                                    let mut tbl = table.lock().await;
-                                    let route = tbl.lookup(dest_net).cloned();
-                                    let reachability = tbl.effective_reachability(dest_net);
-                                    if route.is_some() {
-                                        tbl.touch(dest_net);
-                                    }
-                                    (route, reachability)
-                                };
-
-                                if let Some(route) = route {
-                                    // Check reachability before forwarding (spec 6.6.3.6)
-                                    match reachability.unwrap_or(ReachabilityStatus::Reachable) {
-                                        ReachabilityStatus::Busy => {
-                                            send_reject(
-                                                &send_txs[port_idx],
-                                                &received.source_mac,
-                                                dest_net,
-                                                RejectMessageReason::ROUTER_BUSY,
-                                            );
-                                            continue;
-                                        }
-                                        ReachabilityStatus::Unreachable => {
-                                            send_reject(
-                                                &send_txs[port_idx],
-                                                &received.source_mac,
-                                                dest_net,
-                                                RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-                                            );
-                                            continue;
-                                        }
-                                        ReachabilityStatus::Reachable => {}
-                                    }
-                                    if route.port_index == port_idx && route.directly_connected {
-                                        let dest_mac = npdu
-                                            .destination
-                                            .as_ref()
-                                            .map(|d| &d.mac_address[..])
-                                            .unwrap_or(&[]);
-                                        if dest_mac == &local_mac[..] {
-                                            // DADR matches our MAC: deliver locally
-                                            let apdu = ReceivedApdu {
-                                                apdu: npdu.payload,
-                                                source_mac: received.source_mac,
-                                                source_network: npdu.source,
-                                                link_layer_group: received.link_layer_group,
-                                                is_group: false,
-                                                data_attributes: received.data_attributes,
-                                                reply_tx: received.reply_tx,
-                                            };
-                                            let _ = local_tx.send(apdu).await;
-                                        } else {
-                                            // Remote broadcast to our network (DLEN=0):
-                                            // deliver locally AND forward
-                                            if dest_mac.is_empty() {
-                                                let apdu = ReceivedApdu {
-                                                    apdu: npdu.payload.clone(),
-                                                    source_mac: received.source_mac.clone(),
-                                                    source_network: npdu.source.clone(),
-                                                    link_layer_group: received.link_layer_group,
-                                                    is_group: true,
-                                                    data_attributes: received
-                                                        .data_attributes
-                                                        .clone(),
-                                                    reply_tx: None,
-                                                };
-                                                let _ = local_tx.send(apdu).await;
-                                            }
-                                            forward_unicast(
-                                                &send_txs,
-                                                &route,
-                                                port_network,
-                                                &received.source_mac,
-                                                npdu,
-                                                port_idx,
-                                                &received.data_attributes,
-                                            );
-                                        }
-                                    } else {
-                                        forward_unicast(
-                                            &send_txs,
-                                            &route,
-                                            port_network,
-                                            &received.source_mac,
-                                            npdu,
-                                            port_idx,
-                                            &received.data_attributes,
-                                        );
-                                    }
-                                } else {
-                                    // Unknown network: send reject
-                                    send_reject(
-                                        &send_txs[port_idx],
-                                        &received.source_mac,
-                                        dest_net,
-                                        RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-                                    );
-                                }
-                            } else {
-                                let apdu = ReceivedApdu {
-                                    apdu: npdu.payload,
-                                    source_mac: received.source_mac,
-                                    source_network: npdu.source,
-                                    link_layer_group: received.link_layer_group,
-                                    is_group: is_group_delivery(received.link_layer_group, None),
-                                    data_attributes: received.data_attributes,
-                                    reply_tx: received.reply_tx,
-                                };
-                                let _ = local_tx.send(apdu).await;
-                            }
-                        }
-                        Err(e) => {
-                            warn!(error = %e, port = port_idx, "Router decode failed");
-                        }
-                    }
-                }
-            });
-
-            dispatch_tasks.push(task);
+        for (port_idx, rx) in port_receivers.into_iter().enumerate() {
+            let port = PortDispatch {
+                table: Arc::clone(&table),
+                discovery: Arc::clone(&discovery),
+                control: Arc::clone(&control),
+                local_control: Arc::clone(&local_control),
+                address_length_drops: Arc::clone(&address_length_drops),
+                global_broadcast_dadr_drops: Arc::clone(&global_broadcast_dadr_drops),
+                broadcast_pdu_type_drops: Arc::clone(&broadcast_pdu_type_drops),
+                local_tx: local_tx.clone(),
+                send_txs: Arc::clone(&send_txs),
+                port_idx,
+                port_network: port_networks[port_idx],
+                local_mac: port_local_macs[port_idx].clone(),
+            };
+            dispatch_tasks.push(tokio::spawn(port.run(rx)));
         }
 
-        // Periodically purge stale learned routes.
+        // Periodically purge stale learned routes, hardened pending slots and
+        // discovery entries. `last_used` never extends `last_seen` expiry.
         let aging_table = Arc::clone(&table);
+        let aging_discovery = Arc::clone(&discovery);
         let aging_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             let max_age = Duration::from_secs(300); // 5 minutes
             loop {
                 interval.tick().await;
+                let now = Instant::now();
                 let mut tbl = aging_table.lock().await;
-                let purged = tbl.purge_stale(max_age);
+                let purged = tbl.purge_stale_at(now, max_age);
                 tbl.clear_expired_busy();
+                let expired_pending = tbl.expire_pending_at(now);
                 drop(tbl);
+                let mut disc = aging_discovery.lock().await;
+                let expired_discovery = disc.expire_at(now);
+                drop(disc);
                 for net in purged {
                     debug!(network = net, "Purged stale route");
+                }
+                for net in expired_pending {
+                    debug!(network = net, "Expired hardened pending challenger");
+                }
+                for net in expired_discovery {
+                    debug!(network = net, "Expired discovery solicitation");
                 }
             }
         });
@@ -418,11 +602,18 @@ impl BACnetRouter {
         Ok((
             Self {
                 table,
+                discovery,
+                control,
                 dispatch_tasks,
                 sender_tasks,
                 aging_task: Some(aging_task),
+                address_length_drops,
+                global_broadcast_dadr_drops,
+                broadcast_pdu_type_drops,
+                network_control_ingress_sequence,
             },
             local_rx,
+            counters,
         ))
     }
 
@@ -432,6 +623,13 @@ impl BACnetRouter {
     }
 
     /// Stop the router.
+    ///
+    /// Aborts and awaits dispatch, sender and aging tasks without waiting for
+    /// the local application consumer, even with a full queue. Queued local
+    /// APDUs remain drainable, retaining their reply senders until consumed or
+    /// the receiver is dropped. Stop is not an admission drop and does not clear
+    /// depth/high-water/drop totals. See the
+    /// [receive-queue contract](crate::layer#receive-queue-admission).
     pub async fn stop(&mut self) {
         for task in self.dispatch_tasks.drain(..) {
             task.abort();
@@ -445,8 +643,31 @@ impl BACnetRouter {
             task.abort();
             let _ = task.await;
         }
+        // Cancel pending unknown-destination discovery so no further
+        // solicitation is emitted and coalesced waiters observe shutdown.
+        self.discovery.lock().await.cancel();
     }
 }
 
+#[cfg(test)]
+mod admission_tests;
+#[cfg(test)]
+mod busy_scope_tests;
+#[cfg(test)]
+mod claim_tests;
+#[cfg(test)]
+mod envelope_control_tests;
+#[cfg(test)]
+mod envelope_discovery_tests;
+#[cfg(test)]
+mod envelope_harness;
+#[cfg(test)]
+mod ingress_harness;
+#[cfg(test)]
+mod init_routing_table_tests;
+#[cfg(test)]
+mod rb06_convergence_tests;
+#[cfg(test)]
+mod rb09_control_policy_tests;
 #[cfg(test)]
 mod tests;

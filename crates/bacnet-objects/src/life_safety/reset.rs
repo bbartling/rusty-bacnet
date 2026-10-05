@@ -11,7 +11,9 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::traits::LifeSafetyOperationEffect;
 
-use super::{life_safety_error, LifeSafetyPointObject, LifeSafetyZoneObject};
+use super::{
+    life_safety_error, valid_life_safety_state, LifeSafetyPointObject, LifeSafetyZoneObject,
+};
 
 /// Immutable Life Safety Point state supplied to a reset executor.
 ///
@@ -25,7 +27,7 @@ pub struct LifeSafetyPointResetContext {
     pub operation: LifeSafetyOperation,
     /// Current `Present_Value`.
     pub present_value: LifeSafetyState,
-    /// Current `Tracking_Value`.
+    /// Current `Tracking_Value`, simulated or not.
     pub tracking_value: LifeSafetyState,
     /// Current `Silenced` value.
     pub silenced: SilencedState,
@@ -41,7 +43,9 @@ pub struct LifeSafetyPointResetContext {
 pub struct LifeSafetyPointResetCommit {
     /// Replacement `Present_Value`, when application truth changed.
     pub present_value: Option<LifeSafetyState>,
-    /// Replacement `Tracking_Value`, when application truth changed.
+    /// Replacement `Tracking_Value`, when application truth changed. While
+    /// `Out_Of_Service` is TRUE a client's simulated value stays in place and
+    /// this one is served from the return to service.
     pub tracking_value: Option<LifeSafetyState>,
     /// Replacement `Silenced`, when application truth changed.
     pub silenced: Option<SilencedState>,
@@ -49,9 +53,8 @@ pub struct LifeSafetyPointResetCommit {
 
 /// Immutable Life Safety Zone state supplied to a reset executor.
 ///
-/// Zone `Tracking_Value` is intentionally absent because the built-in Zone
-/// object does not model that required property yet. Network provenance is
-/// retained only by the server-owned authorization boundary.
+/// Network provenance is retained only by the server-owned authorization
+/// boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LifeSafetyZoneResetContext {
     /// Object receiving the operation.
@@ -60,6 +63,8 @@ pub struct LifeSafetyZoneResetContext {
     pub operation: LifeSafetyOperation,
     /// Current `Present_Value`.
     pub present_value: LifeSafetyState,
+    /// Current `Tracking_Value`, simulated or not.
+    pub tracking_value: LifeSafetyState,
     /// Current `Silenced` value.
     pub silenced: SilencedState,
     /// Current `Operation_Expected`, equal to `operation` when invoked.
@@ -74,6 +79,10 @@ pub struct LifeSafetyZoneResetContext {
 pub struct LifeSafetyZoneResetCommit {
     /// Replacement `Present_Value`, when application truth changed.
     pub present_value: Option<LifeSafetyState>,
+    /// Replacement `Tracking_Value`, when application truth changed. While
+    /// `Out_Of_Service` is TRUE a client's simulated value stays in place and
+    /// this one is served from the return to service.
+    pub tracking_value: Option<LifeSafetyState>,
     /// Replacement `Silenced`, when application truth changed.
     pub silenced: Option<SilencedState>,
 }
@@ -153,13 +162,6 @@ fn commit_value_error() -> Error {
     life_safety_error(ErrorCode::VALUE_OUT_OF_RANGE)
 }
 
-fn valid_life_safety_state(state: LifeSafetyState) -> bool {
-    LifeSafetyState::ALL_NAMED
-        .iter()
-        .any(|&(_, named)| named == state)
-        || (256..=65_535).contains(&state.to_raw())
-}
-
 fn valid_silenced_state(state: SilencedState) -> bool {
     SilencedState::ALL_NAMED
         .iter()
@@ -171,7 +173,7 @@ impl LifeSafetyPointObject {
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationEffect, Error> {
-        if !is_reset_operation(operation) || self.operation_expected != operation.to_raw() {
+        if !is_reset_operation(operation) || self.operation_expected != operation {
             return Err(invalid_operation_error());
         }
         let executor = self
@@ -181,10 +183,10 @@ impl LifeSafetyPointObject {
         let context = LifeSafetyPointResetContext {
             object_identifier: self.oid,
             operation,
-            present_value: LifeSafetyState::from_raw(self.present_value),
-            tracking_value: LifeSafetyState::from_raw(self.tracking_value),
-            silenced: SilencedState::from_raw(self.silenced),
-            operation_expected: LifeSafetyOperation::from_raw(self.operation_expected),
+            present_value: self.present_value,
+            tracking_value: self.tracking_value,
+            silenced: self.silenced,
+            operation_expected: self.operation_expected,
         };
         let result = match catch_unwind(AssertUnwindSafe(|| executor(&context))) {
             Ok(result) => result,
@@ -206,15 +208,15 @@ impl LifeSafetyPointObject {
         }
 
         if let Some(value) = commit.present_value {
-            self.present_value = value.to_raw();
+            self.present_value = value;
         }
         if let Some(value) = commit.tracking_value {
-            self.tracking_value = value.to_raw();
+            self.simulation().track(value);
         }
         if let Some(value) = commit.silenced {
-            self.silenced = value.to_raw();
+            self.silenced = value;
         }
-        self.operation_expected = LifeSafetyOperation::NONE.to_raw();
+        self.operation_expected = LifeSafetyOperation::NONE;
         Ok(LifeSafetyOperationEffect::Applied)
     }
 }
@@ -224,7 +226,7 @@ impl LifeSafetyZoneObject {
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationEffect, Error> {
-        if !is_reset_operation(operation) || self.operation_expected != operation.to_raw() {
+        if !is_reset_operation(operation) || self.operation_expected != operation {
             return Err(invalid_operation_error());
         }
         let executor = self
@@ -234,9 +236,10 @@ impl LifeSafetyZoneObject {
         let context = LifeSafetyZoneResetContext {
             object_identifier: self.oid,
             operation,
-            present_value: LifeSafetyState::from_raw(self.present_value),
-            silenced: SilencedState::from_raw(self.silenced),
-            operation_expected: LifeSafetyOperation::from_raw(self.operation_expected),
+            present_value: self.present_value,
+            tracking_value: self.tracking_value,
+            silenced: self.silenced,
+            operation_expected: self.operation_expected,
         };
         let result = match catch_unwind(AssertUnwindSafe(|| executor(&context))) {
             Ok(result) => result,
@@ -248,6 +251,9 @@ impl LifeSafetyZoneObject {
             .present_value
             .is_some_and(|value| !valid_life_safety_state(value))
             || commit
+                .tracking_value
+                .is_some_and(|value| !valid_life_safety_state(value))
+            || commit
                 .silenced
                 .is_some_and(|value| !valid_silenced_state(value))
         {
@@ -255,12 +261,15 @@ impl LifeSafetyZoneObject {
         }
 
         if let Some(value) = commit.present_value {
-            self.present_value = value.to_raw();
+            self.present_value = value;
+        }
+        if let Some(value) = commit.tracking_value {
+            self.simulation().track(value);
         }
         if let Some(value) = commit.silenced {
-            self.silenced = value.to_raw();
+            self.silenced = value;
         }
-        self.operation_expected = LifeSafetyOperation::NONE.to_raw();
+        self.operation_expected = LifeSafetyOperation::NONE;
         Ok(LifeSafetyOperationEffect::Applied)
     }
 }

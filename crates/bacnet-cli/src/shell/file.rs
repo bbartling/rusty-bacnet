@@ -122,10 +122,12 @@ pub(super) async fn handle_file_read<T: TransportPort + 'static>(
         client,
         &mac,
         file_instance,
-        access,
-        start,
-        count,
-        output_path.as_deref(),
+        commands::file::FileReadOptions {
+            access,
+            start_position: start,
+            count,
+            output_path: output_path.as_deref(),
+        },
         format,
     )
     .await

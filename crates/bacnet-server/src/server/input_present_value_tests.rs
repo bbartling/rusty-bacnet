@@ -1,5 +1,6 @@
-use super::super::cov_notifications_tests::RecordingTransport;
+use super::super::cov_notifications_tests::recording_transport;
 use super::super::*;
+use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::binary::BinaryInputObject;
@@ -8,14 +9,9 @@ use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_types::enums::{EventState, Reliability};
-use bytes::Bytes;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-
-type SentFrames = StdArc<StdMutex<Vec<(Bytes, MacAddr)>>>;
-
 struct Fixture {
-    server: BACnetServer<RecordingTransport>,
-    sent: SentFrames,
+    server: BACnetServer<TestTransport>,
+    sent: SendLog,
     ai: ObjectIdentifier,
     bi: ObjectIdentifier,
     msi: ObjectIdentifier,
@@ -23,7 +19,7 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, sent) = recording_transport();
     let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
     for (property, value) in [
         (PropertyIdentifier::HIGH_LIMIT, PropertyValue::Real(80.0)),
@@ -70,7 +66,7 @@ async fn fixture() -> Fixture {
     db.add(Box::new(msi)).unwrap();
     db.add(Box::new(av)).unwrap();
     let server = BACnetServer::generic_builder()
-        .transport(RecordingTransport::new(StdArc::clone(&sent)))
+        .transport(transport)
         .database(db)
         .enable_event_enrollment(false)
         .build()
@@ -88,7 +84,7 @@ async fn fixture() -> Fixture {
 }
 
 async fn read(
-    server: &BACnetServer<RecordingTransport>,
+    server: &BACnetServer<TestTransport>,
     oid: &ObjectIdentifier,
     property: PropertyIdentifier,
 ) -> PropertyValue {
@@ -115,32 +111,37 @@ fn assert_protocol_error(error: Error, class: ErrorClass, code: ErrorCode) {
     }
 }
 
-async fn subscribe(server: &BACnetServer<RecordingTransport>, oid: ObjectIdentifier) {
-    server.cov_table.write().await.subscribe(CovSubscription {
-        subscriber_mac: MacAddr::from_slice(&[
-            127,
-            0,
-            0,
-            1,
-            0xBA,
-            oid.object_type().to_raw() as u8,
-        ]),
-        subscriber_network: None,
-        subscriber_process_identifier: oid.object_type().to_raw(),
-        monitored_object_identifier: oid,
-        issue_confirmed_notifications: false,
-        expires_at: None,
-        last_notified_value: None,
-        monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-        monitored_property_array_index: None,
-        cov_increment: None,
-        notification_kind: CovNotificationKind::Single,
-        timestamped: false,
-    });
+async fn subscribe(server: &BACnetServer<TestTransport>, oid: ObjectIdentifier) {
+    server
+        .cov_table
+        .write()
+        .await
+        .subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[
+                127,
+                0,
+                0,
+                1,
+                0xBA,
+                oid.object_type().to_raw() as u8,
+            ]),
+            subscriber_network: None,
+            subscriber_process_identifier: oid.object_type().to_raw(),
+            monitored_object_identifier: oid,
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_observation: None,
+            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        })
+        .unwrap();
 }
 
 async fn object_state(
-    server: &BACnetServer<RecordingTransport>,
+    server: &BACnetServer<TestTransport>,
     oid: &ObjectIdentifier,
 ) -> (PropertyValue, PropertyValue) {
     (
@@ -156,7 +157,7 @@ async fn assert_rejected_without_mutation(
     code: ErrorCode,
 ) {
     let before = object_state(&fixture.server, oid).await;
-    let sent_before = fixture.sent.lock().unwrap().len();
+    let sent_before = fixture.sent.len();
     let error = fixture
         .server
         .set_present_value_local(oid, value)
@@ -164,7 +165,7 @@ async fn assert_rejected_without_mutation(
         .expect_err("invalid input value must be rejected");
     assert_protocol_error(error, ErrorClass::PROPERTY, code);
     assert_eq!(object_state(&fixture.server, oid).await, before);
-    assert_eq!(fixture.sent.lock().unwrap().len(), sent_before);
+    assert_eq!(fixture.sent.len(), sent_before);
 }
 
 #[tokio::test]
@@ -205,6 +206,7 @@ async fn network_and_application_routes_preserve_input_simulation_ownership() {
             None,
             PropertyValue::Real(40.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .expect_err("network-equivalent in-service write must be denied");
@@ -218,7 +220,7 @@ async fn network_and_application_routes_preserve_input_simulation_ownership() {
         .await,
         PropertyValue::Real(0.0)
     );
-    assert!(fixture.sent.lock().unwrap().is_empty());
+    assert!(fixture.sent.is_empty());
 
     fixture
         .server
@@ -228,6 +230,7 @@ async fn network_and_application_routes_preserve_input_simulation_ownership() {
             None,
             PropertyValue::Boolean(true),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -239,6 +242,7 @@ async fn network_and_application_routes_preserve_input_simulation_ownership() {
             None,
             PropertyValue::Real(72.0),
             None,
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();
@@ -248,7 +252,7 @@ async fn network_and_application_routes_preserve_input_simulation_ownership() {
         PropertyIdentifier::RELIABILITY,
     )
     .await;
-    let sent_before_rejection = fixture.sent.lock().unwrap().len();
+    let sent_before_rejection = fixture.sent.len();
 
     let error = fixture
         .server
@@ -275,7 +279,7 @@ async fn network_and_application_routes_preserve_input_simulation_ownership() {
         reliability
     );
     assert_eq!(
-        fixture.sent.lock().unwrap().len(),
+        fixture.sent.len(),
         sent_before_rejection,
         "rejected application update must not enter the COV path"
     );
@@ -299,7 +303,7 @@ async fn server_path_rejects_invalid_input_values_atomically() {
             .await
             .unwrap();
     }
-    fixture.sent.lock().unwrap().clear();
+    fixture.sent.clear();
 
     for (oid, value, code) in [
         (
@@ -384,7 +388,7 @@ async fn unknown_and_unsupported_objects_fail_before_side_effects() {
         .await,
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
     );
-    assert!(fixture.sent.lock().unwrap().is_empty());
+    assert!(fixture.sent.is_empty());
 
     fixture
         .server
@@ -394,6 +398,7 @@ async fn unknown_and_unsupported_objects_fail_before_side_effects() {
             None,
             PropertyValue::Real(42.0),
             Some(8),
+            crate::LocalCommandSource::ServerDevice,
         )
         .await
         .expect("generic local route must retain commandable-object behavior");
@@ -406,7 +411,7 @@ async fn unknown_and_unsupported_objects_fail_before_side_effects() {
         .await,
         PropertyValue::Real(42.0)
     );
-    assert_eq!(fixture.sent.lock().unwrap().len(), 1);
+    assert_eq!(fixture.sent.len(), 1);
     fixture.server.stop().await.unwrap();
 }
 
@@ -430,7 +435,7 @@ async fn successful_input_update_runs_existing_event_and_cov_pipeline() {
         PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw()),
         "the existing intrinsic-event evaluator must observe the local update"
     );
-    let frame = fixture.sent.lock().unwrap()[0].0.clone();
+    let frame = fixture.sent.frame(0).npdu;
     let npdu = decode_npdu(frame).unwrap();
     let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
         panic!("expected unconfirmed COV notification");
@@ -441,7 +446,7 @@ async fn successful_input_update_runs_existing_event_and_cov_pipeline() {
     );
     let notification = COVNotificationRequest::decode(&request.service_request).unwrap();
     assert_eq!(notification.monitored_object_identifier, fixture.ai);
-    assert_eq!(fixture.sent.lock().unwrap().len(), 1);
+    assert_eq!(fixture.sent.len(), 1);
 
     let error = fixture
         .server
@@ -467,10 +472,129 @@ async fn successful_input_update_runs_existing_event_and_cov_pipeline() {
         .await,
         PropertyValue::Enumerated(EventState::HIGH_LIMIT.to_raw())
     );
+    assert_eq!(fixture.sent.len(), 1, "rejected update must not emit COV");
+    fixture.server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn noncommandable_value_write_local_without_resolved_origin_runs_cov() {
+    let mut fixture = fixture().await;
+    let value = AnalogValueObject::with_access(
+        2,
+        "Writable-AV",
+        62,
+        bacnet_objects::present_value_access::PresentValueAccess::Writable,
+    )
+    .unwrap();
+    let oid = value.object_identifier();
+    fixture
+        .server
+        .database()
+        .write()
+        .await
+        .add(Box::new(value))
+        .unwrap();
+    subscribe(&fixture.server, oid).await;
+    let missing = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 999).unwrap();
+    assert!(crate::command_source::resolve_local(
+        &*fixture.server.database().read().await,
+        crate::LocalCommandSource::Object(missing),
+    )
+    .is_err());
+    fixture
+        .server
+        .write_local(
+            &oid,
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(24.0),
+            Some(6),
+            crate::LocalCommandSource::Object(missing),
+        )
+        .await
+        .unwrap();
     assert_eq!(
-        fixture.sent.lock().unwrap().len(),
-        1,
-        "rejected update must not emit COV"
+        read(&fixture.server, &oid, PropertyIdentifier::PRESENT_VALUE).await,
+        PropertyValue::Real(24.0)
     );
+    let frame = fixture.sent.frame(0).npdu;
+    let npdu = decode_npdu(frame).unwrap();
+    let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
+        panic!("expected COV notification");
+    };
+    assert_eq!(
+        request.service_choice,
+        UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION
+    );
+    let notification = COVNotificationRequest::decode(&request.service_request).unwrap();
+    assert_eq!(notification.monitored_object_identifier, oid);
+    fixture.server.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn application_value_path_preserves_out_of_service_simulation() {
+    let mut fixture = fixture().await;
+    let value = AnalogValueObject::with_access(
+        2,
+        "Read-only-AV",
+        62,
+        bacnet_objects::present_value_access::PresentValueAccess::ReadOnly,
+    )
+    .unwrap();
+    let oid = value.object_identifier();
+    fixture
+        .server
+        .database()
+        .write()
+        .await
+        .add(Box::new(value))
+        .unwrap();
+    subscribe(&fixture.server, oid).await;
+    fixture
+        .server
+        .set_present_value_local(&oid, PropertyValue::Real(25.0))
+        .await
+        .unwrap();
+    assert_eq!(
+        read(&fixture.server, &oid, PropertyIdentifier::PRESENT_VALUE).await,
+        PropertyValue::Real(25.0)
+    );
+    assert_eq!(fixture.sent.len(), 1);
+    fixture
+        .server
+        .write_local(
+            &oid,
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+    fixture
+        .server
+        .write_local(
+            &oid,
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(72.0),
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+    let sent_before = fixture.sent.len();
+    let error = fixture
+        .server
+        .set_present_value_local(&oid, PropertyValue::Real(19.0))
+        .await
+        .unwrap_err();
+    assert_protocol_error(error, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
+    assert_eq!(
+        read(&fixture.server, &oid, PropertyIdentifier::PRESENT_VALUE).await,
+        PropertyValue::Real(72.0)
+    );
+    assert_eq!(fixture.sent.len(), sent_before);
     fixture.server.stop().await.unwrap();
 }

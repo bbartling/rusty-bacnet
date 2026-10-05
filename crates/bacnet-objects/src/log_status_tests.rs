@@ -2,18 +2,29 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+use bacnet_encoding::constructed::{
+    decode_event_log_record, decode_log_multiple_record, decode_log_record,
+};
+use bacnet_types::bitstring::LogStatus;
+use bacnet_types::constructed::{
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
+    LogDatum, LogValue,
+};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, PropertyValue, Time};
+use bytes::BytesMut;
 
 use crate::clock::{ClockFrame, ClockReader};
 use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 
-const LOG_DISABLED: u8 = 0b001;
-const BUFFER_PURGED: u8 = 0b010;
+#[path = "log_insertion_tests.rs"]
+mod insertion;
+
+const LOG_DISABLED: LogStatus = LogStatus::LOG_DISABLED;
+const BUFFER_PURGED: LogStatus = LogStatus::BUFFER_PURGED;
 
 #[derive(Clone, Copy, Debug)]
 enum FamilyKind {
@@ -59,19 +70,37 @@ impl Family {
         }
     }
 
-    fn records(&self) -> &VecDeque<BACnetLogRecord> {
+    /// The resident records, an Event Log's and a Trend Log Multiple's as
+    /// Trend Log records.
+    fn records(&self) -> VecDeque<BACnetLogRecord> {
         match self {
-            Self::Event(object) => object.records(),
-            Self::Trend(object) => object.records(),
-            Self::TrendMultiple(object) => object.records(),
+            Self::Event(object) => object.records().iter().map(single_event).collect(),
+            Self::Trend(object) => object.records().clone(),
+            Self::TrendMultiple(object) => object.records().iter().map(single).collect(),
         }
     }
 
-    fn add_record(&mut self, record: BACnetLogRecord) {
+    fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         match self {
-            Self::Event(object) => object.add_record(record),
+            Self::Event(object) => object.add_record(event(record)),
             Self::Trend(object) => object.add_record(record),
-            Self::TrendMultiple(object) => object.add_record(record),
+            Self::TrendMultiple(object) => object.add_record(multiple(record)),
+        }
+    }
+
+    /// The newest record as ReadRange serves it.
+    fn served_last(&self) -> Vec<u8> {
+        let records = self.object().log_buffer_internal().unwrap();
+        let mut bytes = BytesMut::new();
+        records.encode_record(records.record_count() - 1, &mut bytes);
+        bytes.to_vec()
+    }
+
+    /// Submit `record` through the trend insertion hook its family serves.
+    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        match self {
+            Self::TrendMultiple(object) => object.add_trend_multiple_record(multiple(record)),
+            _ => self.object_mut().add_trend_record(record),
         }
     }
 
@@ -112,7 +141,7 @@ impl Family {
         self.read(PropertyIdentifier::STOP_WHEN_FULL) == PropertyValue::Boolean(true)
     }
 
-    fn identities(&self) -> Vec<u32> {
+    fn identities(&self) -> Vec<u64> {
         self.object()
             .log_record_identities_internal()
             .unwrap()
@@ -179,6 +208,65 @@ fn valid_frame() -> ClockFrame {
     }
 }
 
+/// A single-datum test record as a one-member Trend Log Multiple record.
+fn multiple(record: BACnetLogRecord) -> BACnetLogMultipleRecord {
+    let log_data = match record.log_datum {
+        LogDatum::LogStatus(bits) => LogData::LogStatus(bits),
+        LogDatum::UnsignedValue(value) => LogData::Values(vec![LogValue::UnsignedValue(value)]),
+        other => panic!("no Trend Log Multiple form for {other:?}"),
+    };
+    BACnetLogMultipleRecord {
+        date: record.date,
+        time: record.time,
+        log_data,
+    }
+}
+
+/// A single-datum test record as an Event Log record, its sample carried as
+/// a clock change.
+fn event(record: BACnetLogRecord) -> BACnetEventLogRecord {
+    let log_datum = match record.log_datum {
+        LogDatum::LogStatus(bits) => EventLogDatum::LogStatus(bits),
+        LogDatum::UnsignedValue(value) => EventLogDatum::TimeChange(value as f32),
+        other => panic!("no Event Log form for {other:?}"),
+    };
+    BACnetEventLogRecord {
+        date: record.date,
+        time: record.time,
+        log_datum,
+    }
+}
+
+/// The inverse of [`event`].
+fn single_event(record: &BACnetEventLogRecord) -> BACnetLogRecord {
+    let log_datum = match &record.log_datum {
+        EventLogDatum::LogStatus(bits) => LogDatum::LogStatus(*bits),
+        EventLogDatum::TimeChange(value) => LogDatum::UnsignedValue(*value as u64),
+        other => panic!("no single-datum form for {other:?}"),
+    };
+    BACnetLogRecord {
+        date: record.date,
+        time: record.time,
+        log_datum,
+        status_flags: None,
+    }
+}
+
+/// The inverse of [`multiple`].
+fn single(record: &BACnetLogMultipleRecord) -> BACnetLogRecord {
+    let log_datum = match &record.log_data {
+        LogData::LogStatus(bits) => LogDatum::LogStatus(*bits),
+        LogData::Values(values) if values.len() == 1 => values[0].clone().into(),
+        other => panic!("no single-datum form for {other:?}"),
+    };
+    BACnetLogRecord {
+        date: record.date,
+        time: record.time,
+        log_datum,
+        status_flags: None,
+    }
+}
+
 fn ordinary(hour: u8, value: u64) -> BACnetLogRecord {
     BACnetLogRecord {
         date: valid_frame().local_date,
@@ -191,26 +279,35 @@ fn ordinary(hour: u8, value: u64) -> BACnetLogRecord {
     }
 }
 
-fn assert_status(object: &Family, bits: u8) {
-    let record = object.records().back().expect("status record");
+fn assert_status(object: &Family, status: LogStatus) {
+    let records = object.records();
+    let record = records.back().expect("status record");
     assert_eq!(record.date, valid_frame().local_date);
     assert_eq!(record.time, valid_frame().local_time);
-    assert_eq!(record.log_datum, LogDatum::LogStatus(bits));
+    assert_eq!(record.log_datum, LogDatum::LogStatus(status));
     assert_eq!(record.status_flags, None);
-
-    let PropertyValue::List(records) = object.read(PropertyIdentifier::LOG_BUFFER) else {
-        panic!("expected projected records");
+    // On the wire log-disabled, bit 0, is the top bit of the octet
+    // (Clause 20.2.10). Every family puts the log-status [0] choice first
+    // inside its [1] field, right after the 12-octet timestamp.
+    let octet = if status == LOG_DISABLED {
+        0x80
+    } else if status == BUFFER_PURGED {
+        0x40
+    } else if status == LOG_DISABLED | BUFFER_PURGED {
+        0xC0
+    } else if status.is_empty() {
+        0x00
+    } else {
+        panic!("no wire vector for {status}")
     };
-    let PropertyValue::List(fields) = records.last().expect("projected status record") else {
-        panic!("expected projected record fields");
+    let served = object.served_last();
+    assert_eq!(&served[12..], &[0x1E, 0x0A, 0x05, octet, 0x1F], "{status}");
+    let decoded = match object {
+        Family::Event(_) => single_event(&decode_event_log_record(&served, 0).unwrap().0),
+        Family::Trend(_) => decode_log_record(&served, 0).unwrap().0,
+        Family::TrendMultiple(_) => single(&decode_log_multiple_record(&served, 0).unwrap().0),
     };
-    assert_eq!(
-        fields[2],
-        PropertyValue::BitString {
-            unused_bits: 5,
-            data: vec![(bits & 0b111) << 5],
-        }
-    );
+    assert_eq!(&decoded, record);
 }
 
 fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
@@ -289,12 +386,12 @@ fn stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic() {
             PropertyValue::Boolean(true),
         )
         .unwrap();
-        one.add_record(ordinary(1, 10));
+        one.add_record(ordinary(1, 10)).unwrap();
         assert!(!one.enabled(), "{kind:?}");
         assert_eq!(one.total(), 1, "{kind:?}");
         assert_eq!(one.records().len(), 1, "{kind:?}");
         assert_status(&one, LOG_DISABLED);
-        one.add_record(ordinary(2, 20));
+        one.add_record(ordinary(2, 20)).unwrap();
         assert_eq!(one.total(), 1, "{kind:?}");
 
         let mut many = kind.object(3);
@@ -304,9 +401,9 @@ fn stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic() {
             PropertyValue::Boolean(true),
         )
         .unwrap();
-        many.add_record(ordinary(1, 10));
-        many.add_record(ordinary(2, 20));
-        many.add_record(ordinary(3, 30));
+        many.add_record(ordinary(1, 10)).unwrap();
+        many.add_record(ordinary(2, 20)).unwrap();
+        many.add_record(ordinary(3, 30)).unwrap();
         assert_eq!(many.total(), 3, "{kind:?}");
         assert_eq!(many.records().len(), 3, "{kind:?}");
         assert_eq!(many.records()[0].log_datum, LogDatum::UnsignedValue(10));
@@ -324,12 +421,16 @@ fn stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic() {
                     PropertyValue::Boolean(true),
                 )
                 .unwrap();
-            atomic.add_record(ordinary(1, 10));
-            let before_records = atomic.records().clone();
+            atomic.add_record(ordinary(1, 10)).unwrap();
+            let before_records = atomic.records();
             let before_total = atomic.total();
             let before_identities = atomic.identities();
-            atomic.add_record(ordinary(2, 20));
-            assert_eq!(atomic.records(), &before_records, "{kind:?}");
+            assert_protocol(
+                atomic.add_record(ordinary(2, 20)).unwrap_err(),
+                ErrorClass::DEVICE,
+                ErrorCode::OPERATIONAL_PROBLEM,
+            );
+            assert_eq!(atomic.records(), before_records, "{kind:?}");
             assert_eq!(atomic.total(), before_total, "{kind:?}");
             assert_eq!(atomic.identities(), before_identities, "{kind:?}");
             assert!(atomic.enabled(), "{kind:?}");
@@ -385,7 +486,7 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
             .unwrap();
         assert!(transitions.enabled(), "{kind:?}");
         assert_eq!(transitions.total(), 2, "{kind:?}");
-        assert_status(&transitions, 0);
+        assert_status(&transitions, LogStatus::empty());
 
         transitions
             .write(
@@ -394,12 +495,12 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
             )
             .unwrap();
         transitions.clear();
-        transitions.add_record(ordinary(1, 10));
+        transitions.add_record(ordinary(1, 10)).unwrap();
         assert!(transitions.records().is_empty(), "{kind:?}");
 
         let mut fills = kind.object(3);
         fills.bind_clock(TestClock::valid());
-        fills.add_record(ordinary(1, 10));
+        fills.add_record(ordinary(1, 10)).unwrap();
         fills
             .write(
                 PropertyIdentifier::LOG_ENABLE,
@@ -422,8 +523,8 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
         let mut full = kind.object(2);
         let clock = TestClock::valid();
         full.bind_clock(clock.clone());
-        full.add_record(ordinary(1, 10));
-        full.add_record(ordinary(2, 20));
+        full.add_record(ordinary(1, 10)).unwrap();
+        full.add_record(ordinary(2, 20)).unwrap();
         full.write(
             PropertyIdentifier::STOP_WHEN_FULL,
             PropertyValue::Boolean(true),
@@ -451,8 +552,8 @@ fn zero_capacity_counts_without_residents_and_enforces_full_enable_gate() {
         let mut object = kind.object(0);
         let clock = TestClock::valid();
         object.bind_clock(clock.clone());
-        object.add_record(ordinary(1, 10));
-        object.add_record(ordinary(2, 20));
+        object.add_record(ordinary(1, 10)).unwrap();
+        object.add_record(ordinary(2, 20)).unwrap();
         assert!(object.records().is_empty(), "{kind:?}");
         assert_eq!(object.total(), 2, "{kind:?}");
         assert!(object.identities().is_empty(), "{kind:?}");
@@ -487,11 +588,11 @@ fn status_writes_require_a_valid_clock_before_mutation() {
     for kind in FamilyKind::ALL {
         for clock in [None, Some(TestClock::invalid())] {
             let mut object = kind.object(2);
-            object.add_record(ordinary(1, 10));
+            object.add_record(ordinary(1, 10)).unwrap();
             if let Some(clock) = clock.clone() {
                 object.bind_clock(clock);
             }
-            let before = object.records().clone();
+            let before = object.records();
             let before_total = object.total();
             let before_enable = object.enabled();
             let before_stop = object.stop_when_full();
@@ -499,7 +600,7 @@ fn status_writes_require_a_valid_clock_before_mutation() {
                 .write(PropertyIdentifier::RECORD_COUNT, PropertyValue::Unsigned(0))
                 .unwrap_err();
             assert_protocol(error, ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
-            assert_eq!(object.records(), &before, "{kind:?}");
+            assert_eq!(object.records(), before, "{kind:?}");
             assert_eq!(object.total(), before_total, "{kind:?}");
             assert_eq!(object.enabled(), before_enable, "{kind:?}");
             assert_eq!(object.stop_when_full(), before_stop, "{kind:?}");
@@ -522,9 +623,9 @@ fn status_writes_require_a_valid_clock_before_mutation() {
             if let Some(clock) = clock.clone() {
                 stop.bind_clock(clock);
             }
-            stop.add_record(ordinary(1, 10));
-            stop.add_record(ordinary(2, 20));
-            let before = stop.records().clone();
+            stop.add_record(ordinary(1, 10)).unwrap();
+            stop.add_record(ordinary(2, 20)).unwrap();
+            let before = stop.records();
             let error = stop
                 .write(
                     PropertyIdentifier::STOP_WHEN_FULL,
@@ -532,7 +633,7 @@ fn status_writes_require_a_valid_clock_before_mutation() {
                 )
                 .unwrap_err();
             assert_protocol(error, ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
-            assert_eq!(stop.records(), &before, "{kind:?}");
+            assert_eq!(stop.records(), before, "{kind:?}");
             assert_eq!(stop.total(), 2, "{kind:?}");
             assert!(stop.enabled(), "{kind:?}");
             assert!(!stop.stop_when_full(), "{kind:?}");
@@ -547,10 +648,8 @@ fn log_family_writability_matches_runtime_routes() {
             FamilyKind::Event,
             vec![
                 PropertyIdentifier::LOG_ENABLE,
-                PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
-                PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::DESCRIPTION,
             ],
         ),
@@ -561,7 +660,6 @@ fn log_family_writability_matches_runtime_routes() {
                 PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
-                PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::DESCRIPTION,
             ],
         ),
@@ -596,10 +694,15 @@ fn log_family_writability_matches_runtime_routes() {
                 "{kind:?} {property:?}"
             );
         }
-        if matches!(kind, FamilyKind::TrendMultiple) {
+        // Tables 12-29, 12-35 and 12-31 define no Out_Of_Service (#985,
+        // #1064), and Table 12-31 has no Log_Interval either.
+        assert!(!object
+            .object()
+            .is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+        if matches!(kind, FamilyKind::Event) {
             assert!(!object
                 .object()
-                .is_writable_property(PropertyIdentifier::OUT_OF_SERVICE));
+                .is_writable_property(PropertyIdentifier::LOG_INTERVAL));
         }
     }
 }

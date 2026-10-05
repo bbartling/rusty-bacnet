@@ -116,15 +116,6 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// Event transition bit positions (Clause 12.11).
-    pub struct EventTransitionBits(u8);
-
-    const TO_OFFNORMAL = 0;
-    const TO_FAULT = 1;
-    const TO_NORMAL = 2;
-}
-
-bacnet_enum! {
     /// Bit positions within a `BACnetServicesSupported` bit string (Clause 21).
     pub struct ServiceSupported(u8);
 
@@ -258,7 +249,7 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
-    /// BACnet virtual terminal class (Clause 17.1).
+    /// BACnet virtual terminal class, the VT-Open class parameter (Clause 17.2).
     pub struct VTClass(u32);
 
     const DEFAULT_TERMINAL = 0;

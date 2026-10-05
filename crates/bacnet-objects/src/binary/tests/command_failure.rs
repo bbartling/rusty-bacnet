@@ -3,7 +3,13 @@ use bacnet_types::enums::{EventState, EventType};
 
 fn write_enumerated(object: &mut BinaryOutputObject, property: PropertyIdentifier, value: u32) {
     object
-        .write_property(property, None, PropertyValue::Enumerated(value), None)
+        .write_property_from(
+            property,
+            None,
+            PropertyValue::Enumerated(value),
+            None,
+            &crate::command_source::test_origin(),
+        )
         .unwrap();
 }
 
@@ -99,7 +105,7 @@ fn bo_fresh_object_reports_nothing_when_detection_is_enabled() {
     );
 }
 
-/// Clause 13.2.2.1 requires that while detection is disabled "no transitions shall occur".
+/// Clause 13.2.2.1 prohibits transitions throughout the detection-disabled period.
 /// Discarding an in-flight `Time_Delay` countdown is part of that: without it, a
 /// disable-then-enable cycle would leave a stale `PendingTransition` so the next tick fires
 /// immediately instead of restarting the full delay. Deleting `pending = None` from the write
@@ -295,7 +301,7 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
         bo.evaluate_intrinsic_reporting().unwrap().change.to,
         EventState::OFFNORMAL
     );
-    bo.event_detector.acked_transitions = 0;
+    bo.event_detector.acked_transitions = bacnet_types::bitstring::EventTransitionBits::empty();
     set_detection_enabled(&mut bo, false);
 
     assert_eq!(
@@ -314,7 +320,7 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
     assert_eq!(bo.evaluate_intrinsic_reporting(), None);
     assert_eq!(bo.tick_intrinsic_reporting(), None);
 
-    bo.reliability = 1;
+    bo.reliability = Reliability::NO_SENSOR;
     assert_eq!(
         bo.read_property(PropertyIdentifier::STATUS_FLAGS, None)
             .unwrap(),
@@ -348,8 +354,14 @@ fn bo_generic_event_properties_round_trip_and_match_pics() {
         ),
     ];
     for (property, value) in writes {
-        bo.write_property(property, None, value.clone(), None)
-            .unwrap();
+        bo.write_property_from(
+            property,
+            None,
+            value.clone(),
+            None,
+            &crate::command_source::test_origin(),
+        )
+        .unwrap();
         assert_eq!(bo.read_property(property, None).unwrap(), value);
     }
 

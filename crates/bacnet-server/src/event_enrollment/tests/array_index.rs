@@ -22,20 +22,22 @@ fn add_out_of_range_enrollment(
     let mut enrollment = EventEnrollmentObject::new(
         instance,
         format!("EE-index-{instance}"),
-        EventType::OUT_OF_RANGE.to_raw(),
+        EventType::OUT_OF_RANGE,
     )
     .unwrap();
-    enrollment.set_object_property_reference(Some(
-        BACnetDeviceObjectPropertyReference::new_local(monitored_oid, property.to_raw())
-            .with_index(index),
-    ));
+    enrollment
+        .set_object_property_reference(Some(
+            BACnetDeviceObjectPropertyReference::new_local(monitored_oid, property.to_raw())
+                .with_index(index),
+        ))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay,
         low_limit: 20.0,
         high_limit: 80.0,
         deadband: 1.0,
     });
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
     oid
@@ -50,21 +52,23 @@ fn add_cov_enrollment(
     let mut enrollment = EventEnrollmentObject::new(
         instance,
         format!("EE-COV-index-{instance}"),
-        EventType::CHANGE_OF_VALUE.to_raw(),
+        EventType::CHANGE_OF_VALUE,
     )
     .unwrap();
-    enrollment.set_object_property_reference(Some(
-        BACnetDeviceObjectPropertyReference::new_local(
-            monitored_oid,
-            PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
-        )
-        .with_index(index),
-    ));
+    enrollment
+        .set_object_property_reference(Some(
+            BACnetDeviceObjectPropertyReference::new_local(
+                monitored_oid,
+                PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
+            )
+            .with_index(index),
+        ))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::ChangeOfValue {
         time_delay: 0,
         criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),
     });
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
     oid
@@ -135,8 +139,13 @@ impl BACnetObject for IndexedReadProbe {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        self.inner
-            .write_property(property, array_index, value, priority)
+        self.inner.write_property_from(
+            property,
+            array_index,
+            value,
+            priority,
+            &crate::command_source::test_origin(),
+        )
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -153,11 +162,12 @@ fn indexed_priority_array_element_drives_evaluation() {
     let mut db = ObjectDatabase::new();
     let mut value = AnalogValueObject::new(1, "AV-indexed", 62).unwrap();
     value
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let value_oid = value.object_identifier();
@@ -249,7 +259,7 @@ fn out_of_range_index_clears_state_without_whole_property_fallback() {
 fn index_on_scalar_property_does_not_read_the_scalar() {
     let mut db = ObjectDatabase::new();
     let mut value = AnalogValueObject::new(4, "AV-scalar", 62).unwrap();
-    value.set_present_value(90.0);
+    value.set_relinquish_default(90.0).unwrap();
     let value_oid = value.object_identifier();
     db.add(Box::new(value)).unwrap();
     add_out_of_range_enrollment(
@@ -270,11 +280,12 @@ fn index_change_restarts_the_pending_delay() {
     let mut value = AnalogValueObject::new(5, "AV-retarget", 62).unwrap();
     for priority in [1, 2] {
         value
-            .write_property(
+            .write_property_from(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 PropertyValue::Real(90.0),
                 Some(priority),
+                &crate::command_source::test_origin(),
             )
             .unwrap();
     }
@@ -297,7 +308,7 @@ fn index_change_restarts_the_pending_delay() {
         .unwrap();
     assert_eq!(pending.pending.as_ref().unwrap().remaining, 2);
 
-    assert!(db.remove(&enrollment_oid).is_some());
+    assert!(db.remove(&enrollment_oid).unwrap().is_some());
     let replacement_oid = add_out_of_range_enrollment(
         &mut db,
         5,
@@ -333,11 +344,12 @@ fn index_change_discards_the_previous_element_baselines() {
     let mut value = AnalogValueObject::new(6, "AV-COV-retarget", 62).unwrap();
     for (priority, sample) in [(1, 10.0), (2, 90.0)] {
         value
-            .write_property(
+            .write_property_from(
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
                 PropertyValue::Real(sample),
                 Some(priority),
+                &crate::command_source::test_origin(),
             )
             .unwrap();
     }
@@ -354,7 +366,7 @@ fn index_change_discards_the_previous_element_baselines() {
     assert_eq!(prior_state.cov_baseline, Some(PropertyValue::Real(10.0)));
     prior_state.last_offnormal_value = Some(7);
 
-    assert!(db.remove(&enrollment_oid).is_some());
+    assert!(db.remove(&enrollment_oid).unwrap().is_some());
     assert_eq!(add_cov_enrollment(&mut db, 6, value_oid, 2), enrollment_oid);
     db.get_mut(&enrollment_oid)
         .unwrap()
@@ -386,11 +398,12 @@ fn null_indexed_element_interrupts_the_pending_delay() {
     let mut db = ObjectDatabase::new();
     let mut value = AnalogValueObject::new(7, "AV-null", 62).unwrap();
     value
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(90.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let value_oid = value.object_identifier();
@@ -408,11 +421,12 @@ fn null_indexed_element_interrupts_the_pending_delay() {
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     db.get_mut(&value_oid)
         .unwrap()
-        .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(1),
-            PropertyValue::Null,
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Null,
+            Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -426,11 +440,12 @@ fn null_indexed_element_interrupts_the_pending_delay() {
 
     db.get_mut(&value_oid)
         .unwrap()
-        .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(1),
-            PropertyValue::Real(90.0),
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Real(90.0),
+            Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -488,29 +503,31 @@ fn transient_indexed_read_failure_clears_private_continuity() {
 fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
     let mut db = ObjectDatabase::new();
     let mut monitored = AnalogValueObject::new(9, "AV-floating-monitored", 62).unwrap();
-    monitored.set_present_value(90.0);
+    monitored.set_relinquish_default(90.0).unwrap();
     let monitored_oid = monitored.object_identifier();
     db.add(Box::new(monitored)).unwrap();
 
     let mut setpoint = AnalogValueObject::new(10, "AV-floating-setpoint", 62).unwrap();
     setpoint
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(50.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let setpoint_oid = setpoint.object_identifier();
     db.add(Box::new(setpoint)).unwrap();
 
     let mut enrollment =
-        EventEnrollmentObject::new(9, "EE-indexed-setpoint", EventType::FLOATING_LIMIT.to_raw())
-            .unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        monitored_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+        EventEnrollmentObject::new(9, "EE-indexed-setpoint", EventType::FLOATING_LIMIT).unwrap();
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            monitored_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::FloatingLimit {
         time_delay: 2,
         setpoint_reference: BACnetDeviceObjectPropertyReference::new_local(
@@ -522,7 +539,7 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
         high_diff_limit: 10.0,
         deadband: 1.0,
     });
-    enrollment.set_event_enable(0x07);
+    enrollment.set_event_enable(EventTransitionBits::all());
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
@@ -530,11 +547,12 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
     db.get_mut(&setpoint_oid)
         .unwrap()
-        .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(1),
-            PropertyValue::Null,
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Null,
+            Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -548,11 +566,12 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
 
     db.get_mut(&setpoint_oid)
         .unwrap()
-        .write_property(
-            PropertyIdentifier::PRIORITY_ARRAY,
-            Some(1),
-            PropertyValue::Real(50.0),
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
             None,
+            PropertyValue::Real(50.0),
+            Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());

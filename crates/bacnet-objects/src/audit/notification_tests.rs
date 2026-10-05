@@ -133,6 +133,47 @@ fn receipt(key: &[u8], completed_at: u64) -> CompletedAuditReceipt {
 }
 
 #[test]
+fn forwarding_change_outcome_requires_record_change_and_durable_commit() {
+    let (mut log, persistence) = log(10);
+    let notification = notification(
+        Some(BACnetTimeStamp::Time(time(0))),
+        Some(BACnetTimeStamp::Time(time(0))),
+    );
+    assert!(log
+        .store_notifications_with_change(std::slice::from_ref(&notification), 2_000)
+        .unwrap());
+    assert!(!log
+        .store_notifications_with_change(std::slice::from_ref(&notification), 2_000)
+        .unwrap());
+    assert_eq!(
+        log.store_confirmed_notifications_with_change(
+            std::slice::from_ref(&notification),
+            2_000,
+            receipt(b"first", 1),
+        )
+        .unwrap(),
+        (ConfirmedAuditNotificationOutcome::Stored, false),
+    );
+    assert_eq!(
+        log.store_confirmed_notifications_with_change(
+            std::slice::from_ref(&notification),
+            2_000,
+            receipt(b"first", 2),
+        )
+        .unwrap(),
+        (ConfirmedAuditNotificationOutcome::Duplicate, false),
+    );
+    let before = log.current_snapshot();
+    let mut different = notification.clone();
+    different.invoke_id = Some(8);
+    persistence.fail.store(true, Ordering::Release);
+    assert!(log
+        .store_confirmed_notifications_with_change(&[different], 2_000, receipt(b"second", 3),)
+        .is_err());
+    assert_eq!(log.current_snapshot(), before);
+}
+
+#[test]
 fn complementary_batch_merges_once_and_target_current_value_wins() {
     let (mut log, persistence) = log(10);
     let mut source = notification(Some(BACnetTimeStamp::Time(time(0))), None);
@@ -321,6 +362,99 @@ fn timestamp_variants_use_configured_window_and_never_cross_compare() {
         )
         .unwrap();
         assert_eq!(log.total_record_count(), expected_count);
+    }
+}
+
+#[test]
+fn forwarding_window_is_inclusive_at_wire_tick_and_timeout_edges() {
+    for datetime in [false, true] {
+        // Time/DateTime encode hundredths, not milliseconds. Check +/- one
+        // wire tick, then +/- one millisecond of APDU_Timeout (a 2 ms window step).
+        for (distance, timeout, complements) in [
+            (399, 2_000, true),
+            (400, 2_000, true),
+            (401, 2_000, false),
+            (400, 1_999, false),
+            (400, 2_001, true),
+        ] {
+            let stamp = |ticks: u16| {
+                let time = Time {
+                    second: (ticks / 100) as u8,
+                    hundredths: (ticks % 100) as u8,
+                    ..time(0)
+                };
+                if datetime {
+                    BACnetTimeStamp::DateTime { date: date(), time }
+                } else {
+                    BACnetTimeStamp::Time(time)
+                }
+            };
+            let (mut log, persistence) = log(2);
+            assert!(log
+                .store_notifications_with_change(&[notification(Some(stamp(0)), None)], timeout)
+                .unwrap());
+            let before = log.records().front().unwrap().clone();
+            let target = notification(None, Some(stamp(distance)));
+            assert!(log
+                .store_notifications_with_change(std::slice::from_ref(&target), timeout)
+                .unwrap());
+            assert_eq!(log.records().len(), if complements { 1 } else { 2 });
+            assert_eq!(log.total_record_count(), if complements { 1 } else { 2 });
+            assert_eq!(log.records()[0].sequence_number, before.sequence_number);
+            assert_eq!(log.records()[0].record.timestamp, before.record.timestamp);
+            assert_eq!(persistence.commits.load(Ordering::Acquire), 3);
+            let BACnetAuditLogDatum::AuditNotification(stored) = &log.records()[0].record.datum
+            else {
+                panic!("expected notification")
+            };
+            assert_eq!(stored.target_timestamp.is_some(), complements);
+            if complements {
+                let before = log.current_snapshot();
+                assert!(!log
+                    .store_notifications_with_change(&[target], timeout)
+                    .unwrap());
+                assert_eq!(log.current_snapshot(), before);
+                assert_eq!(persistence.commits.load(Ordering::Acquire), 3);
+            }
+        }
+    }
+}
+
+#[test]
+fn forwarding_mixed_timestamp_variants_never_complement_in_either_direction() {
+    let variants = [
+        BACnetTimeStamp::Time(time(0)),
+        BACnetTimeStamp::DateTime {
+            date: date(),
+            time: time(0),
+        },
+        BACnetTimeStamp::SequenceNumber(0),
+    ];
+    for (i, source) in variants.iter().enumerate() {
+        for (j, target) in variants.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            let (mut log, persistence) = log(2);
+            assert!(log
+                .store_notifications_with_change(
+                    &[notification(Some(source.clone()), None)],
+                    60_000
+                )
+                .unwrap());
+            let first = log.records()[0].clone();
+            assert!(log
+                .store_notifications_with_change(
+                    &[notification(None, Some(target.clone()))],
+                    60_000
+                )
+                .unwrap());
+            assert_eq!(log.total_record_count(), 2);
+            assert_eq!(log.records().len(), 2);
+            assert_eq!(log.records()[0], first);
+            assert_eq!(log.records()[1].sequence_number, 2);
+            assert_eq!(persistence.commits.load(Ordering::Acquire), 3);
+        }
     }
 }
 

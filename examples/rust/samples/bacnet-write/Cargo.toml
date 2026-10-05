@@ -3,6 +3,7 @@ name = "bacnet-write"
 version = "0.1.0"
 edition = "2021"
 description = "Who-Is a device, WriteProperty present-value, read-back, optional relinquish"
+license.workspace = true
 publish = false
 
 [[bin]]

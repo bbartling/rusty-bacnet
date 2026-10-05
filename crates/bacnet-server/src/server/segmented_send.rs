@@ -1,0 +1,241 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+use tokio::sync::{mpsc, watch};
+
+use bacnet_encoding::apdu::{AbortPdu, SegmentAck as SegmentAckPdu};
+use bacnet_encoding::npdu::NpduAddress;
+use bacnet_transport::port::TransportProvenance;
+use bacnet_types::MacAddr;
+
+use super::segmented_receive::RequestPayload;
+use super::{DEFAULT_APDU_SEGMENT_RETRIES, DEFAULT_APDU_SEGMENT_TIMEOUT};
+
+/// Key for tracking segmented transactions by peer and invoke ID.
+pub(crate) type SegKey = (
+    MacAddr,
+    Option<NpduAddress>,
+    u8,
+    Option<bacnet_transport::port::DirectScIdentity>,
+);
+
+/// Key for tracking in-progress segmented request reassembly:
+/// (peer, routed identity, invoke ID, provenance snapshot).
+///
+/// Including the immutable provenance snapshot gives cross-peer isolation;
+/// a conflicting provenance for an otherwise identical key fails closed
+/// (abort) rather than merging. Compat mode: no policy change beyond the
+/// fail-closed abort (RB-07; RB-09 consumes provenance later).
+pub(crate) type SegRecvKey = (MacAddr, Option<NpduAddress>, u8, TransportProvenance);
+
+/// Short, synchronous registry sections permit cleanup during future drop.
+#[derive(Default)]
+pub(super) struct SegmentedSendRegistry(Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>);
+
+impl SegmentedSendRegistry {
+    pub(super) fn lock(&self) -> MutexGuard<'_, HashMap<SegKey, Arc<SegmentedSendHandle>>> {
+        // Map operations preserve their invariants if a caller unwinds. Cleanup
+        // must not panic again while dropping an already-panicking worker.
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+pub(super) struct SegmentedSendRegistration<'a> {
+    pub(super) registry: &'a SegmentedSendRegistry,
+    pub(super) key: SegKey,
+    pub(super) sender: mpsc::Sender<SegmentAckPdu>,
+    // Fields drop after Drop runs: removal always precedes permit release.
+    pub(super) _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl Drop for SegmentedSendRegistration<'_> {
+    fn drop(&mut self) {
+        let mut senders = self.registry.lock();
+        if senders
+            .get(&self.key)
+            .is_some_and(|entry| entry.same_channel(&self.sender))
+        {
+            senders.remove(&self.key);
+        }
+    }
+}
+
+pub(crate) fn segmented_transaction_key(
+    source_mac: &[u8],
+    source_network: Option<&NpduAddress>,
+    invoke_id: u8,
+    provenance: TransportProvenance,
+) -> SegKey {
+    match source_network {
+        Some(address)
+            if (1..=0xFFFE).contains(&address.network) && !address.mac_address.is_empty() =>
+        {
+            (
+                MacAddr::new(),
+                Some(address.clone()),
+                invoke_id,
+                provenance.direct_sc_identity(),
+            )
+        }
+        _ => (
+            MacAddr::from_slice(source_mac),
+            source_network.cloned(),
+            invoke_id,
+            provenance.direct_sc_identity(),
+        ),
+    }
+}
+
+/// Provenance-aware receive key for segmented request reassembly (RB-07).
+/// The first three elements match [`segmented_transaction_key`]; the fourth
+/// is the immutable snapshot compared by value on every later segment.
+pub(crate) fn segmented_receive_key(
+    source_mac: &[u8],
+    source_network: Option<&NpduAddress>,
+    invoke_id: u8,
+    provenance: TransportProvenance,
+) -> SegRecvKey {
+    let (mac, network, id, _) =
+        segmented_transaction_key(source_mac, source_network, invoke_id, provenance);
+    (mac, network, id, provenance)
+}
+
+#[derive(Debug)]
+pub(crate) enum SegmentedSendEvent {
+    SegmentAck(SegmentAckPdu),
+    Abort(AbortPdu),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum SegmentedSendControlEvent {
+    Abort(AbortPdu),
+    Cancel,
+}
+
+pub(crate) struct SegmentedSendHandle {
+    pub(crate) segment_ack_tx: mpsc::Sender<SegmentAckPdu>,
+    pub(crate) control_tx: watch::Sender<Option<SegmentedSendControlEvent>>,
+    pub(crate) closed: AtomicBool,
+    pub(crate) current_sequence: AtomicU16,
+    pub(crate) total_segments: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SegmentAckDisposition {
+    Advance,
+    Retransmit,
+}
+
+pub(crate) fn segment_ack_disposition(
+    ack: &SegmentAckPdu,
+    current: usize,
+    total_segments: usize,
+) -> Option<SegmentAckDisposition> {
+    if current >= total_segments {
+        return None;
+    }
+
+    let ack_seq = ack.sequence_number as usize;
+    if ack_seq >= total_segments {
+        return None;
+    }
+
+    // Clause 5.4.4.2 treats either ACK flavor's sequence number as the last
+    // segment accepted. A NAK for the preceding segment asks for `current`
+    // again; a NAK for `current` confirms it and advances the send window.
+    if ack_seq == current {
+        Some(SegmentAckDisposition::Advance)
+    } else if ack.negative_ack && current.checked_sub(1) == Some(ack_seq) {
+        Some(SegmentAckDisposition::Retransmit)
+    } else {
+        None
+    }
+}
+
+impl SegmentedSendHandle {
+    pub(crate) fn new(
+        segment_ack_tx: mpsc::Sender<SegmentAckPdu>,
+        control_tx: watch::Sender<Option<SegmentedSendControlEvent>>,
+        total_segments: usize,
+    ) -> Self {
+        Self {
+            segment_ack_tx,
+            control_tx,
+            closed: AtomicBool::new(false),
+            current_sequence: AtomicU16::new(u16::MAX),
+            total_segments,
+        }
+    }
+
+    pub(crate) fn accepts_segment_ack(&self, ack: &SegmentAckPdu) -> bool {
+        if ack.sent_by_server || self.closed.load(Ordering::Acquire) {
+            return false;
+        }
+
+        let current = self.current_sequence.load(Ordering::Acquire) as usize;
+        if current >= self.total_segments {
+            return false;
+        }
+
+        segment_ack_disposition(ack, current, self.total_segments).is_some()
+    }
+
+    pub(crate) fn send_control(&self, event: SegmentedSendControlEvent) {
+        self.closed.store(true, Ordering::Release);
+        self.control_tx.send_replace(Some(event));
+    }
+
+    pub(crate) fn same_channel(&self, sender: &mpsc::Sender<SegmentAckPdu>) -> bool {
+        self.segment_ack_tx.same_channel(sender)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SegmentedSendOptions {
+    pub(crate) segment_timeout: Duration,
+    pub(crate) max_retries: u8,
+}
+
+impl Default for SegmentedSendOptions {
+    fn default() -> Self {
+        Self {
+            segment_timeout: DEFAULT_APDU_SEGMENT_TIMEOUT,
+            max_retries: DEFAULT_APDU_SEGMENT_RETRIES,
+        }
+    }
+}
+
+pub(crate) struct SegmentedRequestState {
+    pub(crate) payload: RequestPayload,
+    /// Provenance snapshot at session open (RB-07). Compared by value on
+    /// every later segment; conflicting contexts fail closed.
+    pub(crate) provenance: TransportProvenance,
+    pub(crate) direct_response: Option<bacnet_transport::port::DirectResponse>,
+    pub(crate) last_activity: Instant,
+    /// Last successfully saved new in-order segment, independent of SegmentTimer.
+    pub(crate) last_progress: Instant,
+    pub(crate) expected_seq: u8,
+    /// Last sequence number in the previously completed receive window.
+    pub(crate) initial_sequence_number: u8,
+    /// Duplicates silently discarded in the current receive window.
+    pub(crate) duplicate_count: u8,
+    /// Last segment accepted in order (Clause 5.4.2 LastSequenceNumber).
+    pub(crate) last_acked_seq: u8,
+    pub(crate) window_pos: u8,
+    pub(crate) actual_window_size: u8,
+    /// Monotonic count of segments accepted in order (#364).
+    ///
+    /// The reassembly total. `expected_seq` cannot serve: Clause 20.1.2.7
+    /// makes the sequence number modulo 256, so a 260-segment request ends at
+    /// sequence 3 and `seq + 1` names a four-segment total. This counter also
+    /// carries the overrun cap — acceptance is strictly in order, so it
+    /// reaches [`MAX_REQUEST_SEGMENTS`] exactly when the sequence number is
+    /// about to wrap onto stored segment 0.
+    ///
+    /// [`MAX_REQUEST_SEGMENTS`]: super::MAX_REQUEST_SEGMENTS
+    pub(crate) accepted_segments: usize,
+}

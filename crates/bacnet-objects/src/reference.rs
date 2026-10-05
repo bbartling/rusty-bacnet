@@ -1,177 +1,145 @@
-//! Shared write-arm decode of the `BACnetObjectPropertyReference`-typed
-//! properties (Clause 21 production): Loop `Controlled_Variable_Reference`,
-//! `Manipulated_Variable_Reference`, `Setpoint_Reference` (Clause 12.17, the
-//! last as the optional member of `BACnetSetpointReference`) and Pulse
-//! Converter `Input_Reference` (Clause 12.23).
+//! Read values and write decoding for the reference properties built on
+//! `BACnetObjectPropertyReference` (Clause 21): Loop
+//! Manipulated_Variable_Reference and Controlled_Variable_Reference (Clauses
+//! 12.17.12 and 12.17.13), Loop Setpoint_Reference (12.17.16), whose
+//! `BACnetSetpointReference` wraps one such reference, and Pulse Converter
+//! Input_Reference (12.23.6). The device-qualified references, the Averaging
+//! Object_Property_Reference among them, go through `device_reference.rs`
+//! instead (#1313).
 //!
-//! Three input shapes are accepted, and nothing else:
+//! The Loop and Pulse Converter serve each reference as
+//! `PropertyValue::ApplicationData` holding its context-tagged encoding, built
+//! by the shared codecs in `bacnet_encoding::constructed`, and take writes in
+//! that encoding (#1312). A bare reference has no empty encoding, so an unset
+//! one reads as the standard unset form, the property's usual object type at
+//! the reserved instance 4194303 (Clause 12.1, #1417), and writing a
+//! reference to that instance clears it, as on Averaging. A
+//! `BACnetSetpointReference` does have an empty encoding: its only member is
+//! optional and an absent member encodes as nothing (Clause 20.2.16). An
+//! unset Setpoint_Reference therefore reads as an empty `ApplicationData`,
+//! and writing a value with no octets clears it. Null is a value of another
+//! datatype on all four, which the bundled server turns into the success
+//! that changes nothing (Clause 15.9.2, #1396).
 //!
-//! 1. **`Null`** — clears the reference.
-//! 2. **Legacy local `List`** — `[ObjectIdentifier, Enumerated]` plus an
-//!    optional third `Unsigned` carrying the array index. This is the
-//!    in-process form (object read arms and the pre-#182 local writes), and
-//!    it is exactly what the service decode now produces when a peer writes
-//!    the flattened application-tagged form this stack emits on reads. The
-//!    shape is exact: extra or wrong-typed members are refused, never
-//!    silently ignored.
-//! 3. **Framed network form** — the reference's primitive context-tagged
-//!    members [0]/[1]/[2] verbatim: one or more `ApplicationData` elements
-//!    (the service decode splits at context-tag boundaries, one element per
-//!    member; a `Setpoint_Reference` write wrapped in the
-//!    `BACnetSetpointReference` opening/closing tag 0 arrives as a single
-//!    element). Concatenation is strictly decoded by the Clause 21 codec in
-//!    `bacnet-encoding`, which rejects a device-qualifying member [3] (not
-//!    part of this production — these references are local-device only) and
-//!    any unknown trailing context tag.
-//!
-//! Error pairings follow Clause 15.9.1.3 and the object's existing arms: a
-//! value of the wrong BACnet datatype is PROPERTY / INVALID_DATA_TYPE, and a
-//! framed form whose encoding is not valid for the production is PROPERTY /
-//! INVALID_DATA_ENCODING.
+//! Any other written value holds one reference and is decoded by
+//! `common::decode_single_element`, the decoder behind the device references'
+//! single-reference rule (#1395; the codes are listed in
+//! [`crate::device_reference`]), with the shared offset-taking codecs as its
+//! element decoders, so that decoder alone judges what follows the reference
+//! (#1414). Another kind of value, a list mixing raw chunks with decoded
+//! values, or octets that don't open the way the property's datatype does is
+//! PROPERTY / INVALID_DATA_TYPE. Octets that open right but aren't exactly
+//! one whole reference (none, one cut short, or anything after it) are
+//! PROPERTY / INVALID_DATA_ENCODING. The production has no device-qualifying
+//! member \[3\]; the codec refuses one, so it draws the same code as other
+//! octets after the reference.
 
+use bacnet_encoding::constructed::{
+    decode_object_property_reference_at, decode_setpoint_reference_at,
+    encode_object_property_reference, encode_setpoint_reference,
+};
+use bacnet_encoding::tags::Tag;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
+use bytes::BytesMut;
 
-use crate::common;
+use crate::{common, device_reference};
 
-/// Which wire frame a reference-typed property accepts on top of the bare
-/// member sequence.
+/// The datatype a reference property is declared with, which fixes how its
+/// encoding opens and what stands for "no reference".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReferenceFrame {
-    /// Bare members only (Loop Controlled_/Manipulated_Variable_Reference,
-    /// Pulse Converter Input_Reference — each declared
-    /// `BACnetObjectPropertyReference`).
+    /// `BACnetObjectPropertyReference`: the members alone, opening with the
+    /// object identifier's primitive context tag 0 (Loop
+    /// Controlled_Variable_Reference and Manipulated_Variable_Reference,
+    /// Pulse Converter Input_Reference). A reference to the reserved
+    /// instance stands for no reference.
     Bare,
-    /// Also accept the `BACnetSetpointReference` opening/closing tag 0 frame
-    /// (Loop Setpoint_Reference's Clause 21 production).
+    /// `BACnetSetpointReference`: the members inside opening and closing
+    /// context tag 0, or no octets at all for no reference (Loop
+    /// Setpoint_Reference).
     Setpoint,
 }
 
-/// Build the local (flat `List`) read form of a reference property: object
-/// id and property as `[ObjectIdentifier, Enumerated]`, plus a third
-/// `Unsigned` when the reference is indexed; an absent reference reads back
-/// as `Null`.
-pub(crate) fn reference_read_value(
-    reference: &Option<BACnetObjectPropertyReference>,
-) -> PropertyValue {
-    match reference {
-        Some(r) => {
-            let mut items = vec![
-                PropertyValue::ObjectIdentifier(r.object_identifier),
-                PropertyValue::Enumerated(r.property_identifier),
-            ];
-            if let Some(index) = r.property_array_index {
-                items.push(PropertyValue::Unsigned(index as u64));
-            }
-            PropertyValue::List(items)
-        }
-        None => PropertyValue::Null,
-    }
+/// The unset form of a `BACnetObjectPropertyReference` property (#1417):
+/// the Present_Value of `object_type` at the reserved instance 4194303, as
+/// [`device_reference::unset_reference`] builds it for the device-qualified
+/// references.
+pub(crate) fn unset_reference(object_type: ObjectType) -> BACnetObjectPropertyReference {
+    BACnetObjectPropertyReference::new(
+        device_reference::unset_identifier(object_type),
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )
 }
 
-/// Decode a `BACnetObjectPropertyReference`-typed write value into
-/// `Some(reference)`; `Null` decodes to `None` (clear).
-///
-/// Both the legacy local `List` form and the framed network form are
-/// accepted — see the module documentation for the exact shapes.
+/// `reference`, or `None` when it is the unset form, which these properties
+/// store as no reference at all.
+pub(crate) fn set_or_unset(
+    reference: BACnetObjectPropertyReference,
+) -> Option<BACnetObjectPropertyReference> {
+    (!reference.is_unset()).then_some(reference)
+}
+
+/// A `BACnetObjectPropertyReference` property as a read serves it: the
+/// reference's context-tagged members, or [`unset_reference`] naming
+/// `unset_type` when there is none.
+pub(crate) fn object_property_reference_value(
+    reference: Option<&BACnetObjectPropertyReference>,
+    unset_type: ObjectType,
+) -> PropertyValue {
+    let mut encoded = BytesMut::new();
+    match reference {
+        Some(reference) => encode_object_property_reference(&mut encoded, reference),
+        None => encode_object_property_reference(&mut encoded, &unset_reference(unset_type)),
+    }
+    PropertyValue::ApplicationData(encoded.to_vec())
+}
+
+/// Setpoint_Reference as a read serves it: the reference framed in context
+/// tag 0, or no octets when there is none.
+pub(crate) fn setpoint_reference_value(
+    reference: Option<&BACnetObjectPropertyReference>,
+) -> PropertyValue {
+    let mut encoded = BytesMut::new();
+    if let Some(reference) = reference {
+        encode_setpoint_reference(&mut encoded, reference);
+    }
+    PropertyValue::ApplicationData(encoded.to_vec())
+}
+
+/// Decode a written reference property: `Some(reference)`, or `None` to
+/// clear it. See the module documentation for the accepted values and the
+/// error each refusal carries.
 pub(crate) fn decode_reference_write(
     value: &PropertyValue,
     frame: ReferenceFrame,
 ) -> Result<Option<BACnetObjectPropertyReference>, Error> {
-    match value {
-        PropertyValue::Null => Ok(None),
-        PropertyValue::ApplicationData(bytes) => decode_framed(bytes, frame),
-        PropertyValue::List(items) => match items.first() {
-            Some(PropertyValue::ObjectIdentifier(_)) => decode_legacy_list(items).map(Some),
-            Some(PropertyValue::ApplicationData(_)) => {
-                // Mixed framed/flat element lists are a framing-level
-                // nonsensical mixture: refuse, never pick one interpretation.
-                if !items
-                    .iter()
-                    .all(|item| matches!(item, PropertyValue::ApplicationData(_)))
-                {
-                    return Err(common::invalid_data_encoding_error());
-                }
-                let mut bytes = Vec::new();
-                for item in items {
-                    if let PropertyValue::ApplicationData(part) = item {
-                        bytes.extend_from_slice(part);
-                    }
-                }
-                decode_framed(&bytes, frame)
+    match frame {
+        ReferenceFrame::Bare => {
+            common::decode_single_element(value, opens_bare, decode_object_property_reference_at)
+                .map(set_or_unset)
+        }
+        ReferenceFrame::Setpoint => {
+            if common::chunks(value)?.iter().all(|chunk| chunk.is_empty()) {
+                return Ok(None);
             }
-            _ => Err(common::invalid_data_type_error()),
-        },
-        _ => Err(common::invalid_data_type_error()),
+            common::decode_single_element(value, opens_setpoint, decode_setpoint_reference_at)
+                .map(Some)
+        }
     }
 }
 
-/// The legacy local form: `[ObjectIdentifier, property-id]` with an
-/// optional third `Unsigned` array index — exactly two or three members.
-///
-/// Member typing: the property member travels as `Enumerated` in the
-/// Loop/Pulse Converter flat form and as `Unsigned` in the Averaging flat
-/// form; both are accepted on write for cross-object compatibility (this
-/// mirrors Clause 21 where `BACnetPropertyIdentifier` is itself an
-/// ENUMERATED production, but the two flat conventions predate the framed
-/// codec and each object's read keeps its historical emission). Values past
-/// u32 (a >4-octet wire member, or an overflowing `Unsigned`) are refused.
-fn decode_legacy_list(items: &[PropertyValue]) -> Result<BACnetObjectPropertyReference, Error> {
-    let Some(PropertyValue::ObjectIdentifier(object_identifier)) = items.first() else {
-        return Err(common::invalid_data_type_error());
-    };
-    let property_identifier = match items.get(1) {
-        Some(PropertyValue::Enumerated(property)) => *property,
-        Some(PropertyValue::Unsigned(property)) => {
-            u32::try_from(*property).map_err(|_| common::invalid_data_type_error())?
-        }
-        _ => return Err(common::invalid_data_type_error()),
-    };
-    let property_array_index = match items.get(2) {
-        None => None,
-        Some(PropertyValue::Unsigned(index)) => {
-            Some(u32::try_from(*index).map_err(|_| common::invalid_data_type_error())?)
-        }
-        Some(_) => return Err(common::invalid_data_type_error()),
-    };
-    if items.len() > 3 {
-        return Err(common::invalid_data_type_error());
-    }
-    Ok(BACnetObjectPropertyReference {
-        object_identifier: *object_identifier,
-        property_identifier,
-        property_array_index,
-    })
+/// The bare members open with the object identifier's primitive context
+/// tag 0.
+fn opens_bare(tag: &Tag) -> bool {
+    tag.is_context(0)
 }
 
-/// Strict framed decode; every codec failure is INVALID_DATA_ENCODING.
-///
-/// `Setpoint` accepts the `BACnetSetpointReference` [0]-framed production as
-/// well as the bare member sequence: the two are unambiguous (a bare
-/// reference always opens with *primitive* context tag [0], the frame with
-/// *opening* tag [0]), and the bare form is what a peer handling the
-/// reference generically — and this stack's own test tooling — may send. The
-/// [0] frame with NO inner members is the production's absent-alternative
-/// (the member is OPTIONAL; Clause 12.17 Setpoint_Reference: "The absence of
-/// a reference indicates that the setpoint for this control loop is fixed
-/// and is contained in the Setpoint property") and clears, exactly like a
-/// `Null` write.
-fn decode_framed(
-    bytes: &[u8],
-    frame: ReferenceFrame,
-) -> Result<Option<BACnetObjectPropertyReference>, Error> {
-    let bare = bacnet_encoding::constructed::decode_object_property_reference(bytes);
-    match (bare, frame) {
-        (Ok(reference), _) => Ok(Some(reference)),
-        (Err(_), ReferenceFrame::Setpoint) => {
-            match bacnet_encoding::constructed::decode_setpoint_reference(bytes) {
-                Ok(reference) => Ok(reference),
-                Err(_) => Err(common::invalid_data_encoding_error()),
-            }
-        }
-        (Err(_), ReferenceFrame::Bare) => Err(common::invalid_data_encoding_error()),
-    }
+/// The setpoint frame opens with opening tag 0.
+fn opens_setpoint(tag: &Tag) -> bool {
+    tag.is_opening_tag(0)
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ use super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::FaultParameters;
 use bacnet_types::enums::Reliability;
 use bacnet_types::primitives::BACnetTimeStamp;
@@ -34,7 +35,7 @@ fn timestamp_at(db: &ObjectDatabase, oid: ObjectIdentifier, index: u32) -> BACne
     timestamp
 }
 
-fn acked_transitions(db: &ObjectDatabase, oid: ObjectIdentifier) -> u8 {
+fn acked_transitions(db: &ObjectDatabase, oid: ObjectIdentifier) -> EventTransitionBits {
     let PropertyValue::BitString { data, .. } = db
         .get(&oid)
         .unwrap()
@@ -43,23 +44,24 @@ fn acked_transitions(db: &ObjectDatabase, oid: ObjectIdentifier) -> u8 {
     else {
         panic!("Acked_Transitions must be BitString");
     };
-    bacnet_types::bitstring::unpack_octet(&data, 3)
+    EventTransitionBits::from_bacnet(&data)
 }
 
 #[test]
 fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     let mut db = ObjectDatabase::new();
     let mut notification_class = NotificationClass::new(32, "NC-reliability-source").unwrap();
-    notification_class.ack_required = [false, true, false];
+    notification_class.ack_required = EventTransitionBits::TO_FAULT;
     db.add(Box::new(notification_class)).unwrap();
 
     let mut target = AnalogValueObject::new(307, "AV-reliability-source", 62).unwrap();
     target
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(-1.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -85,7 +87,7 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
 
-    let first = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let first = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(first.reliability_results.len(), 1);
     assert_eq!(
         first.reliability_results[0].new_reliability,
@@ -93,32 +95,36 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     );
     assert!(first
         .diagnostics
-        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
+        .contains(&EventEnrollmentEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentDetailedEvaluationStage::EvaluationSource,
-            outcome: EventEnrollmentDetailedEvaluationOutcome::Rejected,
+            stage: EventEnrollmentEvaluationStage::EvaluationSource,
+            outcome: EventEnrollmentEvaluationOutcome::Rejected,
         }));
     assert_eq!(
         timestamp_at(&db, enrollment_oid, 2),
         BACnetTimeStamp::SequenceNumber(0)
     );
-    assert_eq!(acked_transitions(&db, enrollment_oid), 0b101);
+    assert_eq!(
+        acked_transitions(&db, enrollment_oid),
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
+    );
 
     db.get_mut(&enrollment_oid)
         .unwrap()
-        .set_acked_transitions_internal(0x02, true)
+        .set_acked_transitions_internal(EventTransitionBits::TO_FAULT, true)
         .unwrap();
     db.get_mut(&target_oid)
         .unwrap()
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Real(11.0),
             Some(1),
+            &crate::command_source::test_origin(),
         )
         .unwrap();
 
-    let second = evaluate_event_enrollments_detailed_report(&mut db, 1);
+    let second = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(second.reliability_results.len(), 1);
     assert_eq!(
         second.reliability_results[0].previous_reliability,
@@ -137,16 +143,19 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     );
     assert!(second
         .diagnostics
-        .contains(&EventEnrollmentDetailedEvaluationDiagnostic {
+        .contains(&EventEnrollmentEvaluationDiagnostic {
             enrollment_oid,
-            stage: EventEnrollmentDetailedEvaluationStage::EvaluationSource,
-            outcome: EventEnrollmentDetailedEvaluationOutcome::Rejected,
+            stage: EventEnrollmentEvaluationStage::EvaluationSource,
+            outcome: EventEnrollmentEvaluationOutcome::Rejected,
         }));
     assert_eq!(reliability(&db, enrollment_oid), Reliability::OVER_RANGE);
     assert_eq!(
         timestamp_at(&db, enrollment_oid, 2),
         BACnetTimeStamp::SequenceNumber(1)
     );
-    assert_eq!(acked_transitions(&db, enrollment_oid), 0b101);
+    assert_eq!(
+        acked_transitions(&db, enrollment_oid),
+        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
+    );
     assert_eq!(db.reserve_event_sequence_number().number(), 2);
 }

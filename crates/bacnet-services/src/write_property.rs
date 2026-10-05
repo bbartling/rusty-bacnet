@@ -1,65 +1,62 @@
 //! WriteProperty service per ASHRAE 135-2020 Clause 15.9.
 
 use bacnet_encoding::primitives;
-use bacnet_encoding::tags::{self, TagClass};
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_encoding::tags;
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{extract_property_value, PropertyValueBoundary};
-
-fn decode_context_u32(
-    data: &[u8],
-    offset: usize,
-    tag_number: u8,
-    context: &str,
-) -> Result<(u32, usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if !tag.is_context(tag_number) {
-        return Err(Error::decoding(
-            offset,
-            format!("{context} expected context tag {tag_number}"),
-        ));
-    }
-    let end = pos + tag.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(pos, format!("{context} truncated")));
-    }
-    let raw = primitives::decode_unsigned(&data[pos..end])?;
-    let value = u32::try_from(raw)
-        .map_err(|_| Error::decoding(pos, format!("{context} {raw} exceeds u32")))?;
-    Ok((value, end))
-}
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, expect_end, expect_opening,
+};
+use bacnet_encoding::constructed::{extract_property_value, PropertyValueBoundary};
 
 // ---------------------------------------------------------------------------
 // WritePropertyRequest
 // ---------------------------------------------------------------------------
 
-/// WriteProperty-Request service parameters.
+/// WriteProperty-Request service parameters (Clause 15.9; production in Clause 21.2).
 ///
-/// ```text
-/// WriteProperty-Request ::= SEQUENCE {
-///     objectIdentifier    [0] BACnetObjectIdentifier,
-///     propertyIdentifier  [1] BACnetPropertyIdentifier,
-///     propertyArrayIndex  [2] Unsigned OPTIONAL,
-///     propertyValue       [3] ABSTRACT-SYNTAX.&TYPE,
-///     priority            [4] Unsigned (1..16) OPTIONAL
-/// }
-/// ```
+/// Five context-tagged members in order: object identifier `[0]`, property identifier `[1]`,
+/// an optional Unsigned array index `[2]`, the value inside an opening/closing `[3]` pair (typed
+/// by the property), and an optional priority `[4]`, an Unsigned limited to 1-16.
 ///
 /// WriteProperty uses SimpleACK (no ACK struct needed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WritePropertyRequest {
+    /// Object to write to.
     pub object_identifier: ObjectIdentifier,
+    /// Property to write.
     pub property_identifier: PropertyIdentifier,
+    /// Array index of the element to write; `None` writes the whole property.
     pub property_array_index: Option<u32>,
+    /// Application-tagged encoding of the value to write, opaque to this crate.
     pub property_value: Vec<u8>,
+    /// Priority (1-16) for commandable properties. `None` omits it, and the responder then
+    /// uses 16; a non-commandable property ignores it (Clause 15.9.1).
     pub priority: Option<u8>,
 }
 
+/// Validate an outbound property-write priority without inspecting commandability.
+///
+/// Omission is allowed; every supplied priority must be in 1..=16, including
+/// NULL writes. Returns a local encoding error for invalid typed input.
+pub fn validate_priority(priority: Option<u8>) -> Result<(), Error> {
+    if let Some(priority) = priority {
+        if !(1..=16).contains(&priority) {
+            return Err(Error::Encoding(format!(
+                "WriteProperty priority must be 1-16, got {priority}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl WritePropertyRequest {
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Encode transactionally: invalid priority leaves `buf` unchanged.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        validate_priority(self.priority)?;
         primitives::encode_ctx_object_id(buf, 0, &self.object_identifier);
         primitives::encode_ctx_unsigned(buf, 1, self.property_identifier.to_raw() as u64);
         if let Some(idx) = self.property_array_index {
@@ -71,51 +68,34 @@ impl WritePropertyRequest {
         if let Some(prio) = self.priority {
             primitives::encode_ctx_unsigned(buf, 4, prio as u64);
         }
+        Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
         // [0] object-identifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                "WriteProperty expected context tag 0 for object-id",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "WriteProperty truncated at object-id"));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
+        let (object_identifier, offset) =
+            decode_ctx_object_id(data, 0, 0, "WriteProperty object-id")?;
 
         // [1] property-identifier
-        let (prop_raw, end) = decode_context_u32(data, offset, 1, "WriteProperty property-id")?;
+        let (prop_raw, offset) =
+            decode_ctx_unsigned::<u32>(data, offset, 1, "WriteProperty property-id")?;
         let property_identifier = PropertyIdentifier::from_raw(prop_raw);
-        offset = end;
 
         // [2] propertyArrayIndex (optional)
-        let mut property_array_index = None;
-        let (tag, _) = tags::decode_tag(data, offset)?;
-        if tag.class == TagClass::Context && tag.number == 2 && !tag.is_opening && !tag.is_closing {
-            let (index, end) = decode_context_u32(data, offset, 2, "WriteProperty array-index")?;
-            property_array_index = Some(index);
-            offset = end;
-        }
+        let (property_array_index, offset) = decode_optional_ctx(
+            data,
+            offset,
+            2,
+            "WriteProperty array-index",
+            decode_ctx_unsigned::<u32>,
+        )?;
 
         // [3] propertyValue (opening/closing tag 3)
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        if !tag.is_opening_tag(3) {
-            return Err(Error::decoding(
-                offset,
-                "WriteProperty expected opening tag 3",
-            ));
-        }
-        let (value_bytes, new_offset) = extract_property_value(
+        let content = expect_opening(data, offset, 3, "WriteProperty property-value")?;
+        let (value_bytes, offset) = extract_property_value(
             data,
-            tag_end,
+            content,
             3,
             property_identifier,
             &[
@@ -124,36 +104,26 @@ impl WritePropertyRequest {
             ],
         )?;
         let property_value = value_bytes.to_vec();
-        offset = new_offset;
 
-        // [4] priority (optional)
+        // [4] priority (optional), and nothing after it. Read at full width
+        // so a value past 16 draws the range error, not a width error.
+        let (prio, end) = decode_optional_ctx(
+            data,
+            offset,
+            4,
+            "WriteProperty priority",
+            decode_ctx_unsigned::<u64>,
+        )?;
+        expect_end(data, end, end, "WriteProperty")?;
         let mut priority = None;
-        if offset < data.len() {
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            if !tag.is_context(4) {
-                return Err(Error::decoding(
-                    offset,
-                    "WriteProperty expected context tag 4 for priority",
-                ));
-            }
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "WriteProperty truncated at priority"));
-            }
-            let prio = primitives::decode_unsigned(&data[pos..end])?;
+        if let Some(prio) = prio {
             if !(1..=16).contains(&prio) {
-                return Err(Error::decoding(
-                    pos,
-                    format!("WriteProperty priority {prio} out of range 1-16"),
-                ));
+                return Err(Error::Protocol {
+                    class: ErrorClass::SERVICES.to_raw() as u32,
+                    code: ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw() as u32,
+                });
             }
-            if end != data.len() {
-                return Err(Error::decoding(end, "WriteProperty has trailing data"));
-            }
-            priority =
-                Some(u8::try_from(prio).map_err(|_| {
-                    Error::decoding(pos, "WriteProperty priority conversion failed")
-                })?);
+            priority = Some(prio as u8);
         }
 
         Ok(Self {
@@ -169,6 +139,7 @@ impl WritePropertyRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_encoding::tags::TagClass;
     use bacnet_types::enums::ObjectType;
 
     fn object_id() -> ObjectIdentifier {
@@ -208,6 +179,52 @@ mod tests {
     }
 
     #[test]
+    fn outbound_priority_validation_is_transactional() {
+        for priority in [0, 17, 255] {
+            let request = WritePropertyRequest {
+                object_identifier: object_id(),
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: Some(0),
+                property_value: vec![0],
+                priority: Some(priority),
+            };
+            let mut output = BytesMut::from(&b"prefix"[..]);
+            assert!(matches!(
+                request.encode(&mut output),
+                Err(Error::Encoding(_))
+            ));
+            assert_eq!(
+                &output[..],
+                b"prefix",
+                "invalid priority {priority} changed output"
+            );
+        }
+    }
+
+    #[test]
+    fn outbound_priority_none_and_all_valid_values_preserve_bytes() {
+        for priority in std::iter::once(None).chain((1..=16).map(Some)) {
+            let request = WritePropertyRequest {
+                object_identifier: object_id(),
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: Some(0),
+                property_value: vec![0],
+                priority,
+            };
+            let mut output = BytesMut::from(&b"prefix"[..]);
+            request.encode(&mut output).unwrap();
+            let mut expected = b"prefix".to_vec();
+            expected
+                .extend_from_slice(&[0x0c, 0x00, 0x40, 0x00, 1, 0x19, 85, 0x29, 0, 0x3e, 0, 0x3f]);
+            if let Some(priority) = priority {
+                expected.extend_from_slice(&[0x49, priority]);
+            }
+            assert_eq!(output.as_ref(), expected);
+            assert_eq!(WritePropertyRequest::decode(&output[6..]).unwrap(), request);
+        }
+    }
+
+    #[test]
     fn request_round_trip() {
         let req = WritePropertyRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
@@ -217,7 +234,7 @@ mod tests {
             priority: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = WritePropertyRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -232,7 +249,7 @@ mod tests {
             priority: Some(8),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = WritePropertyRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -292,7 +309,7 @@ mod tests {
             priority: Some(16),               // max valid
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = WritePropertyRequest::decode(&buf).unwrap();
         assert_eq!(decoded.priority, Some(16));
 
@@ -307,7 +324,8 @@ mod tests {
                 priority: None,
                 ..req.clone()
             }
-            .encode(&mut buf);
+            .encode(&mut buf)
+            .unwrap();
             tags::encode_tag(
                 &mut buf,
                 4,
@@ -326,13 +344,68 @@ mod tests {
             priority: None,
             ..req
         }
-        .encode(&mut buf);
+        .encode(&mut buf)
+        .unwrap();
         tags::encode_tag(&mut buf, 4, TagClass::Context, 2);
         buf.extend_from_slice(&[0x00, 0x01]);
         assert_eq!(
             WritePropertyRequest::decode(&buf).unwrap().priority,
             Some(1)
         );
+    }
+
+    #[test]
+    fn write_property_accepts_all_priorities_with_leading_zeros() {
+        for priority in 1u8..=16 {
+            for length in 1..=8 {
+                let mut buf = encode_fields(0, 1, 85, None, None, false);
+                tags::encode_tag(
+                    &mut buf,
+                    4,
+                    TagClass::Context,
+                    u32::try_from(length).unwrap(),
+                );
+                buf.extend_from_slice(&u64::from(priority).to_be_bytes()[8 - length..]);
+                let request = WritePropertyRequest::decode(&buf).unwrap();
+                assert_eq!(request.object_identifier, object_id());
+                assert_eq!(
+                    request.property_identifier,
+                    PropertyIdentifier::PRESENT_VALUE
+                );
+                assert_eq!(request.property_array_index, None);
+                assert_eq!(request.property_value, [0x00]);
+                assert_eq!(request.priority, Some(priority));
+            }
+        }
+    }
+
+    #[test]
+    fn write_property_priority_range_errors_are_typed_for_all_unsigned_widths() {
+        let mut values = vec![0, 17, 255, 256, 65_536, 4_294_967_296, u64::MAX];
+        for low_byte in 1..=16 {
+            for high_bits in [0x100, 0x1_0000, 0x1_0000_0000, 0x8000_0000_0000_0000] {
+                values.push(high_bits | low_byte);
+            }
+        }
+        for value in values {
+            let buf = encode_fields(0, 1, 85, None, Some((4, value)), false);
+            let error = WritePropertyRequest::decode(&buf).unwrap_err();
+            assert!(
+                matches!(error, Error::Protocol { class, code }
+                    if class == ErrorClass::SERVICES.to_raw() as u32
+                        && code == ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw() as u32),
+                "priority {value} must fail semantic range validation, got {error:?}"
+            );
+        }
+        for length in [0, 9] {
+            let mut buf = encode_fields(0, 1, 85, None, None, false);
+            tags::encode_tag(&mut buf, 4, TagClass::Context, length);
+            buf.extend_from_slice(&vec![0; length as usize]);
+            assert!(matches!(
+                WritePropertyRequest::decode(&buf),
+                Err(Error::Decoding { .. })
+            ));
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -354,7 +427,7 @@ mod tests {
             priority: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(WritePropertyRequest::decode(&buf[..1]).is_err());
     }
 
@@ -368,7 +441,7 @@ mod tests {
             priority: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(WritePropertyRequest::decode(&buf[..2]).is_err());
     }
 
@@ -382,7 +455,7 @@ mod tests {
             priority: None,
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(WritePropertyRequest::decode(&buf[..3]).is_err());
     }
 
@@ -396,7 +469,7 @@ mod tests {
             priority: Some(8),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let half = buf.len() / 2;
         assert!(WritePropertyRequest::decode(&buf[..half]).is_err());
     }

@@ -3,9 +3,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::sc_frame::encode_sc_message;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use futures_util::SinkExt;
 use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::sc_frame::{ScFunction, ScMessage, Vmac, BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC};
 
@@ -13,6 +16,28 @@ use super::{
     Clients, ConnectRequestVmacDisposition, DeviceUuid, HubClient, HubClientRegistrationDecision,
     RelayLimitDecision, WsSink,
 };
+
+/// Build the hub's Connect-Accept advertising its VMAC, UUID and size limits.
+pub(super) fn connect_accept_message(
+    message_id: u16,
+    hub_vmac: Vmac,
+    hub_uuid: DeviceUuid,
+) -> ScMessage {
+    let mut payload = Vec::with_capacity(26);
+    payload.extend_from_slice(&hub_vmac);
+    payload.extend_from_slice(&hub_uuid);
+    payload.extend_from_slice(&super::HUB_MAX_BVLC_LENGTH.to_be_bytes());
+    payload.extend_from_slice(&super::HUB_MAX_NPDU_LENGTH.to_be_bytes());
+    ScMessage {
+        function: ScFunction::ConnectAccept,
+        message_id,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from(payload),
+    }
+}
 
 pub(super) fn offers_websocket_subprotocol(
     request: &tokio_tungstenite::tungstenite::handshake::server::Request,
@@ -158,10 +183,24 @@ pub(super) fn build_bvlc_result_nak(
     }
 }
 
-/// Current time in seconds since UNIX epoch.
-pub(super) fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+/// Preserve the selected refusal's wire response outside the registration lock.
+pub(super) async fn send_connect_nak(
+    sink: &Arc<Mutex<WsSink>>,
+    message_id: u16,
+    error_class: ErrorClass,
+    error_code: ErrorCode,
+) {
+    let result = build_bvlc_result_nak(
+        message_id,
+        ScFunction::ConnectRequest,
+        error_class,
+        error_code,
+    );
+    let mut buf = BytesMut::new();
+    encode_sc_message(&mut buf, &result);
+    let _ = sink
+        .lock()
+        .await
+        .send(Message::Binary(buf.to_vec().into()))
+        .await;
 }

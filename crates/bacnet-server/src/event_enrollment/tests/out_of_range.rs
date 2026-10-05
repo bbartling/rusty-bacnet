@@ -8,6 +8,8 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+use bacnet_types::enums::ErrorCode;
+use bacnet_types::error::Error;
 
 // ---- OUT_OF_RANGE tests ----
 
@@ -124,19 +126,19 @@ fn out_of_range_event_enable_suppresses_distribution_not_the_transition() {
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(10, "EE-sup", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(10, "EE-sup", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x04); // only TO_NORMAL enabled
+    ee.set_event_enable(EventTransitionBits::TO_NORMAL);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -184,19 +186,19 @@ fn out_of_range_suppressed_offnormal_still_yields_enabled_return_to_normal() {
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(11, "EE-ret", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(11, "EE-ret", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x04); // only TO_NORMAL enabled
+    ee.set_event_enable(EventTransitionBits::TO_NORMAL);
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -257,19 +259,19 @@ fn out_of_range_event_enable_zero_still_tracks_event_state() {
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(12, "EE-zero", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(12, "EE-zero", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
         high_limit: 80.0,
         deadband: 2.0,
     });
-    ee.set_event_enable(0x00); // nothing distributed
+    ee.set_event_enable(EventTransitionBits::empty());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -288,20 +290,24 @@ fn out_of_range_event_enable_zero_still_tracks_event_state() {
     );
 }
 
+/// Table 12-14 has no Out_Of_Service (#1064), so a client can't pause an
+/// enrollment that way: the write finds no property and evaluation goes on.
 #[test]
-fn out_of_range_skips_out_of_service() {
+fn out_of_range_enrollment_has_no_out_of_service_gate() {
     let (mut db, ee_oid, _ai_oid) = setup_out_of_range(85.0, 80.0, 20.0, 2.0);
 
-    // Set enrollment to out-of-service
     let obj = db.get_mut(&ee_oid).unwrap();
-    obj.write_property(
-        PropertyIdentifier::OUT_OF_SERVICE,
-        None,
-        PropertyValue::Boolean(true),
-        None,
-    )
-    .unwrap();
+    assert!(matches!(
+        obj.write_property(
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+        ),
+        Err(Error::Protocol { code, .. }) if code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+    ));
 
     let transitions = evaluate_event_enrollments(&mut db, 1);
-    assert!(transitions.is_empty());
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
 }

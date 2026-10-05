@@ -1,0 +1,64 @@
+"""Built-artifact parity for constants registered from Rust's ALL_NAMED tables."""
+
+from __future__ import annotations
+
+import ast
+import unittest
+from pathlib import Path
+
+import rusty_bacnet
+from rusty_bacnet import PropertyIdentifier
+
+
+# All discovered enum classes must match the stub exactly: new omissions
+# and repaired declarations alike fail here.
+
+
+def stub_classes() -> dict[str, ast.ClassDef]:
+    stub_path = Path(rusty_bacnet.__file__).with_suffix(".pyi")
+    tree = ast.parse(stub_path.read_text(encoding="utf-8"), filename=str(stub_path))
+    return {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+
+
+class EnumStubParityTests(unittest.TestCase):
+    def test_event_message_property_values(self) -> None:
+        self.assertEqual(PropertyIdentifier.EVENT_MESSAGE_TEXTS.to_raw(), 351)
+        self.assertEqual(PropertyIdentifier.EVENT_MESSAGE_TEXTS_CONFIG.to_raw(), 352)
+
+    def test_registered_constants_match_stub(self) -> None:
+        classes = stub_classes()
+        # py_bacnet_enum! supplies these two methods and registers each named
+        # value as an instance of its own class. Discover from the runtime, not
+        # the stub, so missing declarations (including whole classes) fail.
+        enum_classes = {
+            name: cls
+            for name, cls in vars(rusty_bacnet).items()
+            if isinstance(cls, type)
+            and callable(getattr(cls, "from_raw", None))
+            and callable(getattr(cls, "to_raw", None))
+        }
+        self.assertIn("PropertyIdentifier", enum_classes)
+        for name, cls in enum_classes.items():
+            with self.subTest(enum=name):
+                self.assertIn(name, classes)
+                registered = {
+                    attr for attr, value in vars(cls).items() if isinstance(value, cls)
+                }
+                self.assertTrue(registered, f"{name} has no registered constants")
+                declarations = {
+                    node.target.id: ast.unparse(node.annotation)
+                    for node in classes[name].body
+                    if isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and node.target.id.isupper()
+                }
+                declared = set(declarations)
+                self.assertSetEqual(declared - registered, set())
+                self.assertSetEqual(registered - declared, set())
+                self.assertEqual(
+                    declarations, {constant: name for constant in declared}
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()

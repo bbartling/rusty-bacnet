@@ -1,0 +1,52 @@
+---
+title: "Transport paths and boundaries"
+description: "Compare available code paths, user interfaces, and qualification needs."
+---
+
+import Diagram from '../../../components/Diagram.astro';
+import { release, repository } from '../../../lib/site.mjs';
+
+
+For owner APIs and actual wire qualification, use the [transport evidence matrix](/rusty-bacnet/development/transports/).
+
+A transport appearing in the codebase is not the same as every package, CLI binary, operating system, and hardware combination supporting that transport equally.
+
+## Choose a path
+
+| Path | How to start | Important boundary |
+|---|---|---|
+| BACnet/IP | CLI, Python client, or Rust client | Direct reads, discovery, and routed traffic are distinct tests |
+| BACnet/IPv6 | CLI `--ipv6`, Python, or Rust feature path | Requires appropriate IPv6 addressing/interface and network validation |
+| BACnet/SC | SC-enabled CLI, Python, or Rust | Certificate trust, local identities, and hub behavior must be configured |
+| MS/TP | Rust serial path, or Python `transport="mstp"` and `MstpEndpoint` | No reviewed CLI transport flag; qualify the actual serial hardware |
+| Ethernet/802.3 | Advanced Rust transport path | Platform/privilege evidence is incomplete; not a general CLI tutorial |
+
+This is a guide to entry points, not a formal supported-platform or conformance matrix.
+
+<Diagram file="transport-topologies.svg" title="Different transports, different topologies" description="Separate BACnet/IP, BACnet/SC, and MS/TP topology examples." />
+
+## Features are package-specific
+
+The CLI manifest enables its IPv6 path and defines optional `sc-tls` and `pcap` features; the release executables enable `sc-tls` everywhere and `pcap` on Linux. The Python binding manifest enables underlying SC, IPv6, and serial transport features, but a Cargo feature selection alone is not proof of an installable or qualified wheel on a particular host.
+
+Inspect the selected binary or wheel and its release build configuration. Do not turn a code-level table into five identical “fully supported” badges.
+
+## Do not infer these capabilities
+
+There is no browser-based BACnet transport promised by this site. The unsupported WASM surfaces were withdrawn. A demo or a codec is not a complete browser network interface.
+
+The README does not claim Annex J NAT traversal or IPv4 BACnet/IP multicast. A BBMD setup guide must not accidentally imply either. One working MS/TP example is not a timing qualification, and the presence of segmentation code elsewhere does not automatically qualify end-to-end segmented MS/TP.
+
+## Understand the evidence labels
+
+Code that implements a feature, a test that exercises it, and conformance are separate claims. Keep them apart when describing a feature: a test of one behavior supports that behavior, not the whole object, service family, transport, or product. A generated PICS is not a BTL certification.
+
+## Which guide next?
+
+Start with [connection configuration](/rusty-bacnet/guides/configuration/) for BACnet/IP, [SC setup](/rusty-bacnet/guides/bacnet-sc/) for hub/certificate deployments, or [MS/TP commissioning](/rusty-bacnet/guides/mstp/) for serial labs.
+
+## Sources and release scope
+
+These instructions target **v{release}**. Source review is not a claim of hardware qualification.
+
+<a href={`${repository}/releases/tag/v${release}`}>Release scope</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-cli/Cargo.toml`}>CLI features</a> · <a href={`${repository}/blob/v${release}/crates/rusty-bacnet/Cargo.toml`}>Python transport features</a>.

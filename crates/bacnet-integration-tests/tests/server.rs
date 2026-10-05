@@ -23,6 +23,12 @@ use tokio::time::Duration;
 
 /// Build a server with a Device, an AnalogInput, and a BinaryValue.
 async fn make_server() -> BACnetServer<BipTransport> {
+    make_server_with_dcc_policy(bacnet_server::server::DccPolicy::default()).await
+}
+
+async fn make_server_with_dcc_policy(
+    policy: bacnet_server::server::DccPolicy,
+) -> BACnetServer<BipTransport> {
     let mut db = ObjectDatabase::new();
 
     // Device object (instance 1234)
@@ -54,6 +60,7 @@ async fn make_server() -> BACnetServer<BipTransport> {
     db.add(Box::new(bv)).unwrap();
 
     BACnetServer::bip_builder()
+        .dcc_policy(policy)
         .interface(Ipv4Addr::LOCALHOST)
         .port(0) // ephemeral
         .broadcast_address(Ipv4Addr::LOCALHOST)
@@ -81,17 +88,44 @@ async fn make_client() -> BACnetClient<BipTransport> {
         .unwrap()
 }
 
+#[path = "server/atomic_write_file_budget.rs"]
+mod atomic_write_file_budget;
 #[path = "server/basic.rs"]
 mod basic;
+#[path = "server/bbmd_discovery.rs"]
+mod bbmd_discovery;
+#[cfg(feature = "ipv6")]
+#[path = "server/bip6_group_confirmed.rs"]
+mod bip6_group_confirmed;
+#[cfg(all(feature = "ipv6", unix))]
+#[path = "server/bip6_group_unicast.rs"]
+mod bip6_group_unicast;
+#[cfg(unix)]
+#[path = "server/bip_group_confirmed.rs"]
+mod bip_group_confirmed;
+#[path = "server/channel_remote.rs"]
+mod channel_remote;
+#[path = "server/command_remote.rs"]
+mod command_remote;
 #[path = "server/dcc.rs"]
 mod dcc;
+#[path = "server/duplicate_name.rs"]
+mod duplicate_name;
 #[path = "server/error_cov.rs"]
 mod error_cov;
+#[path = "server/forwarder_subscriptions.rs"]
+mod forwarder_subscriptions;
+#[path = "server/list_elements.rs"]
+mod list_elements;
 #[path = "server/local_write_cov.rs"]
 mod local_write_cov;
+#[path = "server/notification_forwarder.rs"]
+mod notification_forwarder;
 #[path = "server/routing_alarm.rs"]
 mod routing_alarm;
 #[path = "server/segmentation_rx.rs"]
 mod segmentation_rx;
 #[path = "server/segmentation_tx.rs"]
 mod segmentation_tx;
+#[path = "server/structured_errors.rs"]
+mod structured_errors;

@@ -8,6 +8,7 @@ use bacnet_types::error::Error;
 
 /// CLI-level transport arguments for constructing a BACnet client.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct TransportArgs {
     pub interface: Ipv4Addr,
     pub port: u16,
@@ -15,6 +16,7 @@ pub struct TransportArgs {
     pub timeout_ms: u64,
     pub sc: bool,
     pub sc_url: Option<String>,
+    pub sc_ca: Option<PathBuf>,
     pub sc_cert: Option<PathBuf>,
     pub sc_key: Option<PathBuf>,
     pub sc_vmac: Option<[u8; 6]>,
@@ -22,6 +24,41 @@ pub struct TransportArgs {
     pub ipv6: bool,
     pub ipv6_interface: Option<Ipv6Addr>,
     pub device_instance: Option<u32>,
+}
+
+impl TransportArgs {
+    /// Collect the global transport flags, with the BACnet/IP interface and
+    /// broadcast address already chosen by the caller.
+    pub(crate) fn from_cli(
+        cli: &crate::args::Cli,
+        interface: Ipv4Addr,
+        broadcast: Ipv4Addr,
+    ) -> Result<Self, String> {
+        let ipv6_interface = cli
+            .ipv6_interface
+            .as_deref()
+            .map(|s| {
+                s.parse::<Ipv6Addr>()
+                    .map_err(|e| format!("invalid --ipv6-interface address '{s}': {e}"))
+            })
+            .transpose()?;
+        Ok(Self {
+            interface,
+            port: cli.port,
+            broadcast,
+            timeout_ms: cli.timeout,
+            sc: cli.sc,
+            sc_url: cli.sc_url.clone(),
+            sc_ca: cli.sc_ca.clone(),
+            sc_cert: cli.sc_cert.clone(),
+            sc_key: cli.sc_key.clone(),
+            sc_vmac: cli.sc_vmac,
+            sc_device_uuid: cli.sc_device_uuid,
+            ipv6: cli.ipv6,
+            ipv6_interface,
+            device_instance: cli.device_instance,
+        })
+    }
 }
 
 fn parse_fixed_hex_array<const N: usize>(
@@ -88,7 +125,7 @@ pub async fn build_bip_client(args: &TransportArgs) -> Result<BACnetClient<BipTr
 /// Build a BACnet/SC client from CLI transport arguments.
 ///
 /// Loads TLS certificates and private key from PEM files, constructs a TLS
-/// configuration using native root certificates, and builds the SC client.
+/// configuration trusting only the explicit site CA PEM, and builds the SC client.
 #[cfg(feature = "sc-tls")]
 pub async fn build_sc_client(
     args: &TransportArgs,
@@ -96,8 +133,7 @@ pub async fn build_sc_client(
     BACnetClient<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>,
     Error,
 > {
-    use std::sync::Arc;
-
+    use bacnet_transport::sc_tls::ScNodeTlsConfig;
     use rustls::RootCertStore;
     use rustls_pki_types::pem::PemObject;
     use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -120,6 +156,34 @@ pub async fn build_sc_client(
     let sc_device_uuid = args
         .sc_device_uuid
         .ok_or_else(|| Error::Encoding("--sc-device-uuid is required for BACnet/SC".into()))?;
+    let ca_path = args
+        .sc_ca
+        .as_ref()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| {
+            Error::Encoding("--sc-ca <FILE> is required for BACnet/SC; supply a nonempty site CA PEM path (no system-root fallback)".into())
+        })?;
+
+    let mut root_store = RootCertStore::empty();
+    let ca_iter = CertificateDer::pem_file_iter(ca_path)
+        .map_err(|e| Error::Encoding(format!("failed to read --sc-ca PEM: {e}")))?;
+    let mut ca_certs = Vec::new();
+    // Preserve CA error precedence before identity file I/O. The factory below
+    // owns the actual TLS policy; this store only validates the loaded input.
+    for cert in ca_iter {
+        let cert =
+            cert.map_err(|e| Error::Encoding(format!("failed to parse --sc-ca PEM: {e}")))?;
+        root_store
+            .add(cert.clone())
+            .map_err(|e| Error::Encoding(format!("unusable certificate in --sc-ca PEM: {e}")))?;
+        ca_certs.push(cert);
+    }
+    if root_store.is_empty() {
+        return Err(Error::Encoding(
+            "--sc-ca PEM contains no certificates; supply the trusted site CA certificate(s)"
+                .into(),
+        ));
+    }
 
     let certs = CertificateDer::pem_file_iter(cert_path)
         .map_err(|e| Error::Encoding(format!("failed to read cert PEM: {e}")))?
@@ -128,28 +192,12 @@ pub async fn build_sc_client(
     let key = PrivateKeyDer::from_pem_file(key_path)
         .map_err(|e| Error::Encoding(format!("failed to read key PEM: {e}")))?;
 
-    let mut root_store = RootCertStore::empty();
-    let native_certs = rustls_native_certs::load_native_certs();
-    for cert in native_certs.certs {
-        root_store
-            .add(cert)
-            .map_err(|e| Error::Encoding(format!("failed to add native root cert: {e}")))?;
-    }
-    if root_store.is_empty() {
-        return Err(Error::Encoding(
-            "no native root certificates found — TLS connections will fail".into(),
-        ));
-    }
-
-    let tls_config =
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(root_store)
-            .with_client_auth_cert(certs, key)
-            .map_err(|e| Error::Encoding(format!("TLS config error: {e}")))?;
+    let tls_config = ScNodeTlsConfig::from_der(ca_certs, certs, key)
+        .map_err(|e| Error::Encoding(format!("TLS config error: {e}")))?;
 
     BACnetClient::sc_builder()
         .hub_url(hub_url)
-        .tls_config(Arc::new(tls_config))
+        .tls_config(tls_config)
         .vmac(sc_vmac)
         .device_uuid(sc_device_uuid)
         .apdu_timeout_ms(args.timeout_ms)
@@ -186,6 +234,7 @@ mod tests {
             timeout_ms: 6000,
             sc: true,
             sc_url: Some("wss://hub.example.com/bacnet".into()),
+            sc_ca: Some(PathBuf::from("site-ca.pem")),
             sc_cert: Some(PathBuf::from("cert.pem")),
             sc_key: Some(PathBuf::from("key.pem")),
             sc_vmac: Some([0x22, 0x01, 0x02, 0x03, 0x04, 0x05]),

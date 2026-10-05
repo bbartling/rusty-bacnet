@@ -17,6 +17,7 @@ use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::Segmentation;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
@@ -26,61 +27,25 @@ const SERVER_MAC: &[u8] = &[0x02];
 const CLIENT_MAC: &[u8] = &[0x01];
 const CSV_INSTANCE: u32 = 1;
 
-pub(super) struct RoutedInjectionTransport {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
-    sent_unicast: SentFrames,
-    local_mac: MacAddr,
-}
-
-impl RoutedInjectionTransport {
-    pub(super) fn new(sent_unicast: SentFrames) -> (Self, mpsc::Sender<ReceivedNpdu>) {
-        let (incoming_tx, incoming) = mpsc::channel(16);
-        (
-            Self {
-                incoming: Some(incoming),
-                sent_unicast,
-                local_mac: MacAddr::from_slice(SERVER_MAC),
-            },
-            incoming_tx,
-        )
-    }
-}
-
-impl TransportPort for RoutedInjectionTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.incoming
-            .take()
-            .ok_or_else(|| Error::Encoding("routed injection transport already started".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sent_unicast
-            .lock()
-            .unwrap()
-            .push((Bytes::copy_from_slice(npdu), MacAddr::from_slice(mac)));
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
+/// The server end of an injected routed link: the test feeds inbound NPDUs and
+/// reads recorded unicasts; broadcasts are ignored.
+pub(super) fn routed_injection_transport() -> (TestTransport, mpsc::Sender<ReceivedNpdu>, SendLog) {
+    let (incoming_tx, incoming) = mpsc::channel(16);
+    let transport = TestTransport::builder()
+        .local_mac(SERVER_MAC)
+        .inbound(incoming)
+        .broadcast(SendMode::Ignore)
+        .build();
+    let sent = transport.sent();
+    (transport, incoming_tx, sent)
 }
 
 pub(super) async fn start_routed_reassembly_server() -> (
-    BACnetServer<RoutedInjectionTransport>,
+    BACnetServer<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
-    SentFrames,
+    SendLog,
 ) {
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    let (transport, incoming) = RoutedInjectionTransport::new(StdArc::clone(&sent));
+    let (transport, incoming, sent) = routed_injection_transport();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         CharacterStringValueObject::new(CSV_INSTANCE, "CSV-1").unwrap(),
@@ -111,10 +76,12 @@ async fn inject_routed_apdu(
     encode_npdu(&mut npdu_buf, &npdu).unwrap();
     incoming
         .send(ReceivedNpdu {
+            direct_response: None,
             npdu: npdu_buf.freeze(),
             source_mac: router_mac.clone(),
             link_layer_group: false,
             data_attributes: Vec::new(),
+            provenance: TransportProvenance::unverified(),
             reply_tx: None,
         })
         .await
@@ -150,14 +117,11 @@ pub(super) async fn inject_routed_segment(
     .await;
 }
 
-pub(super) fn sent_routed_frame(sent: &SentFrames, index: usize) -> (Npdu, MacAddr) {
-    let (npdu, link_destination) = {
-        let sent = sent.lock().unwrap();
-        sent[index].clone()
-    };
+pub(super) fn sent_routed_frame(sent: &SendLog, index: usize) -> (Npdu, MacAddr) {
+    let frame = sent.frame(index);
     (
-        decode_npdu(npdu).expect("sent frame should decode as NPDU"),
-        link_destination,
+        decode_npdu(frame.npdu).expect("sent frame should decode as NPDU"),
+        frame.mac,
     )
 }
 
@@ -210,7 +174,7 @@ pub(super) fn write_property_payload(text: &str) -> Vec<u8> {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     buf.to_vec()
 }
 
@@ -343,7 +307,7 @@ pub(super) async fn present_value<T: TransportPort + 'static>(server: &BACnetSer
 }
 
 #[tokio::test]
-async fn reassembled_request_uses_direct_request_duplicate_admission_boundary() {
+async fn reassembled_request_reuses_invoke_after_direct_response_issuance() {
     let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
     let invoke_id = 5;
     let text = "direct-then-reassembled-duplicate";
@@ -379,11 +343,11 @@ async fn reassembled_request_uses_direct_request_duplicate_admission_boundary() 
         .await;
         expect_positive_ack(&mut rx, invoke_id, index as u8).await;
     }
+    // The direct response has already issued. Reassembly normalizes to the
+    // same request key, but that completed ordinary transaction is not retained.
     assert!(
-        timeout(Duration::from_millis(250), rx.recv())
-            .await
-            .is_err(),
-        "the reassembled exact duplicate must not produce a service response"
+        matches!(recv_apdu(&mut rx, "reused reassembled response").await,
+        Apdu::SimpleAck(ack) if ack.invoke_id == invoke_id)
     );
     assert_eq!(present_value(&server).await, text);
 }

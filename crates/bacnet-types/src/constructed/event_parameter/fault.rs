@@ -3,10 +3,10 @@
 //! Split out of `mod.rs` to keep every file under the 700-LOC cap.
 
 use super::*;
-use crate::enums::FaultType;
+use crate::enums::{FaultType, LifeSafetyState};
 
 // ---------------------------------------------------------------------------
-// FaultParameters structured round trip (Clause 12.12.50 -- Fault_Parameters)
+// FaultParameters structured round trip (Clause 12.12 -- Fault_Parameters)
 // ---------------------------------------------------------------------------
 
 /// Variant tag carried as the leading element of the flat-`List` encoding.
@@ -72,16 +72,16 @@ impl crate::constructed::FaultParameters {
             ]),
             F::FaultLifeSafety {
                 fault_values,
-                mode_for_reference,
+                mode_property_reference,
             } => PropertyValue::List(vec![
                 PropertyValue::Unsigned(fault_parameter_tag::LIFE_SAFETY),
                 PropertyValue::List(
                     fault_values
                         .iter()
-                        .map(|v| PropertyValue::Unsigned(*v as u64))
+                        .map(|v| PropertyValue::Unsigned(u64::from(v.to_raw())))
                         .collect(),
                 ),
-                device_object_property_reference_pv(mode_for_reference),
+                device_object_property_reference_pv(mode_property_reference),
             ]),
             F::FaultState { fault_values } => PropertyValue::List(vec![
                 PropertyValue::Unsigned(fault_parameter_tag::STATE),
@@ -158,14 +158,15 @@ impl crate::constructed::FaultParameters {
                     .iter()
                     .map(|v| match v {
                         PropertyValue::Unsigned(u) => u32::try_from(*u)
+                            .map(LifeSafetyState::from_raw)
                             .map_err(|_| Error::decoding(idx, "life-safety value exceeds u32")),
                         _ => Err(Error::decoding(idx, "life-safety value not unsigned")),
                     })
-                    .collect::<Result<Vec<u32>, Error>>()?;
-                let mode_for_reference = take_dopr(rest, &mut idx)?;
+                    .collect::<Result<Vec<LifeSafetyState>, Error>>()?;
+                let mode_property_reference = take_dopr(rest, &mut idx)?;
                 F::FaultLifeSafety {
                     fault_values,
-                    mode_for_reference,
+                    mode_property_reference,
                 }
             }
             fault_parameter_tag::STATE => {

@@ -24,7 +24,7 @@ use bacnet_objects::elevator::{ElevatorGroupObject, EscalatorObject, LiftObject}
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::file::FileObject;
-use bacnet_objects::group::{GlobalGroupObject, GroupObject, StructuredViewObject};
+use bacnet_objects::group::{GlobalGroupObject, StructuredViewObject};
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
 use bacnet_objects::load_control::LoadControlObject;
@@ -32,8 +32,7 @@ use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
-use bacnet_objects::network_port::NetworkPortObject;
-use bacnet_objects::notification_class::NotificationClass;
+use bacnet_objects::notification_class::{FileNotificationClassPersistence, NotificationClass};
 use bacnet_objects::program::ProgramObject;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
 use bacnet_objects::staging::{StagingConfig, StagingObject};
@@ -50,11 +49,17 @@ use bacnet_server::server;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetStageLimitValue,
+};
+use bacnet_types::enums::EventType;
 use bacnet_types::primitives::PropertyValue;
 
 use crate::errors::to_py_err;
-use crate::types::{PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
+use crate::types::{PyEventType, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
+
+mod audit_configuration;
+use audit_configuration::AuditNotificationSink;
 
 /// Async BACnet server that hosts objects and responds to requests.
 ///
@@ -70,9 +75,15 @@ use crate::types::{PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
 /// Supports multiple transports via the `transport` parameter:
 /// - `"bip"` (default): BACnet/IP over UDP
 /// - `"ipv6"`: BACnet/IPv6 over UDP multicast
-/// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`)
+/// - `"sc"`: BACnet/SC over TLS WebSocket (requires `sc_hub`, `sc_vmac`,
+///   `sc_ca_cert`, `sc_client_cert`, `sc_client_key`, and persistent `sc_device_uuid`)
 /// - `"mstp"`: BACnet MS/TP over RS-485 (requires `serial_port`)
-#[pyclass(name = "BACnetServer")]
+///
+/// SC credential paths must be nonempty at construction (ValueError otherwise).
+/// start() loads the files before dialing or draining registrations; local TLS
+/// configuration errors raise RuntimeError and permit retry after file repair.
+/// Later startup failures retain existing behavior, not general rollback.
+#[pyclass(name = "BACnetServer", module = "rusty_bacnet")]
 pub struct BACnetServer {
     inner: Arc<Mutex<Option<server::BACnetServer<AnyTransport<crate::mstp_py::PySerial>>>>>,
     device_instance: u32,
@@ -82,9 +93,11 @@ pub struct BACnetServer {
     interface: String,
     port: u16,
     broadcast_address: String,
+    registered_network_port: Option<u32>,
     // SC config
     sc_hub: Option<String>,
     sc_vmac: Option<Vec<u8>>,
+    sc_device_uuid: [u8; 16],
     sc_ca_cert: Option<String>,
     sc_client_cert: Option<String>,
     sc_client_key: Option<String>,
@@ -100,12 +113,44 @@ pub struct BACnetServer {
     mstp_max_info_frames: u8,
     // Passwords
     dcc_password: Option<String>,
+    mutation_policy: bacnet_server::mutation::MutationPolicy,
+    dcc_policy: server::DccPolicy,
+    dcc_source_restriction: Option<server::DccSourceRestriction>,
+    dcc_disable_rate_limit: Option<server::DccDisableRateLimit>,
     reinit_password: Option<String>,
+    request_admission_policy: server::RequestAdmissionPolicy,
+    read_property_multiple_budget: server::ReadPropertyMultipleBudget,
+    get_alarm_summary_budget: server::GetAlarmSummaryBudget,
+    get_enrollment_summary_budget: server::GetEnrollmentSummaryBudget,
+    atomic_read_file_budget: server::AtomicReadFileBudget,
+    atomic_write_file_budget: server::AtomicWriteFileBudget,
+    read_range_budget: server::ReadRangeBudget,
+    get_event_information_budget: server::GetEventInformationBudget,
+    cov_policy: server::CovPolicy,
+    time_sync_policy: server::TimeSyncPolicy,
+    audit_notification_sink: Option<AuditNotificationSink>,
+    audit_reporters: Option<server::AuditReportersConfig>,
+    audit_recipient: std::sync::Mutex<Option<bacnet_types::constructed::BACnetRecipient>>,
+    device_bindings: std::collections::BTreeMap<u32, server::DeviceBinding>,
+    /// Freeze forwarding and Reporter settings at ownership transfer, including startup in flight.
+    forwarding_configuration_started: AtomicBool,
     /// Whether the server has been started.
     started: Arc<AtomicBool>,
     /// Objects to add before starting. Cleared after start.
     pending_objects: std::sync::Mutex<Vec<Box<dyn BACnetObject + Send>>>,
+    /// Save counters of the pending Notification Forwarders, by instance,
+    /// pushed with each forwarder under the `pending_objects` lock.
+    pending_forwarder_save_counters: std::sync::Mutex<Vec<ForwarderSaveCounterEntry>>,
+    /// Save counters of the forwarders the running server holds, replaced
+    /// under the `inner` lock when a start publishes its server.
+    forwarder_save_counters: Arc<std::sync::Mutex<Vec<ForwarderSaveCounterEntry>>>,
 }
+
+/// One Notification Forwarder's instance and its shared save counters.
+type ForwarderSaveCounterEntry = (
+    u32,
+    bacnet_objects::notification_forwarder::ForwarderSaveCounters,
+);
 
 impl BACnetServer {
     /// Lock the pending_objects mutex, converting poison errors into PyRuntimeError.
@@ -129,10 +174,46 @@ impl BACnetServer {
         guard.push(obj);
         Ok(())
     }
+
+    /// Read a member list given to an `add_*` method, a reference tuple or
+    /// mapping per element. A member naming this server's own Device is
+    /// stored in its local form, as the server stores the same member written
+    /// over the network.
+    fn members_from_py(
+        &self,
+        members: &Bound<'_, PyAny>,
+        name: &str,
+    ) -> PyResult<Vec<BACnetDeviceObjectPropertyReference>> {
+        let mut members = crate::types::property_references_from_py(members, name)?;
+        crate::types::localize(
+            &mut members,
+            crate::types::local_device(self.device_instance),
+        );
+        Ok(members)
+    }
 }
 
 mod server_methods {
+    mod access_control_methods;
+    mod access_rights_methods;
+    mod audit_log_methods;
+    mod averaging_methods;
+    mod channel_methods;
+    mod constructor_budgets;
+    mod cov_counters;
+    mod cov_policy;
+    mod dcc_outcomes;
+    mod event_notification_counters;
     mod file_configuration;
+    mod life_safety_methods;
     mod lifecycle;
+    mod loop_methods;
+    mod network_port;
+    mod notification_forwarder;
+    mod policy_dict;
     mod registration;
+    mod request_admission;
+    mod time_sync_policy;
+    mod trend_log_methods;
+    mod value_registration;
 }

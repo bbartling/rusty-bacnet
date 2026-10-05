@@ -22,9 +22,9 @@ impl BACnetClient {
         mstp_baud=38400,
         mstp_mac=1,
         mstp_max_master=127,
-        mstp_max_info_frames=1
+        mstp_max_info_frames=1,
+        sc_device_uuid=None
     ))]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         interface: &str,
         port: u16,
@@ -44,8 +44,18 @@ impl BACnetClient {
         mstp_mac: u8,
         mstp_max_master: u8,
         mstp_max_info_frames: u8,
-    ) -> Self {
-        Self {
+        sc_device_uuid: Option<Vec<u8>>,
+    ) -> PyResult<Self> {
+        if transport == "sc" {
+            crate::tls::required_sc_credentials(
+                sc_ca_cert.as_deref(),
+                sc_client_cert.as_deref(),
+                sc_client_key.as_deref(),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        }
+        let sc_device_uuid = crate::sc_identity::device_uuid(transport, sc_device_uuid)?;
+        Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             transport_type: transport.to_string(),
             interface: interface.to_string(),
@@ -54,6 +64,7 @@ impl BACnetClient {
             apdu_timeout_ms,
             sc_hub,
             sc_vmac,
+            sc_device_uuid,
             sc_ca_cert,
             sc_client_cert,
             sc_client_key,
@@ -65,7 +76,7 @@ impl BACnetClient {
             mstp_mac,
             mstp_max_master,
             mstp_max_info_frames,
-        }
+        })
     }
 
     /// Start the client (called by `async with`).
@@ -79,6 +90,7 @@ impl BACnetClient {
         let timeout_ms = slf.borrow().apdu_timeout_ms;
         let sc_hub = slf.borrow().sc_hub.clone();
         let sc_vmac = slf.borrow().sc_vmac.clone();
+        let sc_device_uuid = slf.borrow().sc_device_uuid;
         let sc_ca_cert = slf.borrow().sc_ca_cert.clone();
         let sc_client_cert = slf.borrow().sc_client_cert.clone();
         let sc_client_key = slf.borrow().sc_client_key.clone();
@@ -91,7 +103,7 @@ impl BACnetClient {
         let mstp_max_master = slf.borrow().mstp_max_master;
         let mstp_max_info_frames = slf.borrow().mstp_max_info_frames;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let transport: AnyTransport<crate::mstp_py::PySerial> = match transport_type.as_str() {
                 "bip" => {
                     let interface: Ipv4Addr = interface_str
@@ -100,7 +112,7 @@ impl BACnetClient {
                     let broadcast: Ipv4Addr = broadcast_str
                         .parse()
                         .map_err(|e| PyRuntimeError::new_err(format!("invalid broadcast: {e}")))?;
-                    AnyTransport::Bip(BipTransport::new(interface, port, broadcast))
+                    AnyTransport::Bip(Box::new(BipTransport::new(interface, port, broadcast)))
                 }
                 "ipv6" => {
                     let iface_str = ipv6_interface.as_deref().unwrap_or("::");
@@ -133,7 +145,8 @@ impl BACnetClient {
                         .await
                         .map_err(to_py_err)?;
 
-                    let mut sc = bacnet_transport::sc::ScTransport::new(ws, vmac);
+                    let mut sc = bacnet_transport::sc::ScTransport::new(ws, vmac)
+                        .with_device_uuid(sc_device_uuid);
                     if let Some(ms) = sc_heartbeat_interval_ms {
                         sc = sc.with_heartbeat_interval_ms(ms);
                     }
@@ -178,7 +191,7 @@ impl BACnetClient {
         _exc_tb: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let arc = {
                 let mut guard = inner.lock().await;
                 guard.take()
@@ -188,7 +201,11 @@ impl BACnetClient {
                 match Arc::try_unwrap(arc) {
                     Ok(mut c) => {
                         if let Err(e) = c.stop().await {
-                            eprintln!("BACnetClient stop error in __aexit__: {e}");
+                            #[allow(clippy::print_stderr)]
+                            // no logging path in this crate; __aexit__ cannot raise here
+                            {
+                                eprintln!("BACnetClient stop error in __aexit__: {e}");
+                            }
                         }
                     }
                     Err(_arc) => {
@@ -198,12 +215,13 @@ impl BACnetClient {
                 }
             }
             Ok(())
-        })
+        };
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
     /// Explicitly stop the client.
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let future = async move {
             let arc = {
                 let mut guard = inner.lock().await;
                 guard.take()
@@ -220,6 +238,7 @@ impl BACnetClient {
                 }
             }
             Ok(())
-        })
+        };
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 }

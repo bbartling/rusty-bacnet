@@ -45,11 +45,15 @@ impl TransportPort for LimitedTransport {
         self.inner.send_broadcast(npdu).await
     }
 
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        self.inner.local_receive_apdu_capacity()
+    }
+
     fn local_mac(&self) -> &[u8] {
         self.inner.local_mac()
     }
 
-    fn max_apdu_length(&self) -> u16 {
+    fn egress_apdu_limit(&self) -> u16 {
         self.max_apdu_length
     }
 }
@@ -104,7 +108,7 @@ async fn accept_sc_with_limits(
 
     let mut payload = Vec::with_capacity(26);
     payload.extend_from_slice(&hub_vmac);
-    payload.extend_from_slice(&[0u8; 16]);
+    payload.extend_from_slice(&[0x33; 16]);
     payload.extend_from_slice(&hub_max_bvlc_length.to_be_bytes());
     payload.extend_from_slice(&hub_max_npdu_length.to_be_bytes());
 
@@ -331,6 +335,7 @@ async fn client_max_apdu_length_reflects_sc_failover_transport_limit() {
     let primary_hub_vmac = [0x10; 6];
     let failover_hub_vmac = [0x20; 6];
     let sc_transport = ScTransport::new(primary_client, [0x01; 6])
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(100)
         .with_heartbeat_interval_ms(5_000)
         .with_reconnect(ScReconnectConfig {

@@ -11,7 +11,7 @@ use bacnet_objects::event::{
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_types::enums::{EventState, EventType};
-use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
+use bacnet_types::primitives::{BACnetTimeStamp, Date, StatusFlags, Time};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone)]
@@ -144,10 +144,6 @@ impl BACnetObject for AtomicHistoryObject {
         ])
     }
 
-    fn intrinsic_reporting_requires_atomic_commit(&self) -> bool {
-        true
-    }
-
     fn commit_event_transition_internal(
         &mut self,
         _commit: EventTransitionCommit,
@@ -213,7 +209,7 @@ async fn commit_and_capture_history_notification(
     let (db, oid) = atomic_history_database(timestamps, messages, clocked);
     let committed = {
         let mut guard = db.write().await;
-        BACnetServer::<RecordingTransport>::commit_intrinsic_transition(
+        BACnetServer::<TestTransport>::commit_intrinsic_transition(
             &mut guard,
             &oid,
             TransitionOutcome {
@@ -224,27 +220,30 @@ async fn commit_and_capture_history_notification(
         )
     };
 
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
+    let (transport, sent) = recording_transport();
     if let Some(committed) = committed {
-        let network = Arc::new(NetworkLayer::new(RecordingTransport {
-            sent_broadcast: StdArc::clone(&sent),
-            local_mac: vec![127, 0, 0, 1, 0xBA, 0xC0],
-        }));
-        BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-            &db,
-            &network,
-            &Arc::new(AtomicU8::new(0)),
-            &Arc::new(Mutex::new(ServerTsm::new())),
-            &NotificationTransactions::new(),
+        let network = Arc::new(NetworkLayer::new(transport));
+        BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
+            &crate::server::event_delivery::EventDelivery {
+                db: &db,
+                network: &network,
+                comm_state: &Arc::new(CommState::default()),
+                learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
+                notification_transactions: &NotificationTransactions::new(),
+                device_bindings: &Arc::new(RwLock::new(
+                    crate::server::device_bindings::DeviceBindingTable::new(),
+                )),
+                suppressions: &Default::default(),
+                retry_timeout_ms: 1000,
+                local_apdu_capacity: 1476,
+            },
             &oid,
             committed,
-            1000,
         )
         .await;
     }
 
-    let captured = sent.lock().unwrap().clone();
-    (db, captured)
+    (db, sent.npdus())
 }
 
 fn repeated_timestamp_reads(timestamp: BACnetTimeStamp) -> [IndexedHistoryRead; 3] {
@@ -272,7 +271,7 @@ fn committed_enrollment_normal(
         event_type: EventType::OUT_OF_RANGE,
         event_values: CommittedNotificationPayload::for_test(NotificationParameters::OutOfRange {
             exceeding_value: 1.0,
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
             deadband: 0.0,
             exceeded_limit: 1.0,
         }),
@@ -298,8 +297,8 @@ fn committed_enrollment_reliability(oid: ObjectIdentifier) -> CommittedEventEnro
         event_type: EventType::CHANGE_OF_RELIABILITY,
         event_values: CommittedNotificationPayload::for_test(
             NotificationParameters::ChangeOfReliability {
-                reliability: bacnet_types::enums::Reliability::OVER_RANGE.to_raw(),
-                status_flags: 0,
+                reliability: bacnet_types::enums::Reliability::OVER_RANGE,
+                status_flags: StatusFlags::empty(),
                 property_values: Vec::new(),
             },
         ),
@@ -444,7 +443,7 @@ fn malformed_or_missing_required_projection_commits_locally_but_cannot_emit() {
         }))
         .unwrap();
 
-        let committed = BACnetServer::<RecordingTransport>::commit_intrinsic_transition(
+        let committed = BACnetServer::<TestTransport>::commit_intrinsic_transition(
             &mut db,
             &oid,
             TransitionOutcome {
@@ -459,8 +458,7 @@ fn malformed_or_missing_required_projection_commits_locally_but_cannot_emit() {
         .expect("the local atomic transition remains committed");
         assert_eq!(commits.load(Ordering::Relaxed), 1);
         assert!(
-            !crate::server::event_notifications::ResolvedIntrinsicTransition::Committed(committed)
-                .can_emit(),
+            committed.event_values.is_none(),
             "malformed or missing required values suppress the frame before encoding"
         );
     }
@@ -503,7 +501,7 @@ async fn committed_history_preserves_each_timestamp_choice_on_the_wire() {
             true,
         )
         .await;
-        let notification = decode_broadcast_notification(&StdMutex::new(sent));
+        let notification = decode_broadcast_notification(&sent);
         assert_eq!(notification.timestamp, expected);
         assert_eq!(
             notification.message_text, None,
@@ -552,7 +550,7 @@ async fn committed_history_selects_only_the_transition_coordinate() {
         )
         .await;
         assert_eq!(
-            decode_broadcast_notification(&StdMutex::new(sent)).timestamp,
+            decode_broadcast_notification(&sent).timestamp,
             BACnetTimeStamp::SequenceNumber(expected)
         );
     }
@@ -573,7 +571,7 @@ async fn committed_history_timestamp_is_distinct_from_the_staged_device_clock_sa
     .await;
 
     assert_eq!(
-        decode_broadcast_notification(&StdMutex::new(sent)).timestamp,
+        decode_broadcast_notification(&sent).timestamp,
         expected,
         "the stored coordinate, not the staged Device DateTime, is wire authority"
     );
@@ -596,7 +594,7 @@ async fn nonempty_committed_message_is_captured_with_its_timestamp() {
     .await;
 
     assert_eq!(
-        decode_broadcast_notification(&StdMutex::new(sent)).message_text,
+        decode_broadcast_notification(&sent).message_text,
         Some("message-1".into())
     );
 }

@@ -1,0 +1,829 @@
+//! Discovery rate-limiting, duplicate suppression, and directed response handling.
+//!
+//! Controls response amplification for unconfirmed discovery services (Who-Is
+//! and Who-Has) per ASHRAE 135-2020 Clauses 16.9 and 16.10.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use bytes::BytesMut;
+
+use bacnet_encoding::apdu::{encode_apdu, Apdu, UnconfirmedRequest as UnconfirmedRequestPdu};
+use bacnet_encoding::npdu::NpduAddress;
+use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
+use bacnet_objects::database::ObjectDatabase;
+use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
+use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
+use bacnet_transport::port::TransportPort;
+use bacnet_types::enums::{ErrorClass, ErrorCode, NetworkPriority, UnconfirmedServiceChoice};
+use bacnet_types::error::Error;
+use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::MacAddr;
+use tokio::sync::RwLock;
+
+use super::{BACnetServer, CommState, ServerConfig};
+
+/// Configuration policy for discovery rate limiting and duplicate suppression.
+#[derive(Debug, Clone)]
+pub struct DiscoveryPolicy {
+    /// Maximum discovery responses emitted globally per second (default 64).
+    pub max_responses_per_sec_global: u32,
+    /// Maximum discovery response bytes emitted globally per second (default 65,536).
+    pub max_bytes_per_sec_global: usize,
+    /// Maximum discovery responses emitted per source per second (default 16).
+    pub max_responses_per_sec_per_source: u32,
+    /// Maximum discovery response bytes emitted per source per second (default 16,384).
+    pub max_bytes_per_sec_per_source: usize,
+    /// Maximum burst capacity for global discovery responses (default 64).
+    pub global_burst_capacity: u32,
+    /// Maximum burst capacity for per-source discovery responses (default 16).
+    pub source_burst_capacity: u32,
+    /// Headroom reserved exclusively for configured reserved sources (default 8).
+    pub reserved_capacity: u32,
+    /// Sources permitted to consume from reserved capacity.
+    pub reserved_sources: Vec<MacAddr>,
+    /// Coalescing window for duplicate discovery request suppression (default 200ms).
+    pub coalesce_window: Duration,
+    /// Prefer directed unicast responses over network broadcast (default true).
+    pub prefer_directed_responses: bool,
+    /// Maximum number of distinct discovery sources tracked concurrently (default 256).
+    pub max_tracked_sources: usize,
+}
+
+impl Default for DiscoveryPolicy {
+    fn default() -> Self {
+        Self {
+            max_responses_per_sec_global: 64,
+            max_bytes_per_sec_global: 65_536,
+            max_responses_per_sec_per_source: 16,
+            max_bytes_per_sec_per_source: 16_384,
+            global_burst_capacity: 64,
+            source_burst_capacity: 16,
+            reserved_capacity: 8,
+            reserved_sources: Vec::new(),
+            coalesce_window: Duration::from_millis(200),
+            prefer_directed_responses: true,
+            max_tracked_sources: 256,
+        }
+    }
+}
+
+impl DiscoveryPolicy {
+    /// Create an unlimited discovery policy with all rate limits disabled.
+    pub fn unlimited() -> Self {
+        Self {
+            max_responses_per_sec_global: u32::MAX,
+            max_bytes_per_sec_global: usize::MAX,
+            max_responses_per_sec_per_source: u32::MAX,
+            max_bytes_per_sec_per_source: usize::MAX,
+            global_burst_capacity: u32::MAX,
+            source_burst_capacity: u32::MAX,
+            reserved_capacity: 0,
+            coalesce_window: Duration::ZERO,
+            prefer_directed_responses: false,
+            ..Default::default()
+        }
+    }
+
+    /// Return a sanitized copy with valid burst and capacity bounds.
+    pub fn sanitized(&self) -> Self {
+        let mut policy = self.clone();
+        if (1..u32::MAX).contains(&policy.max_responses_per_sec_global) {
+            policy.global_burst_capacity = policy.global_burst_capacity.max(1);
+        }
+        if (1..u32::MAX).contains(&policy.max_responses_per_sec_per_source) {
+            policy.source_burst_capacity = policy.source_burst_capacity.max(1);
+        }
+        policy.reserved_capacity = policy.reserved_capacity.min(policy.global_burst_capacity);
+        policy.max_tracked_sources = policy.max_tracked_sources.max(1);
+        policy
+    }
+}
+
+/// Operational counters for discovery requests and responses.
+///
+/// Non-exhaustive, so a counter can be added without breaking callers: read
+/// it from [`BACnetServer::discovery_counters`](crate::server::BACnetServer::discovery_counters)
+/// and its fields rather than building one.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DiscoveryCounters {
+    /// Total Who-Is requests received.
+    pub who_is_received: u64,
+    /// Total Who-Has requests received.
+    pub who_has_received: u64,
+    /// Total I-Am responses sent.
+    pub i_am_sent: u64,
+    /// Total I-Have responses sent.
+    pub i_have_sent: u64,
+    /// Total response bytes sent for discovery.
+    pub response_bytes_sent: u64,
+    /// Total duplicate or cached requests coalesced without sending responses.
+    pub requests_coalesced: u64,
+    /// Responses throttled by per-source rate or burst limits.
+    pub responses_throttled_source: u64,
+    /// Responses throttled by global rate or reserved capacity limits.
+    pub responses_throttled_global: u64,
+    /// Total directed unicast discovery responses sent.
+    pub directed_responses_sent: u64,
+    /// Who-Is and Who-Has requests dropped because they didn't decode, such
+    /// as one with a single limit or octets after its last member. They are
+    /// dropped before any other work and count in neither received total.
+    pub malformed_dropped: u64,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct AtomicDiscoveryCounters {
+    pub(crate) who_is_received: AtomicU64,
+    pub(crate) who_has_received: AtomicU64,
+    pub(crate) i_am_sent: AtomicU64,
+    pub(crate) i_have_sent: AtomicU64,
+    pub(crate) response_bytes_sent: AtomicU64,
+    pub(crate) requests_coalesced: AtomicU64,
+    pub(crate) responses_throttled_source: AtomicU64,
+    pub(crate) responses_throttled_global: AtomicU64,
+    pub(crate) directed_responses_sent: AtomicU64,
+    pub(crate) malformed_dropped: AtomicU64,
+}
+
+impl AtomicDiscoveryCounters {
+    pub(crate) fn snapshot(&self) -> DiscoveryCounters {
+        DiscoveryCounters {
+            who_is_received: self.who_is_received.load(Ordering::Relaxed),
+            who_has_received: self.who_has_received.load(Ordering::Relaxed),
+            i_am_sent: self.i_am_sent.load(Ordering::Relaxed),
+            i_have_sent: self.i_have_sent.load(Ordering::Relaxed),
+            response_bytes_sent: self.response_bytes_sent.load(Ordering::Relaxed),
+            requests_coalesced: self.requests_coalesced.load(Ordering::Relaxed),
+            responses_throttled_source: self.responses_throttled_source.load(Ordering::Relaxed),
+            responses_throttled_global: self.responses_throttled_global.load(Ordering::Relaxed),
+            directed_responses_sent: self.directed_responses_sent.load(Ordering::Relaxed),
+            malformed_dropped: self.malformed_dropped.load(Ordering::Relaxed),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn inc(&self, c: &AtomicU64) {
+        c.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_sent(&self, bytes: usize, directed: bool, is_who_is: bool) {
+        if is_who_is {
+            self.i_am_sent.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.i_have_sent.fetch_add(1, Ordering::Relaxed);
+        }
+        self.response_bytes_sent
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+        if directed {
+            self.directed_responses_sent.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Target of a Who-Has query.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum WhoHasTarget {
+    Id(ObjectIdentifier),
+    Name(String),
+}
+
+/// Network-aware identity of a discovery requester.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SourceKey {
+    pub(crate) network: u16,
+    pub(crate) mac: MacAddr,
+}
+
+impl SourceKey {
+    pub(crate) fn from_parts(source_mac: &MacAddr, source_network: Option<&NpduAddress>) -> Self {
+        if let Some(net) = source_network {
+            if (1..=0xFFFE).contains(&net.network) && !net.mac_address.is_empty() {
+                return Self {
+                    network: net.network,
+                    mac: MacAddr::from_slice(&net.mac_address),
+                };
+            }
+        }
+        Self {
+            network: 0,
+            mac: source_mac.clone(),
+        }
+    }
+
+    pub(crate) fn from_received(received: &ReceivedApdu) -> Self {
+        Self::from_parts(&received.source_mac, received.source_network.as_ref())
+    }
+}
+
+#[derive(Debug)]
+struct SourceState {
+    tokens: f64,
+    byte_tokens: f64,
+    last_refill: Instant,
+    last_activity: Instant,
+    last_who_is: Option<Instant>,
+    last_who_has: HashMap<WhoHasTarget, Instant>,
+}
+
+fn refill_bucket(
+    tokens: &mut f64,
+    byte_tokens: &mut f64,
+    last_refill: &mut Instant,
+    rate: u32,
+    byte_rate: usize,
+    burst: u32,
+    now: Instant,
+) {
+    let elapsed = now.saturating_duration_since(*last_refill).as_secs_f64();
+    if elapsed > 0.0 {
+        *tokens = if rate == u32::MAX {
+            burst as f64
+        } else {
+            (*tokens + elapsed * (rate as f64)).min(burst as f64)
+        };
+        *byte_tokens = if byte_rate == usize::MAX {
+            byte_rate as f64
+        } else {
+            (*byte_tokens + elapsed * (byte_rate as f64)).min(byte_rate as f64)
+        };
+        *last_refill = now;
+    }
+}
+
+impl SourceState {
+    fn refill(&mut self, policy: &DiscoveryPolicy, now: Instant) {
+        refill_bucket(
+            &mut self.tokens,
+            &mut self.byte_tokens,
+            &mut self.last_refill,
+            policy.max_responses_per_sec_per_source,
+            policy.max_bytes_per_sec_per_source,
+            policy.source_burst_capacity,
+            now,
+        );
+    }
+
+    fn has_capacity(&self, policy: &DiscoveryPolicy, bytes: usize) -> bool {
+        (policy.max_responses_per_sec_per_source == u32::MAX || self.tokens >= 1.0)
+            && (policy.max_bytes_per_sec_per_source == usize::MAX
+                || self.byte_tokens >= bytes as f64)
+    }
+
+    fn deduct(&mut self, policy: &DiscoveryPolicy, bytes: usize) {
+        if policy.max_responses_per_sec_per_source != u32::MAX {
+            self.tokens -= 1.0;
+        }
+        if policy.max_bytes_per_sec_per_source != usize::MAX {
+            self.byte_tokens -= bytes as f64;
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DiscoveryState {
+    global_tokens: f64,
+    global_byte_tokens: f64,
+    global_last_refill: Instant,
+    last_broadcast_who_is: Option<Instant>,
+    last_broadcast_who_has: HashMap<WhoHasTarget, Instant>,
+    negative_who_has: HashMap<WhoHasTarget, Instant>,
+    sources: HashMap<SourceKey, SourceState>,
+}
+
+impl DiscoveryState {
+    fn refill_global(&mut self, policy: &DiscoveryPolicy, now: Instant) {
+        refill_bucket(
+            &mut self.global_tokens,
+            &mut self.global_byte_tokens,
+            &mut self.global_last_refill,
+            policy.max_responses_per_sec_global,
+            policy.max_bytes_per_sec_global,
+            policy.global_burst_capacity,
+            now,
+        );
+    }
+
+    fn has_global_capacity(
+        &self,
+        policy: &DiscoveryPolicy,
+        is_reserved: bool,
+        bytes: usize,
+    ) -> bool {
+        let count_ok = policy.max_responses_per_sec_global == u32::MAX || {
+            let req = if is_reserved {
+                1.0
+            } else {
+                1.0 + policy.reserved_capacity as f64
+            };
+            self.global_tokens >= req
+        };
+        count_ok
+            && (policy.max_bytes_per_sec_global == usize::MAX
+                || self.global_byte_tokens >= bytes as f64)
+    }
+
+    fn deduct_global(&mut self, policy: &DiscoveryPolicy, bytes: usize) {
+        if policy.max_responses_per_sec_global != u32::MAX {
+            self.global_tokens -= 1.0;
+        }
+        if policy.max_bytes_per_sec_global != usize::MAX {
+            self.global_byte_tokens -= bytes as f64;
+        }
+    }
+
+    fn get_or_create_source_mut(
+        &mut self,
+        policy: &DiscoveryPolicy,
+        key: &SourceKey,
+        now: Instant,
+    ) -> &mut SourceState {
+        if !self.sources.contains_key(key) {
+            ensure_source_capacity(self, policy, now);
+        }
+        let src = self
+            .sources
+            .entry(key.clone())
+            .or_insert_with(|| SourceState {
+                tokens: policy.source_burst_capacity as f64,
+                byte_tokens: policy.max_bytes_per_sec_per_source as f64,
+                last_refill: now,
+                last_activity: now,
+                last_who_is: None,
+                last_who_has: HashMap::new(),
+            });
+        src.refill(policy, now);
+        src
+    }
+
+    fn is_coalesced_who_has(
+        &self,
+        policy: &DiscoveryPolicy,
+        target: &WhoHasTarget,
+        key: &SourceKey,
+        is_broadcast: bool,
+        now: Instant,
+    ) -> bool {
+        if policy.coalesce_window.is_zero() {
+            return false;
+        }
+        let is_recent = |ts: &Instant| now.saturating_duration_since(*ts) < policy.coalesce_window;
+        self.negative_who_has.get(target).is_some_and(is_recent)
+            || (is_broadcast
+                && self
+                    .last_broadcast_who_has
+                    .get(target)
+                    .is_some_and(is_recent))
+            || self
+                .sources
+                .get(key)
+                .and_then(|s| s.last_who_has.get(target))
+                .is_some_and(is_recent)
+    }
+}
+
+#[derive(Debug)]
+struct AtomicDeviceInstance(AtomicU64);
+
+impl AtomicDeviceInstance {
+    const PRESENT_BIT: u64 = 0x1_0000_0000;
+
+    fn new(opt: Option<u32>) -> Self {
+        Self(AtomicU64::new(
+            opt.map_or(0, |i| Self::PRESENT_BIT | (i as u64)),
+        ))
+    }
+
+    fn load(&self, order: Ordering) -> Option<u32> {
+        let val = self.0.load(order);
+        (val & Self::PRESENT_BIT != 0).then_some(val as u32)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreCheckDecision {
+    Admit,
+    OutOfRange,
+    Coalesced,
+    ThrottledSource,
+    ThrottledGlobal,
+    DecodeError,
+}
+
+/// Thread-safe rate limiter, duplicate coalescer, and negative query cache.
+#[derive(Debug)]
+pub(crate) struct DiscoveryLimiter {
+    policy: DiscoveryPolicy,
+    counters: AtomicDiscoveryCounters,
+    device_instance: AtomicDeviceInstance,
+    state: Mutex<DiscoveryState>,
+}
+
+impl DiscoveryLimiter {
+    pub(crate) fn new(policy: DiscoveryPolicy, device_instance: Option<u32>) -> Self {
+        let now = Instant::now();
+        let state = DiscoveryState {
+            global_tokens: policy.global_burst_capacity as f64,
+            global_byte_tokens: policy.max_bytes_per_sec_global as f64,
+            global_last_refill: now,
+            last_broadcast_who_is: None,
+            last_broadcast_who_has: HashMap::new(),
+            negative_who_has: HashMap::new(),
+            sources: HashMap::new(),
+        };
+        Self {
+            policy,
+            counters: AtomicDiscoveryCounters::default(),
+            device_instance: AtomicDeviceInstance::new(device_instance),
+            state: Mutex::new(state),
+        }
+    }
+
+    pub(crate) fn counters(&self) -> DiscoveryCounters {
+        self.counters.snapshot()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn policy(&self) -> &DiscoveryPolicy {
+        &self.policy
+    }
+
+    #[cfg(test)]
+    pub(crate) fn negative_who_has_count(&self) -> usize {
+        self.state.lock().unwrap().negative_who_has.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_byte_tokens(
+        &self,
+        source_mac: &MacAddr,
+        source_network: Option<&NpduAddress>,
+    ) -> Option<f64> {
+        let key = SourceKey::from_parts(source_mac, source_network);
+        self.state
+            .lock()
+            .unwrap()
+            .sources
+            .get(&key)
+            .map(|s| s.byte_tokens)
+    }
+
+    fn check_instance_in_range(&self, range: Option<DeviceInstanceRange>) -> bool {
+        self.device_instance
+            .load(Ordering::Acquire)
+            .is_some_and(|instance| range.is_none_or(|range| range.contains(instance)))
+    }
+
+    pub(crate) fn pre_check_who_is(
+        &self,
+        req_bytes: &[u8],
+        received: &ReceivedApdu,
+        now: Instant,
+    ) -> PreCheckDecision {
+        // RB-07 compat mode: provenance threaded here for RB-09, no decision.
+        let _ = received.provenance;
+        let who_is = match WhoIsRequest::decode(req_bytes) {
+            Ok(w) => w,
+            Err(_) => {
+                self.counters.inc(&self.counters.malformed_dropped);
+                return PreCheckDecision::DecodeError;
+            }
+        };
+
+        self.counters.inc(&self.counters.who_is_received);
+
+        if !self.check_instance_in_range(who_is.range) {
+            return PreCheckDecision::OutOfRange;
+        }
+
+        let is_broadcast = received.is_group || received.link_layer_group;
+        let source_key = SourceKey::from_received(received);
+        let mut state = self.state.lock().unwrap();
+
+        // 1. Coalescing check
+        if !self.policy.coalesce_window.is_zero() {
+            let is_recent =
+                |ts: &Instant| now.saturating_duration_since(*ts) < self.policy.coalesce_window;
+            let bcast = is_broadcast && state.last_broadcast_who_is.as_ref().is_some_and(is_recent);
+            let src = state
+                .sources
+                .get(&source_key)
+                .and_then(|s| s.last_who_is.as_ref())
+                .is_some_and(is_recent);
+            if bcast || src {
+                self.counters.inc(&self.counters.requests_coalesced);
+                return PreCheckDecision::Coalesced;
+            }
+        }
+
+        // 2. Refill & Rate limits
+        state.refill_global(&self.policy, now);
+        let is_reserved = is_source_reserved(&self.policy, &source_key, received);
+        const ESTIMATED_I_AM_BYTES: usize = 64;
+
+        if !state.has_global_capacity(&self.policy, is_reserved, ESTIMATED_I_AM_BYTES) {
+            self.counters.inc(&self.counters.responses_throttled_global);
+            return PreCheckDecision::ThrottledGlobal;
+        }
+
+        let src = state.get_or_create_source_mut(&self.policy, &source_key, now);
+        if !src.has_capacity(&self.policy, ESTIMATED_I_AM_BYTES) {
+            self.counters.inc(&self.counters.responses_throttled_source);
+            return PreCheckDecision::ThrottledSource;
+        }
+
+        src.deduct(&self.policy, ESTIMATED_I_AM_BYTES);
+        src.last_activity = now;
+        src.last_who_is = Some(now);
+        state.deduct_global(&self.policy, ESTIMATED_I_AM_BYTES);
+        if is_broadcast && !self.policy.prefer_directed_responses {
+            state.last_broadcast_who_is = Some(now);
+        }
+
+        PreCheckDecision::Admit
+    }
+
+    pub(crate) fn record_i_am_sent(
+        &self,
+        actual_bytes: usize,
+        directed: bool,
+        source_mac: &MacAddr,
+        source_network: Option<&NpduAddress>,
+        now: Instant,
+    ) {
+        self.counters.record_sent(actual_bytes, directed, true);
+
+        const ESTIMATED_I_AM_BYTES: usize = 64;
+        let delta = (actual_bytes as f64) - (ESTIMATED_I_AM_BYTES as f64);
+        let mut state = self.state.lock().unwrap();
+        if delta != 0.0 {
+            if self.policy.max_bytes_per_sec_global != usize::MAX {
+                state.global_byte_tokens = (state.global_byte_tokens - delta).max(0.0);
+            }
+            let key = SourceKey::from_parts(source_mac, source_network);
+            if let Some(src) = state.sources.get_mut(&key) {
+                if self.policy.max_bytes_per_sec_per_source != usize::MAX {
+                    src.byte_tokens = (src.byte_tokens - delta).max(0.0);
+                }
+            }
+        }
+        if !directed {
+            state.last_broadcast_who_is = Some(now);
+        }
+    }
+
+    pub(crate) fn pre_check_who_has(
+        &self,
+        req_bytes: &[u8],
+        received: &ReceivedApdu,
+        now: Instant,
+    ) -> PreCheckDecision {
+        // RB-07 compat mode: provenance threaded here for RB-09, no decision.
+        let _ = received.provenance;
+        let who_has = match WhoHasRequest::decode(req_bytes) {
+            Ok(w) => w,
+            Err(_) => {
+                self.counters.inc(&self.counters.malformed_dropped);
+                return PreCheckDecision::DecodeError;
+            }
+        };
+
+        self.counters.inc(&self.counters.who_has_received);
+
+        if !self.check_instance_in_range(who_has.range) {
+            return PreCheckDecision::OutOfRange;
+        }
+
+        let target = match who_has.object {
+            WhoHasObject::Identifier(oid) => WhoHasTarget::Id(oid),
+            WhoHasObject::Name(name) => WhoHasTarget::Name(name),
+        };
+
+        let is_broadcast = received.is_group || received.link_layer_group;
+        let source_key = SourceKey::from_received(received);
+        let mut state = self.state.lock().unwrap();
+
+        if state.is_coalesced_who_has(&self.policy, &target, &source_key, is_broadcast, now) {
+            self.counters.inc(&self.counters.requests_coalesced);
+            return PreCheckDecision::Coalesced;
+        }
+
+        state.refill_global(&self.policy, now);
+        let is_reserved = is_source_reserved(&self.policy, &source_key, received);
+        const ESTIMATED_I_HAVE_BYTES: usize = 64;
+
+        if !state.has_global_capacity(&self.policy, is_reserved, ESTIMATED_I_HAVE_BYTES) {
+            self.counters.inc(&self.counters.responses_throttled_global);
+            return PreCheckDecision::ThrottledGlobal;
+        }
+
+        let src = state.get_or_create_source_mut(&self.policy, &source_key, now);
+        if !src.has_capacity(&self.policy, ESTIMATED_I_HAVE_BYTES) {
+            self.counters.inc(&self.counters.responses_throttled_source);
+            return PreCheckDecision::ThrottledSource;
+        }
+
+        src.last_activity = now;
+        PreCheckDecision::Admit
+    }
+
+    pub(crate) fn is_negative_who_has(&self, target: &WhoHasTarget, now: Instant) -> bool {
+        if self.policy.coalesce_window.is_zero() {
+            return false;
+        }
+        let state = self.state.lock().unwrap();
+        if let Some(ts) = state.negative_who_has.get(target) {
+            now.saturating_duration_since(*ts) < self.policy.coalesce_window
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn record_negative_who_has(&self, target: WhoHasTarget, now: Instant) {
+        const MAX_NEGATIVE_WHO_HAS: usize = 512;
+        let mut state = self.state.lock().unwrap();
+        if state.negative_who_has.len() >= MAX_NEGATIVE_WHO_HAS {
+            let window = self.policy.coalesce_window;
+            state
+                .negative_who_has
+                .retain(|_, ts| now.saturating_duration_since(*ts) < window);
+        }
+        while state.negative_who_has.len() >= MAX_NEGATIVE_WHO_HAS {
+            let Some(oldest) = state
+                .negative_who_has
+                .iter()
+                .min_by_key(|(_, ts)| *ts)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            state.negative_who_has.remove(&oldest);
+        }
+        state.negative_who_has.insert(target, now);
+    }
+
+    pub(crate) fn try_consume_who_has_response(
+        &self,
+        target: &WhoHasTarget,
+        received: &ReceivedApdu,
+        response_bytes: usize,
+        now: Instant,
+    ) -> bool {
+        let source_key = SourceKey::from_received(received);
+        let mut state = self.state.lock().unwrap();
+        let is_broadcast = received.is_group || received.link_layer_group;
+
+        if state.is_coalesced_who_has(&self.policy, target, &source_key, is_broadcast, now) {
+            self.counters.inc(&self.counters.requests_coalesced);
+            return false;
+        }
+
+        state.refill_global(&self.policy, now);
+        let is_reserved = is_source_reserved(&self.policy, &source_key, received);
+
+        if !state.has_global_capacity(&self.policy, is_reserved, response_bytes) {
+            self.counters.inc(&self.counters.responses_throttled_global);
+            return false;
+        }
+
+        let src = state.get_or_create_source_mut(&self.policy, &source_key, now);
+        if !src.has_capacity(&self.policy, response_bytes) {
+            self.counters.inc(&self.counters.responses_throttled_source);
+            return false;
+        }
+
+        src.deduct(&self.policy, response_bytes);
+        src.last_activity = now;
+        src.last_who_has.insert(target.clone(), now);
+        state.deduct_global(&self.policy, response_bytes);
+        if is_broadcast && !self.policy.prefer_directed_responses {
+            state.last_broadcast_who_has.insert(target.clone(), now);
+        }
+
+        true
+    }
+
+    pub(crate) fn record_i_have_sent(
+        &self,
+        actual_bytes: usize,
+        directed: bool,
+        target: &WhoHasTarget,
+        _source_mac: &MacAddr,
+        _source_network: Option<&NpduAddress>,
+        now: Instant,
+    ) {
+        self.counters.record_sent(actual_bytes, directed, false);
+
+        if !directed {
+            let mut state = self.state.lock().unwrap();
+            state.last_broadcast_who_has.insert(target.clone(), now);
+        }
+    }
+}
+
+fn is_source_reserved(policy: &DiscoveryPolicy, key: &SourceKey, recv: &ReceivedApdu) -> bool {
+    policy
+        .reserved_sources
+        .iter()
+        .any(|r| r == &key.mac || r == &recv.source_mac)
+}
+
+fn ensure_source_capacity(state: &mut DiscoveryState, policy: &DiscoveryPolicy, now: Instant) {
+    if state.sources.len() < policy.max_tracked_sources {
+        return;
+    }
+    state.sources.retain(|_, src| {
+        now.saturating_duration_since(src.last_activity) < Duration::from_secs(10)
+    });
+    while state.sources.len() >= policy.max_tracked_sources {
+        let Some(key) = state
+            .sources
+            .iter()
+            .min_by_key(|(_, src)| src.last_activity)
+            .map(|(k, _)| k.clone())
+        else {
+            break;
+        };
+        state.sources.remove(&key);
+    }
+}
+
+/// Broadcast this device's I-Am unless DeviceCommunicationControl restricts
+/// initiation. Clause 16.1.2 exempts only an I-Am answering a Who-Is, so an
+/// announcement made under DISABLE_INITIATION sends nothing and fails with
+/// `SERVICES` / `COMMUNICATION_DISABLED`, the code Clause 18.6 keeps for local
+/// work that could not initiate a service for that reason.
+pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
+    config: &ServerConfig,
+    db: &Arc<RwLock<ObjectDatabase>>,
+    network: &Arc<NetworkLayer<T>>,
+    comm_state: &CommState,
+    limiter: Option<&Arc<DiscoveryLimiter>>,
+) -> Result<(), Error> {
+    let guard = db.read().await;
+    let device_oid =
+        crate::local_device::validate_apdu_declaration(&guard, config.max_apdu_length)?
+            .ok_or_else(|| Error::Encoding("no Device object in database".into()))?;
+
+    // RB-16 alignment: this construction is field-for-field identical to
+    // `bacnet-endpoint`'s `DeviceIdentity::iam_request` built from
+    // `DeviceIdentity::server_config`. The endpoint session I-Am path encodes
+    // the same four fields (object id + max-apdu + segmentation + vendor) so
+    // I-Am vs Device ReadProperty vs role limits agree on one identity.
+    let mut service_buf = BytesMut::new();
+    iam_request_for(device_oid, config).encode(&mut service_buf);
+
+    let mut buf = BytesMut::new();
+    encode_apdu(
+        &mut buf,
+        &Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
+            service_choice: UnconfirmedServiceChoice::I_AM,
+            service_request: service_buf.freeze(),
+        }),
+    )?;
+
+    drop(guard);
+    if comm_state.initiation_restricted() {
+        return Err(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::COMMUNICATION_DISABLED.to_raw() as u32,
+        });
+    }
+    if let Some(limiter) = limiter {
+        limiter.record_i_am_sent(buf.len(), false, &MacAddr::new(), None, Instant::now());
+    }
+
+    network
+        .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
+        .await
+}
+
+/// RB-16 discovery-alignment helper: single I-Am construction shared with the
+/// endpoint identity path.
+///
+/// `bacnet-endpoint`'s `DeviceIdentity::iam_request` (via
+/// `DeviceIdentity::server_config`) builds these same four fields; any drift
+/// here breaks the I-Am ≡ ReadProperty ≡ role-capabilities matrix.
+#[doc(hidden)]
+pub fn iam_request_for(device_oid: ObjectIdentifier, config: &ServerConfig) -> IAmRequest {
+    IAmRequest {
+        object_identifier: device_oid,
+        max_apdu_length: config.max_apdu_length,
+        segmentation_supported: config.segmentation_supported,
+        vendor_id: config.vendor_id,
+    }
+}
+
+impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Broadcast I-Am through this server's bounded local-send owner.
+    /// Cancelling the waiter leaves admitted work owned until completion or stop.
+    /// While DeviceCommunicationControl restricts initiation nothing is sent
+    /// and this fails with `SERVICES` / `COMMUNICATION_DISABLED` (Clause 16.1).
+    pub async fn broadcast_i_am(&self) -> Result<(), Error> {
+        self.broadcaster
+            .send(Some(Arc::clone(&self.discovery_limiter)))
+            .await
+    }
+}

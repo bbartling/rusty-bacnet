@@ -1,8 +1,10 @@
 //! WritePropertyMultiple service per ASHRAE 135-2020 Clause 15.10.
 
+use bacnet_encoding::constructed::encode_bacnet_property_value;
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
-use bacnet_types::error::Error;
+use bacnet_types::enums::RejectReason;
+use bacnet_types::error::{DecodingKind, Error};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
@@ -10,10 +12,14 @@ use crate::common::BACnetPropertyValue;
 
 pub mod cursor;
 pub mod error;
+#[cfg(test)]
+mod priority_tests;
+#[cfg(test)]
+mod validation_tests;
 
 pub use cursor::{
     WritePropertyAttempt, WritePropertyMultipleCursor, WritePropertyMultipleCursorError,
-    WritePropertyMultipleDecodeStage, WritePropertyMultipleEvent,
+    WritePropertyMultipleDecodeStage, WritePropertyMultipleEvent, WritePropertyMultipleFailureKind,
 };
 pub use error::WritePropertyMultipleError;
 
@@ -21,10 +27,36 @@ pub use error::WritePropertyMultipleError;
 // WritePropertyMultipleRequest
 // ---------------------------------------------------------------------------
 
+/// The [`DecodingKind`] that draws the Reject reason the cursor gave
+/// `failure` (see [`DecodingKind::reject_reason`]).
+///
+/// A priority outside 1..=16 is [`DecodingKind::OutOfRange`], so a responder
+/// that converts [`WritePropertyMultipleRequest::decode`]'s error rejects it.
+/// This stack's server doesn't: it walks the cursor itself and answers that
+/// priority with an Error, PARAMETER_OUT_OF_RANGE, as it answers
+/// WriteProperty's. Clause 20.1.8 leaves that choice to the implementation.
+fn failure_kind(failure: WritePropertyMultipleFailureKind) -> DecodingKind {
+    use RejectReason as R;
+    match failure {
+        WritePropertyMultipleFailureKind::PriorityOutOfRange => DecodingKind::OutOfRange,
+        WritePropertyMultipleFailureKind::Syntax(reason) => match reason {
+            R::INVALID_TAG => DecodingKind::InvalidTag,
+            R::MISSING_REQUIRED_PARAMETER => DecodingKind::Missing,
+            R::TOO_MANY_ARGUMENTS => DecodingKind::Trailing,
+            R::PARAMETER_OUT_OF_RANGE => DecodingKind::OutOfRange,
+            R::BUFFER_OVERFLOW => DecodingKind::Overflow,
+            R::OTHER => DecodingKind::Unsupported,
+            _ => DecodingKind::InvalidEncoding,
+        },
+    }
+}
+
 /// A single object + list of property values to write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteAccessSpecification {
+    /// Object to write to.
     pub object_identifier: ObjectIdentifier,
+    /// Property values to write to that object, each with optional array index and priority.
     pub list_of_properties: Vec<BACnetPropertyValue>,
 }
 
@@ -33,28 +65,73 @@ pub struct WriteAccessSpecification {
 /// Uses SimpleACK (no ACK struct needed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WritePropertyMultipleRequest {
+    /// Per-object write specifications; must not be empty when encoding.
     pub list_of_write_access_specs: Vec<WriteAccessSpecification>,
 }
 
 impl WritePropertyMultipleRequest {
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Validate the complete outbound request without reading remote metadata.
+    ///
+    /// Each request and object specification must contain writes. Special RPM
+    /// selectors are not write targets; supplied priorities must be in 1..=16.
+    /// Encoded property values remain opaque, including legal empty list values.
+    pub fn validate(&self) -> Result<(), Error> {
+        use bacnet_types::enums::PropertyIdentifier as P;
+        if self.list_of_write_access_specs.is_empty() {
+            return Err(Error::Encoding(
+                "WPM requires at least one object specification".into(),
+            ));
+        }
+        for spec in &self.list_of_write_access_specs {
+            if spec.list_of_properties.is_empty() {
+                return Err(Error::Encoding(
+                    "WPM requires at least one property per object".into(),
+                ));
+            }
+            for property in &spec.list_of_properties {
+                if matches!(
+                    property.property_identifier,
+                    P::ALL | P::REQUIRED | P::OPTIONAL
+                ) {
+                    return Err(Error::Encoding(
+                        "WPM does not accept ALL, REQUIRED or OPTIONAL selectors".into(),
+                    ));
+                }
+                crate::write_property::validate_priority(property.priority)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Encode transactionally after validating every object/property write.
+    /// Invalid typed input leaves an existing buffer unchanged. Inbound decoding
+    /// remains separate and may preserve external empty-list/no-op requests.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.validate()?;
         for spec in &self.list_of_write_access_specs {
             primitives::encode_ctx_object_id(buf, 0, &spec.object_identifier);
             tags::encode_opening_tag(buf, 1);
             for prop_val in &spec.list_of_properties {
-                prop_val.encode(buf);
+                encode_bacnet_property_value(prop_val, buf);
             }
             tags::encode_closing_tag(buf, 1);
         }
+        Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
+    ///
+    /// The error's [`DecodingKind`] is the one whose Reject reason the
+    /// cursor chose, so [`Error::into_request_reject`] gives a responder the
+    /// cursor's reason.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut cursor = WritePropertyMultipleCursor::new(data);
         let mut specs = Vec::new();
         let mut current = None;
 
         while let Some(event) = cursor.next_event().map_err(|error| {
-            Error::decoding(
+            Error::decoding_kind(
+                failure_kind(error.kind),
                 error.offset,
                 format!("WPM {:?}: {}", error.stage, error.message),
             )
@@ -111,7 +188,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = WritePropertyMultipleRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -141,7 +218,7 @@ mod tests {
             ],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = WritePropertyMultipleRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -168,7 +245,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
 
         assert_eq!(WritePropertyMultipleRequest::decode(&buf).unwrap(), req);
     }
@@ -190,7 +267,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
 
         assert!(WritePropertyMultipleRequest::decode(&buf).is_err());
     }
@@ -213,7 +290,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(WritePropertyMultipleRequest::decode(&buf[..1]).is_err());
     }
 
@@ -231,7 +308,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(WritePropertyMultipleRequest::decode(&buf[..3]).is_err());
     }
 
@@ -249,7 +326,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let half = buf.len() / 2;
         assert!(WritePropertyMultipleRequest::decode(&buf[..half]).is_err());
     }

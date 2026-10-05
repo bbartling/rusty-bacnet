@@ -6,39 +6,85 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use bacnet_encoding::primitives::charset;
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::device::EXECUTED_SERVICES;
-use bacnet_objects::property_metadata::PropertyConformance;
 use bacnet_types::bitstring::ServicesSupported;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, ServiceSupported};
 use bacnet_types::primitives::PropertyValue;
 
 use crate::server::ServerConfig;
 
+const PROPERTY_CAPABILITIES_EXPLANATION: &str = "Property rows aggregate configured instances: a row or access flag means at least one instance supports it. Actual availability and access depend on the concrete object. Optional is the metadata conformance classification; a required declaration wins, and absent rows do not vote.";
+
+/// How the text and Markdown PICS introduce a type's
+/// [`ObjectTypeSupport::creation_only_properties`]: read-only to
+/// WriteProperty as a whole, but a CreateObject initial value sets them.
+const CREATION_ONLY_LABEL: &str = "Whole value set only by CreateObject";
+
+/// A row's access as the text and Markdown PICS print it: the flags, and for
+/// a row writes of another property change
+/// ([`PropertySupport::written_through`]) a note saying so, since no write
+/// naming the row itself is taken (#1443).
+fn access_text(row: &PropertySupport) -> String {
+    match row.written_through {
+        Some(through) => format!(
+            "{} (resized through {through}: a whole write or its size at index 0)",
+            row.access
+        ),
+        None => row.access.to_string(),
+    }
+}
+
+/// The type's creation-only properties, comma-separated, or `None` if it
+/// has none.
+fn creation_only_names(support: &ObjectTypeSupport) -> Option<String> {
+    let names: Vec<_> = support
+        .creation_only_properties
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
 // ───────────────────────────── Data model ──────────────────────────────────
 
 /// Complete PICS document per ASHRAE 135-2020 Annex A.
 #[derive(Debug, Clone)]
 pub struct Pics {
+    /// Vendor and device identification.
     pub vendor_info: VendorInfo,
+    /// Device profile claimed.
     pub device_profile: DeviceProfile,
+    /// Object types present in the database with their creation, deletion and property support.
     pub supported_object_types: Vec<ObjectTypeSupport>,
+    /// Services the server can initiate or execute.
     pub supported_services: Vec<ServiceSupport>,
+    /// Data-link layers the device supports.
     pub data_link_layers: Vec<DataLinkSupport>,
+    /// Network-layer roles the device fills.
     pub network_layer: NetworkLayerSupport,
+    /// Character sets the device supports.
     pub character_sets: Vec<CharacterSet>,
+    /// Free-text descriptions of special functionality.
     pub special_functionality: Vec<String>,
 }
 
 /// Vendor and device identification.
 #[derive(Debug, Clone)]
 pub struct VendorInfo {
+    /// Vendor identifier assigned by ASHRAE.
     pub vendor_id: u16,
+    /// Vendor name.
     pub vendor_name: String,
+    /// Product model name.
     pub model_name: String,
+    /// Firmware revision string.
     pub firmware_revision: String,
+    /// Application software version string.
     pub application_software_version: String,
+    /// BACnet protocol version implemented.
     pub protocol_version: u16,
+    /// BACnet protocol revision implemented.
     pub protocol_revision: u16,
 }
 
@@ -81,11 +127,16 @@ impl fmt::Display for DeviceProfile {
     }
 }
 
-/// Property access flags for a supported property.
+/// Property capabilities across configured instances of an object type.
+/// Read/write flags mean at least one instance supports that access. Optional is
+/// true only when every present metadata row is optional; absent rows do not vote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PropertyAccess {
+    /// At least one instance can be read.
     pub readable: bool,
+    /// At least one instance can be written.
     pub writable: bool,
+    /// Every instance that has the property treats it as optional.
     pub optional: bool,
 }
 
@@ -101,34 +152,58 @@ impl fmt::Display for PropertyAccess {
 /// Supported property with its access flags.
 #[derive(Debug, Clone)]
 pub struct PropertySupport {
+    /// Property this row describes.
     pub property_id: PropertyIdentifier,
+    /// Aggregated access flags for the property.
     pub access: PropertyAccess,
+    /// The property whose writes change this one on some instance, although
+    /// a write naming this one is refused: State_Text, written whole or at
+    /// index 0, for a multi-state object's Number_Of_States (#1443).
+    pub written_through: Option<PropertyIdentifier>,
 }
 
 /// Object type support declaration.
 #[derive(Debug, Clone)]
 pub struct ObjectTypeSupport {
+    /// Object type described.
     pub object_type: ObjectType,
+    /// Whether the type can be created remotely with CreateObject.
     pub createable: bool,
+    /// The properties a CreateObject initial value may set whole on a type
+    /// that is createable, although WriteProperty can't change them later
+    /// (#1429). Empty when the type isn't createable. A property writes of
+    /// another one change, such as Number_Of_States, isn't listed: its row
+    /// says so instead ([`PropertySupport::written_through`]).
+    pub creation_only_properties: Vec<PropertyIdentifier>,
+    /// Whether the type can be deleted remotely with DeleteObject.
     pub deleteable: bool,
+    /// Union of effective instance rows in ascending property-ID order.
     pub supported_properties: Vec<PropertySupport>,
 }
 
 /// Service support declaration.
 #[derive(Debug, Clone)]
 pub struct ServiceSupport {
+    /// Service name.
     pub service_name: String,
+    /// Device can request the service.
     pub initiator: bool,
+    /// Device can execute the service.
     pub executor: bool,
 }
 
 /// Data link layer support.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataLinkSupport {
+    /// BACnet/IP over IPv4.
     BipV4,
+    /// BACnet/IP over IPv6.
     BipV6,
+    /// MS/TP over RS-485.
     Mstp,
+    /// Raw BACnet Ethernet (802.3).
     Ethernet,
+    /// BACnet Secure Connect.
     BacnetSc,
 }
 
@@ -147,32 +222,64 @@ impl fmt::Display for DataLinkSupport {
 /// Network layer capabilities.
 #[derive(Debug, Clone)]
 pub struct NetworkLayerSupport {
+    /// Device routes between networks.
     pub router: bool,
+    /// Device acts as a BACnet Broadcast Management Device.
     pub bbmd: bool,
+    /// Device can register as a foreign device with a BBMD.
     pub foreign_device: bool,
 }
 
-/// Character set support.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A character set the PICS can claim under Annex A "Character Sets Supported".
+///
+/// The variants are exactly the six sets Annex A offers. Each discriminant is the
+/// set's code from Clause 20.2.9, the initial octet of an encoded CharacterString.
+/// `Display` prints the set's Annex A label. Claiming several sets does not mean
+/// the device can use them all at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum CharacterSet {
-    Utf8,
-    Ansi,
-    DbcsIbm,
-    DbcsMs,
-    Jisx0208,
-    Iso8859_1,
+    /// ISO 10646 UTF-8, code X'00'.
+    Utf8 = charset::UTF8,
+    /// IBM/Microsoft DBCS, code X'01'. Its strings carry a two-octet code page.
+    IbmMicrosoftDbcs = charset::IBM_MICROSOFT_DBCS,
+    /// JIS X 0208, code X'02'.
+    JisX0208 = charset::JIS_X_0208,
+    /// ISO 10646 UCS-4, code X'03'.
+    Ucs4 = charset::UCS4,
+    /// ISO 10646 UCS-2, code X'04'.
+    Ucs2 = charset::UCS2,
+    /// ISO 8859-1, code X'05'.
+    Iso8859_1 = charset::ISO_8859_1,
+}
+
+impl CharacterSet {
+    /// Every set Annex A offers, in Clause 20.2.9 code order.
+    pub const ALL: [Self; 6] = [
+        Self::Utf8,
+        Self::IbmMicrosoftDbcs,
+        Self::JisX0208,
+        Self::Ucs4,
+        Self::Ucs2,
+        Self::Iso8859_1,
+    ];
+
+    /// The set's Clause 20.2.9 code, one of the `bacnet_encoding::primitives::charset` constants.
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
 }
 
 impl fmt::Display for CharacterSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Utf8 => f.write_str("UTF-8"),
-            Self::Ansi => f.write_str("ANSI X3.4"),
-            Self::DbcsIbm => f.write_str("IBM/Microsoft DBCS"),
-            Self::DbcsMs => f.write_str("JIS C 6226"),
-            Self::Jisx0208 => f.write_str("JIS X 0208"),
-            Self::Iso8859_1 => f.write_str("ISO 8859-1"),
-        }
+        f.write_str(match self {
+            Self::Utf8 => "ISO 10646 (UTF-8)",
+            Self::IbmMicrosoftDbcs => "IBM/Microsoft DBCS",
+            Self::JisX0208 => "JIS X 0208",
+            Self::Ucs4 => "ISO 10646 (UCS-4)",
+            Self::Ucs2 => "ISO 10646 (UCS-2)",
+            Self::Iso8859_1 => "ISO 8859-1",
+        })
     }
 }
 
@@ -181,16 +288,27 @@ impl fmt::Display for CharacterSet {
 /// Configuration for PICS generation that cannot be inferred from the database.
 #[derive(Debug, Clone)]
 pub struct PicsConfig {
+    /// Vendor name.
     pub vendor_name: String,
+    /// Product model name.
     pub model_name: String,
+    /// Firmware revision string.
     pub firmware_revision: String,
+    /// Application software version string.
     pub application_software_version: String,
+    /// BACnet protocol version implemented (default 1).
     pub protocol_version: u16,
+    /// BACnet protocol revision implemented (default 24).
     pub protocol_revision: u16,
+    /// Device profile claimed.
     pub device_profile: DeviceProfile,
+    /// Data-link layers the device supports.
     pub data_link_layers: Vec<DataLinkSupport>,
+    /// Network-layer roles the device fills.
     pub network_layer: NetworkLayerSupport,
+    /// Character sets the device supports.
     pub character_sets: Vec<CharacterSet>,
+    /// Free-text descriptions of special functionality.
     pub special_functionality: Vec<String>,
 }
 
@@ -218,14 +336,18 @@ impl Default for PicsConfig {
 
 // ────────────────────────────── Generator ──────────────────────────────────
 
-/// Generates a [`Pics`] document from an [`ObjectDatabase`] and configuration.
+/// Generates PICS from raw object declarations and configuration. This standalone
+/// generator does not establish service execution; use `BACnetServer::generate_pics`
+/// for the full server's effective Device contract.
 pub struct PicsGenerator<'a> {
     db: &'a ObjectDatabase,
     server_config: &'a ServerConfig,
     pics_config: &'a PicsConfig,
+    served: bool,
 }
 
 impl<'a> PicsGenerator<'a> {
+    /// Create a generator over the object database and the server and PICS configuration.
     pub fn new(
         db: &'a ObjectDatabase,
         server_config: &'a ServerConfig,
@@ -235,7 +357,13 @@ impl<'a> PicsGenerator<'a> {
             db,
             server_config,
             pics_config,
+            served: false,
         }
+    }
+
+    pub(crate) fn for_server(mut self) -> Self {
+        self.served = true;
+        self
     }
 
     /// Generate the complete PICS document.
@@ -278,44 +406,43 @@ impl<'a> PicsGenerator<'a> {
         for (raw_type, objects) in &by_type {
             let object_type = ObjectType::from_raw(*raw_type);
             let representative = objects[0];
-            let metadata = representative.property_metadata();
-            let supported_properties = if metadata.is_empty() {
-                let all_props = representative.property_list();
-                let required = representative.required_properties();
-                all_props
-                    .iter()
-                    .map(|&property_id| {
-                        let is_required = required.contains(&property_id);
-                        PropertySupport {
-                            property_id,
-                            access: PropertyAccess {
-                                readable: true,
-                                writable: representative.is_writable_property(property_id),
-                                optional: !is_required,
-                            },
-                        }
-                    })
-                    .collect()
-            } else {
-                metadata
-                    .iter()
-                    .map(|row| PropertySupport {
-                        property_id: row.property_identifier,
-                        access: PropertyAccess {
-                            readable: true,
-                            writable: row.write_capability.is_writable(),
-                            optional: row.conformance == PropertyConformance::Optional,
-                        },
-                    })
-                    .collect()
-            };
+            let view = (self.served && object_type == ObjectType::DEVICE).then(|| {
+                crate::device_view::DeviceReadContext::new(
+                    self.db,
+                    crate::device_view::DeviceExecution::FullServer,
+                )
+            });
+            let supported_properties =
+                Self::union_property_support(objects.iter().flat_map(|object| {
+                    if let Some(view) = &view {
+                        Self::object_property_support(&view.object(*object))
+                    } else {
+                        Self::object_property_support(*object)
+                    }
+                }));
+
+            // Factory/deletion capabilities are type-level declarations, not
+            // per-instance property capabilities. Preserve that separate policy.
 
             let createable = representative.is_createable();
             let deleteable = representative.is_deleteable();
+            let written_through = |property: &PropertyIdentifier| {
+                supported_properties
+                    .iter()
+                    .any(|row| row.property_id == *property && row.written_through.is_some())
+            };
+            let creation_only_properties = if createable {
+                let mut properties = representative.creation_only_properties().to_vec();
+                properties.retain(|property| !written_through(property));
+                properties
+            } else {
+                Vec::new()
+            };
 
             result.push(ObjectTypeSupport {
                 object_type,
                 createable,
+                creation_only_properties,
                 deleteable,
                 supported_properties,
             });
@@ -323,10 +450,66 @@ impl<'a> PicsGenerator<'a> {
         result
     }
 
+    fn object_property_support(
+        object: &dyn bacnet_objects::traits::BACnetObject,
+    ) -> Vec<PropertySupport> {
+        let metadata = object.property_metadata();
+        if metadata.is_empty() {
+            let all_props = object.property_list();
+            let required = object.required_properties();
+            all_props
+                .iter()
+                .map(|&property_id| PropertySupport {
+                    property_id,
+                    access: PropertyAccess {
+                        readable: true,
+                        writable: object.is_writable_property(property_id),
+                        optional: !required.contains(&property_id),
+                    },
+                    written_through: None,
+                })
+                .collect()
+        } else {
+            metadata
+                .iter()
+                .map(|row| PropertySupport {
+                    property_id: row.property_identifier,
+                    access: PropertyAccess {
+                        readable: true,
+                        writable: row.write_capability.is_writable(),
+                        optional: !row.is_required(),
+                    },
+                    written_through: row.write_capability.written_through(),
+                })
+                .collect()
+        }
+    }
+
+    fn union_property_support(
+        rows: impl IntoIterator<Item = PropertySupport>,
+    ) -> Vec<PropertySupport> {
+        // A type row records capabilities across all configured instances.
+        // Missing properties do not vote on conformance; a required present row
+        // wins over optional rows. Sort even a single instance by property ID.
+        let mut properties: BTreeMap<u32, PropertySupport> = BTreeMap::new();
+        for row in rows {
+            properties
+                .entry(row.property_id.to_raw())
+                .and_modify(|existing| {
+                    existing.access.readable |= row.access.readable;
+                    existing.access.writable |= row.access.writable;
+                    existing.access.optional &= row.access.optional;
+                    existing.written_through = existing.written_through.or(row.written_through);
+                })
+                .or_insert(row);
+        }
+        properties.into_values().collect()
+    }
+
     /// Build the service support list based on what the server actually handles.
     /// Services this server initiates (the PICS initiator column): replies
     /// and notifications constructed outbound by `bacnet-server`. Distinct
-    /// from [`EXECUTED_SERVICES`], which Clause 12.11 ties to execution.
+    /// from [`EXECUTED_SERVICES`](bacnet_objects::device::EXECUTED_SERVICES), which Clause 12.11 ties to execution.
     const INITIATED_SERVICES: &'static [ServiceSupported] = &[
         ServiceSupported::I_AM,
         ServiceSupported::I_HAVE,
@@ -339,15 +522,13 @@ impl<'a> PicsGenerator<'a> {
     ];
 
     fn build_services(&self) -> Vec<ServiceSupport> {
-        // Prefer the effective Device bit string so runtime modes such as an
-        // explicitly clockless server cannot drift from generated PICS. The
-        // static dispatch contract remains the fallback for databases without
-        // a readable Device service property, filtered by database clock mode.
-        let effective_executed = self
-            .db
-            .iter_objects()
-            .filter(|(oid, _)| oid.object_type() == ObjectType::DEVICE)
-            .find_map(|(_, device)| {
+        // Standalone callers inspect the selected Device's raw declaration. The
+        // full server always uses its fixed execution profile, filtered by
+        // database clock availability; a mutable/custom Device cannot override
+        // that contract.
+        let effective_executed = (!self.served)
+            .then(|| {
+                let device = self.db.get(&self.db.selected_device()?)?;
                 match device
                     .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
                     .ok()?
@@ -357,16 +538,15 @@ impl<'a> PicsGenerator<'a> {
                     }
                     _ => None,
                 }
-            });
+            })
+            .flatten();
         let mut service_map: BTreeMap<&'static str, (bool, bool)> = BTreeMap::new();
         let clock_available = self.db.clock_frame().is_some();
         let executed: Box<dyn Iterator<Item = ServiceSupported> + '_> = match &effective_executed {
             Some(services) => Box::new(services.iter()),
-            None => Box::new(EXECUTED_SERVICES.iter().copied().filter(move |service| {
-                clock_available
-                    || (*service != ServiceSupported::TIME_SYNCHRONIZATION
-                        && *service != ServiceSupported::UTC_TIME_SYNCHRONIZATION)
-            })),
+            None => {
+                Box::new(crate::device_view::DeviceExecution::FullServer.services(clock_available))
+            }
         };
         for service in executed {
             service_map
@@ -436,17 +616,22 @@ impl Pics {
         out.push_str(&format!("Profile: {}\n\n", self.device_profile));
 
         out.push_str("--- Supported Object Types ---\n");
+        out.push_str(PROPERTY_CAPABILITIES_EXPLANATION);
+        out.push('\n');
         for ot in &self.supported_object_types {
             out.push_str(&format!(
                 "\n  Object Type: {} (createable={}, deleteable={})\n",
                 ot.object_type, ot.createable, ot.deleteable
             ));
+            if let Some(names) = creation_only_names(ot) {
+                out.push_str(&format!("  {CREATION_ONLY_LABEL}: {names}\n"));
+            }
             out.push_str("  Properties:\n");
             for prop in &ot.supported_properties {
                 out.push_str(&format!(
                     "    {:<40} {}\n",
                     prop.property_id.to_string(),
-                    prop.access
+                    access_text(prop)
                 ));
             }
         }
@@ -542,15 +727,25 @@ impl Pics {
         out.push_str(&format!("**{}**\n\n", self.device_profile));
 
         out.push_str("## Supported Object Types\n\n");
+        out.push_str(PROPERTY_CAPABILITIES_EXPLANATION);
+        out.push_str("\n\n");
         for ot in &self.supported_object_types {
             out.push_str(&format!(
-                "### {}\n\n- Createable: {}\n- Deleteable: {}\n\n",
+                "### {}\n\n- Createable: {}\n- Deleteable: {}\n",
                 ot.object_type, ot.createable, ot.deleteable
             ));
+            if let Some(names) = creation_only_names(ot) {
+                out.push_str(&format!("- {CREATION_ONLY_LABEL}: {names}\n"));
+            }
+            out.push('\n');
             out.push_str("| Property | Access |\n");
             out.push_str("|----------|--------|\n");
             for prop in &ot.supported_properties {
-                out.push_str(&format!("| {} | {} |\n", prop.property_id, prop.access));
+                out.push_str(&format!(
+                    "| {} | {} |\n",
+                    prop.property_id,
+                    access_text(prop)
+                ));
             }
             out.push('\n');
         }
@@ -678,3 +873,15 @@ mod acked_transitions_policy_tests;
 
 #[cfg(test)]
 mod truth_source_tests;
+
+#[cfg(test)]
+mod property_union_tests;
+
+#[cfg(test)]
+mod character_set_tests;
+
+#[cfg(test)]
+mod selected_device_tests;
+
+#[cfg(test)]
+mod creation_only_tests;

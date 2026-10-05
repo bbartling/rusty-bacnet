@@ -8,7 +8,7 @@ use bacnet_endpoint_core::coordinator::{
 use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
 use bytes::Bytes;
 
-use super::coordinated::CoordinatedRegistrationError;
+use super::coordinated::{CoordinatedRegistrationError, SegmentedAckArrival};
 use super::*;
 
 fn coordinated_tsm() -> (Tsm, Arc<OutboundTransactionCoordinator>) {
@@ -375,10 +375,12 @@ fn segmented_progress_is_nonterminal_until_valid_reassembly() {
     });
     assert!(matches!(
         tsm.coordinated_admit_segmented_complex_ack_for_owner(
-            &mac,
-            invoke_id,
-            1,
-            true,
+            SegmentedAckArrival {
+                source_mac: &mac,
+                invoke_id,
+                sequence_number: 1,
+                segmented_response_accepted: true,
+            },
             &registration.owner,
             &peer,
             &final_segment,
@@ -434,4 +436,96 @@ fn drop_releases_every_coordinated_lease() {
         assert_eq!(coordinator.active_count().unwrap(), 3);
     }
     assert_eq!(coordinator.active_count().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn error_service_is_checked_in_coordinated_and_pre_admitted_completion() {
+    use bacnet_encoding::apdu::ErrorPdu;
+    use bacnet_endpoint_core::coordinator::AdmissionOutcome;
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    for pre_admitted in [false, true] {
+        let (mut tsm, coordinator) = coordinated_tsm();
+        let mac = [7];
+        let peer = CanonicalPeer::direct(&mac);
+        let (invoke_id, mut registration) = register(
+            &mut tsm,
+            &mac,
+            peer.clone(),
+            ConfirmedServiceChoice::WRITE_PROPERTY,
+            false,
+        );
+        let error = |service_choice| {
+            Apdu::Error(ErrorPdu {
+                invoke_id,
+                service_choice,
+                error_class: ErrorClass::PROPERTY,
+                error_code: ErrorCode::WRITE_ACCESS_DENIED,
+                error_data: Bytes::new(),
+            })
+        };
+        let response = || TsmResponse::Error {
+            class: 2,
+            code: 40,
+            detail: None,
+        };
+        let wrong = error(ConfirmedServiceChoice::READ_PROPERTY);
+        let matching = error(ConfirmedServiceChoice::WRITE_PROPERTY);
+        if pre_admitted {
+            let AdmissionOutcome::Admitted(admission) =
+                coordinator.admit(&peer, &matching).unwrap()
+            else {
+                panic!()
+            };
+            assert!(matches!(
+                tsm.complete_pre_admitted_terminal_response(&mac, &admission, &wrong, response()),
+                CoordinatedCompletion::ServiceChoiceMismatch { .. }
+            ));
+            assert!(registration.response.try_recv().is_err());
+            assert_eq!(tsm.pending_count(), 1);
+            assert_eq!(
+                tsm.complete_pre_admitted_terminal_response(
+                    &mac,
+                    &admission,
+                    &matching,
+                    response()
+                ),
+                CoordinatedCompletion::Completed(CompletionOutcome::Delivered)
+            );
+        } else {
+            assert!(matches!(
+                tsm.complete_coordinated_terminal_response(
+                    &mac,
+                    invoke_id,
+                    Some(&registration.owner),
+                    &peer,
+                    &wrong,
+                    response()
+                ),
+                CoordinatedCompletion::ServiceChoiceMismatch { .. }
+            ));
+            assert!(registration.response.try_recv().is_err());
+            assert_eq!(tsm.pending_count(), 1);
+            assert_eq!(
+                tsm.complete_coordinated_terminal_response(
+                    &mac,
+                    invoke_id,
+                    Some(&registration.owner),
+                    &peer,
+                    &matching,
+                    response()
+                ),
+                CoordinatedCompletion::Completed(CompletionOutcome::Delivered)
+            );
+        }
+        assert!(matches!(
+            registration.response.await.unwrap(),
+            TsmResponse::Error {
+                class: 2,
+                code: 40,
+                detail: None
+            }
+        ));
+        assert_eq!(coordinator.active_count().unwrap(), 0);
+        assert_eq!(tsm.pending_count(), 0);
+    }
 }

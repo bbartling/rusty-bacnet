@@ -41,18 +41,19 @@ fn setup_out_of_range(
     db.add(Box::new(ai)).unwrap();
 
     // Event enrollment
-    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-OOR", EventType::OUT_OF_RANGE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit,
         high_limit,
         deadband,
     });
-    ee.set_event_enable(0x07); // all transitions
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -83,12 +84,12 @@ fn setup_floating_limit(
     let sp_oid = sp.object_identifier();
     db.add(Box::new(sp)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(2, "EE-FL", EventType::FLOATING_LIMIT.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(2, "EE-FL", EventType::FLOATING_LIMIT).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::FloatingLimit {
         time_delay: 0,
         setpoint_reference: BACnetDeviceObjectPropertyReference::new_local(
@@ -99,7 +100,7 @@ fn setup_floating_limit(
         high_diff_limit: high_diff,
         deadband,
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -118,12 +119,12 @@ fn setup_change_of_state(
     let bi_oid = bi.object_identifier();
     db.add(Box::new(bi)).unwrap();
 
-    let mut ee =
-        EventEnrollmentObject::new(3, "EE-COS", EventType::CHANGE_OF_STATE.to_raw()).unwrap();
+    let mut ee = EventEnrollmentObject::new(3, "EE-COS", EventType::CHANGE_OF_STATE).unwrap();
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 0,
         list_of_values: alarm_values
@@ -131,7 +132,7 @@ fn setup_change_of_state(
             .map(|v| BACnetPropertyStates::BinaryValue(*v))
             .collect(),
     });
-    ee.set_event_enable(0x07);
+    ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 

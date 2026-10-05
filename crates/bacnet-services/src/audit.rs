@@ -1,10 +1,14 @@
 //! Audit notification and query wire models.
 //!
-//! These codecs follow the formal Clause 21 field and tag productions in
-//! ASHRAE 135-2020 within the library's `u64` Unsigned implementation limit.
-//! Clause 13.19 conflicts with them by describing an `Unsigned64` start
-//! sequence and a three-state success filter. This model intentionally uses
-//! Clause 21's `Unsigned32` and strict mandatory Boolean forms.
+//! These codecs follow the corrected 2020 baseline: ANSI/ASHRAE 135-2020 plus
+//! the Errata Summary 2024-04-29 (v1), visually verified from the rendered
+//! errata page 3 under its page-1 convention (strikeout = removed, italics =
+//! added) and recorded by RB-01. Item 7 (Clause 21.6, printed p. 886)
+//! corrects the by-target/by-source `successful-actions-only` fields from
+//! BOOLEAN to `BACnetSuccessFilter` at unchanged tags \[7\]/\[4\]; item 8
+//! (Clause 21.2.3, printed p. 865) corrects `start-at-sequence-number` from
+//! Unsigned32 to Unsigned64 at unchanged optional tag \[2\]. Unsigned values
+//! use the library's `u64` implementation limit (1-8 octet canonical forms).
 
 pub use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
@@ -13,8 +17,6 @@ pub use bacnet_types::constructed::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
-
-use crate::common::PropertyReference;
 
 #[path = "audit/notification_codec.rs"]
 mod notification_codec;
@@ -36,64 +38,25 @@ pub struct AuditNotificationRequest {
 /// continuity, filtering, or the truth of `no_more_items`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuditLogQueryAck {
+    /// Audit Log object whose records were queried.
     pub audit_log: ObjectIdentifier,
     /// Zero or more adjacent record results encoded under context tag `[1]`.
     pub records: Vec<BACnetAuditLogRecordResult>,
+    /// `true` when no records remain beyond those returned; the codec does not verify it.
     pub no_more_items: bool,
-}
-
-/// Audit-local wire-equivalent of `BACnetPropertyReference`.
-///
-/// The shared service [`PropertyReference`] predates these codecs and narrows
-/// the optional array index to `u32`. Clause 21 defines it as unconstrained
-/// Unsigned, so Audit preserves every value supported by the primitive layer.
-impl From<PropertyReference> for AuditPropertyReference {
-    fn from(value: PropertyReference) -> Self {
-        Self {
-            property_identifier: value.property_identifier,
-            property_array_index: value.property_array_index.map(u64::from),
-        }
-    }
-}
-
-impl TryFrom<AuditPropertyReference> for PropertyReference {
-    type Error = Error;
-
-    fn try_from(value: AuditPropertyReference) -> Result<Self, Self::Error> {
-        Ok(Self {
-            property_identifier: value.property_identifier,
-            property_array_index: value
-                .property_array_index
-                .map(u32::try_from)
-                .transpose()
-                .map_err(|_| {
-                    Error::OutOfRange(
-                        "Audit property-array-index exceeds shared PropertyReference u32 limit"
-                            .into(),
-                    )
-                })?,
-        })
-    }
 }
 
 /// AuditLogQuery-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditLogQueryRequest {
+    /// Audit Log object to query.
     pub audit_log: ObjectIdentifier,
+    /// Filter selecting which records to return.
     pub query_parameters: BACnetAuditLogQueryParameters,
-    /// Clause 21 constrains this field to `Unsigned32`.
-    pub start_at_sequence_number: Option<u32>,
+    /// Corrected-baseline `Unsigned64` cursor (Errata 2024-04-29 item 8).
+    pub start_at_sequence_number: Option<u64>,
+    /// Maximum number of records the requester wants returned.
     pub requested_count: u16,
-}
-
-fn decode_canonical_unsigned(data: &[u8], offset: usize, field: &str) -> Result<u64, Error> {
-    if data.len() > 1 && data.first() == Some(&0) {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} must use the shortest Unsigned/Enumerated encoding"),
-        ));
-    }
-    bacnet_encoding::primitives::decode_unsigned(data)
 }
 
 impl AuditNotificationRequest {
@@ -102,6 +65,7 @@ impl AuditNotificationRequest {
         notification_codec::encode(self, buf)
     }
 
+    /// Encode the request into `buf`; same as `try_encode`.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         self.try_encode(buf)
     }
@@ -118,6 +82,7 @@ impl AuditLogQueryRequest {
         query_codec::encode(self, buf)
     }
 
+    /// Encode the request into `buf`; same as `try_encode`.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         self.try_encode(buf)
     }
@@ -134,6 +99,7 @@ impl AuditLogQueryAck {
         query_ack_codec::encode(self, buf)
     }
 
+    /// Encode the ACK into `buf`; same as `try_encode`.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         self.try_encode(buf)
     }
@@ -151,3 +117,11 @@ mod tests;
 #[cfg(test)]
 #[path = "audit/malformed_tests.rs"]
 mod malformed_tests;
+
+#[cfg(test)]
+#[path = "audit/empty_value_tests.rs"]
+mod empty_value_tests;
+
+#[cfg(test)]
+#[path = "audit/address_bound_tests.rs"]
+mod address_bound_tests;

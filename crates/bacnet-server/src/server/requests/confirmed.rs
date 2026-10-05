@@ -1,54 +1,104 @@
 use super::*;
 
+#[cfg(test)]
+#[path = "dcc_tests.rs"]
+mod dcc_tests;
+
+#[cfg(test)]
+#[path = "reinitialize_device_tests.rs"]
+mod reinitialize_device_tests;
+
+#[cfg(test)]
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Atomically admit a confirmed request before DCC, service decoding,
-    /// authorization, mutation, side effects, or response construction.
-    #[allow(clippy::too_many_arguments)]
+    /// Atomically admit a confirmed request before service decoding,
+    /// authorization, mutation, side effects, or response construction. Runs
+    /// with fresh DCC outcome and mutation decision logs, whatever `services`
+    /// carries for them.
     pub(in crate::server) async fn handle_confirmed_request(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        seg_ack_senders: &Arc<Mutex<HashMap<SegKey, Arc<SegmentedSendHandle>>>>,
-        seg_send_permits: &Arc<Semaphore>,
-        cov_in_flight: &Arc<Semaphore>,
-        server_tsm: &Arc<Mutex<ServerTsm>>,
-        notification_transactions: &Arc<NotificationTransactions>,
+        services: &RequestServices<T>,
         confirmed_request_tracker: &Arc<ConfirmedRequestTracker>,
-        device_bindings: &Arc<RwLock<DeviceBindingTable>>,
-        comm_state: &Arc<AtomicU8>,
-        dcc_timer: &Arc<Mutex<Option<JoinHandle<()>>>>,
-        config: &ServerConfig,
+        request_tasks: &super::super::request_tasks::RequestTaskSpawner,
         source_mac: &[u8],
         source_network: Option<NpduAddress>,
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     ) {
-        let pending =
-            match confirmed_request_tracker.begin(source_mac, source_network.as_ref(), req.clone())
-            {
-                ConfirmedRequestAdmission::Duplicate => return,
-                ConfirmedRequestAdmission::New(pending) => pending,
+        let RequestServices { network, .. } = services;
+        let services = &RequestServices {
+            dcc_outcomes: Arc::new(dcc_outcomes::DccOutcomes::default()),
+            mutation_decisions: Arc::new(crate::mutation::MutationDecisions::default()),
+            ..services.clone()
+        };
+        // LSO-only replay path mirrors dispatch admission (server level,
+        // separate budget). Retransmitted already-executed LSO replays
+        // byte-identically; pending in-flight duplicates discard.
+        if req.service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
+            let lso_pending = match confirmed_request_tracker.lso.begin(
+                source_mac,
+                source_network.as_ref(),
+                bacnet_transport::port::TransportProvenance::unverified(),
+                req.clone(),
+            ) {
+                LsoAdmission::Replay(bytes) => {
+                    confirmed_response::send_replay_bytes(
+                        network,
+                        &bytes,
+                        source_mac,
+                        source_network.as_ref(),
+                        &bacnet_network::response_route::ResponseRoute::unverified(),
+                        reply_tx,
+                    )
+                    .await;
+                    return;
+                }
+                LsoAdmission::DuplicatePending => return,
+                LsoAdmission::New(pending) => pending,
             };
 
-        Self::handle_admitted_confirmed_request(
-            db,
-            network,
-            cov_table,
-            seg_ack_senders,
-            seg_send_permits,
-            cov_in_flight,
-            server_tsm,
-            notification_transactions,
-            device_bindings,
-            comm_state,
-            dcc_timer,
-            config,
+            Self::handle_admitted_confirmed_request(
+                services,
+                request_tasks,
+                RequestOrigin {
+                    mac: source_mac,
+                    network: source_network,
+                    route: bacnet_network::response_route::ResponseRoute::new(
+                        bacnet_transport::port::TransportProvenance::unverified(),
+                        None,
+                    ),
+                },
+                req,
+                reply_tx,
+                Some(ConfirmedRequestOwnership::LifeSafety(lso_pending)),
+            )
+            .await;
+            return;
+        }
+
+        let pending = match confirmed_request_tracker.begin(
             source_mac,
-            source_network,
+            source_network.as_ref(),
+            bacnet_transport::port::TransportProvenance::unverified(),
+            req.clone(),
+        ) {
+            ConfirmedRequestAdmission::Duplicate => return,
+            ConfirmedRequestAdmission::New(pending) => pending,
+        };
+
+        Self::handle_admitted_confirmed_request(
+            services,
+            request_tasks,
+            RequestOrigin {
+                mac: source_mac,
+                network: source_network,
+                route: bacnet_network::response_route::ResponseRoute::new(
+                    bacnet_transport::port::TransportProvenance::unverified(),
+                    None,
+                ),
+            },
             req,
             reply_tx,
+            Some(ConfirmedRequestOwnership::Generic(pending)),
         )
         .await;
-        pending.complete();
     }
 }

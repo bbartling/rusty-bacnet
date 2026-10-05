@@ -11,8 +11,8 @@
 //! gates every indicated transition into an OFFNORMAL state; the EE object's
 //! optional `Time_Delay_Normal` property (pTimeDelayNormal, Table 12-14 O —
 //! falling back to pTimeDelay per Clause 13.3) gates transitions to NORMAL.
-//! Both delays are SECONDS in the standard (e.g. 13.3.1: "the time, in
-//! seconds, that the offnormal conditions must exist"), and this evaluator
+//! Both delays measure condition persistence in SECONDS (e.g. 13.3.1),
+//! and this evaluator
 //! keeps them in seconds: the pending countdown (owned by the EE object,
 //! in-memory only) is seeded with `ceil(delay_secs / interval_secs)` —
 //! never-fire-early ceiling semantics, so at the default 10s
@@ -29,7 +29,7 @@
 //! fresh `ceil` conversion, like the intrinsic detectors.
 //!
 //! Transition actions (#166): an *indicated* transition executes Clause
-//! 13.2.2.1.4's actions even when it does not change the event state — the
+//! 13.2.2.1.4's actions even when its target equals the current state — the
 //! specific returned state is stored in `Event_State`, the corresponding
 //! `Acked_Transitions` bit is set/cleared per the referenced Notification
 //! Class's `Ack_Required` (Clause 13.2.3), and the transition is emitted with
@@ -53,12 +53,9 @@ pub use algorithms::{
     encode_change_of_value_params, encode_floating_limit_params, encode_out_of_range_params,
 };
 pub use api::{
-    evaluate_event_enrollments, evaluate_event_enrollments_detailed_report,
-    evaluate_event_enrollments_report, EventEnrollmentTransition,
+    evaluate_event_enrollments, evaluate_event_enrollments_report, EventEnrollmentTransition,
 };
 pub use commit::{
-    EventEnrollmentDetailedEvaluationDiagnostic, EventEnrollmentDetailedEvaluationOutcome,
-    EventEnrollmentDetailedEvaluationReport, EventEnrollmentDetailedEvaluationStage,
     EventEnrollmentEvaluationDiagnostic, EventEnrollmentEvaluationOutcome,
     EventEnrollmentEvaluationReport, EventEnrollmentEvaluationStage,
     EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult,
@@ -82,6 +79,7 @@ use fault::{
     read_monitored_reliability, FaultAlgorithmEvaluation, MonitoredReliability,
     SupportedFaultAlgorithm,
 };
+pub(crate) use reference::decode_reference_value;
 #[cfg(test)]
 use reference::MonitoredReference;
 use reference::{params_fingerprint, read_object_property_ref};
@@ -103,6 +101,7 @@ use bacnet_objects::event::EventTransition;
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentPending};
 #[cfg(test)]
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -114,13 +113,9 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
 ) -> EventEnrollmentEvaluationBatch {
     let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
-    // A qualified reference can identify self only when the containing Device
-    // object is unambiguous. Unqualified references remain local regardless.
-    let device_oids = db.find_by_type(ObjectType::DEVICE);
-    let local_device_oid = match device_oids.as_slice() {
-        [oid] if oid.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE => Some(*oid),
-        _ => None,
-    };
+    // The monitored, setpoint and fault references all resolve through this
+    // one rule: unqualified or naming this device is local (#1184).
+    let local_device = db.local_device();
 
     let mut updates: HashMap<ObjectIdentifier, EnrollmentUpdate> = HashMap::new();
     let mut database_eval_sources = HashSet::new();
@@ -147,15 +142,8 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         };
         let force_state_reset = db.enrollment_eval_state_invalidated(oid);
 
-        if let Ok(PropertyValue::Boolean(true)) =
-            enrollment.read_property(PropertyIdentifier::OUT_OF_SERVICE, None)
-        {
-            continue;
-        }
-
-        // Clause 13.2.2.1: "If the Event_Detection_Enable property is FALSE,
-        // then this state machine is not evaluated. In this case, no
-        // transitions shall occur". The accompanying reset is applied by the
+        // Clause 13.2.2.1 suspends evaluation and prohibits transitions while
+        // Event_Detection_Enable is FALSE. The accompanying reset is applied by the
         // object when the property is written (Clause 12.12 states the disabled
         // condition as an invariant), so skipping here cannot strand a stale
         // non-NORMAL state the way the pre-#136 Event_Enable gate did, nor a
@@ -172,8 +160,8 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
             continue;
         }
 
-        let event_type_raw = match enrollment.read_property(PropertyIdentifier::EVENT_TYPE, None) {
-            Ok(PropertyValue::Enumerated(v)) => v,
+        let event_type = match enrollment.read_property(PropertyIdentifier::EVENT_TYPE, None) {
+            Ok(PropertyValue::Enumerated(v)) => EventType::from_raw(v),
             _ => continue,
         };
 
@@ -183,10 +171,8 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         };
 
         let event_enable = match enrollment.read_property(PropertyIdentifier::EVENT_ENABLE, None) {
-            Ok(PropertyValue::BitString { data, .. }) => {
-                bacnet_types::bitstring::unpack_octet(&data, 3)
-            }
-            _ => 0,
+            Ok(PropertyValue::BitString { data, .. }) => EventTransitionBits::from_bacnet(&data),
+            _ => EventTransitionBits::empty(),
         };
 
         let current_reliability =
@@ -197,6 +183,14 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     continue;
                 }
             };
+        let subject = ReliabilitySubject {
+            db,
+            enrollment,
+            enrollment_oid: *oid,
+            previous: current_reliability,
+            current_state,
+            event_enable,
+        };
 
         // Local configuration is resolved before any target observation. A
         // malformed/missing required reference, malformed parameters, or an
@@ -204,7 +198,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // Reliability precedence chain deterministically.
         let reference = read_object_property_ref(enrollment);
         let params = read_event_parameters(enrollment);
-        let fault_algorithm = read_fault_algorithm(enrollment, local_device_oid);
+        let fault_algorithm = read_fault_algorithm(enrollment, local_device);
         if matches!(reference, Err(LocalConfigurationReadError::Malformed))
             || matches!(params, Err(LocalConfigurationReadError::Malformed))
             || matches!(fault_algorithm, Err(LocalConfigurationReadError::Malformed))
@@ -224,15 +218,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 queue_eval_source_reset(&mut updates, *oid, eval_source);
             }
             queue_reliability_transition(
-                db,
-                enrollment,
                 &mut updates,
-                *oid,
+                &subject,
                 monitored_oid,
-                current_reliability,
                 Reliability::CONFIGURATION_ERROR,
-                current_state,
-                event_enable,
                 EventEnrollmentReliabilityCause::Configuration,
                 CapturedReferencedValue::Unavailable,
             );
@@ -262,10 +251,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // A well-formed remote target is temporarily unobservable in this
         // local-only slice. D4 clears only private continuity; no persistent
         // target-loss Reliability policy is inferred.
-        if monitored
-            .device_identifier
-            .is_some_and(|device| Some(device) != local_device_oid)
-        {
+        if !local_device.is_local(monitored.device_identifier) {
             queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
             continue;
         }
@@ -294,15 +280,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         if monitored.array_index.is_some() && !monitored_obj.is_array_property(monitored_prop) {
             queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
             queue_reliability_transition(
-                db,
-                enrollment,
                 &mut updates,
-                *oid,
+                &subject,
                 Some(monitored_oid),
-                current_reliability,
                 Reliability::CONFIGURATION_ERROR,
-                current_state,
-                event_enable,
                 EventEnrollmentReliabilityCause::Configuration,
                 CapturedReferencedValue::Unavailable,
             );
@@ -320,15 +301,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     monitored_reference,
                 );
                 queue_reliability_transition(
-                    db,
-                    enrollment,
                     &mut updates,
-                    *oid,
+                    &subject,
                     Some(monitored_oid),
-                    current_reliability,
                     Reliability::CONFIGURATION_ERROR,
-                    current_state,
-                    event_enable,
                     EventEnrollmentReliabilityCause::Configuration,
                     CapturedReferencedValue::NotEvaluated,
                 );
@@ -350,15 +326,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     monitored_reference,
                 );
                 queue_reliability_transition(
-                    db,
-                    enrollment,
                     &mut updates,
-                    *oid,
+                    &subject,
                     Some(monitored_oid),
-                    current_reliability,
                     Reliability::MONITORED_OBJECT_FAULT,
-                    current_state,
-                    event_enable,
                     EventEnrollmentReliabilityCause::MonitoredObject,
                     CapturedReferencedValue::NotEvaluated,
                 );
@@ -376,15 +347,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 {
                     queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
                     queue_reliability_transition(
-                        db,
-                        enrollment,
                         &mut updates,
-                        *oid,
+                        &subject,
                         Some(monitored_oid),
-                        current_reliability,
                         Reliability::CONFIGURATION_ERROR,
-                        current_state,
-                        event_enable,
                         EventEnrollmentReliabilityCause::Configuration,
                         CapturedReferencedValue::Unavailable,
                     );
@@ -408,15 +374,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     monitored_reference,
                 );
                 queue_reliability_transition(
-                    db,
-                    enrollment,
                     &mut updates,
-                    *oid,
+                    &subject,
                     Some(monitored_oid),
-                    current_reliability,
                     Reliability::CONFIGURATION_ERROR,
-                    current_state,
-                    event_enable,
                     EventEnrollmentReliabilityCause::Configuration,
                     CapturedReferencedValue::from_evaluated(monitored_value.as_ref()),
                 );
@@ -436,15 +397,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     monitored_reference,
                 );
                 queue_reliability_transition(
-                    db,
-                    enrollment,
                     &mut updates,
-                    *oid,
+                    &subject,
                     Some(monitored_oid),
-                    current_reliability,
                     reliability,
-                    current_state,
-                    event_enable,
                     EventEnrollmentReliabilityCause::FaultAlgorithm,
                     CapturedReferencedValue::from_evaluated(monitored_value.as_ref()),
                 );
@@ -473,15 +429,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 EventEnrollmentReliabilityCause::FaultAlgorithm
             };
             queue_reliability_transition(
-                db,
-                enrollment,
                 &mut updates,
-                *oid,
+                &subject,
                 Some(monitored_oid),
-                current_reliability,
                 Reliability::NO_FAULT_DETECTED,
-                current_state,
-                event_enable,
                 cause,
                 CapturedReferencedValue::from_evaluated(monitored_value.as_ref()),
             );
@@ -497,15 +448,10 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                 {
                     queue_invalid_reference(&mut updates, *oid, eval_state_supported, eval_source);
                     queue_reliability_transition(
-                        db,
-                        enrollment,
                         &mut updates,
-                        *oid,
+                        &subject,
                         Some(monitored_oid),
-                        current_reliability,
                         Reliability::CONFIGURATION_ERROR,
-                        current_state,
-                        event_enable,
                         EventEnrollmentReliabilityCause::Configuration,
                         CapturedReferencedValue::Unavailable,
                     );
@@ -544,7 +490,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // and re-gates from the current parameters; no partial countdown is
         // resumed.
         let Ok(fingerprint) =
-            params_fingerprint(&params, normal_delay as u64, event_type_raw, &monitored)
+            params_fingerprint(&params, normal_delay as u64, event_type, &monitored)
         else {
             queue_pending_cancellation(&mut updates, *oid, eval_state_supported, &mut eval_state);
             continue;
@@ -562,8 +508,6 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     .set_eval_state(eval_state.clone());
             }
         }
-
-        let event_type = EventType::from_raw(event_type_raw);
 
         let mut projection_setpoint = None;
         let (time_delay, arm) = match &params {
@@ -609,7 +553,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     );
                     continue;
                 };
-                let setpoint = match read_setpoint(db, setpoint_reference) {
+                let setpoint = match read_setpoint(db, local_device, setpoint_reference) {
                     SetpointRead::Value(value) => value,
                     SetpointRead::Unusable => {
                         queue_pending_cancellation(
@@ -765,9 +709,9 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
             match &mut eval_state.pending {
                 // In flight to the same target under the same condition: the
                 // countdown advances; a redundant qualifying observation does
-                // NOT re-seed it (Clause 13.2.4's debounce semantics, the same
-                // rule the intrinsic detectors document at
-                // `OutOfRangeDetector::probe`).
+                // NOT re-seed it (Clause 13.3 counts the delay from when the
+                // condition began to hold, the same rule the intrinsic
+                // detectors document at `OutOfRangeDetector::probe`).
                 Some(p) if p.state == ind.target && p.condition == ind.condition => {
                     p.remaining = p.remaining.saturating_sub(1);
                     eval_state_dirty = true;
@@ -819,7 +763,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // transition is recorded either way; the flag rides along so the
         // notification pipeline can suppress the send (#127).
         let transition_bit = EventTransition::for_target_state(fired.target).bit_mask();
-        let distribute = event_enable & transition_bit != 0;
+        let distribute = event_enable.contains(transition_bit);
         let ack_required = ack_required_for_transition(db, enrollment, transition_bit);
 
         let update = updates.entry(*oid).or_default();
@@ -828,7 +772,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         }
         update.fire(FiredTransition {
             monitored_oid,
-            event_type_raw,
+            event_type,
             from: current_state,
             to: fired.target,
             distribute,

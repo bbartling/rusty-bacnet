@@ -107,7 +107,21 @@ fn gating_db() -> ObjectDatabase {
     db.add(Box::new(StructuredViewObject::new(1, "SV-1").unwrap()))
         .unwrap();
     let mut command = CommandObject::new(1, "CMD-1").unwrap();
-    command.set_action(vec![vec![1, 2, 3]]);
+    command
+        .set_action(vec![bacnet_types::constructed::BACnetActionList {
+            commands: vec![bacnet_types::constructed::BACnetActionCommand {
+                device_identifier: None,
+                object_identifier: oid(ObjectType::ANALOG_OUTPUT, 1),
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: None,
+                property_value: PropertyValue::Real(1.0),
+                priority: None,
+                post_delay: None,
+                quit_on_failure: false,
+                write_successful: true,
+            }],
+        }])
+        .unwrap();
     db.add(Box::new(command)).unwrap();
     db.add(Box::new(staging(1, "STG-1"))).unwrap();
     db
@@ -213,8 +227,8 @@ fn write_indexed(
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
-    handle_write_property(db, &mut buf).map(|_| ())
+    request.encode(&mut buf).unwrap();
+    handle_write_property(db, &buf).map(|_| ())
 }
 
 fn wpm_single(
@@ -236,7 +250,7 @@ fn wpm_single(
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     handle_write_property_multiple(db, &buf).map(|_| ())
 }
 
@@ -253,8 +267,7 @@ fn list_properties_reject_indexed_read_property() {
 
 #[test]
 fn list_properties_reject_indexed_read_property_multiple_inline() {
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let db = gating_db();
     for &(object_type, property) in LIST_TARGETS {
@@ -276,10 +289,10 @@ fn list_properties_reject_indexed_read_property_multiple_inline() {
             }],
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf).unwrap();
         let mut ack_buf = BytesMut::new();
         handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
-        let ack = ReadPropertyMultipleACK::decode(&ack_buf.to_vec()).unwrap();
+        let ack = ReadPropertyMultipleACK::decode(&ack_buf).unwrap();
         let results = &ack.list_of_read_access_results[0].list_of_results;
         assert!(
             results[0].property_value.is_some(),
@@ -290,8 +303,8 @@ fn list_properties_reject_indexed_read_property_multiple_inline() {
             Some((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
             "{object_type:?}.{property:?}: indexed list read must fail inline"
         );
-        // The index is echoed back in the error element (Clause 15.8.1.2).
-        assert_eq!(results[1].property_array_index, Some(1));
+        // Clause 15.7.3.2.2.2 omits the index for a non-array property.
+        assert_eq!(results[1].property_array_index, None);
     }
 }
 
@@ -331,7 +344,7 @@ fn true_arrays_pass_the_gate_on_read_property() {
     .encode(&mut buf);
     let mut ack_buf = BytesMut::new();
     handle_read_property(&db, &buf, &mut ack_buf).unwrap();
-    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf).unwrap();
     let (count, _) =
         bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
     assert_eq!(count, PropertyValue::Unsigned(2));
@@ -411,10 +424,9 @@ fn true_arrays_pass_the_gate_on_read_property() {
 #[test]
 fn modeled_arrays_on_command_and_staging_pass_the_gate() {
     // Review FIX 1: ACTION (Table 12-12) and STAGES / STAGE_NAMES /
-    // TARGET_REFERENCES (Table 12-80) are BACnetARRAY[N]. The objects still
-    // return the whole value for any index (same documented residue as
-    // Global Group / Structured View) — the pin is that the gate ADMITS the
-    // index instead of rejecting PROPERTY_IS_NOT_AN_ARRAY.
+    // TARGET_REFERENCES (Table 12-80) are BACnetARRAY[N]. The pin is that the
+    // gate ADMITS the index instead of rejecting PROPERTY_IS_NOT_AN_ARRAY;
+    // read_rpm::command and the Staging tests pin the element octets.
     let db = gating_db();
     for &(property, object_type) in &[
         (PropertyIdentifier::ACTION, ObjectType::COMMAND),
@@ -571,11 +583,10 @@ fn object_level_classification_matrix() {
     assert!(!ao.is_array_property(PropertyIdentifier::PRESENT_VALUE));
 
     let cmd = CommandObject::new(9, "CMD-9").unwrap();
-    // Command (Table 12-12): ACTION is BACnetARRAY[N]; ACTION_TEXT is an
-    // array in the standard but not modeled in-tree, so it stays rejected
-    // until its object-side modeling lands.
+    // Command (Table 12-12): ACTION and its parallel ACTION_TEXT are both
+    // BACnetARRAY[N] (#1150).
     assert!(cmd.is_array_property(PropertyIdentifier::ACTION));
-    assert!(!cmd.is_array_property(PropertyIdentifier::ACTION_TEXT));
+    assert!(cmd.is_array_property(PropertyIdentifier::ACTION_TEXT));
     assert!(!cmd.is_array_property(PropertyIdentifier::PRESENT_VALUE));
 
     let stg = staging(9, "STG-9");
@@ -617,8 +628,9 @@ fn write_property_omitted_index_priority_array_is_write_access_denied() {
 }
 
 #[test]
-fn priority_array_out_of_range_index_stays_invalid_array_index() {
-    // Indexes 0 and 17 are outside the fixed 1..=16 array: INVALID_ARRAY_INDEX.
+fn priority_array_count_and_out_of_range_write_are_read_only() {
+    // Index 0 is the count; 17 is beyond the slots. Read-only denial precedes
+    // property-specific range validation for both (§19.2.1).
     let mut db = gating_db();
     let ao = oid(ObjectType::ANALOG_OUTPUT, 1);
     for index in [Some(0), Some(17)] {
@@ -631,7 +643,7 @@ fn priority_array_out_of_range_index_stays_invalid_array_index() {
                 index,
                 value.clone(),
             ),
-            ErrorCode::INVALID_ARRAY_INDEX,
+            ErrorCode::WRITE_ACCESS_DENIED,
             &format!("WPM PRIORITY_ARRAY index {index:?}"),
         );
         assert_protocol_error(
@@ -642,7 +654,7 @@ fn priority_array_out_of_range_index_stays_invalid_array_index() {
                 index,
                 value,
             ),
-            ErrorCode::INVALID_ARRAY_INDEX,
+            ErrorCode::WRITE_ACCESS_DENIED,
             &format!("WriteProperty PRIORITY_ARRAY index {index:?}"),
         );
     }
@@ -676,7 +688,7 @@ fn indexed_access_to_recipient_list_rejected_with_not_an_array() {
     // The unindexed whole-list write is unaffected: Recipient_List stays
     // writable at the list level (tranche J's framed tests pin the wire form).
     let mut framed = BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(&mut framed, &[]);
+    bacnet_encoding::constructed::encode_destination_list(&mut framed, &[]).unwrap();
     let mut db = gating_db();
     write_indexed(
         &mut db,
@@ -705,7 +717,7 @@ fn notification_class_priority_accepts_index_range() {
     .encode(&mut buf);
     let mut ack_buf = BytesMut::new();
     handle_read_property(&db, &buf, &mut ack_buf).unwrap();
-    let ack = ReadPropertyACK::decode(&ack_buf.to_vec()).unwrap();
+    let ack = ReadPropertyACK::decode(&ack_buf).unwrap();
     assert_eq!(ack.property_array_index, Some(0));
     let (count, _) =
         bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
@@ -740,7 +752,7 @@ fn wpm_gate_rejection_keeps_valid_prefix() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     assert_not_an_array(
         handle_write_property_multiple(&mut db, &buf).map(|_| ()),
         "WPM with one gated reference",

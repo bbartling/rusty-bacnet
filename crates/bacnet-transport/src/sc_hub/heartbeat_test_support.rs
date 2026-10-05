@@ -1,9 +1,10 @@
 use super::heartbeat::HeartbeatIo;
 use super::*;
+use crate::sc_tls::boxed;
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::{client::ClientRequestBuilder, Error};
 
-type ClientWs = WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type ClientWs = WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
 type AckHook = Arc<std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>>;
 
 pub(super) struct LiveClient {
@@ -37,11 +38,16 @@ impl LiveClient {
             .with_root_certificates(roots)
             .with_no_client_auth();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("wss://localhost:{}", listener.local_addr().unwrap().port());
+        let address = listener.local_addr().unwrap();
+        let url = format!("wss://localhost:{}", address.port());
         let request = ClientRequestBuilder::new(url.parse().unwrap())
             .with_sub_protocol(crate::sc_frame::BACNET_SC_HUB_SUBPROTOCOL);
-        let accept = async {
+        // Both handshakes are boxed: tests poll on a 2 MiB test thread, and
+        // unboxed, these futures put about 200 KB more in this frame and each
+        // test's (#953).
+        let accept = boxed(|| async {
             let (tcp, addr) = listener.accept().await.unwrap();
+            crate::sc_tls::disable_nagle(&tcp); // as the hub's accept does
             let tls = TlsAcceptor::from(Arc::new(server))
                 .accept(tcp)
                 .await
@@ -53,13 +59,20 @@ impl LiveClient {
                 Ok(response)
             }).await.unwrap();
             (ws, addr)
-        };
-        let dial = tokio_tungstenite::connect_async_tls_with_config(
-            request,
-            None,
-            false,
-            Some(tokio_tungstenite::Connector::Rustls(Arc::new(client))),
-        );
+        });
+        // Dialled like production SC sockets: tokio-rustls, then the upgrade.
+        let dial = boxed(|| async {
+            let tcp = tokio::net::TcpStream::connect(address).await.unwrap();
+            crate::sc_tls::disable_nagle(&tcp);
+            let tls = tokio_rustls::TlsConnector::from(Arc::new(client))
+                .connect(
+                    rustls::pki_types::ServerName::try_from("localhost").unwrap(),
+                    tcp,
+                )
+                .await
+                .unwrap();
+            tokio_tungstenite::client_async(request, tls).await
+        });
         let ((server, peer_addr), client) =
             tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(accept, dial) })
                 .await
@@ -102,7 +115,7 @@ impl LiveClient {
     }
 
     pub async fn connect(clients: Clients, vmac: Vmac) -> Self {
-        let mut live = Self::open(clients, vmac).await;
+        let mut live = boxed(|| Self::open(clients, vmac)).await;
         let mut request = frame(ScFunction::ConnectRequest, 1);
         let mut payload = Vec::from(vmac);
         payload.extend_from_slice(&[vmac[0]; 16]);
@@ -174,7 +187,7 @@ impl LiveClient {
 }
 
 pub(super) fn clients() -> Clients {
-    Arc::new(Mutex::new(HashMap::new()))
+    Arc::new(super::client::ClientRegistry::default())
 }
 
 pub(super) fn frame(function: ScFunction, message_id: u16) -> ScMessage {
@@ -192,7 +205,10 @@ pub(super) fn frame(function: ScFunction, message_id: u16) -> ScMessage {
 pub(super) struct ClockIo(pub AtomicU64);
 
 impl HeartbeatIo for ClockIo {
-    fn now_secs(&self) -> u64 {
+    fn policy(&self) -> ScHubProbePolicy {
+        ScHubProbePolicy::default()
+    }
+    fn now_ms(&self) -> u64 {
         self.0.load(Ordering::Acquire)
     }
     async fn send(&self, sink: &mut WsSink, frame: Message) -> Result<(), Error> {
@@ -219,7 +235,10 @@ impl GatedIo {
 }
 
 impl HeartbeatIo for GatedIo {
-    fn now_secs(&self) -> u64 {
+    fn policy(&self) -> ScHubProbePolicy {
+        ScHubProbePolicy::default()
+    }
+    fn now_ms(&self) -> u64 {
         self.now.load(Ordering::Acquire)
     }
     async fn send(&self, sink: &mut WsSink, frame: Message) -> Result<(), Error> {
@@ -231,5 +250,15 @@ impl HeartbeatIo for GatedIo {
         } else {
             Ok(())
         }
+    }
+}
+
+// Controlled sweeps in these fixtures use t=100s. Give real handler activity
+// the same monotonic epoch, rather than mixing elapsed ticks with Unix time.
+pub(super) fn probe_runtime() -> super::timing::HubTiming {
+    super::timing::HubTiming {
+        origin: tokio::time::Instant::now() - Duration::from_secs(100),
+        policy: ScHubProbePolicy::default(),
+        relay_send_budget: Duration::from_secs(5),
     }
 }

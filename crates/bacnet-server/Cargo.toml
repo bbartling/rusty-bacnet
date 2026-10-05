@@ -18,14 +18,16 @@ bacnet-transport.workspace = true
 bacnet-network.workspace = true
 bacnet-objects.workspace = true
 bytes.workspace = true
+futures-util.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time"] }
 tokio-rustls = { workspace = true, optional = true }
 
 [features]
-sc-tls = ["bacnet-transport/sc-tls", "tokio-rustls"]
+sc-tls = ["bacnet-transport/sc-tls", "dep:tokio-rustls"]
 
 [dev-dependencies]
+rcgen.workspace = true
 bacnet-client.workspace = true
 bacnet-transport.workspace = true
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "macros", "time", "test-util"] }

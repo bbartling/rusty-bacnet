@@ -1,25 +1,59 @@
-//! AddListElement / RemoveListElement services per ASHRAE 135-2020 Clause 15.3.
+//! AddListElement / RemoveListElement services per ASHRAE 135-2020 Clauses 15.1 and 15.2.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_constructed, decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx,
+    expect_end,
+};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
+mod error;
+pub use error::ChangeListError;
+
 /// AddListElement-Request / RemoveListElement-Request service parameters.
 ///
 /// Both services share the same PDU structure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListElementRequest {
+    /// Object whose list property is modified.
     pub object_identifier: ObjectIdentifier,
+    /// List property to modify.
     pub property_identifier: PropertyIdentifier,
+    /// Array index selecting one list within an array-of-lists property; `None` when the property
+    /// is itself the list. Zero is invalid.
     pub property_array_index: Option<u32>,
     /// Raw encoded list of elements to add/remove.
     pub list_of_elements: Vec<u8>,
 }
 
 impl ListElementRequest {
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Validate local outbound constraints without interpreting element values.
+    ///
+    /// Requires elements and a nonzero optional index. Tag headers, lengths and
+    /// balanced context nesting use the shared parser limits, counting the outer
+    /// service \[3\] wrapper. Application Boolean has no payload octets. Primitive
+    /// value forms, vendor semantics and remote property types are not checked.
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.property_array_index == Some(0) {
+            return Err(Error::Encoding(
+                "ListElement array index must be nonzero".into(),
+            ));
+        }
+        if self.list_of_elements.is_empty() {
+            return Err(Error::Encoding(
+                "ListElement requires at least one encoded element".into(),
+            ));
+        }
+        validate_elements_framing(&self.list_of_elements)
+            .map_err(|error| Error::Encoding(format!("ListElement framing: {error}")))
+    }
+
+    /// Encode transactionally; invalid input leaves the caller's buffer unchanged.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        self.validate()?;
         // [0] objectIdentifier
         primitives::encode_ctx_object_id(buf, 0, &self.object_identifier);
         // [1] propertyIdentifier
@@ -32,71 +66,33 @@ impl ListElementRequest {
         tags::encode_opening_tag(buf, 3);
         buf.extend_from_slice(&self.list_of_elements);
         tags::encode_closing_tag(buf, 3);
+        Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
         // [0] objectIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                "ListElement request expected context tag 0",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
+        let (object_identifier, offset) =
+            decode_ctx_object_id(data, 0, 0, "ListElement request object-id")?;
 
         // [1] propertyIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(1) {
-            return Err(Error::decoding(
-                offset,
-                "ListElement request expected context tag 1",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let property_identifier = primitives::decode_unsigned(&data[pos..end])?;
-        let property_identifier = u32::try_from(property_identifier)
-            .map(PropertyIdentifier::from_raw)
-            .map_err(|_| Error::decoding(pos, "ListElement property-id exceeds u32"))?;
-        offset = end;
+        let (property_identifier, offset) =
+            decode_ctx_unsigned::<u32>(data, offset, 1, "ListElement request property-id")?;
+        let property_identifier = PropertyIdentifier::from_raw(property_identifier);
 
         // [2] propertyArrayIndex (optional)
-        let mut property_array_index = None;
-        let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 2)?;
-        if let Some(content) = opt_data {
-            let value = primitives::decode_unsigned(content)?;
-            property_array_index = Some(
-                u32::try_from(value)
-                    .map_err(|_| Error::decoding(offset, "ListElement array-index exceeds u32"))?,
-            );
-            offset = new_offset;
-        }
+        let (property_array_index, offset) = decode_optional_ctx(
+            data,
+            offset,
+            2,
+            "ListElement request array-index",
+            decode_ctx_unsigned::<u32>,
+        )?;
 
-        // [3] listOfElements
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        if !tag.is_opening_tag(3) {
-            return Err(Error::decoding(
-                offset,
-                "ListElement request expected opening tag 3",
-            ));
-        }
-        let (content, offset) = tags::extract_context_value(data, tag_end, 3)?;
-        if offset != data.len() {
-            return Err(Error::decoding(
-                offset,
-                "ListElement request has trailing data",
-            ));
-        }
+        // [3] listOfElements, and nothing after it
+        let what = "ListElement request list-of-elements";
+        let (content, end) = decode_ctx_constructed(data, offset, 3, what)?;
+        expect_end(data, end, end, "ListElement request")?;
         let list_of_elements = content.to_vec();
 
         Ok(Self {
@@ -106,6 +102,51 @@ impl ListElementRequest {
             list_of_elements,
         })
     }
+}
+
+// The surrounding service [3] is already open: callers cannot close it from
+// within the element bytes, and it consumes one slot of the shared depth limit.
+// This framing-only walk deliberately does not decode application values.
+fn validate_elements_framing(data: &[u8]) -> Result<(), Error> {
+    let mut open_tags = [0; tags::MAX_CONTEXT_NESTING_DEPTH];
+    open_tags[0] = 3;
+    let mut depth = 1;
+    let mut offset = 0;
+    while offset < data.len() {
+        let (tag, next) = tags::decode_tag(data, offset)?;
+        if tag.is_opening {
+            if depth == open_tags.len() {
+                return Err(Error::invalid_tag(
+                    offset,
+                    "context nesting exceeds shared limit",
+                ));
+            }
+            open_tags[depth] = tag.number;
+            depth += 1;
+            offset = next;
+        } else if tag.is_closing {
+            if depth == 1 || open_tags[depth - 1] != tag.number {
+                return Err(Error::invalid_tag(
+                    offset,
+                    "unmatched or mismatched closing tag",
+                ));
+            }
+            depth -= 1;
+            offset = next;
+        } else if tag.class == tags::TagClass::Application && tag.number == tags::app_tag::BOOLEAN {
+            offset = next;
+        } else {
+            let end = next.saturating_add(tag.length as usize);
+            if end > data.len() {
+                return Err(Error::buffer_too_short(end, data.len()));
+            }
+            offset = end;
+        }
+    }
+    if depth != 1 {
+        return Err(Error::missing(offset, "unclosed context tag"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -138,7 +179,7 @@ mod tests {
             list_of_elements: elements.clone(),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = ListElementRequest::decode(&buf).unwrap();
         assert_eq!(decoded.object_identifier, req.object_identifier);
         assert_eq!(decoded.property_identifier, req.property_identifier);
@@ -156,7 +197,7 @@ mod tests {
             list_of_elements: elements.clone(),
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = ListElementRequest::decode(&buf).unwrap();
         assert_eq!(decoded.property_array_index, Some(3));
         assert_eq!(decoded.list_of_elements, elements);
@@ -227,7 +268,7 @@ mod tests {
             list_of_elements: vec![0x21, 0x2A],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(ListElementRequest::decode(&buf[..1]).is_err());
     }
 
@@ -240,7 +281,7 @@ mod tests {
             list_of_elements: vec![0x21, 0x2A],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(ListElementRequest::decode(&buf[..3]).is_err());
     }
 
@@ -253,7 +294,7 @@ mod tests {
             list_of_elements: vec![0x21, 0x2A],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let half = buf.len() / 2;
         assert!(ListElementRequest::decode(&buf[..half]).is_err());
     }
@@ -263,3 +304,7 @@ mod tests {
         assert!(ListElementRequest::decode(&[0xFF, 0xFF, 0xFF]).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "list_validation_tests.rs"]
+mod validation_tests;

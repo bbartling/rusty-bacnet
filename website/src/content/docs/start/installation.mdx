@@ -1,0 +1,239 @@
+---
+title: "Install the tools"
+tableOfContents: false
+description: "Choose a CLI executable, a Python environment, or Rust crates. Verify the installation before connecting."
+---
+
+import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
+import DownloadList from '../../../components/DownloadList.astro';
+import Checkpoint from '../../../components/Checkpoint.astro';
+import NextStep from '../../../components/NextStep.astro';
+import { release, repository } from '../../../lib/site.mjs';
+
+**Choose one path.** Use the CLI to inspect, Python to automate, or Rust to embed. For the [local client/server lab](/rusty-bacnet/start/local-lab/), start with **Python**; the CLI is optional.
+
+<Tabs>
+<TabItem label="CLI">
+
+## Install a CLI executable
+
+Download the file for the **machine that will run the tool**. These are v{release} release assets, not an automatic platform recommendation. Each one is the executable itself, not an archive.
+
+<DownloadList />
+
+Windows ARM64 is not listed in this release. The feature labels reflect the release workflow, not a blanket transport or conformance guarantee.
+
+The release also publishes <a href={`${repository}/releases/download/v${release}/SHA256SUMS`}>SHA256SUMS</a>, the SHA-256 of every other file in the release. Save it in the same directory as the executable; the first command in each tab below checks the download against it. Stop if the check fails.
+
+### Run it from the download directory
+
+<Tabs>
+<TabItem label="macOS">
+
+#### CLI on macOS
+
+For Apple silicon, after downloading `bacnet-macos-arm64`, check it with `shasum`, then run it:
+
+```sh
+grep ' bacnet-macos-arm64$' SHA256SUMS | shasum -a 256 -c
+chmod +x ./bacnet-macos-arm64
+./bacnet-macos-arm64 --version
+./bacnet-macos-arm64 --help
+```
+
+The check prints `bacnet-macos-arm64: OK`. On an Intel Mac, use `bacnet-macos-amd64` in each command instead.
+
+:::caution[macOS Gatekeeper]
+The macOS executables are not notarized, so macOS may block one downloaded through a browser. Check it against `SHA256SUMS` first. Then clear its quarantine attribute with `xattr -d com.apple.quarantine ./bacnet-macos-arm64`, or allow it under **System Settings → Privacy & Security**. Do not turn Gatekeeper off for the whole system.
+:::
+
+</TabItem>
+<TabItem label="Linux">
+
+#### CLI on Linux
+
+For x86-64, after downloading `bacnet-linux-amd64`, check it with `sha256sum`, then run it:
+
+```sh
+grep ' bacnet-linux-amd64$' SHA256SUMS | sha256sum -c
+chmod +x ./bacnet-linux-amd64
+./bacnet-linux-amd64 --version
+./bacnet-linux-amd64 --help
+```
+
+The check prints `bacnet-linux-amd64: OK`. On ARM64, use `bacnet-linux-arm64` in each command instead. Do not run a file built for another processor architecture.
+
+:::note[Linux builds]
+The Linux executables need glibc 2.17 or newer: RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later. libpcap is linked into them, so packet capture needs no libpcap package on the machine. Capturing live traffic still needs capture privileges; decoding a saved file with `capture --read` does not.
+:::
+
+</TabItem>
+<TabItem label="Windows">
+
+#### CLI on Windows
+
+In PowerShell, from the download directory, check the download with `Get-FileHash`. This prints `True`:
+
+```powershell
+$sum = Select-String -Path .\SHA256SUMS -SimpleMatch -Pattern '  bacnet-windows-amd64.exe'
+(Get-FileHash .\bacnet-windows-amd64.exe -Algorithm SHA256).Hash -eq $sum.Line.Split(' ')[0]
+```
+
+Then run it:
+
+```powershell
+.\bacnet-windows-amd64.exe --version
+.\bacnet-windows-amd64.exe --help
+```
+
+The `.\` prefix means “run the file in this directory.” You do not need to change PowerShell's script-execution policy to run this executable. It links the C runtime statically, so it doesn't need the Visual C++ Redistributable. Follow your organization's executable approval process; do not disable operating-system protections to follow a tutorial.
+
+</TabItem>
+</Tabs>
+
+<Checkpoint title="Check the executable">
+
+The version should identify **{release}**, and `--help` should list the available commands. This checks the executable and its runtime dependencies; it does not send a BACnet discovery request.
+
+</Checkpoint>
+
+The guides use `bacnet` for readability. Rename the executable to `bacnet` / `bacnet.exe` and place it on your `PATH`, or substitute its downloaded filename in commands. On Windows, `Get-Command bacnet`; on macOS/Linux, `command -v bacnet` helps identify which executable will run.
+
+### Prefer a source build?
+
+With Rust **1.93 or later** and the toolchain's platform prerequisites installed:
+
+<Code lang="sh" code={`git clone --branch v${release} ${repository}.git rusty-bacnet-v${release}
+cd rusty-bacnet-v${release}
+cargo install --path crates/bacnet-cli --locked
+bacnet --version`} />
+
+The release also publishes `bacnet-cli` to crates.io, so Cargo can build the same release without a clone:
+
+<Code lang="sh" code={`cargo install bacnet-cli --version ${release} --locked`} />
+
+Neither basic build enables packet capture. To include BACnet/SC without adding packet capture, add `--features sc-tls`:
+
+```sh
+cargo install --path crates/bacnet-cli --locked --features sc-tls
+```
+
+`pcap` is a separate optional Cargo feature and needs native development dependencies when building. A source build with it links the system's libpcap, so the machine that runs it needs libpcap too. Add it only when packet capture is needed.
+
+<NextStep href="/rusty-bacnet/start/first-read/" label="Read a known device" description="Start with one authorized device and one property." />
+
+</TabItem>
+<TabItem label="Python">
+
+## Install the Python package
+
+The package is named `rusty-bacnet`; the import is `rusty_bacnet`. It does **not** install the documented `bacnet` CLI executable.
+
+The package minimum is Python 3.11. The release publishes a wheel for each of CPython **3.11, 3.12, 3.13, and 3.14** on each of these platforms, to PyPI and to the GitHub release:
+
+| Platform | Wheel platform tag | Runs on |
+|---|---|---|
+| Linux x86-64 | `manylinux_2_17_x86_64.manylinux2014_x86_64` | glibc 2.17 or newer |
+| Linux ARM64 | `manylinux_2_17_aarch64.manylinux2014_aarch64` | glibc 2.17 or newer |
+| macOS Intel | `macosx_10_12_x86_64` | macOS 10.12 or later |
+| macOS Apple silicon | `macosx_11_0_arm64` | macOS 11.0 or later |
+| Windows x86-64 | `win_amd64` | 64-bit Windows |
+
+Start with one of those interpreters. Free-threaded Python builds, musl-based Linux such as Alpine, and Windows ARM64 have no wheel.
+
+Every wheel, macOS and Windows included, is built with the MS/TP serial transport, and `rusty_bacnet.list_serial_ports()` shows the ports the operating system reports. Release testing does not drive a serial line, so qualify MS/TP hardware separately.
+
+<Tabs>
+<TabItem label="macOS / Linux">
+
+### Python on macOS or Linux
+
+Check that `python3` is an appropriate interpreter, then create a local environment:
+
+<Code lang="sh" code={`python3 --version
+python3 -m venv .venv
+.venv/bin/python -m pip install --only-binary=:all: rusty-bacnet==${release}`} />
+
+Verify that the native module loads, not just that package metadata exists:
+
+```sh
+.venv/bin/python -c "from rusty_bacnet import BACnetClient; from importlib.metadata import version; print(version('rusty-bacnet'))"
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+### Python on Windows
+
+This example explicitly selects Python 3.13. Use an installed, supported interpreter:
+
+<Code lang="powershell" code={String.raw`py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --only-binary=:all: rusty-bacnet==${release}`} />
+
+```powershell
+.\.venv\Scripts\python.exe -c "from rusty_bacnet import BACnetClient; from importlib.metadata import version; print(version('rusty-bacnet'))"
+```
+
+Using the environment's interpreter directly avoids a separate activation step or an execution-policy change.
+
+</TabItem>
+</Tabs>
+
+<Checkpoint title="Check the import">
+
+The command prints <code>{release}</code> without an import or shared-library error. Use this **same environment's interpreter** for the next script.
+
+</Checkpoint>
+
+### “No matching distribution found”
+
+`--only-binary=:all:` deliberately prevents an unexpected native source build. Check the interpreter version, operating system, architecture, and configured package index. A missing wheel is not a BACnet network failure.
+
+The release also publishes a source distribution, <code>rusty_bacnet-{release}.tar.gz</code>, but installing from it is a different installation path: it builds the native extension, so it needs Rust and the native prerequisites for the release's PyO3/Maturin build. Review the <a href={`${repository}/blob/v${release}/crates/rusty-bacnet/pyproject.toml`}>Python packaging source</a> before choosing it. Do not silently drop the binary-only option and call that an equivalent install.
+
+<NextStep href="/rusty-bacnet/start/local-lab/" label="Try the local client/server lab" description="Read an example point without a physical controller or building network." />
+
+</TabItem>
+<TabItem label="Rust">
+
+## Add the Rust crates
+
+Rust **1.93 or later** is the reviewed workspace minimum. Use the `bacnet-*` crates; `rusty-bacnet` is the Python package name, not the Rust client crate.
+
+Start with the exact release baseline while learning:
+
+<Code lang="toml" code={`[dependencies]
+bacnet-client = "=${release}"
+bacnet-types = "=${release}"
+bacnet-encoding = "=${release}"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }`} />
+
+The release publishes these crates to crates.io, all at the same version: `bacnet-types`, `bacnet-encoding`, `bacnet-services`, `bacnet-transport`, `bacnet-network`, `bacnet-endpoint-core`, `bacnet-endpoint`, `bacnet-client`, `bacnet-objects`, `bacnet-server`, and `bacnet-cli`. Keep related BACnet crate versions aligned. Add transport features only when the application needs them. The [Rust quickstart](/rusty-bacnet/start/rust/) supplies a directed-read example and explains the address format.
+
+<NextStep href="/rusty-bacnet/start/rust/" label="Embed the Rust client" description="Build a small client, then choose the transport your application needs." />
+
+</TabItem>
+</Tabs>
+
+## What the release publishes
+
+The <a href={`${repository}/blob/v${release}/.github/workflows/release.yml`}>release workflow</a> builds each file on a runner of its own platform and runs it there before anything is published. Version {release} consists of:
+
+- **The GitHub release** (<a href={`${repository}/releases/tag/v${release}`}>v{release}</a>):
+  - five CLI executables: `bacnet-linux-amd64`, `bacnet-linux-arm64`, `bacnet-macos-amd64`, `bacnet-macos-arm64` and `bacnet-windows-amd64.exe`;
+  - twenty Python wheels, <code>rusty_bacnet-{release}-cp3XY-cp3XY-PLATFORM.whl</code>: one per CPython 3.11, 3.12, 3.13 and 3.14 (`cp311` to `cp314`) per platform tag in the Python table;
+  - the Python source distribution, <code>rusty_bacnet-{release}.tar.gz</code>;
+  - `THIRD-PARTY-NOTICES`, the license texts of Rusty BACnet and of the third-party code built into the executables and wheels;
+  - `SHA256SUMS`, the SHA-256 of each of those files.
+- **PyPI**: the same wheels and source distribution, as the [rusty-bacnet](https://pypi.org/project/rusty-bacnet/) package.
+- **crates.io**: the eleven crates listed under Rust, all at version {release}.
+
+To check a wheel or the source distribution downloaded from the GitHub release, use your system's command from the CLI tabs with that file's name.
+
+## Installation is not connectivity
+
+A working executable or Python import is the first checkpoint. Network reachability, certificate trust, and serial timing are separate checks. Start locally, then move to a known authorized device.
+
+## Sources and release scope
+
+This page targets **v{release}**. <a href={`${repository}/releases/tag/v${release}`}>Release assets</a> · <a href={`${repository}/blob/v${release}/.github/workflows/release.yml`}>Release workflow</a> · <a href={`${repository}/blob/v${release}/docs/ci.md#artifacts`}>Release artifacts and checks</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-cli/Cargo.toml`}>CLI feature flags</a> · <a href={`${repository}/blob/v${release}/crates/rusty-bacnet/pyproject.toml`}>Python packaging</a> · <a href={`${repository}/blob/v${release}/Cargo.toml`}>Workspace minimum</a>.

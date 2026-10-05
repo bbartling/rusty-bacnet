@@ -1,7 +1,6 @@
 use super::*;
 use bacnet_encoding::primitives::{decode_timestamp_choice, encode_timestamp_choice};
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::primitives::{Date, Time};
 
 const EVENT_ARRAY_PROPERTIES: &[PropertyIdentifier] = &[
@@ -205,7 +204,7 @@ fn rpm_preserves_event_timestamp_choices_count_and_inline_array_error() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     let mut ack_buf = BytesMut::new();
     handle_read_property_multiple(&db, &buf, &mut ack_buf).unwrap();
     let ack = ReadPropertyMultipleACK::decode(&ack_buf).unwrap();

@@ -13,8 +13,7 @@ Tuned for the bench Niagara box at device **5007** (`192.168.204.200`).
 Build + run manually:
 
 ```bash
-cargo build --release
-./target/release/point-discover \
+cargo run --release -- \
   --device 5007 \
   --interface 192.168.204.55 \
   --broadcast 192.168.204.255

@@ -7,10 +7,12 @@ use bacnet_endpoint_core::coordinator::{
 };
 use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 use bytes::Bytes;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::Notify;
 
 use super::notification_transactions::NotificationReserveError;
 use super::*;
+use crate::server::test_transport::{TestTransport, BIP_LOCAL_MAC};
+use bacnet_transport::port::TransportProvenance;
 
 const COV_SERVICE: ConfirmedServiceChoice = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION;
 const EVENT_SERVICE: ConfirmedServiceChoice = ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION;
@@ -130,9 +132,22 @@ async fn notification_terminals_complete_exactly_once() {
 
     for (pdu, expected) in [
         (simple_ack(0, COV_SERVICE), CovAckResult::Ack),
-        (error(0, EVENT_SERVICE), CovAckResult::Error),
-        (reject(0), CovAckResult::Error),
-        (abort(0, false), CovAckResult::Error),
+        (
+            error(0, COV_SERVICE),
+            CovAckResult::Error(Refusal::Error {
+                class: ErrorClass::DEVICE,
+                code: ErrorCode::OTHER,
+            }),
+        ),
+        (
+            reject(0),
+            CovAckResult::Error(Refusal::Reject(RejectReason::OTHER)),
+        ),
+        // The recipient serves the notification: its Abort has the server flag.
+        (
+            abort(0, true),
+            CovAckResult::Error(Refusal::Abort(AbortReason::OTHER)),
+        ),
     ] {
         let transactions = NotificationTransactions::new();
         let (operation, receiver) = transactions.reserve(direct_peer(1), COV_SERVICE).unwrap();
@@ -157,10 +172,21 @@ async fn notification_terminals_complete_exactly_once() {
             _ => unreachable!(),
         };
 
-        assert!(transactions.admit_terminal(&direct_mac, None, &pdu));
+        assert!(!transactions.admit_terminal(
+            &direct_mac,
+            None,
+            None,
+            &error(invoke_id, EVENT_SERVICE)
+        ));
+        assert_eq!(
+            transactions.active_count(),
+            1,
+            "wrong-service Error must retain notification ownership"
+        );
+        assert!(transactions.admit_terminal(&direct_mac, None, None, &pdu));
         assert_eq!(receiver.await.unwrap(), expected);
         assert_eq!(transactions.active_count(), 0);
-        assert!(!transactions.admit_terminal(&direct_mac, None, &pdu));
+        assert!(!transactions.admit_terminal(&direct_mac, None, None, &pdu));
         drop(operation);
     }
 }
@@ -192,23 +218,35 @@ async fn mismatches_and_nonterminals_leave_notification_pending() {
 
     for pdu in [
         simple_ack(invoke_id, EVENT_SERVICE),
-        abort(invoke_id, true),
+        // A client-direction Abort belongs to a transaction this device serves.
+        abort(invoke_id, false),
         complex_ack(invoke_id, false),
         complex_ack(invoke_id, true),
         segment_ack(invoke_id, false),
         segment_ack(invoke_id, true),
     ] {
-        assert!(!transactions.admit_terminal(&[1, 0x55], None, &pdu));
+        assert!(!transactions.admit_terminal(&[1, 0x55], None, None, &pdu));
         assert_eq!(transactions.active_count(), 1);
     }
-    assert!(!transactions.admit_terminal(&[2, 0x55], None, &simple_ack(invoke_id, COV_SERVICE)));
+    assert!(!transactions.admit_terminal(
+        &[2, 0x55],
+        None,
+        None,
+        &simple_ack(invoke_id, COV_SERVICE)
+    ));
     assert!(!transactions.admit_terminal(
         &[1, 0x55],
+        None,
         None,
         &simple_ack(invoke_id.wrapping_add(1), COV_SERVICE)
     ));
 
-    assert!(transactions.admit_terminal(&[1, 0x55], None, &simple_ack(invoke_id, COV_SERVICE)));
+    assert!(transactions.admit_terminal(
+        &[1, 0x55],
+        None,
+        None,
+        &simple_ack(invoke_id, COV_SERVICE)
+    ));
     assert_eq!(receiver.await.unwrap(), CovAckResult::Ack);
     assert_eq!(transactions.active_count(), 0);
     drop(operation);
@@ -229,16 +267,17 @@ async fn routed_identity_ignores_the_immediate_router() {
         .unwrap();
     let ack = simple_ack(operation.invoke_id(), EVENT_SERVICE);
 
-    assert!(!transactions.admit_terminal(&[9], None, &ack));
+    assert!(!transactions.admit_terminal(&[9], None, None, &ack));
     assert!(!transactions.admit_terminal(
         &[9],
         Some(&NpduAddress {
             network: routed_source.network,
             mac_address: MacAddr::new(),
         }),
+        None,
         &ack,
     ));
-    assert!(transactions.admit_terminal(&[0x44], Some(&routed_source), &ack));
+    assert!(transactions.admit_terminal(&[0x44], Some(&routed_source), None, &ack));
     assert_eq!(receiver.await.unwrap(), CovAckResult::Ack);
     drop(operation);
 }
@@ -324,42 +363,9 @@ async fn close_drains_waiters_and_rejects_reserve_and_rearm() {
     ));
 }
 
-#[derive(Clone)]
-struct IdleTransport {
-    local_mac: Vec<u8>,
-}
-
-impl Default for IdleTransport {
-    fn default() -> Self {
-        Self {
-            local_mac: vec![127, 0, 0, 1, 0xba, 0xc0],
-        }
-    }
-}
-
-impl TransportPort for IdleTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_sender, receiver) = mpsc::channel(1);
-        Ok(receiver)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
+/// A closed B/IP-shaped link whose sends succeed.
+fn idle_transport() -> TestTransport {
+    TestTransport::builder().local_mac(&BIP_LOCAL_MAC).build()
 }
 
 #[tokio::test]
@@ -370,18 +376,12 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
         .reserve(canonical_direct_peer(source_mac.as_slice()), COV_SERVICE)
         .unwrap();
     let invoke_id = operation.invoke_id();
-    let network = Arc::new(NetworkLayer::new(IdleTransport::default()));
-    let db = Arc::new(RwLock::new(ObjectDatabase::new()));
-    let cov_table = Arc::new(RwLock::new(CovSubscriptionTable::new()));
-    let seg_ack_senders = Arc::new(Mutex::new(HashMap::new()));
-    let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
-    let cov_in_flight = Arc::new(Semaphore::new(255));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
-    let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
-    let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let dcc_timer = Arc::new(Mutex::new(None::<JoinHandle<()>>));
-    let config = Arc::new(ServerConfig::default());
+    let network = Arc::new(NetworkLayer::new(idle_transport()));
+    let context = DispatchContext::for_test(RequestServices {
+        notification_transactions: Arc::clone(&transactions),
+        cov_in_flight: Arc::new(Semaphore::new(255)),
+        ..RequestServices::for_test(network, ServerConfig::default())
+    });
 
     for apdu in [
         segment_ack(invoke_id, false),
@@ -389,30 +389,21 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
         complex_ack(invoke_id, false),
         complex_ack(invoke_id, true),
     ] {
-        BACnetServer::<IdleTransport>::dispatch(
-            &db,
-            &network,
-            &cov_table,
-            &seg_ack_senders,
-            &seg_send_permits,
-            &cov_in_flight,
-            &server_tsm,
-            &transactions,
-            &confirmed_request_tracker,
-            &device_bindings,
-            &comm_state,
-            &dcc_timer,
-            &config,
-            &None,
+        BACnetServer::<TestTransport>::dispatch(
+            &context,
             source_mac.as_slice(),
             apdu,
             bacnet_network::layer::ReceivedApdu {
+                direct_response: None,
                 apdu: Bytes::new(),
                 source_mac: source_mac.clone(),
+                ingress_network: None,
                 source_network: None,
                 link_layer_group: false,
                 is_group: false,
+                global_broadcast: false,
                 data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
                 reply_tx: None,
             },
         )
@@ -422,6 +413,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
 
     assert!(transactions.admit_terminal(
         source_mac.as_slice(),
+        None,
         None,
         &simple_ack(invoke_id, COV_SERVICE)
     ));
@@ -434,7 +426,7 @@ async fn server_lifecycle_stop_and_drop_close_notification_transactions() {
     let mut server = BACnetServer::start(
         ServerConfig::default(),
         ObjectDatabase::new(),
-        IdleTransport::default(),
+        idle_transport(),
     )
     .await
     .unwrap();
@@ -447,7 +439,7 @@ async fn server_lifecycle_stop_and_drop_close_notification_transactions() {
     let server = BACnetServer::start(
         ServerConfig::default(),
         ObjectDatabase::new(),
-        IdleTransport::default(),
+        idle_transport(),
     )
     .await
     .unwrap();
@@ -456,4 +448,72 @@ async fn server_lifecycle_stop_and_drop_close_notification_transactions() {
     drop(server);
     assert!(transactions.is_closed());
     assert_eq!(transactions.active_count(), 0);
+}
+
+/// An answer that takes the lease after a retry's receiver is armed, but
+/// before that retry is withdrawn (DCC taking effect on another thread),
+/// still ends the transaction: the withdrawal does not lose it (#1327).
+#[tokio::test(start_paused = true)]
+async fn an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction() {
+    use super::notification_transactions::{run_attempts, Attempt, AttemptsEnd};
+    let transactions = NotificationTransactions::new();
+    let (operation, receiver) = transactions.reserve(direct_peer(10), COV_SERVICE).unwrap();
+    let invoke_id = operation.invoke_id();
+    let answering = Arc::clone(&transactions);
+    let result = run_attempts(operation, receiver, Duration::from_secs(3), 3, |attempt| {
+        let next = if attempt == 0 {
+            Attempt::Sent
+        } else {
+            assert!(answering.admit_terminal(
+                &[10, 0x55],
+                None,
+                None,
+                &simple_ack(invoke_id, COV_SERVICE)
+            ));
+            Attempt::Withdrawn(())
+        };
+        std::future::ready(next)
+    })
+    .await;
+    assert_eq!(result, Ok(AttemptsEnd::Answered(CovAckResult::Ack)));
+    assert_eq!(transactions.active_count(), 0);
+}
+
+/// A read's lease takes the ComplexAck that answers it, with its service
+/// data; a notification's lease never does (#1342).
+#[tokio::test(start_paused = true)]
+async fn only_a_read_lease_takes_a_complex_ack_and_its_data() {
+    use super::notification_transactions::{run_attempts, Attempt, AttemptsEnd};
+    const READ: ConfirmedServiceChoice = ConfirmedServiceChoice::READ_PROPERTY;
+    let complex_ack = |invoke_id, service_choice| {
+        Apdu::ComplexAck(ComplexAck {
+            segmented: false,
+            more_follows: false,
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice,
+            service_ack: Bytes::from_static(&[0x09, 0x01]),
+        })
+    };
+    let transactions = NotificationTransactions::new();
+    let (notification, _answer) = transactions.reserve(direct_peer(10), READ).unwrap();
+    let notified = complex_ack(notification.invoke_id(), READ);
+    assert!(!transactions.admit_terminal(&[10, 0x55], None, None, &notified));
+
+    let (operation, receiver) = transactions.reserve_read(direct_peer(10), READ).unwrap();
+    let invoke_id = operation.invoke_id();
+    // Another service's data doesn't answer it.
+    let other = complex_ack(invoke_id, COV_SERVICE);
+    assert!(!transactions.admit_terminal(&[10, 0x55], None, None, &other));
+    let answering = Arc::clone(&transactions);
+    let result = run_attempts(operation, receiver, Duration::from_secs(3), 3, |_| {
+        assert!(answering.admit_terminal(&[10, 0x55], None, None, &complex_ack(invoke_id, READ)));
+        std::future::ready(Attempt::<()>::Sent)
+    })
+    .await;
+    let data = Bytes::from_static(&[0x09, 0x01]);
+    assert_eq!(result, Ok(AttemptsEnd::Answered(CovAckResult::Data(data))));
+    // Only the notification's lease is left.
+    assert_eq!(transactions.active_count(), 1);
 }

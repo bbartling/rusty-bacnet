@@ -1,6 +1,10 @@
 //! ConfirmedTextMessage / UnconfirmedTextMessage services
 //! per ASHRAE 135-2020 Clauses 16.5 and 16.6.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_character_string, decode_ctx_constructed, decode_ctx_object_id, decode_ctx_unsigned,
+    expect_end, misplaced_kind, next_is_context, next_is_opening,
+};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::enums::MessagePriority;
@@ -15,7 +19,9 @@ use bytes::BytesMut;
 /// The messageClass CHOICE: numeric or text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageClass {
+    /// Numeric class code chosen by the sender.
     Numeric(u32),
+    /// Free-form class name chosen by the sender.
     Text(String),
 }
 
@@ -27,13 +33,18 @@ pub enum MessageClass {
 /// UnconfirmedTextMessage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextMessageRequest {
+    /// Device object of the sending device.
     pub source_device: ObjectIdentifier,
+    /// Optional classification of the message; `None` when the sender did not supply one.
     pub message_class: Option<MessageClass>,
+    /// Urgency of the message (normal or urgent).
     pub message_priority: MessagePriority,
+    /// Message text shown to the recipient.
     pub message: String,
 }
 
 impl TextMessageRequest {
+    /// Encode the request parameters into `buf`; fails if a character string cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         // [0] textMessageSourceDevice
         primitives::encode_ctx_object_id(buf, 0, &self.source_device);
@@ -57,114 +68,46 @@ impl TextMessageRequest {
         Ok(())
     }
 
+    /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
         // [0] textMessageSourceDevice
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                "TextMessage expected context tag 0",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "TextMessage truncated at sourceDevice",
-            ));
-        }
-        let source_device = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
+        let (source_device, mut offset) =
+            decode_ctx_object_id(data, 0, 0, "TextMessage sourceDevice")?;
 
         // messageClass [1] CHOICE { numeric [0], character [1] } OPTIONAL
         let mut message_class = None;
-        if offset < data.len() {
-            let (tag, tag_end) = tags::decode_tag(data, offset)?;
-            if tag.is_opening_tag(1) {
-                let (content, new_offset) = tags::extract_context_value(data, tag_end, 1)?;
-                if content.is_empty() {
-                    return Err(Error::decoding(
-                        tag_end,
-                        "TextMessage messageClass is empty",
-                    ));
-                }
-                let (inner_tag, inner_pos) = tags::decode_tag(content, 0)?;
-                let inner_end = inner_pos + inner_tag.length as usize;
-                if inner_end > content.len() {
-                    return Err(Error::decoding(
-                        tag_end + inner_pos,
-                        "TextMessage messageClass is truncated",
-                    ));
-                }
-                message_class = if inner_tag.is_context(0) {
-                    let value = primitives::decode_unsigned(&content[inner_pos..inner_end])?;
-                    Some(MessageClass::Numeric(u32::try_from(value).map_err(
-                        |_| {
-                            Error::decoding(
-                                tag_end + inner_pos,
-                                "TextMessage numeric class exceeds u32",
-                            )
-                        },
-                    )?))
-                } else if inner_tag.is_context(1) {
-                    Some(MessageClass::Text(primitives::decode_character_string(
-                        &content[inner_pos..inner_end],
-                    )?))
-                } else {
-                    return Err(Error::decoding(
-                        tag_end + inner_pos,
-                        "TextMessage messageClass expected context tag 0 or 1",
-                    ));
-                };
-                if inner_end != content.len() {
-                    return Err(Error::decoding(
-                        tag_end + inner_end,
-                        "TextMessage messageClass has trailing data",
-                    ));
-                }
-                offset = new_offset;
-            }
+        if next_is_opening(data, offset, 1)? {
+            let what = "TextMessage messageClass";
+            let (content, new_offset) = decode_ctx_constructed(data, offset, 1, what)?;
+            let (class, end) = if next_is_context(content, 0, 0)? {
+                let (n, end) = decode_ctx_unsigned::<u32>(content, 0, 0, what)?;
+                (MessageClass::Numeric(n), end)
+            } else if next_is_context(content, 0, 1)? {
+                let (text, end) = decode_ctx_character_string(content, 0, 1, what)?;
+                (MessageClass::Text(text), end)
+            } else {
+                // Neither alternative: the frame is empty, or another tag
+                // stands there.
+                let (found, _) = tags::decode_tag(content, 0)?;
+                return Err(Error::decoding_kind(
+                    misplaced_kind(content, 0, &found, None),
+                    offset,
+                    "TextMessage messageClass expected context tag 0 or 1",
+                ));
+            };
+            expect_end(content, end, offset, what)?;
+            message_class = Some(class);
+            offset = new_offset;
         }
 
         // [2] messagePriority (per Clause 16.5/16.6 ASN.1)
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(2) {
-            return Err(Error::decoding(
-                offset,
-                "TextMessage expected context tag 2",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "TextMessage truncated at messagePriority",
-            ));
-        }
-        let message_priority = primitives::decode_unsigned(&data[pos..end])?;
-        let message_priority = u32::try_from(message_priority)
-            .map(MessagePriority::from_raw)
-            .map_err(|_| Error::decoding(pos, "TextMessage priority exceeds u32"))?;
-        offset = end;
+        let (priority, offset) =
+            decode_ctx_unsigned::<u32>(data, offset, 2, "TextMessage messagePriority")?;
+        let message_priority = MessagePriority::from_raw(priority);
 
-        // [3] message
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(3) {
-            return Err(Error::decoding(
-                offset,
-                "TextMessage expected context tag 3",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "TextMessage truncated at message"));
-        }
-        let message = primitives::decode_character_string(&data[pos..end])?;
-        if end != data.len() {
-            return Err(Error::decoding(end, "TextMessage has trailing data"));
-        }
+        // [3] message, and nothing after it
+        let (message, end) = decode_ctx_character_string(data, offset, 3, "TextMessage message")?;
+        expect_end(data, end, end, "TextMessage")?;
 
         Ok(Self {
             source_device,

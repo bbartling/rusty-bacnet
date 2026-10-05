@@ -1,3 +1,8 @@
+use super::log_fields::{decode_log_status, encode_log_status};
+use super::tagged::{
+    decode_app_fixed, decode_ctx_canonical_unsigned, decode_ctx_constructed, decode_ctx_primitive,
+    expect_end,
+};
 use super::{decode_audit_notification_at, encode_audit_notification};
 use crate::{primitives, tags};
 use bacnet_types::constructed::{
@@ -33,14 +38,7 @@ pub fn encode_audit_log_record(
 
     tags::encode_opening_tag(buf, 1);
     match &record.datum {
-        BACnetAuditLogDatum::LogStatus(status) => {
-            if status & !0b111 != 0 {
-                return Err(Error::OutOfRange(format!(
-                    "BACnetAuditLogRecord log-status {status:#010b} exceeds three bits"
-                )));
-            }
-            primitives::encode_ctx_bit_string(buf, 0, 5, &[*status << 5]);
-        }
+        BACnetAuditLogDatum::LogStatus(status) => encode_log_status(buf, 0, *status),
         BACnetAuditLogDatum::AuditNotification(notification) => {
             tags::encode_opening_tag(buf, 1);
             encode_audit_notification(notification, buf)?;
@@ -59,21 +57,14 @@ pub fn decode_audit_log_record_result_at(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetAuditLogRecordResult, usize), Error> {
-    let (sequence_contents, record_start) =
-        decode_context(data, offset, 0, "AuditLogQuery-ACK record sequence-number")?;
-    if sequence_contents.is_empty() || sequence_contents.len() > 8 {
-        return Err(Error::decoding(
-            offset,
-            "AuditLogQuery-ACK sequence-number must contain one to eight octets",
-        ));
-    }
-    let sequence_number = decode_canonical_unsigned(
-        sequence_contents,
+    let (sequence_number, record_start) = decode_ctx_canonical_unsigned::<u64>(
+        data,
         offset,
-        "AuditLogQuery-ACK sequence-number",
+        0,
+        "AuditLogQuery-ACK record sequence-number",
     )?;
-
-    let (record_body, next) = decode_constructed_body(data, record_start, 1, "record value")?;
+    let (record_body, next) =
+        decode_ctx_constructed(data, record_start, 1, "AuditLogQuery-ACK record value")?;
     let record = decode_audit_log_record(record_body)?;
     Ok((
         BACnetAuditLogRecordResult {
@@ -86,67 +77,34 @@ pub fn decode_audit_log_record_result_at(
 
 /// Decode a complete bare `BACnetAuditLogRecord` field sequence.
 pub fn decode_audit_log_record(data: &[u8]) -> Result<BACnetAuditLogRecord, Error> {
-    let (timestamp_body, datum_start) = decode_constructed_body(data, 0, 0, "record timestamp")?;
+    let (record, end) = decode_audit_log_record_at(data, 0)?;
+    expect_end(data, end, end, "BACnetAuditLogRecord")?;
+    Ok(record)
+}
+
+/// Decode one bare `BACnetAuditLogRecord` starting at `offset`, returning it
+/// and the offset just past it, so the records of a ReadRange item list
+/// decode one after another.
+pub fn decode_audit_log_record_at(
+    data: &[u8],
+    offset: usize,
+) -> Result<(BACnetAuditLogRecord, usize), Error> {
+    let (timestamp_body, datum_start) =
+        decode_ctx_constructed(data, offset, 0, "AuditLogQuery-ACK record timestamp")?;
     let timestamp = decode_date_time(timestamp_body)?;
-
-    let (datum_body, end) = decode_constructed_body(data, datum_start, 1, "record datum")?;
-    if end != data.len() {
-        return Err(Error::decoding(
-            end,
-            "BACnetAuditLogRecord has trailing fields",
-        ));
-    }
+    let (datum_body, end) =
+        decode_ctx_constructed(data, datum_start, 1, "AuditLogQuery-ACK record datum")?;
     let datum = decode_datum(datum_body)?;
-
-    Ok(BACnetAuditLogRecord { timestamp, datum })
+    Ok((BACnetAuditLogRecord { timestamp, datum }, end))
 }
 
 fn decode_date_time(data: &[u8]) -> Result<(Date, Time), Error> {
-    let (date_tag, date_start) = tags::decode_tag(data, 0)?;
-    if date_tag.class != tags::TagClass::Application
-        || date_tag.number != tags::app_tag::DATE
-        || date_tag.is_opening
-        || date_tag.is_closing
-        || date_tag.length != 4
-    {
-        return Err(Error::decoding(
-            0,
-            "BACnetAuditLogRecord timestamp expected four-octet application Date",
-        ));
-    }
-    let date_end = date_start
-        .checked_add(4)
-        .ok_or_else(|| Error::decoding(date_start, "timestamp Date length overflow"))?;
-    if date_end > data.len() {
-        return Err(Error::decoding(date_start, "timestamp Date is truncated"));
-    }
-    let date = Date::decode(&data[date_start..date_end])?;
-
-    let (time_tag, time_start) = tags::decode_tag(data, date_end)?;
-    if time_tag.class != tags::TagClass::Application
-        || time_tag.number != tags::app_tag::TIME
-        || time_tag.is_opening
-        || time_tag.is_closing
-        || time_tag.length != 4
-    {
-        return Err(Error::decoding(
-            date_end,
-            "BACnetAuditLogRecord timestamp expected four-octet application Time",
-        ));
-    }
-    let time_end = time_start
-        .checked_add(4)
-        .ok_or_else(|| Error::decoding(time_start, "timestamp Time length overflow"))?;
-    if time_end > data.len() {
-        return Err(Error::decoding(time_start, "timestamp Time is truncated"));
-    }
-    if time_end != data.len() {
-        return Err(Error::decoding(
-            time_end,
-            "BACnetAuditLogRecord timestamp has trailing fields",
-        ));
-    }
-    let time = Time::decode(&data[time_start..time_end])?;
+    const WHAT: &str = "BACnetAuditLogRecord timestamp";
+    let (date, date_end) = decode_app_fixed(data, 0, tags::app_tag::DATE, 4, WHAT)?;
+    let (time, time_end) = decode_app_fixed(data, date_end, tags::app_tag::TIME, 4, WHAT)?;
+    expect_end(data, time_end, time_end, WHAT)?;
+    let date = Date::decode(date)?;
+    let time = Time::decode(time)?;
     validate_date_time(&date, &time).map_err(|error| {
         Error::decoding(
             0,
@@ -159,45 +117,30 @@ fn decode_date_time(data: &[u8]) -> Result<(Date, Time), Error> {
 fn decode_datum(data: &[u8]) -> Result<BACnetAuditLogDatum, Error> {
     let (choice, _) = tags::decode_tag(data, 0)?;
     if choice.is_context(0) {
-        let (contents, end) = decode_context(data, 0, 0, "BACnetAuditLogRecord log-status")?;
-        if end != data.len() {
-            return Err(Error::decoding(
-                end,
-                "log-status choice has trailing fields",
-            ));
-        }
-        if contents.len() != 2 || contents[0] != 5 || contents[1] & 0x1f != 0 {
-            return Err(Error::decoding(
-                0,
-                "BACnetAuditLogRecord log-status must be a canonical three-bit BitString",
-            ));
-        }
-        Ok(BACnetAuditLogDatum::LogStatus(contents[1] >> 5))
+        const WHAT: &str = "BACnetAuditLogRecord log-status";
+        let (contents, end) = decode_ctx_primitive(data, 0, 0, WHAT)?;
+        expect_end(data, end, end, WHAT)?;
+        Ok(BACnetAuditLogDatum::LogStatus(decode_log_status(
+            contents,
+            0,
+            "BACnetAuditLogRecord",
+        )?))
     } else if choice.is_opening_tag(1) {
-        let (notification_body, end) =
-            decode_constructed_body(data, 0, 1, "AuditNotification choice")?;
-        if end != data.len() {
-            return Err(Error::decoding(
-                end,
-                "AuditNotification choice has trailing fields",
-            ));
-        }
+        const WHAT: &str = "AuditLogQuery-ACK AuditNotification choice";
+        let (notification_body, end) = decode_ctx_constructed(data, 0, 1, WHAT)?;
+        expect_end(data, end, end, WHAT)?;
         let (notification, notification_end) = decode_audit_notification_at(notification_body, 0)?;
-        if notification_end != notification_body.len() {
-            return Err(Error::decoding(
-                notification_end,
-                "AuditNotification choice has trailing notification fields",
-            ));
-        }
+        expect_end(
+            notification_body,
+            notification_end,
+            notification_end,
+            "AuditNotification choice notification",
+        )?;
         Ok(BACnetAuditLogDatum::AuditNotification(notification))
     } else if choice.is_context(2) {
-        let (contents, end) = decode_context(data, 0, 2, "BACnetAuditLogRecord time-change")?;
-        if end != data.len() {
-            return Err(Error::decoding(
-                end,
-                "time-change choice has trailing fields",
-            ));
-        }
+        const WHAT: &str = "BACnetAuditLogRecord time-change";
+        let (contents, end) = decode_ctx_primitive(data, 0, 2, WHAT)?;
+        expect_end(data, end, end, WHAT)?;
         Ok(BACnetAuditLogDatum::TimeChange(primitives::decode_real(
             contents,
         )?))
@@ -207,22 +150,6 @@ fn decode_datum(data: &[u8]) -> Result<BACnetAuditLogDatum, Error> {
             "BACnetAuditLogRecord datum expected context [0], constructed [1], or context [2]",
         ))
     }
-}
-
-fn decode_constructed_body<'a>(
-    data: &'a [u8],
-    offset: usize,
-    tag_number: u8,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (opening, body_start) = tags::decode_tag(data, offset)?;
-    if !opening.is_opening_tag(tag_number) {
-        return Err(Error::decoding(
-            offset,
-            format!("AuditLogQuery-ACK {field} expected opening tag [{tag_number}]"),
-        ));
-    }
-    tags::extract_context_value(data, body_start, tag_number)
 }
 
 fn validate_date_time(date: &Date, time: &Time) -> Result<(), Error> {
@@ -241,47 +168,10 @@ fn validate_date_time(date: &Date, time: &Time) -> Result<(), Error> {
     Ok(())
 }
 
-fn decode_context<'a>(
-    data: &'a [u8],
-    offset: usize,
-    expected_tag: u8,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, contents_start) = tags::decode_tag(data, offset)?;
-    if !tag.is_context(expected_tag) {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} expected context tag [{expected_tag}]"),
-        ));
-    }
-    let end = contents_start
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(contents_start, format!("{field} length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((&data[contents_start..end], end))
-}
-
-fn decode_canonical_unsigned(data: &[u8], offset: usize, field: &str) -> Result<u64, Error> {
-    if data.is_empty() || data.len() > 8 {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} must contain one to eight octets"),
-        ));
-    }
-    if data.len() > 1 && data.first() == Some(&0) {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} must use the shortest Unsigned/Enumerated encoding"),
-        ));
-    }
-    primitives::decode_unsigned(data)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_types::bitstring::LogStatus;
 
     fn audit_record() -> BACnetAuditLogRecord {
         BACnetAuditLogRecord {
@@ -299,7 +189,28 @@ mod tests {
                     hundredths: 78,
                 },
             ),
-            datum: BACnetAuditLogDatum::LogStatus(0b010),
+            datum: BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED),
+        }
+    }
+
+    /// The log-status choice puts log-disabled, bit 0, in the top bit of the
+    /// octet (Clause 20.2.10), so it never reads back as log-interrupted.
+    #[test]
+    fn audit_record_log_status_has_bit0_first_wire_bytes() {
+        for (status, octet) in [
+            (LogStatus::LOG_DISABLED, 0x80),
+            (LogStatus::LOG_DISABLED | LogStatus::BUFFER_PURGED, 0xC0),
+            (LogStatus::LOG_INTERRUPTED, 0x20),
+        ] {
+            let record = BACnetAuditLogRecord {
+                datum: BACnetAuditLogDatum::LogStatus(status),
+                ..audit_record()
+            };
+            let mut encoded = BytesMut::new();
+            encode_audit_log_record(&record, &mut encoded).unwrap();
+            // Timestamp [0], then [1] around log-status [0] = 05 <octet>.
+            assert_eq!(&encoded[12..], &[0x1E, 0x0A, 0x05, octet, 0x1F], "{status}");
+            assert_eq!(decode_audit_log_record(&encoded).unwrap(), record);
         }
     }
 
@@ -312,6 +223,28 @@ mod tests {
 
         encoded.extend_from_slice(&[0]);
         assert!(decode_audit_log_record(&encoded).is_err());
+    }
+
+    #[test]
+    fn consecutive_audit_records_decode_by_returned_offset() {
+        let first = audit_record();
+        let second = BACnetAuditLogRecord {
+            datum: BACnetAuditLogDatum::TimeChange(-1.5),
+            ..audit_record()
+        };
+        let mut encoded = BytesMut::new();
+        encode_audit_log_record(&first, &mut encoded).unwrap();
+        let split = encoded.len();
+        encode_audit_log_record(&second, &mut encoded).unwrap();
+        assert_eq!(
+            decode_audit_log_record_at(&encoded, 0).unwrap(),
+            (first, split)
+        );
+        assert_eq!(
+            decode_audit_log_record_at(&encoded, split).unwrap(),
+            (second, encoded.len())
+        );
+        assert!(decode_audit_log_record_at(&encoded[..encoded.len() - 1], split).is_err());
     }
 
     #[test]

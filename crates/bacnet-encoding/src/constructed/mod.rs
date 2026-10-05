@@ -26,204 +26,143 @@ use bacnet_types::constructed::{
     BACnetProprietaryPropertyState,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use crate::primitives;
 use crate::tags::{self, TagClass};
+use tagged::{
+    contents, decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, expect_closing,
+    expect_end, expect_opening,
+};
 
+pub mod access_credential;
+pub mod access_rule;
+mod action_list;
+pub mod assigned_landing_calls;
 mod audit_notification;
 mod audit_record;
+pub mod calendar;
+mod channel_value;
+mod color_command;
 pub mod cov_subscription;
+mod event_log_record;
+mod event_notification;
+pub mod event_notification_subscription;
 pub mod event_parameter;
 pub mod fault_parameter;
+mod floor_pairs;
+pub mod landing_call_status;
+pub mod landing_door_status;
+pub mod lift_car_call_list;
+mod lighting_command;
+mod log_fields;
+mod log_multiple_record;
+mod log_record;
+mod members;
 pub mod object_property_reference;
+pub mod port_permission;
+mod property_access_result;
+mod property_value;
+mod read_access;
 pub mod recipient;
+mod scale;
+pub mod schedule;
+mod shed_level;
 pub mod staging;
+pub mod tagged;
+mod value_source;
 
+pub use access_credential::{
+    decode_assigned_access_rights, decode_authentication_factor,
+    decode_authentication_factor_format, decode_credential_authentication_factor,
+    encode_assigned_access_rights, encode_authentication_factor,
+    encode_authentication_factor_format, encode_credential_authentication_factor,
+};
+pub use access_rule::{decode_access_rule, encode_access_rule};
+pub use action_list::{
+    decode_action_command, decode_action_list, encode_action_command, encode_action_list,
+};
+pub use assigned_landing_calls::{decode_assigned_landing_calls, encode_assigned_landing_calls};
 pub use audit_notification::{decode_audit_notification_at, encode_audit_notification};
 pub use audit_record::{
-    decode_audit_log_record, decode_audit_log_record_result_at, encode_audit_log_record,
-    encode_audit_log_record_result,
+    decode_audit_log_record, decode_audit_log_record_at, decode_audit_log_record_result_at,
+    encode_audit_log_record, encode_audit_log_record_result,
 };
-pub use cov_subscription::{encode_cov_subscription, encode_cov_subscription_list};
+pub use calendar::{
+    decode_calendar_entry, decode_calendar_entry_list, decode_date_range, encode_calendar_entry,
+    encode_calendar_entry_list, encode_date_range,
+};
+pub use channel_value::{channel_value_end, is_lighting_command_channel_value};
+pub use color_command::{
+    decode_color_command, decode_color_command_value, decode_xy_color, encode_color_command,
+    encode_xy_color,
+};
+pub use cov_subscription::{
+    decode_cov_multiple_subscription, decode_cov_subscription, encode_cov_multiple_subscription,
+    encode_cov_multiple_subscription_list, encode_cov_subscription, encode_cov_subscription_list,
+};
+pub use event_log_record::{decode_event_log_record, encode_event_log_record};
+pub use event_notification::{
+    decode_event_notification, decode_event_notification_tolerant, decode_notification_parameters,
+    encode_event_notification, encode_notification_parameters,
+};
+pub use event_notification_subscription::{
+    decode_event_notification_subscription, encode_event_notification_subscription,
+    encode_event_notification_subscription_list,
+};
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};
+pub use landing_call_status::{
+    decode_landing_call_status, decode_landing_call_status_list, encode_landing_call_status,
+    encode_landing_call_status_list,
+};
+pub use landing_door_status::{decode_landing_door_status, encode_landing_door_status};
+pub use lift_car_call_list::{decode_lift_car_call_list, encode_lift_car_call_list};
+pub use lighting_command::{
+    decode_lighting_command, decode_lighting_command_value, encode_lighting_command,
+};
+pub use log_multiple_record::{decode_log_multiple_record, encode_log_multiple_record};
+pub use log_record::{decode_log_record, encode_log_record};
 pub use object_property_reference::{
-    decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
+    decode_object_property_reference, decode_object_property_reference_at,
+    decode_setpoint_reference, decode_setpoint_reference_at, encode_object_property_reference,
     encode_setpoint_reference,
 };
-pub use recipient::{
-    decode_destination, decode_destination_list, decode_recipient, encode_destination,
-    encode_destination_list, encode_recipient,
+pub use port_permission::{decode_port_permission, encode_port_permission};
+pub use property_access_result::{decode_property_access_result, encode_property_access_result};
+pub use property_value::{
+    decode_bacnet_property_value, decode_bacnet_property_value_in_list,
+    decode_bacnet_property_value_in_list_detailed, encode_bacnet_property_value,
+    extract_property_value, PropertyValueBoundary, PropertyValueDecodeError,
+    PropertyValueDecodeFailure, PropertyValueDecodeStage,
 };
+pub use read_access::{
+    decode_property_reference, decode_read_access_specification, encode_property_reference,
+    encode_read_access_specification,
+};
+pub use recipient::{
+    check_decoded_mac_len, check_encoded_mac_len, decode_destination, decode_destination_list,
+    decode_recipient, encode_destination, encode_destination_list, encode_recipient,
+};
+pub use scale::{decode_prescale, decode_scale, encode_prescale, encode_scale};
+pub use schedule::{
+    decode_daily_schedule, decode_exception_schedule, decode_special_event,
+    decode_special_event_period, decode_time_value, decode_weekly_schedule, encode_daily_schedule,
+    encode_exception_schedule, encode_special_event, encode_special_event_period,
+    encode_time_value, encode_weekly_schedule,
+};
+pub use shed_level::{decode_shed_level, encode_shed_level};
 pub use staging::{
     decode_device_object_reference, decode_stage_limit_value, encode_device_object_reference,
     encode_stage_limit_value,
 };
 
+pub use value_source::{decode_value_source, encode_value_source};
+
 /// Upper bound on decoded SEQUENCE OF / list lengths, mirroring the socket-
 /// facing posture of `bacnet-services`' `MAX_DECODED_ITEMS`. Prevents memory
 /// exhaustion from malformed framed payloads.
 const MAX_FRAMED_ITEMS: usize = 10_000;
-
-// ---------------------------------------------------------------------------
-// Small tagged-field helpers
-// ---------------------------------------------------------------------------
-
-/// Require an opening context tag `tag` at `offset`; return the offset of its
-/// content.
-fn expect_opening(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<usize, Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if !t.is_opening_tag(tag) {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected opening tag [{tag}]"),
-        ));
-    }
-    Ok(pos)
-}
-
-/// Require a closing context tag `tag` at `offset`; return the offset past it.
-fn expect_closing(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<usize, Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if !t.is_closing_tag(tag) {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected closing tag [{tag}]"),
-        ));
-    }
-    Ok(pos)
-}
-
-/// Decode a primitive context tag `tag` holding unsigned contents.
-fn decode_ctx_unsigned(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<(u64, usize), Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if !t.is_context(tag) {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected context tag [{tag}]"),
-        ));
-    }
-    let end = pos
-        .checked_add(t.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((primitives::decode_unsigned(&data[pos..end])?, end))
-}
-
-/// Decode a primitive context tag `tag` holding a 4-octet REAL.
-fn decode_ctx_real(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<(f32, usize), Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if !t.is_context(tag) || t.length != 4 {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected context tag [{tag}] REAL (4 octets)"),
-        ));
-    }
-    let end = pos + 4;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((primitives::decode_real(&data[pos..end])?, end))
-}
-
-/// Decode a primitive context tag `tag` holding a BIT STRING
-/// `(first octet = unused-bits count)`.
-fn decode_ctx_bit_string(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<((u8, Vec<u8>), usize), Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if !t.is_context(tag) {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected context tag [{tag}] BIT STRING"),
-        ));
-    }
-    let end = pos
-        .checked_add(t.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    let (unused_bits, bits) = primitives::decode_bit_string(&data[pos..end])?;
-    Ok(((unused_bits, bits), end))
-}
-
-/// Decode one application-tagged BIT STRING (`SEQUENCE OF BIT STRING` item).
-fn decode_app_bit_string(
-    data: &[u8],
-    offset: usize,
-    what: &str,
-) -> Result<((u8, Vec<u8>), usize), Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if t.class != TagClass::Application || t.number != tags::app_tag::BIT_STRING {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected application-tagged BIT STRING"),
-        ));
-    }
-    let end = pos
-        .checked_add(t.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    let (unused_bits, bits) = primitives::decode_bit_string(&data[pos..end])?;
-    Ok(((unused_bits, bits), end))
-}
-
-/// Decode one application-tagged ENUMERATED (`SEQUENCE OF enumerated` item).
-fn decode_app_enumerated(data: &[u8], offset: usize, what: &str) -> Result<(u32, usize), Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if t.class != TagClass::Application || t.number != tags::app_tag::ENUMERATED {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected application-tagged ENUMERATED"),
-        ));
-    }
-    let end = pos
-        .checked_add(t.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    let value = u32::try_from(primitives::decode_unsigned(&data[pos..end])?)
-        .map_err(|_| Error::decoding(pos, format!("{what}: ENUMERATED exceeds u32")))?;
-    Ok((value, end))
-}
-
-/// Decode one application-tagged CharacterString.
-fn decode_app_character_string(
-    data: &[u8],
-    offset: usize,
-    what: &str,
-) -> Result<(String, usize), Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if t.class != TagClass::Application || t.number != tags::app_tag::CHARACTER_STRING {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected application-tagged CharacterString"),
-        ));
-    }
-    let end = pos
-        .checked_add(t.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((primitives::decode_character_string(&data[pos..end])?, end))
-}
 
 // ---------------------------------------------------------------------------
 // BACnetPropertyStates (Clause 21 CHOICE) — spec-tagged framing
@@ -247,12 +186,7 @@ pub fn encode_property_state(
             framed.extend_from_slice(value.data());
             tags::encode_closing_tag(&mut framed, value.tag());
             let (_, end) = tags::extract_context_value(&framed, body_start, value.tag())?;
-            if end != framed.len() {
-                return Err(Error::decoding(
-                    end,
-                    "proprietary property-state body has trailing data",
-                ));
-            }
+            expect_end(&framed, end, end, "proprietary property-state body")?;
         }
     }
     match state {
@@ -336,14 +270,17 @@ pub fn decode_property_state(
     use BACnetPropertyStates as S;
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if tag.class != TagClass::Context || tag.is_closing {
-        return Err(Error::decoding(
+        return Err(tagged::misplaced_tag(
+            data,
+            &tag,
+            None,
             offset,
             "BACnetPropertyStates: expected a context tag",
         ));
     }
     if tag.is_opening {
         if !(64..=254).contains(&tag.number) {
-            return Err(Error::decoding(
+            return Err(Error::invalid_tag(
                 offset,
                 "BACnetPropertyStates: constructed form requires a proprietary tag",
             ));
@@ -358,16 +295,10 @@ pub fn decode_property_state(
             end,
         ));
     }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, "BACnetPropertyStates: length overflow"))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    let content = &data[pos..end];
+    let (content, end) = contents(data, pos, tag.length)?;
     let unsigned = || -> Result<u32, Error> {
         u32::try_from(primitives::decode_unsigned(content)?)
-            .map_err(|_| Error::decoding(pos, "BACnetPropertyStates: contents exceed u32"))
+            .map_err(|_| Error::out_of_range(pos, "BACnetPropertyStates: contents exceed u32"))
     };
     let state = match tag.number {
         0 => {
@@ -454,7 +385,7 @@ pub fn decode_property_state(
             content.to_vec(),
         )?),
         reserved => {
-            return Err(Error::decoding(
+            return Err(Error::invalid_tag(
                 offset,
                 format!("BACnetPropertyStates context tag {reserved} is reserved"),
             ));
@@ -489,66 +420,12 @@ pub(crate) fn decode_dopr_body(
     offset: usize,
     what: &str,
 ) -> Result<(BACnetDeviceObjectPropertyReference, usize), Error> {
-    // [0] object-identifier
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if !t.is_context(0) || t.length != 4 {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected [0] object-identifier (4 octets)"),
-        ));
-    }
-    let end = pos + 4;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-    let mut offset = end;
-
-    // [1] property-identifier
-    let (raw, new_offset) = decode_ctx_unsigned(data, offset, 1, what)?;
-    let property_identifier = u32::try_from(raw)
-        .map_err(|_| Error::decoding(offset, format!("{what}: property-identifier exceeds u32")))?;
-    offset = new_offset;
-
-    // [2] property-array-index OPTIONAL
-    let mut property_array_index = None;
-    if offset < data.len() {
-        let (peek, peek_pos) = tags::decode_tag(data, offset)?;
-        if peek.is_context(2) {
-            let end = peek_pos
-                .checked_add(peek.length as usize)
-                .ok_or_else(|| Error::decoding(peek_pos, format!("{what}: length overflow")))?;
-            if end > data.len() {
-                return Err(Error::buffer_too_short(end, data.len()));
-            }
-            let index = primitives::decode_unsigned(&data[peek_pos..end])?;
-            property_array_index = Some(u32::try_from(index).map_err(|_| {
-                Error::decoding(offset, format!("{what}: property-array-index exceeds u32"))
-            })?);
-            offset = end;
-        }
-    }
-
-    // [3] device-identifier OPTIONAL
-    let mut device_identifier = None;
-    if offset < data.len() {
-        let (peek, peek_pos) = tags::decode_tag(data, offset)?;
-        if peek.is_context(3) {
-            if peek.length != 4 {
-                return Err(Error::decoding(
-                    offset,
-                    format!("{what}: expected [3] device-identifier (4 octets)"),
-                ));
-            }
-            let end = peek_pos + 4;
-            if end > data.len() {
-                return Err(Error::buffer_too_short(end, data.len()));
-            }
-            device_identifier = Some(ObjectIdentifier::decode(&data[peek_pos..end])?);
-            offset = end;
-        }
-    }
-
+    let (object_identifier, offset) = decode_ctx_object_id(data, offset, 0, what)?;
+    let (property_identifier, offset) = decode_ctx_unsigned::<u32>(data, offset, 1, what)?;
+    let (property_array_index, offset) =
+        decode_optional_ctx(data, offset, 2, what, decode_ctx_unsigned::<u32>)?;
+    let (device_identifier, offset) =
+        decode_optional_ctx(data, offset, 3, what, decode_ctx_object_id)?;
     Ok((
         BACnetDeviceObjectPropertyReference {
             object_identifier,
@@ -560,6 +437,27 @@ pub(crate) fn decode_dopr_body(
     ))
 }
 
+/// Encode one bare `BACnetDeviceObjectPropertyReference`, the counterpart of
+/// [`decode_device_object_property_reference`]: its members with no enclosing
+/// frame, so a BACnetLIST of these references is their encodings back to back.
+pub fn encode_device_object_property_reference(
+    buf: &mut BytesMut,
+    r: &BACnetDeviceObjectPropertyReference,
+) {
+    encode_dopr_body(buf, r);
+}
+
+/// Decode one bare `BACnetDeviceObjectPropertyReference` at `offset`; returns
+/// it and the offset past its last member. A BACnetLIST of these references
+/// concatenates its elements with no frame, so walking the list calls this at
+/// each element's start.
+pub fn decode_device_object_property_reference(
+    data: &[u8],
+    offset: usize,
+) -> Result<(BACnetDeviceObjectPropertyReference, usize), Error> {
+    decode_dopr_body(data, offset, "BACnetDeviceObjectPropertyReference")
+}
+
 /// Validate a BACnet TLV sequence without normalizing its encoded values.
 ///
 /// This checks matching context tags, the context nesting limit, and
@@ -569,7 +467,7 @@ pub fn validate_tlv_sequence(data: &[u8], what: &str) -> Result<(), Error> {
     let mut count = 0;
     while offset < data.len() {
         if count >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset,
                 format!("{what}: sequence exceeds item limit"),
             ));
@@ -599,19 +497,14 @@ pub(crate) fn validate_extended_parameters(data: &[u8], what: &str) -> Result<()
     let mut count = 0;
     while offset < data.len() {
         if count >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset,
                 format!("{what}: parameters exceed item limit"),
             ));
         }
-        let (tag, content) = tags::decode_tag(data, offset)?;
+        let (tag, _) = tags::decode_tag(data, offset)?;
         if tag.class == TagClass::Context {
-            if !tag.is_opening_tag(0) {
-                return Err(Error::decoding(
-                    offset,
-                    format!("{what}: expected reference opening tag [0]"),
-                ));
-            }
+            let content = expect_opening(data, offset, 0, what)?;
             let (_, after_reference) = decode_dopr_body(data, content, what)?;
             offset = expect_closing(data, after_reference, 0, what)?;
         } else {
@@ -623,4 +516,4 @@ pub(crate) fn validate_extended_parameters(data: &[u8], what: &str) -> Result<()
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -10,6 +10,7 @@ use super::{
     Bip6Vmac, MAX_VMAC_RETRIES,
 };
 use crate::port::TransportPort;
+use crate::port_ownership::lost_port;
 
 #[test]
 fn generate_random_vmac_produces_3_bytes() {
@@ -49,30 +50,44 @@ async fn random_vmac_foreign_device_fails_before_bip6_startup() {
 
 #[tokio::test]
 async fn peer_probe_collision_fails_startup_without_publishing_socket() {
-    let reservation = UdpSocket::bind("[::1]:0").await.unwrap();
-    let port = reservation.local_addr().unwrap().port();
-    drop(reservation);
-
     let device_instance = 0x12_3456;
     let vmac = derive_vmac_from_device_instance(device_instance);
-    let destination = SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0);
-    let peer = UdpSocket::bind("[::1]:0").await.unwrap();
-    let peer_task = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let probe = encode_address_resolution_ack(&vmac, &vmac);
-        for _ in 0..20 {
-            let _ = peer.send_to(&probe, destination).await;
+    // The peer needs the port before the start binds it, so it comes from a
+    // probe. Another socket can take the port in between (#1032): that start
+    // fails at the bind instead of at the collision, and the test goes again
+    // with a fresh port.
+    let mut attempt = 1;
+    let (transport, error) = loop {
+        let port = std::net::UdpSocket::bind("[::1]:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let destination = SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0);
+        let peer = UdpSocket::bind("[::1]:0").await.unwrap();
+        let peer_task = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    });
+            let probe = encode_address_resolution_ack(&vmac, &vmac);
+            for _ in 0..20 {
+                let _ = peer.send_to(&probe, destination).await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
 
-    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, port, Some(device_instance));
-    let error = transport.start().await.unwrap_err();
-    peer_task.abort();
-    let _ = peer_task.await;
+        let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, port, Some(device_instance));
+        let error = transport.start().await.unwrap_err();
+        peer_task.abort();
+        let _ = peer_task.await;
+        match error {
+            Error::Transport(ref err) if lost_port(attempt, err) => attempt += 1,
+            error => break (transport, error),
+        }
+    };
 
     assert!(
-        matches!(error, Error::Transport(error) if error.kind() == std::io::ErrorKind::AddrInUse)
+        matches!(&error, Error::Transport(error) if error.kind() == std::io::ErrorKind::AddrInUse
+            && error.to_string() == "configured BACnet Device instance VMAC is already in use"),
+        "{error:?}"
     );
     assert!(transport.socket.is_none());
     let send_error = transport.send_broadcast(&[0x01, 0x00]).await.unwrap_err();

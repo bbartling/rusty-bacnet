@@ -21,6 +21,15 @@ pub(crate) struct ReliabilityInhibitState {
     oos_client_reliability_override: bool,
 }
 
+/// Whether an Out_Of_Service write may trigger object-owned follow-up work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutOfServiceWrite {
+    /// A Boolean write was applied, including an accepted same-value write.
+    Applied,
+    /// NULL relinquishment succeeded without changing state or ownership.
+    Relinquished,
+}
+
 impl ReliabilityInhibitState {
     #[inline]
     pub(crate) fn enabled(self) -> bool {
@@ -41,7 +50,7 @@ impl ReliabilityInhibitState {
     #[inline]
     pub(crate) fn write_inhibit(
         &mut self,
-        reliability: &mut u32,
+        reliability: &mut Reliability,
         out_of_service: bool,
         property: PropertyIdentifier,
         value: &PropertyValue,
@@ -55,24 +64,27 @@ impl ReliabilityInhibitState {
 
         self.enabled = *enabled;
         if self.enabled && !(out_of_service && self.oos_client_reliability_override) {
-            *reliability = Reliability::NO_FAULT_DETECTED.to_raw();
+            *reliability = Reliability::NO_FAULT_DETECTED;
         }
         Some(Ok(()))
     }
 
-    /// Apply target-object OOS sequencing without changing the generic helper
-    /// retained by Loop, Schedule, and unrelated object types.
+    /// Apply OOS sequencing. A relinquishment must not trigger reevaluation
+    /// or change saved/client Reliability ownership in the calling object.
     #[inline]
     pub(crate) fn write_out_of_service(
         &mut self,
         out_of_service: &mut bool,
-        reliability: &mut u32,
-        saved_reliability: &mut Option<u32>,
+        reliability: &mut Reliability,
+        saved_reliability: &mut Option<Reliability>,
         property: PropertyIdentifier,
         value: &PropertyValue,
-    ) -> Option<Result<(), Error>> {
+    ) -> Option<Result<OutOfServiceWrite, Error>> {
         if property != PropertyIdentifier::OUT_OF_SERVICE {
             return None;
+        }
+        if *value == PropertyValue::Null {
+            return Some(Ok(OutOfServiceWrite::Relinquished));
         }
         let PropertyValue::Boolean(enabled) = value else {
             return Some(Err(invalid_data_type_error()));
@@ -82,19 +94,19 @@ impl ReliabilityInhibitState {
             *saved_reliability = Some(*reliability);
             self.oos_client_reliability_override = false;
             if self.enabled {
-                *reliability = Reliability::NO_FAULT_DETECTED.to_raw();
+                *reliability = Reliability::NO_FAULT_DETECTED;
             }
         } else if *out_of_service && !*enabled {
             self.oos_client_reliability_override = false;
             let saved = saved_reliability.take();
             *reliability = if self.enabled {
-                Reliability::NO_FAULT_DETECTED.to_raw()
+                Reliability::NO_FAULT_DETECTED
             } else {
-                saved.unwrap_or(Reliability::NO_FAULT_DETECTED.to_raw())
+                saved.unwrap_or(Reliability::NO_FAULT_DETECTED)
             };
         }
         *out_of_service = *enabled;
-        Some(Ok(()))
+        Some(Ok(OutOfServiceWrite::Applied))
     }
 
     /// Apply the OOS-only client Reliability route and record successful
@@ -103,7 +115,7 @@ impl ReliabilityInhibitState {
     pub(crate) fn write_client_reliability(
         &mut self,
         out_of_service: bool,
-        reliability: &mut u32,
+        reliability: &mut Reliability,
         property: PropertyIdentifier,
         value: &PropertyValue,
     ) -> Option<Result<(), Error>> {
@@ -113,14 +125,15 @@ impl ReliabilityInhibitState {
         if !out_of_service {
             return Some(Err(write_access_denied_error()));
         }
-        let PropertyValue::Enumerated(new_reliability) = value else {
+        let PropertyValue::Enumerated(raw) = value else {
             return Some(Err(invalid_data_type_error()));
         };
-        if !is_reliability_value_valid(*new_reliability) {
+        let new_reliability = Reliability::from_raw(*raw);
+        if !is_reliability_value_valid(new_reliability) {
             return Some(Err(value_out_of_range_error()));
         }
 
-        *reliability = *new_reliability;
+        *reliability = new_reliability;
         self.oos_client_reliability_override = true;
         Some(Ok(()))
     }

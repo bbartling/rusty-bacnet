@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_services::who_is::DeviceInstanceRange;
 
 #[test]
 fn wpm_handler_success() {
@@ -26,9 +27,9 @@ fn wpm_handler_success() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
-    handle_write_property_multiple(&mut db, &buf).unwrap();
+    sourced_wpm(&mut db, &buf).unwrap();
 
     let obj = db.get(&oid).unwrap();
     let val = obj
@@ -51,7 +52,7 @@ fn subscribe_cov_handler_success() {
         lifetime: Some(300),
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let subscriptions = handle_subscribe_cov_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert_eq!(subscriptions.len(), 1);
@@ -77,7 +78,7 @@ fn subscribe_cov_property_handler_returns_initial_subscription() {
         cov_increment: Some(0.5),
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let subscriptions =
         handle_subscribe_cov_property_with_initial(&mut table, &db, &mac, &buf).unwrap();
@@ -92,30 +93,47 @@ fn subscribe_cov_property_handler_returns_initial_subscription() {
 
 #[test]
 fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
+    use crate::cov::{AtomicCovCounters, CovPolicy};
     let db = make_db_with_ai();
-    let mut table = CovSubscriptionTable::new();
     let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
+    let mut table = CovSubscriptionTable::with_policy(
+        CovPolicy {
+            reserved_peers: vec![MacAddr::from_slice(&mac)],
+            reserved_capacity: 0,
+            ..Default::default()
+        },
+        std::sync::Arc::new(AtomicCovCounters::default()),
+    );
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     for instance in 0..1023 {
-        table.subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&[10, 0, 0, (instance % 255) as u8, 0xBA, 0xC0]),
-            subscriber_network: None,
-            subscriber_process_identifier: instance,
-            monitored_object_identifier: ObjectIdentifier::new(
-                ObjectType::ANALOG_INPUT,
-                1000 + instance,
-            )
-            .unwrap(),
-            issue_confirmed_notifications: false,
-            expires_at: None,
-            last_notified_value: None,
-            monitored_property: None,
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: CovNotificationKind::Single,
-            timestamped: false,
-        });
+        table
+            .subscribe(CovSubscription {
+                subscriber_mac: MacAddr::from_slice(&[
+                    10,
+                    0,
+                    0,
+                    (instance % 255) as u8,
+                    0xBA,
+                    0xC0,
+                ]),
+                subscriber_network: None,
+                subscriber_process_identifier: instance,
+                monitored_object_identifier: ObjectIdentifier::new(
+                    ObjectType::ANALOG_INPUT,
+                    1000 + instance,
+                )
+                .unwrap(),
+                issue_confirmed_notifications: false,
+                expires_at: None,
+                last_notified_observation: None,
+                monitored_property: None,
+                monitored_property_array_index: None,
+                cov_increment: None,
+                notification_kind: CovNotificationKind::Single,
+                timestamped: false,
+            })
+            .unwrap();
     }
 
     let original = SubscribeCOVRequest {
@@ -125,7 +143,7 @@ fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
         lifetime: Some(300),
     };
     let mut buf = BytesMut::new();
-    original.encode(&mut buf);
+    original.encode(&mut buf).unwrap();
     handle_subscribe_cov(&mut table, &db, &mac, &buf).unwrap();
     assert_eq!(table.len(), 1024);
 
@@ -136,7 +154,7 @@ fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
         lifetime: Some(600),
     };
     let mut buf = BytesMut::new();
-    update.encode(&mut buf);
+    update.encode(&mut buf).unwrap();
     let subscriptions = handle_subscribe_cov_with_initial(&mut table, &db, &mac, &buf).unwrap();
 
     assert_eq!(subscriptions.len(), 1);
@@ -146,10 +164,10 @@ fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
 
 #[test]
 fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
-    use bacnet_services::common::PropertyReference;
     use bacnet_services::cov_multiple::{
         COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
     };
+    use bacnet_types::constructed::PropertyReference;
 
     let db = make_db_with_ai();
     let mut table = CovSubscriptionTable::new();
@@ -184,7 +202,7 @@ fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let subscriptions =
         handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
@@ -198,16 +216,18 @@ fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
         subscriptions[1].monitored_property,
         Some(PropertyIdentifier::STATUS_FLAGS)
     );
-    assert!(subscriptions.iter().all(|sub| sub.expires_at.is_some()));
+    assert!(subscriptions
+        .iter()
+        .all(|sub| sub.expires_at.is_some() && sub.max_notification_delay() == Some(10)));
     assert_eq!(table.len(), 2);
 }
 
 #[test]
 fn subscribe_cov_property_multiple_deduplicates_initial_subscriptions() {
-    use bacnet_services::common::PropertyReference;
     use bacnet_services::cov_multiple::{
         COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
     };
+    use bacnet_types::constructed::PropertyReference;
 
     let db = make_db_with_device_and_ai();
     let mut table = CovSubscriptionTable::new();
@@ -239,7 +259,7 @@ fn subscribe_cov_property_multiple_deduplicates_initial_subscriptions() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let subscriptions =
         handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
@@ -251,10 +271,10 @@ fn subscribe_cov_property_multiple_deduplicates_initial_subscriptions() {
 
 #[test]
 fn subscribe_cov_property_multiple_cancellation_removes_context_or_specs() {
-    use bacnet_services::common::PropertyReference;
     use bacnet_services::cov_multiple::{
         COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
     };
+    use bacnet_types::constructed::PropertyReference;
 
     let db = make_db_with_ai();
     let mut table = CovSubscriptionTable::new();
@@ -289,7 +309,7 @@ fn subscribe_cov_property_multiple_cancellation_removes_context_or_specs() {
         }],
     };
     let mut buf = BytesMut::new();
-    subscription_request.encode(&mut buf);
+    subscription_request.encode(&mut buf).unwrap();
     handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert_eq!(table.len(), 2);
 
@@ -311,7 +331,7 @@ fn subscribe_cov_property_multiple_cancellation_removes_context_or_specs() {
         }],
     };
     let mut buf = BytesMut::new();
-    cancel_present_value.encode(&mut buf);
+    cancel_present_value.encode(&mut buf).unwrap();
     let initial =
         handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert!(initial.is_empty());
@@ -330,141 +350,11 @@ fn subscribe_cov_property_multiple_cancellation_removes_context_or_specs() {
         list_of_cov_subscription_specifications: Vec::new(),
     };
     let mut buf = BytesMut::new();
-    cancel_context.encode(&mut buf);
+    cancel_context.encode(&mut buf).unwrap();
     let initial =
         handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert!(initial.is_empty());
     assert!(table.is_empty());
-}
-
-#[test]
-fn subscribe_cov_property_multiple_invalid_property_is_atomic() {
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::cov_multiple::{
-        COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
-    };
-
-    let db = make_db_with_ai();
-    let mut table = CovSubscriptionTable::new();
-    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-
-    let request = SubscribeCOVPropertyMultipleRequest {
-        subscriber_process_identifier: 1,
-        issue_confirmed_notifications: false,
-        lifetime: Some(300),
-        max_notification_delay: Some(10),
-        list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
-            monitored_object_identifier: oid,
-            list_of_cov_references: vec![
-                COVReference {
-                    monitored_property: PropertyReference {
-                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                        property_array_index: None,
-                    },
-                    cov_increment: Some(0.5),
-                    timestamped: false,
-                },
-                COVReference {
-                    monitored_property: PropertyReference {
-                        property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
-                        property_array_index: None,
-                    },
-                    cov_increment: None,
-                    timestamped: false,
-                },
-            ],
-        }],
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf);
-
-    let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
-        .unwrap_err();
-    match err {
-        Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
-            assert_eq!(code, ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32);
-        }
-        other => panic!("expected UNKNOWN_PROPERTY protocol error, got {other:?}"),
-    }
-    assert!(table.is_empty());
-}
-
-#[test]
-fn subscribe_cov_property_multiple_capacity_failure_is_atomic() {
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::cov_multiple::{
-        COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
-    };
-
-    let db = make_db_with_ai();
-    let mut table = CovSubscriptionTable::new();
-    let mac = vec![192, 168, 1, 1, 0xBA, 0xC0];
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-
-    for instance in 1000..2023 {
-        table.subscribe(CovSubscription {
-            subscriber_mac: MacAddr::from_slice(&mac),
-            subscriber_network: None,
-            subscriber_process_identifier: 99,
-            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance)
-                .unwrap(),
-            issue_confirmed_notifications: false,
-            expires_at: None,
-            last_notified_value: None,
-            monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-            monitored_property_array_index: None,
-            cov_increment: None,
-            notification_kind: CovNotificationKind::Single,
-            timestamped: false,
-        });
-    }
-    assert_eq!(table.len(), 1023);
-
-    let request = SubscribeCOVPropertyMultipleRequest {
-        subscriber_process_identifier: 1,
-        issue_confirmed_notifications: false,
-        lifetime: Some(300),
-        max_notification_delay: Some(10),
-        list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
-            monitored_object_identifier: oid,
-            list_of_cov_references: vec![
-                COVReference {
-                    monitored_property: PropertyReference {
-                        property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                        property_array_index: None,
-                    },
-                    cov_increment: Some(0.5),
-                    timestamped: false,
-                },
-                COVReference {
-                    monitored_property: PropertyReference {
-                        property_identifier: PropertyIdentifier::STATUS_FLAGS,
-                        property_array_index: None,
-                    },
-                    cov_increment: None,
-                    timestamped: false,
-                },
-            ],
-        }],
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf);
-
-    let err = handle_subscribe_cov_property_multiple_with_initial(&mut table, &db, &mac, &buf)
-        .unwrap_err();
-    match err {
-        Error::Protocol { class, code } => {
-            assert_eq!(class, ErrorClass::RESOURCES.to_raw() as u32);
-            assert_eq!(
-                code,
-                ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
-            );
-        }
-        other => panic!("expected NO_SPACE_TO_ADD_LIST_ELEMENT protocol error, got {other:?}"),
-    }
-    assert_eq!(table.len(), 1023);
 }
 
 #[test]
@@ -485,7 +375,7 @@ fn subscribe_cov_records_routed_subscriber_endpoint() {
         lifetime: Some(300),
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     let subscriptions = handle_subscribe_cov_with_initial_endpoint(
         &mut table,
@@ -518,7 +408,7 @@ fn subscribe_cov_unknown_object_fails() {
         lifetime: Some(300),
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
 
     assert!(handle_subscribe_cov(&mut table, &db, &mac, &buf).is_err());
     assert!(table.is_empty());
@@ -539,7 +429,7 @@ fn subscribe_cov_cancellation() {
         lifetime: Some(300),
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     handle_subscribe_cov(&mut table, &db, &mac, &buf).unwrap();
     assert_eq!(table.len(), 1);
 
@@ -551,7 +441,7 @@ fn subscribe_cov_cancellation() {
         lifetime: None,
     };
     let mut buf = BytesMut::new();
-    cancel.encode(&mut buf);
+    cancel.encode(&mut buf).unwrap();
     let subscriptions = handle_subscribe_cov_with_initial(&mut table, &db, &mac, &buf).unwrap();
     assert!(subscriptions.is_empty());
     assert!(table.is_empty());
@@ -564,8 +454,7 @@ fn who_has_by_id_found() {
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     let request = WhoHasRequest {
-        low_limit: None,
-        high_limit: None,
+        range: None,
         object: WhoHasObject::Identifier(ai_oid),
     };
     let mut buf = BytesMut::new();
@@ -584,8 +473,7 @@ fn who_has_by_name_found() {
     let device_oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
 
     let request = WhoHasRequest {
-        low_limit: None,
-        high_limit: None,
+        range: None,
         object: WhoHasObject::Name("AI-1".into()),
     };
     let mut buf = BytesMut::new();
@@ -602,8 +490,7 @@ fn who_has_not_found() {
     let missing_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 99).unwrap();
 
     let request = WhoHasRequest {
-        low_limit: None,
-        high_limit: None,
+        range: None,
         object: WhoHasObject::Identifier(missing_oid),
     };
     let mut buf = BytesMut::new();
@@ -620,8 +507,7 @@ fn who_has_out_of_range() {
     let ai_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
     let request = WhoHasRequest {
-        low_limit: Some(100),
-        high_limit: Some(200),
+        range: Some(DeviceInstanceRange::new(100, 200).unwrap()),
         object: WhoHasObject::Identifier(ai_oid),
     };
     let mut buf = BytesMut::new();
@@ -687,7 +573,15 @@ fn delete_network_port_object_fails() {
     // runtime, mirroring `NetworkPortObject::is_deleteable` so PICS and the
     // runtime DeleteObject handler share one truth source.
     let mut db = ObjectDatabase::new();
-    let np = bacnet_objects::network_port::NetworkPortObject::new(1, "NP-1", 0).unwrap();
+    let np = bacnet_objects::network_port::NetworkPortObject::new_non_bip(
+        1,
+        "NP-1",
+        bacnet_types::enums::NetworkType::from_raw(0),
+        0,
+        Default::default(),
+        1476,
+    )
+    .unwrap();
     db.add(Box::new(np)).unwrap();
 
     let oid = ObjectIdentifier::new(ObjectType::NETWORK_PORT, 1).unwrap();

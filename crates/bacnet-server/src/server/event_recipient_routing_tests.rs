@@ -1,8 +1,8 @@
 //! How a `Recipient_List` entry becomes a network destination.
 //!
 //! Clause 21's `BACnetAddress` carries two independent fields — `network-number`
-//! ("A value of 0 indicates the local network") and `mac-address` ("A string of
-//! length 0 indicates a broadcast") — so a recipient names one of four
+//! (zero selects the local network) and `mac-address` (empty selects
+//! broadcast delivery) — so a recipient names one of four
 //! destinations, not one unicast with edge cases. These tests pin each one, plus
 //! the two that cannot be resolved at all.
 //!
@@ -10,59 +10,36 @@
 
 use super::event_notifications_tests::local_broadcast_destination;
 use super::*;
+use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::{EventStateChange, EventTransition};
-use bacnet_objects::notification_class::NotificationClass;
+use bacnet_objects::notification_class::{NotificationClass, MAX_RECIPIENT_LIST_DESTINATIONS};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
 use std::borrow::Cow;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 
-/// Records broadcasts and unicasts separately, keeping each unicast's target
-/// MAC. The MAC matters: a recipient on a remote network that is delivered as a
-/// local unicast reaches whichever device happens to hold that MAC on this link,
+mod group_routes;
+mod post_route_counters;
+mod route_skip_counters;
+mod suppression_counters;
+
+/// One recorded unicast send: destination MAC and NPDU bytes.
+type UnicastFrame = (Vec<u8>, Bytes);
+
+/// Records broadcasts and unicasts, keeping each unicast's target MAC. The MAC
+/// matters: a recipient on a remote network that is delivered as a local
+/// unicast reaches whichever device happens to hold that MAC on this link,
 /// which is the failure this module exists to catch.
-#[derive(Clone, Default)]
-pub(super) struct RoutingTransport {
-    broadcasts: StdArc<StdMutex<Vec<Bytes>>>,
-    unicasts: StdArc<StdMutex<Vec<(Vec<u8>, Bytes)>>>,
-}
-
-impl TransportPort for RoutingTransport {
-    async fn start(
-        &mut self,
-    ) -> Result<mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.unicasts
-            .lock()
-            .unwrap()
-            .push((mac.to_vec(), Bytes::copy_from_slice(npdu)));
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.broadcasts
-            .lock()
-            .unwrap()
-            .push(Bytes::copy_from_slice(npdu));
-        Ok(())
-    }
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0xBA, 0xC0]
-    }
-    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
-        mac == LITERAL_BROADCAST_MAC
-    }
+fn routing_transport() -> (TestTransport, SendLog) {
+    let transport = TestTransport::builder()
+        .local_mac(&BIP_LOCAL_MAC)
+        .broadcast_mac(LITERAL_BROADCAST_MAC)
+        .build();
+    let sent = transport.sent();
+    (transport, sent)
 }
 
 /// This test link's literal broadcast MAC — the data-link spelling of a
@@ -79,6 +56,37 @@ pub(super) fn destination_for(recipient: BACnetRecipient, confirmed: bool) -> BA
     }
 }
 
+/// Whether `frame` is a Who-Is, as a look for an unbound Device recipient
+/// sends (#1368).
+pub(super) fn is_who_is(frame: &crate::server::test_transport::SentFrame) -> bool {
+    matches!(
+        frame.apdu(),
+        Apdu::UnconfirmedRequest(request)
+            if request.service_choice == UnconfirmedServiceChoice::WHO_IS
+    )
+}
+
+/// Split broadcast NPDUs into the Who-Is requests among them, which looks
+/// for unbound Device recipients send (#1368), and the rest.
+pub(super) fn split_who_is(broadcasts: Vec<Bytes>) -> (Vec<WhoIsRequest>, Vec<Bytes>) {
+    let mut who_is = Vec::new();
+    let mut rest = Vec::new();
+    for npdu in broadcasts {
+        let payload = bacnet_encoding::npdu::decode_npdu(npdu.clone())
+            .unwrap()
+            .payload;
+        match bacnet_encoding::apdu::decode_apdu(payload).unwrap() {
+            Apdu::UnconfirmedRequest(request)
+                if request.service_choice == UnconfirmedServiceChoice::WHO_IS =>
+            {
+                who_is.push(WhoIsRequest::decode(&request.service_request).unwrap());
+            }
+            _ => rest.push(npdu),
+        }
+    }
+    (who_is, rest)
+}
+
 pub(super) fn address_recipient(network_number: u16, mac: &[u8]) -> BACnetRecipient {
     BACnetRecipient::Address(BACnetAddress {
         network_number,
@@ -88,9 +96,7 @@ pub(super) fn address_recipient(network_number: u16, mac: &[u8]) -> BACnetRecipi
 
 /// Fire one TO_OFFNORMAL transition at an AnalogInput whose Notification Class
 /// holds exactly `destinations`, and return what reached the transport.
-async fn distribute_to(
-    destinations: Vec<BACnetDestination>,
-) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+async fn distribute_to(destinations: Vec<BACnetDestination>) -> (Vec<Bytes>, Vec<UnicastFrame>) {
     distribute_with_priority([255, 255, 255], destinations).await
 }
 
@@ -99,7 +105,7 @@ async fn distribute_to(
 pub(super) async fn distribute_with_priority(
     priority: [u8; 3],
     destinations: Vec<BACnetDestination>,
-) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+) -> (Vec<Bytes>, Vec<UnicastFrame>) {
     distribute_with_clock_mode(priority, destinations, true).await
 }
 
@@ -107,7 +113,7 @@ async fn distribute_with_clock_mode(
     priority: [u8; 3],
     destinations: Vec<BACnetDestination>,
     clocked: bool,
-) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+) -> (Vec<Bytes>, Vec<UnicastFrame>) {
     let mut db = if clocked {
         clocked_test_database()
     } else {
@@ -116,13 +122,13 @@ async fn distribute_with_clock_mode(
     let mut nc = NotificationClass::new(0, "NC-0").unwrap();
     nc.priority = priority;
     for destination in destinations {
-        nc.add_destination(destination);
+        nc.add_destination(destination).unwrap();
     }
     db.add(Box::new(nc)).unwrap();
     distribute_from_database(db).await
 }
 
-async fn distribute_from_database(db: ObjectDatabase) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+async fn distribute_from_database(db: ObjectDatabase) -> (Vec<Bytes>, Vec<UnicastFrame>) {
     distribute_from_database_with_bindings(
         db,
         Arc::new(RwLock::new(
@@ -133,15 +139,49 @@ async fn distribute_from_database(db: ObjectDatabase) -> (Vec<Bytes>, Vec<(Vec<u
 }
 
 pub(super) async fn distribute_from_database_with_bindings(
+    db: ObjectDatabase,
+    device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
+) -> (Vec<Bytes>, Vec<UnicastFrame>) {
+    let (broadcasts, unicasts, _) = distribute_counted(db, device_bindings, DccState::Enable).await;
+    (broadcasts, unicasts)
+}
+
+/// [`distribute_from_database_with_bindings`] under the given DCC state, also
+/// returning the undelivered-notification counters the transition moved.
+pub(super) async fn distribute_counted(
+    db: ObjectDatabase,
+    device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
+    state: DccState,
+) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
+    let (transport, _) = routing_transport();
+    distribute_counted_on(transport, db, device_bindings, state).await
+}
+
+/// [`distribute_counted`] over a caller-built transport.
+pub(super) async fn distribute_counted_on(
+    transport: TestTransport,
+    db: ObjectDatabase,
+    device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
+    state: DccState,
+) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
+    let sent = transport.sent();
+    let network = Arc::new(NetworkLayer::new(transport));
+    distribute_counted_through(&network, &sent, db, device_bindings, state).await
+}
+
+/// [`distribute_counted`] through a caller's network, such as a started
+/// server's, reading what it sent from `sent`.
+pub(super) async fn distribute_counted_through(
+    network: &Arc<NetworkLayer<TestTransport>>,
+    sent: &SendLog,
     mut db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
-) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
-    let transport = RoutingTransport::default();
-    let broadcasts = StdArc::clone(&transport.broadcasts);
-    let unicasts = StdArc::clone(&transport.unicasts);
-    let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let server_tsm = Arc::new(Mutex::new(ServerTsm::new()));
+    state: DccState,
+) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
+    let comm_state = Arc::new(CommState::default());
+    comm_state.set_for_test(state);
+    let suppressions = Arc::default();
+    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
@@ -164,13 +204,19 @@ pub(super) async fn distribute_from_database_with_bindings(
 
     let db = Arc::new(RwLock::new(db));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    BACnetServer::<RoutingTransport>::build_and_send_event_notification_with_bindings(
-        &db,
-        &network,
-        &comm_state,
-        &server_tsm,
-        &NotificationTransactions::new(),
-        &device_bindings,
+    let notifications = NotificationTransactions::new();
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
+        &EventDelivery {
+            db: &db,
+            network,
+            comm_state: &comm_state,
+            learned_routers: &learned_routers,
+            notification_transactions: &notifications,
+            device_bindings: &device_bindings,
+            suppressions: &suppressions,
+            retry_timeout_ms: 1000,
+            local_apdu_capacity: 1476,
+        },
         &oid,
         (
             EventStateChange {
@@ -179,7 +225,6 @@ pub(super) async fn distribute_from_database_with_bindings(
             },
             EventType::OUT_OF_RANGE,
         ),
-        1000,
     )
     .await;
 
@@ -189,15 +234,36 @@ pub(super) async fn distribute_from_database_with_bindings(
     for _ in 0..16 {
         tokio::task::yield_now().await;
     }
+    // A Device recipient with no binding is looked for with a Who-Is first
+    // (#1368). Its device stays silent here: its probe runs out now, and the
+    // notification waiting on it is skipped and counted.
+    device_bindings.write().await.probes.run_out_for_test();
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    notifications.close();
+    while let Some(result) = notifications.join_next().await {
+        NotificationTransactions::observe(Some(result));
+    }
 
-    let broadcasts = broadcasts.lock().unwrap().clone();
-    let unicasts = unicasts.lock().unwrap().clone();
-    (broadcasts, unicasts)
+    let broadcasts = sent
+        .broadcasts()
+        .into_iter()
+        .map(|frame| frame.npdu)
+        .collect();
+    let unicasts = sent
+        .unicasts()
+        .into_iter()
+        .map(|frame| (frame.mac.to_vec(), frame.npdu))
+        .collect();
+    (broadcasts, unicasts, suppressions.snapshot())
 }
 
 enum TestRecipientList {
     Unavailable,
     Invalid,
+    /// This many local-broadcast destinations, process identifiers 1 up.
+    Broadcasts(u32),
 }
 
 struct TestNotificationClass {
@@ -236,6 +302,18 @@ impl BACnetObject for TestNotificationClass {
                     code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
                 }),
                 TestRecipientList::Invalid => Ok(PropertyValue::ApplicationData(vec![0x5E])),
+                TestRecipientList::Broadcasts(count) => {
+                    let destinations: Vec<_> = (1..=count)
+                        .map(|process_identifier| BACnetDestination {
+                            process_identifier,
+                            ..destination_for(address_recipient(0, &[]), false)
+                        })
+                        .collect();
+                    let mut list = BytesMut::new();
+                    bacnet_encoding::constructed::encode_destination_list(&mut list, &destinations)
+                        .unwrap();
+                    Ok(PropertyValue::ApplicationData(list.to_vec()))
+                }
             },
             _ => Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -265,7 +343,12 @@ impl BACnetObject for TestNotificationClass {
     }
 }
 
-async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<(Vec<u8>, Bytes)>) {
+async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<UnicastFrame>) {
+    distribute_from_database(non_matched_database(case)).await
+}
+
+/// A database whose Notification Class 0 lookup gives the named outcome.
+fn non_matched_database(case: &str) -> ObjectDatabase {
     let mut db = clocked_test_database();
     match case {
         "missing-class" => {}
@@ -279,6 +362,12 @@ async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<(Vec<u8>, B
                 TestRecipientList::Invalid,
             )))
             .unwrap(),
+        // Only a custom class can serve a list past the cap (#1124).
+        "list-past-the-cap" => db
+            .add(Box::new(TestNotificationClass::new(
+                TestRecipientList::Broadcasts(CAP + 1),
+            )))
+            .unwrap(),
         "empty-list" => db
             .add(Box::new(NotificationClass::new(0, "NC-0").unwrap()))
             .unwrap(),
@@ -286,12 +375,12 @@ async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<(Vec<u8>, B
             let mut nc = NotificationClass::new(0, "NC-0").unwrap();
             let mut destination = destination_for(address_recipient(0, &[]), false);
             destination.transitions = EventTransition::ToNormal.bit_mask();
-            nc.add_destination(destination);
+            nc.add_destination(destination).unwrap();
             db.add(Box::new(nc)).unwrap();
         }
         _ => unreachable!("test case is fixed"),
     }
-    distribute_from_database(db).await
+    db
 }
 
 #[tokio::test]
@@ -300,6 +389,7 @@ async fn every_non_matched_lookup_outcome_emits_no_frame() {
         "missing-class",
         "list-unavailable",
         "list-invalid",
+        "list-past-the-cap",
         "empty-list",
         "no-eligible-destination",
     ] {
@@ -307,6 +397,23 @@ async fn every_non_matched_lookup_outcome_emits_no_frame() {
         assert!(broadcasts.is_empty(), "{case} must not widen to broadcast");
         assert!(unicasts.is_empty(), "{case} must not emit a unicast");
     }
+}
+
+/// The Recipient_List cap (#1098), which routing applies to every class.
+const CAP: u32 = MAX_RECIPIENT_LIST_DESTINATIONS as u32;
+
+#[tokio::test]
+async fn custom_class_at_the_cap_reaches_every_destination() {
+    // #1124: the routing bound is inclusive. A custom class serving exactly
+    // the cap is routed whole; one more destination and none is.
+    let mut db = clocked_test_database();
+    db.add(Box::new(TestNotificationClass::new(
+        TestRecipientList::Broadcasts(CAP),
+    )))
+    .unwrap();
+    let (broadcasts, unicasts) = distribute_from_database(db).await;
+    assert_eq!(broadcasts.len(), CAP as usize);
+    assert!(unicasts.is_empty());
 }
 
 #[tokio::test]
@@ -331,7 +438,7 @@ pub(super) fn npdu_destination(frame: &Bytes) -> Option<(u16, Vec<u8>)> {
 }
 
 /// #185: Clause 12.21 requires a device whose `Recipient_List` is not writable
-/// to ship exactly one entry, "with the Recipient set to a local broadcast".
+/// to ship exactly one entry whose Recipient targets the local link broadcast.
 /// Clause 21 spells a local broadcast as network 0 with a zero-length MAC.
 ///
 /// This previously reached `send_apdu` with an empty MAC, which BACnet/IP
@@ -359,8 +466,8 @@ async fn zero_length_mac_on_local_network_broadcasts() {
 }
 
 /// #185/#186: a zero-length MAC on a *remote* network is a remote broadcast.
-/// Clause 6.3: "DNET shall specify the network number of the remote network and
-/// DLEN shall be set to zero."
+/// Clause 6.3 encodes that destination with the remote network number in
+/// DNET and a zero DLEN.
 #[tokio::test]
 async fn zero_length_mac_on_remote_network_broadcasts_with_dnet() {
     let (broadcasts, unicasts) =
@@ -376,13 +483,13 @@ async fn zero_length_mac_on_remote_network_broadcasts_with_dnet() {
 }
 
 /// Network 65535 with a zero-length MAC is a *global* broadcast, not a remote
-/// network that happens to be numbered 65535. Clause 6.3: "A global broadcast,
-/// indicated by a DNET of X'FFFF', is sent to all networks through all routers."
+/// network that happens to be numbered 65535. Clause 6.3 reserves DNET
+/// X'FFFF' for the global form, which routers propagate everywhere.
 ///
 /// It needs its own send: `NetworkLayer::broadcast_to_network` rejects 0xFFFF
-/// ("reserved for global broadcasts; use broadcast_global_apdu instead"), so
-/// routing it as an ordinary remote broadcast turns the notification into a
-/// logged send error and delivers nothing.
+/// ("dest_network 0xFFFF is the global broadcast; use broadcast_global_apdu
+/// for a global broadcast"), so routing it as an ordinary remote broadcast
+/// turns the notification into a logged send error and delivers nothing.
 #[tokio::test]
 async fn zero_length_mac_on_network_65535_is_a_global_broadcast() {
     let (broadcasts, unicasts) =
@@ -411,7 +518,7 @@ async fn global_broadcast_network_with_a_mac_is_skipped() {
 
 /// #186: a unicast MAC on a remote network goes out as a routed NPDU whose
 /// DNET/DADR name the recipient, sent with a broadcast link DA — Clause
-/// 6.5.3's form for when "the address of the router is initially unknown"
+/// 6.5.3's initial send form before learning the router's address
 /// (this non-routing device keeps no router table).
 ///
 /// The unicast assertion still matters most: the pre-#357 behavior discarded
@@ -481,6 +588,13 @@ async fn device_recipient_is_skipped_not_broadcast() {
     )])
     .await;
 
+    // The device is looked for with a Who-Is limited to it (#1368), and its
+    // notification goes nowhere when it doesn't answer.
+    let (who_is, broadcasts) = split_who_is(broadcasts);
+    assert_eq!(
+        who_is,
+        [crate::server::remote_write_discovery_tests::targeted(99)]
+    );
     assert!(
         broadcasts.is_empty(),
         "a targeted device recipient must not be widened to a broadcast"
@@ -488,8 +602,8 @@ async fn device_recipient_is_skipped_not_broadcast() {
     assert!(unicasts.is_empty());
 }
 
-/// Clause 6.3: "Of the BACnet APDUs, only the BACnet-Unconfirmed-Request-PDU
-/// may be transmitted using a multicast or broadcast network layer address."
+/// Clause 6.3 reserves network-layer broadcast and multicast addressing for
+/// unconfirmed requests: no other APDU type may be sent to such a destination.
 ///
 /// A recipient asking for confirmed notifications at a broadcast address is
 /// unsatisfiable — it is skipped rather than broadcast as a ConfirmedRequest
@@ -540,8 +654,8 @@ async fn confirmed_notification_to_a_local_unicast_recipient_is_sent() {
 }
 
 /// #124: an empty `Recipient_List` names no notification-clients, and Clause
-/// 13.2.5 distributes "to the notification-clients specified by the
-/// Recipient_List input". Broadcasting instead invented a destination the
+/// 13.2.5 restricts distribution to the notification-clients in
+/// Recipient_List. Broadcasting instead invented a destination the
 /// configuration never named.
 #[tokio::test]
 async fn empty_recipient_list_distributes_nothing() {
@@ -575,5 +689,8 @@ async fn one_unresolvable_recipient_does_not_suppress_the_others() {
         "the local unicast recipient still gets it"
     );
     assert_eq!(unicasts[0].0, mac);
+    // Device 99 is looked for with one Who-Is (#1368).
+    let (who_is, broadcasts) = split_who_is(broadcasts);
+    assert_eq!(who_is.len(), 1);
     assert_eq!(broadcasts.len(), 1, "the broadcast recipient still gets it");
 }

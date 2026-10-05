@@ -31,6 +31,13 @@ async fn connect_deadline_releases_held_registry_without_evicting_uuid_owner() {
         ([0x22; 16], 1476, 1476)
     );
     assert!(!peer.deadline.is_committed());
+    assert_eq!(
+        clients.outcomes.snapshot(),
+        ScHubOutcomeCounts {
+            connect_timeouts: 1,
+            ..ScHubOutcomeCounts::default()
+        }
+    );
     drop(map);
     assert!(matches!(peer.next().await, Message::Close(_)));
     tokio::time::resume();
@@ -56,6 +63,13 @@ async fn connect_deadline_exact_expiry_beats_ready_registry_and_request() {
     poll_io(&mut peer.task).await.unwrap();
     assert!(clients.lock().await.is_empty());
     assert!(!peer.deadline.is_committed());
+    assert_eq!(
+        clients.outcomes.snapshot(),
+        ScHubOutcomeCounts {
+            connect_timeouts: 1,
+            ..ScHubOutcomeCounts::default()
+        }
+    );
     assert!(matches!(peer.next().await, Message::Close(_)));
 }
 
@@ -63,6 +77,9 @@ async fn connect_deadline_exact_expiry_beats_ready_registry_and_request() {
 async fn connect_commit_survives_ready_expiry_and_blocked_accept_then_cleans_up() {
     let clients = clients();
     let (server, mut ws, address, _) = TestTls::new().pair().await;
+    let verified_leaf = super::certificate_bindings::VerifiedLeaf::from_verified_chain(
+        server.get_ref().get_ref().1.peer_certificates(),
+    );
     let (write, read) = server.split();
     let sink = Arc::new(Mutex::new(write));
     let held = sink.clone().lock_owned().await;
@@ -71,11 +88,19 @@ async fn connect_commit_survives_ready_expiry_and_blocked_accept_then_cleans_up(
         tokio::time::Instant::now() + Duration::from_secs(1),
     ));
     let mut handler = Box::pin(super::deadlines::serve(
-        address,
-        ([0x10; 6], [0x10; 16]),
-        read,
-        sink,
-        clients.clone(),
+        super::context::PeerConnection {
+            addr: address,
+            read,
+            write: sink,
+            verified_leaf,
+        },
+        super::context::HubConnectionContext {
+            hub: ([0x10; 6], [0x10; 16]),
+            clients: clients.clone(),
+            admission: Arc::new(super::admission::AdmissionRuntime::default()),
+            graceful: super::tasks::Tasks::new().graceful_ctx(),
+            timing: super::timing::HubTiming::new(super::ScHubProbePolicy::default()),
+        },
         deadline.clone(),
         || {},
     ));
@@ -84,7 +109,7 @@ async fn connect_commit_survives_ready_expiry_and_blocked_accept_then_cleans_up(
     let started = std::time::Instant::now();
     loop {
         assert!(futures_util::poll!(&mut handler).is_pending());
-        if clients.try_lock().unwrap().contains_key(&[0x42; 6]) {
+        if clients.lock().await.contains_key(&[0x42; 6]) {
             break;
         }
         assert!(started.elapsed() < Duration::from_secs(5));
@@ -97,6 +122,7 @@ async fn connect_commit_survives_ready_expiry_and_blocked_accept_then_cleans_up(
         futures_util::poll!(&mut handler).is_pending(),
         "old deadline cancelled committed handler"
     );
+    assert_eq!(clients.outcomes.snapshot(), ScHubOutcomeCounts::default());
     let map = clients.lock().await;
     let client = map.get(&[0x42; 6]).unwrap();
     assert!(!client.closed.load(Ordering::Acquire));
@@ -119,6 +145,7 @@ async fn connect_deadline_bounds_preregistration_output_and_close_lock_waits() {
     for message in [
         Message::Binary(vec![0x0A, 0, 0, 1].into()),
         Message::Binary(vec![6, 0, 0, 1].into()),
+        request([0x42; 6], [0; 16]),
         Message::Text("invalid text".into()),
     ] {
         let clients = clients();
@@ -178,4 +205,49 @@ async fn connect_deadline_ignores_nonqualifying_traffic_without_restart_or_starv
     poll_io(&mut peer.task).await.unwrap();
     assert!(matches!(peer.next().await, Message::Close(_)));
     assert!(clients.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn zero_uuid_flood_cannot_extend_blocked_nak_connect_deadline() {
+    check_invalid_flood_blocked_nak_deadline(10..26).await;
+}
+
+#[tokio::test]
+async fn zero_limits_flood_cannot_extend_blocked_nak_connect_deadline() {
+    for field in [26..28, 28..30, 26..30] {
+        check_invalid_flood_blocked_nak_deadline(field).await;
+    }
+}
+
+async fn check_invalid_flood_blocked_nak_deadline(field: std::ops::Range<usize>) {
+    let clients = clients();
+    let mut peer = DeadlinePeer::new(clients.clone(), Duration::from_secs(1)).await;
+    let held = peer.sink.clone().lock_owned().await;
+    tokio::time::pause();
+    let expires = peer.deadline.expires();
+    let mut wire = crate::sc_frame::connect_test_support::valid_connect(6, [0x42; 6]);
+    wire[field].fill(0);
+    for _ in 0..9 {
+        peer.ws
+            .send(Message::Binary(wire.clone().into()))
+            .await
+            .unwrap();
+        until(|| peer.deadline.received.load(Ordering::Acquire) != 0).await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+        assert!(!peer.deadline.admission_started.load(Ordering::Acquire));
+        assert!(!peer.deadline.is_committed());
+        assert_eq!(peer.deadline.expires(), expires);
+        assert!(clients.lock().await.is_empty());
+    }
+    tokio::time::advance(Duration::from_millis(102)).await;
+    until(|| peer.deadline.close_started.load(Ordering::Acquire)).await;
+    // The one existing Close grace includes the held sink, not another connect budget.
+    tokio::time::advance(Duration::from_millis(1002)).await;
+    poll_io(&mut peer.task).await.unwrap();
+    assert_eq!(peer.active.load(Ordering::Acquire), 0);
+    assert_eq!(peer.deadline.received.load(Ordering::Acquire), 1);
+    assert!(!peer.deadline.is_committed());
+    assert!(clients.lock().await.is_empty());
+    drop(held);
+    tokio::time::resume();
 }

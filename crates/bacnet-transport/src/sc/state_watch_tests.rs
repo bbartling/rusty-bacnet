@@ -7,7 +7,7 @@ async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&[0x33; 16]);
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 
@@ -66,8 +66,9 @@ async fn sc_connection_state_changes_reports_connected_then_disconnected() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport =
-        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(100, 300);
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(100, 300);
     let mut states = transport.connection_state_changes();
 
     let hub_task = tokio::spawn(async move {
@@ -100,7 +101,7 @@ async fn sc_connection_state_changes_reports_bvlc_result_disconnect_without_stal
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport = ScTransport::new(ws_client, client_vmac);
+    let mut transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
     let mut states = transport.connection_state_changes();
 
     let hub_task = tokio::spawn(async move {
@@ -127,15 +128,12 @@ async fn sc_connection_state_changes_reports_bvlc_result_disconnect_without_stal
 
     transport.stop().await.unwrap();
 
-    match tokio::time::timeout(Duration::from_millis(100), ws_hub.recv()).await {
-        Ok(Ok(data)) => {
-            let msg = decode_sc_message(&data).unwrap();
-            assert_ne!(
-                msg.function,
-                ScFunction::DisconnectRequest,
-                "stop sent a stale Disconnect-Request after fatal disconnect"
-            );
-        }
-        Ok(Err(_)) | Err(_) => {}
+    if let Ok(Ok(data)) = tokio::time::timeout(Duration::from_millis(100), ws_hub.recv()).await {
+        let msg = decode_sc_message(&data).unwrap();
+        assert_ne!(
+            msg.function,
+            ScFunction::DisconnectRequest,
+            "stop sent a stale Disconnect-Request after fatal disconnect"
+        );
     }
 }

@@ -18,9 +18,9 @@ fn encode_decode_round_trip() {
 }
 
 #[test]
-fn ieee_group_bit_covers_multicast_and_broadcast_destinations() {
+fn ethernet_local_policy_marks_only_all_ff_as_group() {
     assert!(!is_ethernet_group(&[0x02, 0, 0, 0, 0, 1]));
-    assert!(is_ethernet_group(&[0x01, 0, 0x5e, 0, 0, 1]));
+    assert!(!is_ethernet_group(&[0x01, 0, 0x5e, 0, 0, 1]));
     assert!(is_ethernet_group(&ETHERNET_BROADCAST));
 }
 
@@ -151,4 +151,158 @@ fn padded_frame_decodes_correctly() {
 fn ethernet_transport_new() {
     let t = EthernetTransport::new("eth0");
     assert_eq!(t.local_mac(), &[0; 6]); // not started yet
+}
+
+/// Group MACs: the all-ones broadcast and multicast MACs (IPv4 and IPv6
+/// mapped, a bridge group, a locally administered group).
+const GROUP_MACS: [[u8; 6]; 5] = [
+    ETHERNET_BROADCAST,
+    [0x01, 0x00, 0x5E, 0x00, 0x00, 0x01],
+    [0x33, 0x33, 0x00, 0x00, 0x00, 0x01],
+    [0x01, 0x80, 0xC2, 0x00, 0x00, 0x00],
+    [0x03, 0x00, 0x00, 0x00, 0x00, 0x01],
+];
+
+/// Individual MACs, a locally administered one and all-but-the-group-bit
+/// included.
+const INDIVIDUAL_MACS: [[u8; 6]; 3] = [
+    [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
+    [0x02, 0x00, 0x00, 0x00, 0x00, 0x01],
+    [0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+];
+
+/// #1493: the group bit, the low bit of the first octet, marks every group
+/// MAC, so a multicast MAC is a group destination as the broadcast is.
+#[test]
+fn the_group_bit_marks_every_group_mac() {
+    for mac in GROUP_MACS {
+        assert!(is_group_mac(&mac), "{mac:02x?}");
+    }
+    for mac in INDIVIDUAL_MACS {
+        assert!(!is_group_mac(&mac), "{mac:02x?}");
+    }
+    for length in [0, 1, 5, 7] {
+        assert!(!is_group_mac(&vec![0xFF; length]), "{length} octets");
+    }
+}
+
+/// The transport's live and owned rules are the group bit, while
+/// `is_broadcast_mac` keeps to the all-ones broadcast.
+#[cfg(target_os = "linux")]
+#[test]
+fn ethernet_group_destinations_are_every_group_mac() {
+    let transport = EthernetTransport::new("unused");
+    let owned = transport.group_destinations();
+    for mac in GROUP_MACS {
+        assert!(transport.is_group_destination(&mac), "{mac:02x?}");
+        assert!(owned.contains(&mac), "{mac:02x?}");
+        assert_eq!(transport.is_broadcast_mac(&mac), mac == ETHERNET_BROADCAST);
+    }
+    for mac in INDIVIDUAL_MACS {
+        assert!(!transport.is_group_destination(&mac), "{mac:02x?}");
+        assert!(!owned.contains(&mac), "{mac:02x?}");
+    }
+}
+
+#[test]
+fn ethernet_destination_policy_precedes_all_llc_controls() {
+    let local = [2, 0, 0, 0, 0, 1];
+    for control in [LLC_CONTROL_UI, LLC_CONTROL_XID_CMD, LLC_CONTROL_TEST_CMD] {
+        for (destination, admitted) in [
+            (local, true),
+            (ETHERNET_BROADCAST, true),
+            ([2, 0, 0, 0, 0, 2], false),
+            ([1, 0, 0x5e, 0, 0, 1], false),
+        ] {
+            let mut frame = destination.to_vec();
+            frame.extend_from_slice(&[2, 0, 0, 0, 0, 3, 0, 3, 0x82, 0x82, control]);
+            assert_eq!(accepts_ethernet_destination(&frame, &local), admitted);
+        }
+    }
+    for length in 0..6 {
+        assert!(!accepts_ethernet_destination(&local[..length], &local));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ethernet_number_capability_delegates_without_configured_authority() {
+    use crate::{any::AnyTransport, mstp::LoopbackSerial};
+    let transport = EthernetTransport::new("unused");
+    assert!(transport.supports_local_nonrouter_number_controls());
+    let any: AnyTransport<LoopbackSerial> = AnyTransport::Ethernet(transport);
+    assert!(any.supports_local_nonrouter_number_controls());
+    assert!(any.normal_bip_endpoint().is_none());
+}
+
+/// A raw frame to `destination` from `source` with LLC `control`, carrying
+/// `info` after the LLC header, unpadded.
+fn llc_frame(destination: [u8; 6], source: [u8; 6], control: u8, info: &[u8]) -> Vec<u8> {
+    let mut frame = destination.to_vec();
+    frame.extend_from_slice(&source);
+    frame.extend_from_slice(&((LLC_HEADER_LEN + info.len()) as u16).to_be_bytes());
+    frame.extend_from_slice(&[BACNET_LLC_DSAP, BACNET_LLC_SSAP, control]);
+    frame.extend_from_slice(info);
+    frame
+}
+
+/// An NPDU carrying Who-Is.
+const WHO_IS: [u8; 4] = [0x01, 0x00, 0x10, 0x08];
+
+/// #1492: a UI frame, an XID and a TEST from a group source MAC, sent to
+/// this station or to the broadcast, are dropped and counted before an LLC
+/// command is answered or a frame decoded, so the receive loop hands nothing
+/// up and sends nothing back. The same frames from a station are answered or
+/// decoded as before.
+#[test]
+fn a_frame_from_a_group_source_is_dropped_before_any_answer_or_decode() {
+    use super::ingress::{classify_frame, FrameIngress};
+    let local = [2, 0, 0, 0, 0, 1];
+    let commands = [LLC_CONTROL_UI, LLC_CONTROL_XID_CMD, LLC_CONTROL_TEST_CMD];
+    for source in GROUP_MACS {
+        for destination in [local, ETHERNET_BROADCAST] {
+            for control in commands {
+                let frame = llc_frame(destination, source, control, &WHO_IS);
+                assert_eq!(
+                    classify_frame(&frame, &local),
+                    FrameIngress::GroupSource { source },
+                    "{source:02x?} to {destination:02x?}, control {control:#04x}"
+                );
+            }
+        }
+    }
+
+    let station = INDIVIDUAL_MACS[0];
+    let from_station = |control| llc_frame(local, station, control, &WHO_IS);
+    assert_eq!(
+        classify_frame(&from_station(LLC_CONTROL_XID_CMD), &local),
+        FrameIngress::Xid { source: station }
+    );
+    assert_eq!(
+        classify_frame(&from_station(LLC_CONTROL_TEST_CMD), &local),
+        FrameIngress::Test {
+            source: station,
+            data: &WHO_IS
+        }
+    );
+    let ui = from_station(LLC_CONTROL_UI);
+    assert_eq!(classify_frame(&ui, &local), FrameIngress::Decode);
+    assert_eq!(decode_ethernet_frame(&ui).unwrap().payload, WHO_IS[..]);
+
+    // Destination admission still comes first, and this station's own
+    // frames, and frames too short to name a source, are ignored.
+    for control in commands {
+        let elsewhere = llc_frame([2, 0, 0, 0, 0, 2], GROUP_MACS[1], control, &WHO_IS);
+        assert_eq!(classify_frame(&elsewhere, &local), FrameIngress::Ignore);
+        let own = llc_frame(local, local, control, &WHO_IS);
+        assert_eq!(classify_frame(&own, &local), FrameIngress::Ignore);
+    }
+    let frame = llc_frame(local, GROUP_MACS[0], LLC_CONTROL_UI, &WHO_IS);
+    for length in 0..12 {
+        assert_eq!(
+            classify_frame(&frame[..length], &local),
+            FrameIngress::Ignore,
+            "{length} octets"
+        );
+    }
 }

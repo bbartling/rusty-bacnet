@@ -16,6 +16,19 @@ use super::{
     TsmConfig, TsmResponse,
 };
 
+/// A segmented ComplexAck segment as it arrived, before admission.
+#[derive(Clone, Copy)]
+pub(crate) struct SegmentedAckArrival<'a> {
+    /// MAC of the peer the segment came from.
+    pub(crate) source_mac: &'a [u8],
+    /// Invoke ID the segment answers.
+    pub(crate) invoke_id: u8,
+    /// Sequence number of this segment.
+    pub(crate) sequence_number: u8,
+    /// Whether this client advertised acceptance of segmented responses.
+    pub(crate) segmented_response_accepted: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PendingLease {
     Legacy,
@@ -155,6 +168,7 @@ impl Tsm {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn complete_pre_admitted_terminal_response(
         &mut self,
         source_mac: &[u8],
@@ -162,15 +176,32 @@ impl Tsm {
         apdu: &Apdu,
         response: TsmResponse,
     ) -> CoordinatedCompletion {
+        self.complete_pre_admitted_terminal_response_for_peer(
+            &MacAddr::from_slice(source_mac),
+            &CanonicalPeer::direct(source_mac),
+            admission,
+            apdu,
+            response,
+        )
+    }
+
+    pub(crate) fn complete_pre_admitted_terminal_response_for_peer(
+        &mut self,
+        tsm_mac: &MacAddr,
+        peer: &CanonicalPeer,
+        admission: &Admission,
+        apdu: &Apdu,
+        response: TsmResponse,
+    ) -> CoordinatedCompletion {
         if admission.kind() != AdmissionKind::Terminal
             || admission.metadata().owner() != LeaseOwner::Requester
-            || admission.metadata().peer() != &CanonicalPeer::direct(source_mac)
+            || admission.metadata().peer() != peer
         {
             return CoordinatedCompletion::Rejected;
         }
 
         let invoke_id = admission.token().invoke_id();
-        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let key = (tsm_mac.clone(), invoke_id);
         let Some(pending) = self.pending.get(&key) else {
             return CoordinatedCompletion::Rejected;
         };
@@ -191,7 +222,9 @@ impl Tsm {
             {
                 Some(pdu.service_choice)
             }
-            (Apdu::Error(pdu), TsmResponse::Error { .. }) if pdu.invoke_id == invoke_id => None,
+            (Apdu::Error(pdu), TsmResponse::Error { .. }) if pdu.invoke_id == invoke_id => {
+                Some(pdu.service_choice)
+            }
             (Apdu::Reject(pdu), TsmResponse::Reject { .. }) if pdu.invoke_id == invoke_id => None,
             (Apdu::Abort(pdu), TsmResponse::Abort { .. }) if pdu.invoke_id == invoke_id => None,
             _ => return CoordinatedCompletion::Rejected,
@@ -206,7 +239,7 @@ impl Tsm {
         }
 
         CoordinatedCompletion::Completed(self.complete_transaction_inner(
-            source_mac,
+            tsm_mac.as_slice(),
             invoke_id,
             Some(&owner),
             observed_service_choice,
@@ -215,15 +248,16 @@ impl Tsm {
         ))
     }
 
-    pub(crate) fn reject_pre_admitted_segmented_response(
+    pub(crate) fn reject_pre_admitted_segmented_response_for_peer(
         &mut self,
-        source_mac: &[u8],
+        tsm_mac: &MacAddr,
+        peer: &CanonicalPeer,
         admission: &Admission,
         apdu: &Apdu,
     ) -> bool {
         if admission.kind() != AdmissionKind::NonTerminal
             || admission.metadata().owner() != LeaseOwner::Requester
-            || admission.metadata().peer() != &CanonicalPeer::direct(source_mac)
+            || admission.metadata().peer() != peer
         {
             return false;
         }
@@ -240,7 +274,7 @@ impl Tsm {
             return false;
         }
 
-        let key = (MacAddr::from_slice(source_mac), invoke_id);
+        let key = (tsm_mac.clone(), invoke_id);
         let Some(pending) = self.pending.get(&key) else {
             return false;
         };
@@ -251,7 +285,7 @@ impl Tsm {
             return false;
         }
         let owner = pending.owner.clone();
-        self.abort_invalid_apdu_in_current_state(source_mac, invoke_id, &owner);
+        self.abort_invalid_apdu_in_current_state(tsm_mac.as_slice(), invoke_id, &owner);
         true
     }
 
@@ -281,7 +315,8 @@ impl Tsm {
         let observed_service_choice = match apdu {
             Apdu::SimpleAck(pdu) => Some(pdu.service_choice),
             Apdu::ComplexAck(pdu) if !pdu.segmented => Some(pdu.service_choice),
-            Apdu::Error(_) | Apdu::Reject(_) | Apdu::Abort(_) => None,
+            Apdu::Error(pdu) => Some(pdu.service_choice),
+            Apdu::Reject(_) | Apdu::Abort(_) => None,
             _ => return CoordinatedCompletion::Rejected,
         };
         CoordinatedCompletion::Completed(self.complete_transaction_inner(
@@ -410,17 +445,19 @@ impl Tsm {
         self.coordinate_segmented_response_admission(source_mac, invoke_id, peer, apdu, admission)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn coordinated_admit_segmented_complex_ack_for_owner(
         &mut self,
-        source_mac: &[u8],
-        invoke_id: u8,
-        sequence_number: u8,
-        segmented_response_accepted: bool,
+        segment: SegmentedAckArrival<'_>,
         owner: &TransactionOwner,
         peer: &CanonicalPeer,
         apdu: &Apdu,
     ) -> SegmentedResponseAdmission {
+        let SegmentedAckArrival {
+            source_mac,
+            invoke_id,
+            sequence_number,
+            segmented_response_accepted,
+        } = segment;
         let admission = self.admit_segmented_complex_ack_for_owner(
             source_mac,
             invoke_id,

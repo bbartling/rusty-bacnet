@@ -1,10 +1,10 @@
-//! Closed projection of committed built-in and Event Enrollment transitions.
+//! Closed projection of committed intrinsic and Event Enrollment transitions.
 //!
 //! Every value is selected explicitly from the evaluated source while the
 //! server still owns the database write guard. The resulting private wrapper
 //! is the immutable payload carried to all recipients and confirmed retries.
 
-use bacnet_encoding::constructed::encode_property_state;
+use bacnet_encoding::constructed::{encode_bacnet_property_value, encode_property_state};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_encoding::{constructed::validate_tlv_sequence, tags};
 use bacnet_objects::database::ObjectDatabase;
@@ -12,9 +12,11 @@ use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{ChangeOfValueChoice, NotificationParameters};
 use bacnet_services::common::BACnetPropertyValue;
-use bacnet_types::constructed::{BACnetEventParameter, BACnetPropertyStates};
-use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
+};
+use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
 /// One validated notification-parameter value captured for a committed event.
@@ -23,7 +25,7 @@ pub(crate) struct CommittedNotificationPayload(NotificationParameters);
 
 #[derive(Clone, Copy)]
 pub(crate) enum CapturedStatusFlags {
-    Value(u8),
+    Value(StatusFlags),
     Unavailable,
     Malformed,
 }
@@ -47,6 +49,9 @@ pub(crate) struct EventEnrollmentProjectionSnapshot {
     monitored_value: PropertyValue,
     parameters: BACnetEventParameter,
     status_flags: CapturedStatusFlags,
+    /// The FLOATING_LIMIT setpoint the evaluator read. It is present only
+    /// when the evaluator resolved the setpoint reference to this device, so
+    /// the projection never resolves that reference a second way (#1184).
     setpoint_value: Option<f32>,
 }
 
@@ -98,11 +103,14 @@ enum OptionalProjectionValue {
     Malformed,
 }
 
-/// Project a built-in intrinsic source after its transition commit.
+/// Project an intrinsic source after its transition commit. `device` is this
+/// device's identifier, which a log's BUFFER_READY report names its buffer
+/// with.
 pub(crate) fn project_intrinsic_payload(
     object: &dyn BACnetObject,
     change: &EventStateChange,
     event_type: EventType,
+    device: Option<ObjectIdentifier>,
 ) -> Option<CommittedNotificationPayload> {
     let object_type = object.object_identifier().object_type();
     let params = if change.from == EventState::FAULT || change.to == EventState::FAULT {
@@ -119,6 +127,8 @@ pub(crate) fn project_intrinsic_payload(
             | ObjectType::BINARY_VALUE
             | ObjectType::MULTI_STATE_INPUT
             | ObjectType::MULTI_STATE_VALUE
+            | ObjectType::ACCESS_ZONE
+            | ObjectType::ACCESS_DOOR
                 if event_type == EventType::CHANGE_OF_STATE =>
             {
                 project_builtin_change_of_state(object, object_type)?
@@ -128,10 +138,34 @@ pub(crate) fn project_intrinsic_payload(
             {
                 project_builtin_command_failure(object, object_type)?
             }
+            ObjectType::TREND_LOG | ObjectType::EVENT_LOG | ObjectType::TREND_LOG_MULTIPLE
+                if event_type == EventType::BUFFER_READY =>
+            {
+                project_buffer_ready(object, device)?
+            }
             _ => return None,
         }
     };
     Some(CommittedNotificationPayload(params))
+}
+
+/// A log's BUFFER_READY report (Clause 13.3.7): its own Log_Buffer in this
+/// device, with the counts its committed transition reported.
+fn project_buffer_ready(
+    object: &dyn BACnetObject,
+    device: Option<ObjectIdentifier>,
+) -> Option<NotificationParameters> {
+    let report = object.buffer_ready_report_internal()?;
+    Some(NotificationParameters::BufferReady {
+        buffer_property: BACnetDeviceObjectPropertyReference {
+            object_identifier: object.object_identifier(),
+            property_identifier: PropertyIdentifier::LOG_BUFFER.to_raw(),
+            property_array_index: None,
+            device_identifier: device,
+        },
+        previous_notification: report.previous_notification,
+        current_notification: report.current_notification,
+    })
 }
 
 /// Project an Event Enrollment source after its transition commit.
@@ -197,14 +231,26 @@ fn project_builtin_out_of_range(
     })
 }
 
+/// The property a built-in CHANGE_OF_STATE source watches, whose value
+/// New_State carries (Clause 13.3.2): Present_Value, except on an Access
+/// Zone, which watches Occupancy_State (Clause 12.32.6), and an Access Door,
+/// which watches Door_Alarm_State (Clause 12.26.20).
+fn watched_property(object_type: ObjectType) -> PropertyIdentifier {
+    match object_type {
+        ObjectType::ACCESS_ZONE => PropertyIdentifier::OCCUPANCY_STATE,
+        ObjectType::ACCESS_DOOR => PropertyIdentifier::DOOR_ALARM_STATE,
+        _ => PropertyIdentifier::PRESENT_VALUE,
+    }
+}
+
 fn project_builtin_change_of_state(
     object: &dyn BACnetObject,
     object_type: ObjectType,
 ) -> Option<NotificationParameters> {
-    let present_value = object
-        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+    let watched = object
+        .read_property(watched_property(object_type), None)
         .ok()?;
-    let new_state = match (object_type, present_value) {
+    let new_state = match (object_type, watched) {
         (ObjectType::BINARY_INPUT | ObjectType::BINARY_VALUE, PropertyValue::Enumerated(value))
             if value <= 1 =>
         {
@@ -214,6 +260,12 @@ fn project_builtin_change_of_state(
             ObjectType::MULTI_STATE_INPUT | ObjectType::MULTI_STATE_VALUE,
             PropertyValue::Unsigned(value),
         ) if value > 0 => BACnetPropertyStates::UnsignedValue(u32::try_from(value).ok()?),
+        (ObjectType::ACCESS_ZONE, PropertyValue::Enumerated(value)) => {
+            BACnetPropertyStates::ZoneOccupancyState(value)
+        }
+        (ObjectType::ACCESS_DOOR, PropertyValue::Enumerated(value)) => {
+            BACnetPropertyStates::DoorAlarmState(value)
+        }
         _ => return None,
     };
     Some(NotificationParameters::ChangeOfState {
@@ -259,46 +311,50 @@ fn project_builtin_reliability(
     else {
         return None;
     };
-    let present = object
-        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
-        .ok()?;
-    validate_builtin_present_value(object_type, &present)?;
-
     let mut property_values = Vec::new();
-    append_property_value(
-        &mut property_values,
-        PropertyIdentifier::PRESENT_VALUE,
-        None,
-        &present,
-    )?;
-    match object_type {
-        ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => {
-            let feedback = object
-                .read_property(PropertyIdentifier::FEEDBACK_VALUE, None)
-                .ok()?;
-            validate_builtin_feedback_value(object_type, &feedback)?;
-            append_property_value(
-                &mut property_values,
-                PropertyIdentifier::FEEDBACK_VALUE,
-                None,
-                &feedback,
-            )?;
+    for &property in reliability_report_properties(object_type)? {
+        let value = object.read_property(property, None).ok()?;
+        match property {
+            PropertyIdentifier::PRESENT_VALUE => {
+                validate_builtin_present_value(object_type, &value)?
+            }
+            PropertyIdentifier::FEEDBACK_VALUE => {
+                validate_builtin_feedback_value(object_type, &value)?
+            }
+            _ => matches!(value, PropertyValue::Enumerated(_)).then_some(())?,
         }
+        append_property_value(&mut property_values, property, None, &value)?;
+    }
+
+    Some(NotificationParameters::ChangeOfReliability {
+        reliability: Reliability::from_raw(reliability),
+        status_flags: required_status_flags(object)?,
+        property_values,
+    })
+}
+
+/// The properties a built-in source's CHANGE_OF_RELIABILITY notification
+/// carries, in the order Table 13-5 lists them for its object type.
+fn reliability_report_properties(object_type: ObjectType) -> Option<&'static [PropertyIdentifier]> {
+    match object_type {
         ObjectType::ANALOG_INPUT
         | ObjectType::ANALOG_OUTPUT
         | ObjectType::ANALOG_VALUE
         | ObjectType::BINARY_INPUT
         | ObjectType::BINARY_VALUE
         | ObjectType::MULTI_STATE_INPUT
-        | ObjectType::MULTI_STATE_VALUE => {}
-        _ => return None,
+        | ObjectType::MULTI_STATE_VALUE => Some(&[PropertyIdentifier::PRESENT_VALUE]),
+        ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => Some(&[
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::FEEDBACK_VALUE,
+        ]),
+        ObjectType::ACCESS_ZONE => Some(&[PropertyIdentifier::OCCUPANCY_STATE]),
+        ObjectType::ACCESS_DOOR => Some(&[
+            PropertyIdentifier::DOOR_ALARM_STATE,
+            PropertyIdentifier::PRESENT_VALUE,
+        ]),
+        _ => None,
     }
-
-    Some(NotificationParameters::ChangeOfReliability {
-        reliability,
-        status_flags: required_status_flags(object)?,
-        property_values,
-    })
 }
 
 fn project_event_enrollment_normal(
@@ -310,7 +366,7 @@ fn project_event_enrollment_normal(
     let monitored_value = snapshot.monitored_value.clone();
     let status_flags = match snapshot.status_flags {
         CapturedStatusFlags::Value(value) => value,
-        CapturedStatusFlags::Unavailable => 0,
+        CapturedStatusFlags::Unavailable => StatusFlags::empty(),
         CapturedStatusFlags::Malformed => return None,
     };
     let parameters = snapshot.parameters.clone();
@@ -363,7 +419,6 @@ fn project_event_enrollment_normal(
         (
             EventType::FLOATING_LIMIT,
             BACnetEventParameter::FloatingLimit {
-                setpoint_reference,
                 low_diff_limit,
                 high_diff_limit,
                 ..
@@ -376,9 +431,6 @@ fn project_event_enrollment_normal(
                 || !low_diff_limit.is_finite()
                 || !high_diff_limit.is_finite()
             {
-                return None;
-            }
-            if setpoint_reference.device_identifier.is_some() {
                 return None;
             }
             let setpoint_value = snapshot.setpoint_value?;
@@ -483,7 +535,7 @@ fn project_event_enrollment_reliability(
     }
 
     Some(NotificationParameters::ChangeOfReliability {
-        reliability,
+        reliability: Reliability::from_raw(reliability),
         status_flags: required_status_flags(enrollment)?,
         property_values,
     })
@@ -495,37 +547,13 @@ fn read_monitored_reference(
     let value = enrollment
         .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
         .ok()?;
-    let PropertyValue::List(items) = &value else {
-        return None;
-    };
-    if !(2..=4).contains(&items.len()) {
-        return None;
-    }
-    let PropertyValue::ObjectIdentifier(object_identifier) = items[0] else {
-        return None;
-    };
-    let PropertyValue::Unsigned(raw_property) = items[1] else {
-        return None;
-    };
-    let raw_property = u32::try_from(raw_property).ok()?;
-    if raw_property > 0x3f_ffff {
-        return None;
-    }
-    let array_index = match items.get(2) {
-        None | Some(PropertyValue::Null) => None,
-        Some(PropertyValue::Unsigned(index)) => Some(u32::try_from(*index).ok()?),
-        Some(_) => return None,
-    };
-    match items.get(3) {
-        None | Some(PropertyValue::Null) | Some(PropertyValue::ObjectIdentifier(_)) => {}
-        Some(_) => return None,
-    }
+    let reference = crate::event_enrollment::decode_reference_value(&value)?;
     Some((
         value,
         MonitoredReference {
-            object_identifier,
-            property_identifier: PropertyIdentifier::from_raw(raw_property),
-            array_index,
+            object_identifier: reference.object_identifier,
+            property_identifier: PropertyIdentifier::from_raw(reference.property_identifier),
+            array_index: reference.property_array_index,
         },
     ))
 }
@@ -602,7 +630,7 @@ fn read_real(object: &dyn BACnetObject, property: PropertyIdentifier) -> Option<
     value.is_finite().then_some(value)
 }
 
-fn required_status_flags(object: &dyn BACnetObject) -> Option<u8> {
+fn required_status_flags(object: &dyn BACnetObject) -> Option<StatusFlags> {
     let value = object
         .read_property(PropertyIdentifier::STATUS_FLAGS, None)
         .ok()?;
@@ -634,11 +662,12 @@ fn optional_reliability(object: &dyn BACnetObject) -> OptionalProjectionValue {
     }
 }
 
-fn status_flags(value: &PropertyValue) -> Option<u8> {
+fn status_flags(value: &PropertyValue) -> Option<StatusFlags> {
     let PropertyValue::BitString { unused_bits, data } = value else {
         return None;
     };
-    (*unused_bits == 4 && data.len() == 1 && data[0] & 0x0f == 0).then_some(data[0] >> 4)
+    (*unused_bits == 4 && data.len() == 1 && data[0] & 0x0f == 0)
+        .then(|| StatusFlags::from_bits_retain(data[0] >> 4))
 }
 
 fn validate_bitstring(unused_bits: u8, data: &[u8]) -> Option<()> {
@@ -667,6 +696,8 @@ fn validate_builtin_present_value(object_type: ObjectType, value: &PropertyValue
             | ObjectType::MULTI_STATE_VALUE,
             PropertyValue::Unsigned(value),
         ) if *value > 0 && u32::try_from(*value).is_ok() => Some(()),
+        // A BACnetDoorValue: LOCK to EXTENDED_PULSE_UNLOCK.
+        (ObjectType::ACCESS_DOOR, PropertyValue::Enumerated(value)) if *value <= 3 => Some(()),
         _ => None,
     }
 }
@@ -704,7 +735,7 @@ fn append_property_value(
         priority: None,
     };
     let mut entry = BytesMut::new();
-    property_value.encode(&mut entry);
+    encode_bacnet_property_value(&property_value, &mut entry);
     validate_tlv_sequence(&entry, "committed reliability property value").ok()?;
     encoded.extend_from_slice(&entry);
     Some(())

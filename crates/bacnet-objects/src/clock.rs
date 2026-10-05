@@ -1,5 +1,7 @@
 //! Dependency-neutral clock data exposed to BACnet objects.
 
+use bacnet_types::bitstring::DaysOfWeek;
+use bacnet_types::calendar::SpecificDate;
 use bacnet_types::primitives::{Date, Time};
 
 /// One coherent sample of the Device clock.
@@ -16,70 +18,21 @@ pub struct ClockFrame {
 }
 
 impl ClockFrame {
-    /// Return the BACnetDaysOfWeek bit for this frame, or `None` for an
-    /// unavailable/invalid day-of-week value.
-    pub fn day_of_week_bit(self) -> Option<u8> {
+    /// Return this frame's day of the week as a single [`DaysOfWeek`] flag,
+    /// or `None` for an unavailable/invalid day-of-week value.
+    pub fn day_of_week(self) -> Option<DaysOfWeek> {
         (1..=7)
             .contains(&self.local_date.day_of_week)
-            .then(|| 1 << (self.local_date.day_of_week - 1))
+            .then(|| DaysOfWeek::from_bits_truncate(1 << (self.local_date.day_of_week - 1)))
     }
 
     /// Whether this frame is a fully specified, internally consistent Device
     /// DateTime suitable for timestamping notifications.
     pub fn is_valid_actual_datetime(self) -> bool {
-        let Some(year) = self.local_date.actual_year() else {
-            return false;
-        };
-        if !(1..=12).contains(&self.local_date.month)
-            || !(1..=7).contains(&self.local_date.day_of_week)
-        {
-            return false;
-        }
-
-        let max_day = days_in_month(year, self.local_date.month);
-        if self.local_date.day == 0 || self.local_date.day > max_day {
-            return false;
-        }
-
-        let days = days_from_civil(
-            i64::from(year),
-            i64::from(self.local_date.month),
-            i64::from(self.local_date.day),
-        );
-        let expected_day_of_week = (days + 3).rem_euclid(7) as u8 + 1;
-        if self.local_date.day_of_week != expected_day_of_week {
-            return false;
-        }
-
-        self.local_time.hour <= 23
-            && self.local_time.minute <= 59
-            && self.local_time.second <= 59
-            && self.local_time.hundredths <= 99
+        SpecificDate::from_date(&self.local_date)
+            .is_some_and(|day| day.weekday() == self.local_date.day_of_week)
+            && self.local_time.is_specific()
     }
-}
-
-fn days_in_month(year: u16, month: u8) -> u8 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => 0,
-    }
-}
-
-fn is_leap_year(year: u16) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
-}
-
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = year - i64::from(month <= 2);
-    let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let month_prime = month + if month > 2 { -3 } else { 9 };
-    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
 }
 
 /// Synchronous read port for a coherent Device clock sample.
@@ -90,6 +43,40 @@ pub trait ClockReader: Send + Sync {
     /// Read one coherent frame, or report that no wall clock is available.
     fn read_clock(&self) -> Option<ClockFrame>;
 }
+
+/// The local date and time to stamp on a BACnetDateTime property when an
+/// object changes it: the Device clock's current frame, or a date and time
+/// with every field unspecified when there is no clock or its frame is not a
+/// valid actual date and time.
+pub(crate) fn stamp_datetime(clock: Option<&dyn ClockReader>) -> (Date, Time) {
+    current_datetime(clock).unwrap_or(UNSPECIFIED_DATETIME)
+}
+
+/// The Device clock's current local date and time, or `None` when there is
+/// no clock or its frame is not a valid actual date and time.
+pub(crate) fn current_datetime(clock: Option<&dyn ClockReader>) -> Option<(Date, Time)> {
+    clock
+        .and_then(ClockReader::read_clock)
+        .filter(|frame| frame.is_valid_actual_datetime())
+        .map(|frame| (frame.local_date, frame.local_time))
+}
+
+/// A BACnetDateTime with every field unspecified, the value of a timestamp
+/// that has never been set.
+pub(crate) const UNSPECIFIED_DATETIME: (Date, Time) = (
+    Date {
+        year: Date::UNSPECIFIED,
+        month: Date::UNSPECIFIED,
+        day: Date::UNSPECIFIED,
+        day_of_week: Date::UNSPECIFIED,
+    },
+    Time {
+        hour: Time::UNSPECIFIED,
+        minute: Time::UNSPECIFIED,
+        second: Time::UNSPECIFIED,
+        hundredths: Time::UNSPECIFIED,
+    },
+);
 
 #[cfg(test)]
 mod tests {

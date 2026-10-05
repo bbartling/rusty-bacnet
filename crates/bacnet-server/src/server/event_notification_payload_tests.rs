@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_encoding::constructed::decode_bacnet_property_value;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use std::borrow::Cow;
 
@@ -44,8 +45,32 @@ impl BACnetObject for BuiltInProjectionObject {
         property: PropertyIdentifier,
         _array_index: Option<u32>,
     ) -> Result<PropertyValue, bacnet_types::error::Error> {
+        let object_type = self.oid.object_type();
         match property {
-            p if p == PropertyIdentifier::PRESENT_VALUE => Ok(self.present_value.clone()),
+            // An Access Zone watches Occupancy_State and serves no
+            // Present_Value, and an Access Door watches Door_Alarm_State; the
+            // fixture's value stands for the watched one. The door's own
+            // Present_Value reads LOCK.
+            p if p == PropertyIdentifier::OCCUPANCY_STATE
+                && object_type == ObjectType::ACCESS_ZONE =>
+            {
+                Ok(self.present_value.clone())
+            }
+            p if p == PropertyIdentifier::DOOR_ALARM_STATE
+                && object_type == ObjectType::ACCESS_DOOR =>
+            {
+                Ok(self.present_value.clone())
+            }
+            p if p == PropertyIdentifier::PRESENT_VALUE
+                && object_type == ObjectType::ACCESS_DOOR =>
+            {
+                Ok(PropertyValue::Enumerated(0))
+            }
+            p if p == PropertyIdentifier::PRESENT_VALUE
+                && object_type != ObjectType::ACCESS_ZONE =>
+            {
+                Ok(self.present_value.clone())
+            }
             p if p == PropertyIdentifier::FEEDBACK_VALUE => {
                 self.feedback_value
                     .clone()
@@ -92,7 +117,9 @@ fn normal_payload(object: &BuiltInProjectionObject) -> NotificationParameters {
         ObjectType::BINARY_INPUT
         | ObjectType::BINARY_VALUE
         | ObjectType::MULTI_STATE_INPUT
-        | ObjectType::MULTI_STATE_VALUE => (EventType::CHANGE_OF_STATE, EventState::OFFNORMAL),
+        | ObjectType::MULTI_STATE_VALUE
+        | ObjectType::ACCESS_ZONE
+        | ObjectType::ACCESS_DOOR => (EventType::CHANGE_OF_STATE, EventState::OFFNORMAL),
         ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => {
             (EventType::COMMAND_FAILURE, EventState::OFFNORMAL)
         }
@@ -105,12 +132,13 @@ fn normal_payload(object: &BuiltInProjectionObject) -> NotificationParameters {
             to,
         },
         event_type,
+        None,
     )
     .unwrap()
     .0
 }
 
-fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> {
+fn all_eleven_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> {
     vec![
         (
             BuiltInProjectionObject::new(
@@ -121,7 +149,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::OutOfRange {
                 exceeding_value: 85.0,
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
                 deadband: 2.0,
                 exceeded_limit: 80.0,
             },
@@ -135,7 +163,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::OutOfRange {
                 exceeding_value: 85.0,
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
                 deadband: 2.0,
                 exceeded_limit: 80.0,
             },
@@ -149,7 +177,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::OutOfRange {
                 exceeding_value: 85.0,
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
                 deadband: 2.0,
                 exceeded_limit: 80.0,
             },
@@ -163,7 +191,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::ChangeOfState {
                 new_state: BACnetPropertyStates::BinaryValue(1),
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
             },
         ),
         (
@@ -175,7 +203,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::ChangeOfState {
                 new_state: BACnetPropertyStates::BinaryValue(1),
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
             },
         ),
         (
@@ -187,7 +215,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::ChangeOfState {
                 new_state: BACnetPropertyStates::UnsignedValue(3),
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
             },
         ),
         (
@@ -199,7 +227,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::ChangeOfState {
                 new_state: BACnetPropertyStates::UnsignedValue(3),
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
             },
         ),
         (
@@ -211,7 +239,7 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::CommandFailure {
                 command_value: vec![0x91, 0x01],
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
                 feedback_value: vec![0x91, 0x00],
             },
         ),
@@ -224,23 +252,49 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
             ),
             NotificationParameters::CommandFailure {
                 command_value: vec![0x21, 0x03],
-                status_flags: 0b1100,
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
                 feedback_value: vec![0x21, 0x02],
+            },
+        ),
+        (
+            // Occupancy_State ABOVE_UPPER_LIMIT (4), as zone-occupancy-state.
+            BuiltInProjectionObject::new(
+                10,
+                ObjectType::ACCESS_ZONE,
+                PropertyValue::Enumerated(4),
+                None,
+            ),
+            NotificationParameters::ChangeOfState {
+                new_state: BACnetPropertyStates::ZoneOccupancyState(4),
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
+            },
+        ),
+        (
+            // Door_Alarm_State FORCED_OPEN (3), as door-alarm-state.
+            BuiltInProjectionObject::new(
+                11,
+                ObjectType::ACCESS_DOOR,
+                PropertyValue::Enumerated(3),
+                None,
+            ),
+            NotificationParameters::ChangeOfState {
+                new_state: BACnetPropertyStates::DoorAlarmState(3),
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
             },
         ),
     ]
 }
 
 #[test]
-fn all_nine_builtin_normal_families_project_exact_typed_values() {
-    for (source, expected) in all_nine_sources() {
+fn all_eleven_builtin_normal_families_project_exact_typed_values() {
+    for (source, expected) in all_eleven_sources() {
         assert_eq!(normal_payload(&source), expected, "source {}", source.oid);
     }
 }
 
 #[test]
 fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
-    for (source, _) in all_nine_sources() {
+    for (source, _) in all_eleven_sources() {
         let payload = project_intrinsic_payload(
             &source,
             &EventStateChange {
@@ -248,6 +302,7 @@ fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
                 to: EventState::FAULT,
             },
             EventType::CHANGE_OF_RELIABILITY,
+            None,
         )
         .unwrap()
         .0;
@@ -259,27 +314,30 @@ fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
         else {
             panic!("{} did not project CHANGE_OF_RELIABILITY", source.oid);
         };
-        assert_eq!(reliability, 2);
-        assert_eq!(status_flags, 0b1100);
+        assert_eq!(reliability, Reliability::OVER_RANGE);
+        assert_eq!(status_flags, StatusFlags::IN_ALARM | StatusFlags::FAULT);
 
         let mut decoded = Vec::new();
         let mut offset = 0;
         while offset < property_values.len() {
-            let (entry, next) = BACnetPropertyValue::decode(&property_values, offset).unwrap();
+            let (entry, next) = decode_bacnet_property_value(&property_values, offset).unwrap();
             assert!(next > offset);
             decoded.push(entry);
             offset = next;
         }
-        let expected_properties = if matches!(
-            source.oid.object_type(),
-            ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT
-        ) {
-            vec![
+        // Table 13-5: the zone reports Occupancy_State in place of
+        // Present_Value, and the door Door_Alarm_State before it.
+        let expected_properties = match source.oid.object_type() {
+            ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => vec![
                 PropertyIdentifier::PRESENT_VALUE,
                 PropertyIdentifier::FEEDBACK_VALUE,
-            ]
-        } else {
-            vec![PropertyIdentifier::PRESENT_VALUE]
+            ],
+            ObjectType::ACCESS_ZONE => vec![PropertyIdentifier::OCCUPANCY_STATE],
+            ObjectType::ACCESS_DOOR => vec![
+                PropertyIdentifier::DOOR_ALARM_STATE,
+                PropertyIdentifier::PRESENT_VALUE,
+            ],
+            _ => vec![PropertyIdentifier::PRESENT_VALUE],
         };
         assert_eq!(
             decoded
@@ -297,6 +355,10 @@ fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
         if let Some(feedback) = &source.feedback_value {
             assert_eq!(decoded[1].value, encode_abstract_value(feedback).unwrap());
         }
+        if source.oid.object_type() == ObjectType::ACCESS_DOOR {
+            // The door's Present_Value, LOCK.
+            assert_eq!(decoded[1].value, [0x91, 0x00]);
+        }
     }
 }
 
@@ -309,9 +371,10 @@ fn fault_recovery_requires_effective_reliability_type_and_none_is_not_projected(
         to: EventState::NORMAL,
     };
     assert!(
-        project_intrinsic_payload(&source, &recovery, EventType::CHANGE_OF_RELIABILITY).is_some()
+        project_intrinsic_payload(&source, &recovery, EventType::CHANGE_OF_RELIABILITY, None)
+            .is_some()
     );
-    assert!(project_intrinsic_payload(&source, &recovery, EventType::OUT_OF_RANGE).is_none());
+    assert!(project_intrinsic_payload(&source, &recovery, EventType::OUT_OF_RANGE, None).is_none());
     assert!(project_intrinsic_payload(
         &source,
         &EventStateChange {
@@ -319,6 +382,7 @@ fn fault_recovery_requires_effective_reliability_type_and_none_is_not_projected(
             to: EventState::HIGH_LIMIT,
         },
         EventType::NONE,
+        None,
     )
     .is_none());
 }
@@ -335,6 +399,7 @@ fn malformed_required_builtin_data_fails_closed() {
             to: EventState::HIGH_LIMIT,
         },
         EventType::OUT_OF_RANGE,
+        None,
     )
     .is_none());
 }

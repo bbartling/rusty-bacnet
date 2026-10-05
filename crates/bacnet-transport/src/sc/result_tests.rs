@@ -10,7 +10,7 @@ async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&[0x33; 16]);
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 
@@ -243,7 +243,9 @@ fn fail_random48_vmac() -> Result<Vmac, Error> {
 #[tokio::test]
 async fn sc_connect_result_nak_fails_without_timeout() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_connect_timeout_ms(5000);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(5000);
 
     let hub_task = tokio::spawn(async move {
         let data = ws_server.recv().await.unwrap();
@@ -285,7 +287,9 @@ async fn sc_connect_result_nak_fails_without_timeout() {
 #[tokio::test]
 async fn sc_connect_result_nak_preserves_error_details() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_connect_timeout_ms(5000);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(5000);
 
     let hub_task = tokio::spawn(async move {
         let data = ws_server.recv().await.unwrap();
@@ -325,7 +329,9 @@ async fn sc_connect_result_nak_preserves_error_details() {
 #[tokio::test]
 async fn sc_connect_not_hub_nak_preserves_error_code_for_matching() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_connect_timeout_ms(5000);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(5000);
 
     let hub_task = tokio::spawn(async move {
         let data = ws_server.recv().await.unwrap();
@@ -359,7 +365,9 @@ async fn sc_connect_not_hub_nak_preserves_error_code_for_matching() {
 #[tokio::test]
 async fn sc_connect_malformed_result_returns_typed_sc_error() {
     let (ws_client, ws_server) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_connect_timeout_ms(5000);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(5000);
 
     let hub_task = tokio::spawn(async move {
         let data = ws_server.recv().await.unwrap();
@@ -393,7 +401,9 @@ async fn sc_connect_malformed_result_returns_typed_sc_error() {
 #[tokio::test]
 async fn sc_connect_timeout_returns_timeout_error() {
     let (ws_client, _ws_server) = LoopbackWebSocket::pair();
-    let mut transport = ScTransport::new(ws_client, [0x01; 6]).with_connect_timeout_ms(20);
+    let mut transport = ScTransport::new(ws_client, [0x01; 6])
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(20);
 
     let err = transport.start().await.unwrap_err();
     assert!(
@@ -412,11 +422,13 @@ async fn sc_connect_duplicate_vmac_nak_retries_failover_with_new_vmac() {
     let (failover_client, failover_hub) = LoopbackWebSocket::pair();
     let original_vmac = [0x01; 6];
     let mut transport = ScTransport::new(primary_client, original_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(5000)
         .with_failover(failover_client);
 
     let primary_task = tokio::spawn(async move {
         let data = primary_hub.recv().await.unwrap();
+        super::tests::identity_tests::assert_request_uuid(&data, [1; 16]);
         let req = decode_sc_message(&data).unwrap();
         assert_eq!(req.function, ScFunction::ConnectRequest);
         assert_eq!(&req.payload[0..6], &original_vmac);
@@ -429,6 +441,7 @@ async fn sc_connect_duplicate_vmac_nak_retries_failover_with_new_vmac() {
 
     let failover_task = tokio::spawn(async move {
         let data = failover_hub.recv().await.unwrap();
+        super::tests::identity_tests::assert_request_uuid(&data, [1; 16]);
         let req = decode_sc_message(&data).unwrap();
         assert_eq!(req.function, ScFunction::ConnectRequest);
         let retry_vmac: Vmac = req.payload[0..6].try_into().unwrap();
@@ -437,7 +450,7 @@ async fn sc_connect_duplicate_vmac_nak_retries_failover_with_new_vmac() {
 
         let mut accept_payload = Vec::with_capacity(26);
         accept_payload.extend_from_slice(&[0x20; 6]);
-        accept_payload.extend_from_slice(&[0u8; 16]);
+        accept_payload.extend_from_slice(&[0x33; 16]);
         accept_payload.extend_from_slice(&1476u16.to_be_bytes());
         accept_payload.extend_from_slice(&1476u16.to_be_bytes());
         let accept = ScMessage {
@@ -473,6 +486,7 @@ async fn sc_connect_duplicate_vmac_reseed_failure_does_not_try_failover() {
     let (failover_client, failover_hub) = LoopbackWebSocket::pair();
     let original_vmac = [0x01; 6];
     let mut transport = ScTransport::new(primary_client, original_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(5000)
         .with_failover(failover_client);
 
@@ -497,12 +511,13 @@ async fn sc_connect_duplicate_vmac_reseed_failure_does_not_try_failover() {
     );
     primary_task.await.unwrap();
 
-    match tokio::time::timeout(Duration::from_millis(100), failover_hub.recv()).await {
-        Ok(Ok(data)) => panic!(
+    if let Ok(Ok(data)) =
+        tokio::time::timeout(Duration::from_millis(100), failover_hub.recv()).await
+    {
+        panic!(
             "failover received stale-VMAC Connect-Request: {:02x?}",
             data
-        ),
-        Ok(Err(_)) | Err(_) => {}
+        )
     }
 
     let conn = transport.connection().unwrap();
@@ -518,8 +533,9 @@ async fn sc_result_nak_closes_receive_loop_before_heartbeat() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport =
-        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(500, 5000);
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(500, 5000);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -548,7 +564,7 @@ async fn encapsulated_npdu_result_nak_keeps_receive_loop_open() {
     let (ws_client, ws_hub) = LoopbackWebSocket::pair();
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
-    let mut transport = ScTransport::new(ws_client, client_vmac);
+    let mut transport = ScTransport::new(ws_client, client_vmac).with_device_uuid([1; 16]);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;
@@ -589,8 +605,9 @@ async fn malformed_wire_bvlc_result_closes_receive_loop() {
     let client_vmac = [0x01; 6];
     let hub_vmac = [0x10; 6];
 
-    let mut transport =
-        ScTransport::new(ws_client, client_vmac).with_test_heartbeat_timing_ms(500, 5000);
+    let mut transport = ScTransport::new(ws_client, client_vmac)
+        .with_device_uuid([1; 16])
+        .with_test_heartbeat_timing_ms(500, 5000);
 
     let hub_task = tokio::spawn(async move {
         hub_accept(&ws_hub, hub_vmac).await;

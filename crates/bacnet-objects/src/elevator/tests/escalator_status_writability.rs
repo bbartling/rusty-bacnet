@@ -222,20 +222,23 @@ fn fault_signals_reject_reserved_oversized_and_duplicate_values_atomically() {
     ]);
     write(&mut esc, PropertyIdentifier::FAULT_SIGNALS, prior.clone()).unwrap();
 
+    // Each refusal names the element it refused (#1048): a lone value is
+    // element 1, a repeat the second of the pair.
     for raw in [9u32, 1023, 65536, u32::MAX] {
-        assert_value_out_of_range(
+        out_of_range_at(
             write(
                 &mut esc,
                 PropertyIdentifier::FAULT_SIGNALS,
                 PropertyValue::Enumerated(raw),
             ),
+            1,
             &format!("invalid fault value {raw}"),
         );
         assert_eq!(read(&esc, PropertyIdentifier::FAULT_SIGNALS), prior);
     }
 
     for duplicate in [0u32, 1024] {
-        assert_value_out_of_range(
+        out_of_range_at(
             write(
                 &mut esc,
                 PropertyIdentifier::FAULT_SIGNALS,
@@ -244,6 +247,7 @@ fn fault_signals_reject_reserved_oversized_and_duplicate_values_atomically() {
                     PropertyValue::Enumerated(duplicate),
                 ]),
             ),
+            2,
             &format!("duplicate fault value {duplicate}"),
         );
         assert_eq!(read(&esc, PropertyIdentifier::FAULT_SIGNALS), prior);
@@ -252,15 +256,26 @@ fn fault_signals_reject_reserved_oversized_and_duplicate_values_atomically() {
     let mut late_duplicate: Vec<PropertyValue> =
         (1024..=11022).map(PropertyValue::Enumerated).collect();
     late_duplicate.push(PropertyValue::Enumerated(1024));
-    assert_value_out_of_range(
+    out_of_range_at(
         write(
             &mut esc,
             PropertyIdentifier::FAULT_SIGNALS,
             PropertyValue::List(late_duplicate),
         ),
+        10_000,
         "late duplicate in a maximum-size service list",
     );
     assert_eq!(read(&esc, PropertyIdentifier::FAULT_SIGNALS), prior);
+}
+
+fn out_of_range_at(result: Result<(), Error>, position: u32, context: &str) {
+    crate::common::assert_list_element_refused(
+        result,
+        bacnet_types::enums::ErrorClass::PROPERTY,
+        bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE,
+        position,
+        context,
+    );
 }
 
 #[test]
@@ -269,19 +284,31 @@ fn fault_signals_reject_wrong_value_shapes_atomically() {
     let prior = PropertyValue::List(vec![PropertyValue::Enumerated(8)]);
     write(&mut esc, PropertyIdentifier::FAULT_SIGNALS, prior.clone()).unwrap();
 
-    for wrong in [
-        PropertyValue::Unsigned(8),
-        PropertyValue::List(vec![
-            PropertyValue::Enumerated(0),
+    // A value that is no list names no element; a mistyped element is named.
+    assert_invalid_data_type(
+        write(
+            &mut esc,
+            PropertyIdentifier::FAULT_SIGNALS,
             PropertyValue::Unsigned(8),
-        ]),
-    ] {
-        assert_invalid_data_type(
-            write(&mut esc, PropertyIdentifier::FAULT_SIGNALS, wrong),
-            "mistyped Fault_Signals",
-        );
-        assert_eq!(read(&esc, PropertyIdentifier::FAULT_SIGNALS), prior);
-    }
+        ),
+        "mistyped Fault_Signals",
+    );
+    assert_eq!(read(&esc, PropertyIdentifier::FAULT_SIGNALS), prior);
+    crate::common::assert_list_element_refused(
+        write(
+            &mut esc,
+            PropertyIdentifier::FAULT_SIGNALS,
+            PropertyValue::List(vec![
+                PropertyValue::Enumerated(0),
+                PropertyValue::Unsigned(8),
+            ]),
+        ),
+        bacnet_types::enums::ErrorClass::PROPERTY,
+        bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE,
+        2,
+        "mistyped second Fault_Signals element",
+    );
+    assert_eq!(read(&esc, PropertyIdentifier::FAULT_SIGNALS), prior);
 }
 
 #[test]

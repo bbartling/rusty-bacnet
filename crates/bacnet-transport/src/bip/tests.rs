@@ -37,7 +37,8 @@ fn bip_max_apdu_length() {
         0,
         std::net::Ipv4Addr::LOCALHOST,
     );
-    assert_eq!(transport.max_apdu_length(), 1476);
+    assert_eq!(transport.egress_apdu_limit(), 1476);
+    assert_eq!(transport.local_receive_apdu_capacity(), 1476);
 }
 
 #[test]
@@ -91,11 +92,12 @@ fn expect_bvlc_function_rejects_unexpected_response_function() {
 
 #[tokio::test]
 async fn pending_bvlc_response_requires_sender_and_expected_function() {
-    let socket = Arc::new(
+    let socket = Arc::new(super::BipSocket::new(
         UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap(),
-    );
+        None,
+    ));
     let (npdu_tx, _npdu_rx) = mpsc::channel(1);
     let pending_bvlc_response = Arc::new(Mutex::new(None));
     let (tx, mut rx) = oneshot::channel();
@@ -117,22 +119,30 @@ async fn pending_bvlc_response_requires_sender_and_expected_function() {
         broadcast_addr: Ipv4Addr::BROADCAST,
         broadcast_port: 47808,
         pending_bvlc_response: pending_bvlc_response.clone(),
-        bdt_persist_path: None,
+        management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
+        fanout: None,
         force_dbtn_forward_failure: false,
+        forwarded_origins: super::groups::ForwardedOrigins::detached(),
     };
 
     let result = test_bvll_message(BvlcFunction::BVLC_RESULT, &[0x00, 0x00]);
-    handle_bvll_message(&result, ([127, 0, 0, 2], 47808), &ctx).await;
+    handle_bvll_message(&result, ([127, 0, 0, 2], 47808), Delivery::Unicast, &ctx).await;
     assert!(pending_bvlc_response.lock().await.is_some());
     assert!(rx.try_recv().is_err());
 
     let wrong_ack = test_bvll_message(BvlcFunction::READ_FOREIGN_DEVICE_TABLE_ACK, &[]);
-    handle_bvll_message(&wrong_ack, ([127, 0, 0, 1], 47808), &ctx).await;
+    handle_bvll_message(&wrong_ack, ([127, 0, 0, 1], 47808), Delivery::Unicast, &ctx).await;
     assert!(pending_bvlc_response.lock().await.is_some());
     assert!(rx.try_recv().is_err());
 
     let expected_ack = test_bvll_message(BvlcFunction::READ_BROADCAST_DISTRIBUTION_TABLE_ACK, &[]);
-    handle_bvll_message(&expected_ack, ([127, 0, 0, 1], 47808), &ctx).await;
+    handle_bvll_message(
+        &expected_ack,
+        ([127, 0, 0, 1], 47808),
+        Delivery::Unicast,
+        &ctx,
+    )
+    .await;
     assert!(pending_bvlc_response.lock().await.is_none());
     assert_eq!(
         rx.await.unwrap().function,
@@ -185,6 +195,7 @@ async fn bbmd_register_foreign_device() {
     // Start a BBMD
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
@@ -249,6 +260,7 @@ async fn read_fdt_from_bbmd() {
     // Start a BBMD
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
@@ -322,7 +334,7 @@ async fn read_fdt_from_non_bbmd_surfaces_typed_nak() {
 }
 
 #[tokio::test]
-async fn write_bdt_to_bbmd() {
+async fn write_bdt_to_bbmd_always_naks_and_preserves_table() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let old_bdt_entry = BdtEntry {
         ip: [10, 0, 0, 1],
@@ -330,6 +342,8 @@ async fn write_bdt_to_bbmd() {
         broadcast_mask: [255, 255, 255, 0],
     };
     bbmd_transport.enable_bbmd(vec![old_bdt_entry.clone()]);
+    // Even an explicitly listed sender must observe the not-supported result.
+    bbmd_transport.set_bbmd_management_acl(vec![[127, 0, 0, 1]]);
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -345,16 +359,21 @@ async fn write_bdt_to_bbmd() {
         .write_bdt(&bbmd_mac, &new_bdt)
         .await
         .unwrap();
-    assert_eq!(result, BvlcResultCode::SUCCESSFUL_COMPLETION);
+    assert_eq!(
+        result,
+        BvlcResultCode::WRITE_BROADCAST_DISTRIBUTION_TABLE_NAK
+    );
 
-    // Verify by reading back — includes written entry plus auto-inserted self
+    // Verify memory is unchanged: prior entry remains, replacement absent.
     let bdt = client_transport.read_bdt(&bbmd_mac).await.unwrap();
-    assert!(bdt
-        .iter()
-        .any(|e| e.ip == [192, 168, 1, 1] && e.port == 0xBAC0));
     assert!(
-        !bdt.iter().any(|e| e == &old_bdt_entry),
-        "Write-BDT must replace the prior configured BDT entries"
+        bdt.iter().any(|e| e == &old_bdt_entry),
+        "rejected Write-BDT must preserve the prior BDT"
+    );
+    assert!(
+        !bdt.iter()
+            .any(|e| e.ip == [192, 168, 1, 1] && e.port == 0xBAC0),
+        "rejected Write-BDT must not apply the replacement entry"
     );
 
     client_transport.stop().await.unwrap();
@@ -411,6 +430,18 @@ async fn write_bdt_to_non_bbmd_surfaces_typed_nak() {
         BvlcResultCode::WRITE_BROADCAST_DISTRIBUTION_TABLE_NAK
     );
 
+    // A malformed payload to a non-BBMD answers the same not-supported result.
+    let response = raw_bvlc_request(
+        &server_mac,
+        BvlcFunction::WRITE_BROADCAST_DISTRIBUTION_TABLE,
+        &[0; bbmd::BDT_ENTRY_SIZE - 1],
+    )
+    .await;
+    assert_eq!(
+        decode_bvlc_result_code(&response).unwrap(),
+        BvlcResultCode::WRITE_BROADCAST_DISTRIBUTION_TABLE_NAK
+    );
+
     client_transport.stop().await.unwrap();
     server_transport.stop().await.unwrap();
 }
@@ -419,6 +450,7 @@ async fn write_bdt_to_non_bbmd_surfaces_typed_nak() {
 async fn register_foreign_device_via_bvlc() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -439,6 +471,7 @@ async fn register_foreign_device_via_bvlc() {
 async fn register_foreign_device_rejects_zero_ttl() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -465,6 +498,7 @@ async fn register_foreign_device_rejects_zero_ttl() {
 async fn register_foreign_device_rejects_malformed_ttl_payload_lengths() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -490,6 +524,10 @@ async fn register_foreign_device_rejects_malformed_ttl_payload_lengths() {
 async fn register_foreign_device_accepts_max_ttl_and_caps_remaining() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy {
+        max_ttl: u16::MAX,
+        ..Default::default()
+    });
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -553,9 +591,11 @@ async fn delete_fdt_entry_to_non_bbmd_surfaces_typed_nak() {
 }
 
 #[tokio::test]
-async fn delete_fdt_entry_removes_registered_foreign_device() {
+async fn delete_fdt_entry_via_bvlc() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.set_bbmd_management_acl(vec![[127, 0, 0, 1]]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -586,6 +626,8 @@ async fn delete_fdt_entry_removes_registered_foreign_device() {
 async fn delete_fdt_entry_rejects_malformed_payload_and_preserves_entry() {
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.set_bbmd_management_acl(vec![[127, 0, 0, 1]]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let _bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
 
@@ -630,6 +672,7 @@ async fn foreign_device_broadcast_via_bbmd() {
     // BBMD
     let mut bbmd_transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     bbmd_transport.enable_bbmd(vec![]);
+    bbmd_transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
     let mut bbmd_rx = bbmd_transport.start().await.unwrap();
     let bbmd_mac = bbmd_transport.local_mac().to_vec();
     let (bbmd_ip, bbmd_port) = decode_bip_mac(&bbmd_mac).unwrap();
@@ -738,52 +781,6 @@ async fn bvlc_request_rejects_concurrent_calls() {
 }
 
 #[tokio::test]
-async fn socket_is_broadcast_capable_and_binds_inaddr_any() {
-    // Regression for the "user-supplied interface IP" silently rejecting
-    // broadcast traffic.  Even when the caller passes a specific interface,
-    // the underlying socket must bind 0.0.0.0 so the kernel delivers
-    // subnet- and limited-broadcast packets to it.  The interface IP is
-    // still used for the announced local MAC.
-    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-    let _rx = transport.start().await.unwrap();
-
-    let local = transport
-        .socket
-        .as_ref()
-        .expect("socket exists after start")
-        .local_addr()
-        .expect("local_addr is queryable");
-
-    assert!(
-        local.ip().is_unspecified(),
-        "BIP socket must bind to 0.0.0.0 for broadcast reception; got {local}"
-    );
-    assert!(
-        socket2::SockRef::from(
-            transport
-                .socket
-                .as_ref()
-                .expect("socket exists after start")
-                .as_ref()
-        )
-        .broadcast()
-        .expect("SO_BROADCAST is queryable"),
-        "BIP socket must enable SO_BROADCAST for Original-Broadcast-NPDU sends"
-    );
-
-    // The announced local MAC must still reflect the user-supplied interface,
-    // not the bind address.
-    let mac = transport.local_mac();
-    assert_eq!(
-        &mac[..4],
-        &Ipv4Addr::LOCALHOST.octets(),
-        "announced IP must match interface"
-    );
-
-    transport.stop().await.unwrap();
-}
-
-#[tokio::test]
 async fn start_fails_on_nonlocal_interface() {
     // Now that we bind the real socket to 0.0.0.0, a typo'd interface IP
     // would otherwise succeed at bind and only fail silently later when
@@ -814,4 +811,36 @@ fn is_broadcast_mac_requires_configured_ip_and_port() {
     assert!(!transport.is_broadcast_mac(&[255, 255, 255, 255, 0xBA, 0xC0]));
     assert!(!transport.is_broadcast_mac(&[192, 168, 1, 7, 0xBA, 0xC0]));
     assert!(!transport.is_broadcast_mac(&[192, 168, 1, 255]));
+}
+
+/// #1479: a group destination is any address that reaches more than one
+/// node, at any port: the limited broadcast, the configured broadcast IP and
+/// IPv4 multicast, beside this link's broadcast MAC. `is_broadcast_mac`
+/// keeps its narrower answer, and the owned rule agrees with the live one.
+#[test]
+fn group_destinations_cover_every_broadcast_and_multicast_address() {
+    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0xBAC0, Ipv4Addr::new(192, 168, 1, 255));
+    let owned = transport.group_destinations();
+    for (mac, group) in [
+        ([192, 168, 1, 255, 0xBA, 0xC0], true),
+        ([192, 168, 1, 255, 0xBA, 0xC1], true),
+        ([255, 255, 255, 255, 0xBA, 0xC0], true),
+        ([255, 255, 255, 255, 0x12, 0x34], true),
+        ([224, 0, 0, 1, 0xBA, 0xC0], true),
+        ([239, 255, 255, 250, 0xBA, 0xC0], true),
+        ([192, 168, 1, 7, 0xBA, 0xC0], false),
+        ([127, 0, 0, 1, 0xBA, 0xC1], false),
+        ([223, 255, 255, 255, 0xBA, 0xC0], false),
+    ] {
+        assert_eq!(transport.is_group_destination(&mac), group, "{mac:?}");
+        assert_eq!(owned.contains(&mac), group, "{mac:?}");
+    }
+    assert!(!transport.is_group_destination(&[255, 255, 255, 255]));
+    assert!(!transport.is_broadcast_mac(&[255, 255, 255, 255, 0xBA, 0xC0]));
+
+    // Loopback tests name a unicast address as the broadcast one; it stays a
+    // group only at this link's port, so requests to other ports still go.
+    let looped = BipTransport::new(Ipv4Addr::LOCALHOST, 0xBAC0, Ipv4Addr::LOCALHOST);
+    assert!(looped.is_group_destination(&[127, 0, 0, 1, 0xBA, 0xC0]));
+    assert!(!looped.is_group_destination(&[127, 0, 0, 1, 0xBA, 0xC1]));
 }

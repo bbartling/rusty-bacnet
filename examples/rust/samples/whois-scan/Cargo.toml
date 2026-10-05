@@ -3,6 +3,7 @@ name = "whois-scan"
 version = "0.1.0"
 edition = "2021"
 description = "BACnet Who-Is discovery scan"
+license.workspace = true
 publish = false
 
 [[bin]]

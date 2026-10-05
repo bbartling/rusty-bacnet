@@ -38,8 +38,8 @@ fn write_wire(
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
-    handle_write_property(db, &buf).map(|_| ())
+    request.encode(&mut buf).unwrap();
+    sourced_wp(db, &buf).map(|_| ())
 }
 
 fn read_wire(
@@ -193,15 +193,8 @@ fn trend_log_reliability_write_is_denied_over_write_property() {
     let tl_oid = tl.object_identifier();
     db.add(Box::new(tl)).unwrap();
 
-    // Clause 12.25 Table 12-29: Reliability O, no writability footnote; the
-    // object-family gate does not apply, so even out-of-service writes refuse.
-    write_wire(
-        &mut db,
-        tl_oid,
-        PropertyIdentifier::OUT_OF_SERVICE,
-        PropertyValue::Boolean(true),
-    )
-    .unwrap();
+    // Clause 12.25 Table 12-29: Reliability O, no writability footnote, and
+    // no Out_Of_Service to grant a simulation write (#985), so it refuses.
     assert_refused(
         &mut db,
         tl_oid,
@@ -209,8 +202,19 @@ fn trend_log_reliability_write_is_denied_over_write_property() {
         PropertyValue::Enumerated(1),
         ErrorCode::WRITE_ACCESS_DENIED,
         PropertyValue::Enumerated(0),
-        "TL out-of-service Reliability",
+        "TL Reliability",
     );
+    assert!(matches!(
+        write_wire(
+            &mut db,
+            tl_oid,
+            PropertyIdentifier::OUT_OF_SERVICE,
+            PropertyValue::Boolean(true),
+        ),
+        Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+    ));
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -274,9 +278,9 @@ fn enumerated_overflow_is_invalid_data_encoding_without_mutation() {
         priority: None,
     };
     let mut request_bytes = BytesMut::new();
-    request.encode(&mut request_bytes);
+    request.encode(&mut request_bytes).unwrap();
 
-    match handle_write_property(&mut db, &request_bytes).unwrap_err() {
+    match sourced_wp(&mut db, &request_bytes).unwrap_err() {
         Error::Protocol { class, code } => {
             assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
             assert_eq!(code, ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32);
@@ -401,7 +405,7 @@ fn multistate_event_property_writes_are_validated_over_write_property() {
 #[test]
 fn event_enrollment_writes_are_validated_over_write_property() {
     let mut db = ObjectDatabase::new();
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -425,14 +429,14 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
     // Occupy priority 8 so PV tracks the command, not the default.
     let slot = WritePropertyRequest {
         object_identifier: ao_oid,
-        property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
-        property_array_index: Some(8),
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
         property_value: encode_value(PropertyValue::Real(55.0)),
-        priority: None,
+        priority: Some(8),
     };
     let mut buf = BytesMut::new();
-    slot.encode(&mut buf);
-    handle_write_property(&mut db, &buf).unwrap();
+    slot.encode(&mut buf).unwrap();
+    sourced_wp(&mut db, &buf).unwrap();
     assert_eq!(
         read_wire(&db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
         PropertyValue::Real(55.0)
@@ -469,14 +473,14 @@ fn relinquish_default_write_recaptures_present_value_over_write_property() {
     // Relinquish priority 8: PV falls back to the new default.
     let slot = WritePropertyRequest {
         object_identifier: ao_oid,
-        property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
-        property_array_index: Some(8),
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
         property_value: encode_value(PropertyValue::Null),
-        priority: None,
+        priority: Some(8),
     };
     let mut buf = BytesMut::new();
-    slot.encode(&mut buf);
-    handle_write_property(&mut db, &buf).unwrap();
+    slot.encode(&mut buf).unwrap();
+    sourced_wp(&mut db, &buf).unwrap();
     assert_eq!(
         read_wire(&db, ao_oid, PropertyIdentifier::PRESENT_VALUE),
         PropertyValue::Real(12.5),
@@ -498,9 +502,8 @@ fn time_delay_normal_round_trips_over_write_property_and_read_property() {
     let ai_oid = ai.object_identifier();
     db.add(Box::new(ai)).unwrap();
 
-    // Never written, the read-back is Time_Delay's value: Clause 13.3 — "If
-    // no value is available for this parameter, then it takes on the value of
-    // the pTimeDelay parameter."
+    // Never written, the read-back is Time_Delay's value: Clause 13.3 uses
+    // pTimeDelay as the fallback for an absent pTimeDelayNormal.
     write_wire(
         &mut db,
         ai_oid,
@@ -582,9 +585,9 @@ fn write_property_rejects_overwide_color_temperature_without_mutation() {
         priority: None,
     };
     let mut request_bytes = BytesMut::new();
-    request.encode(&mut request_bytes);
+    request.encode(&mut request_bytes).unwrap();
 
-    match handle_write_property(&mut db, &request_bytes)
+    match sourced_wp(&mut db, &request_bytes)
         .expect_err("over-wide Color Temperature Present_Value must be rejected")
     {
         Error::Protocol { class, code } => {

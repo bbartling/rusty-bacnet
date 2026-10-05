@@ -5,6 +5,7 @@
 use super::*;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::notification_class::NotificationClass;
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{
     BACnetDestination, BACnetEventParameter, BACnetRecipient, FaultParameters,
 };
@@ -46,16 +47,16 @@ fn framed_recipient_list() -> (Vec<u8>, Vec<BACnetDestination>) {
         hundredths: 99,
     };
     let device_entry = BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: midnight,
         to_time: end_of_day,
         recipient: BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap()),
         process_identifier: 1,
         issue_confirmed_notifications: true,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     };
     let address_entry = BACnetDestination {
-        valid_days: 0b0111_1111,
+        valid_days: DaysOfWeek::all(),
         from_time: midnight,
         to_time: end_of_day,
         recipient: BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
@@ -64,11 +65,11 @@ fn framed_recipient_list() -> (Vec<u8>, Vec<BACnetDestination>) {
         }),
         process_identifier: 42,
         issue_confirmed_notifications: false,
-        transitions: 0b0000_0111,
+        transitions: EventTransitionBits::all(),
     };
     let destinations = vec![device_entry, address_entry];
     let mut buf = BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(&mut buf, &destinations);
+    bacnet_encoding::constructed::encode_destination_list(&mut buf, &destinations).unwrap();
     (buf.to_vec(), destinations)
 }
 
@@ -86,7 +87,7 @@ fn write_framed(
         priority: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     handle_write_property(db, &buf).map(|_| ())
 }
 
@@ -100,15 +101,13 @@ fn read_raw(db: &ObjectDatabase, oid: ObjectIdentifier, property: PropertyIdenti
     request.encode(&mut buf);
     let mut ack_buf = BytesMut::new();
     handle_read_property(db, &buf, &mut ack_buf).unwrap();
-    ReadPropertyACK::decode(&ack_buf.to_vec())
-        .unwrap()
-        .property_value
+    ReadPropertyACK::decode(&ack_buf).unwrap().property_value
 }
 
 #[test]
 fn event_parameters_framed_wire_round_trip() {
     let mut db = ObjectDatabase::new();
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -130,7 +129,7 @@ fn event_parameters_framed_wire_round_trip() {
 #[test]
 fn opaque_event_parameters_with_tag_like_payload_round_trip() {
     let mut db = ObjectDatabase::new();
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -159,7 +158,7 @@ fn opaque_event_parameters_with_tag_like_payload_round_trip() {
 #[test]
 fn legacy_event_parameters_wire_write_is_canonicalized() {
     let mut db = ObjectDatabase::new();
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -186,7 +185,7 @@ fn legacy_event_parameters_wire_write_is_canonicalized() {
 #[test]
 fn fault_parameters_framed_wire_round_trip() {
     let mut db = ObjectDatabase::new();
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -207,7 +206,7 @@ fn fault_parameters_framed_wire_round_trip() {
 #[test]
 fn extended_fault_parameters_with_tag_like_payload_round_trip() {
     let mut db = ObjectDatabase::new();
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -237,7 +236,7 @@ fn extended_fault_parameters_with_tag_like_payload_round_trip() {
 #[test]
 fn defined_preserved_character_sets_round_trip_over_wire() {
     let mut db = ObjectDatabase::new();
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
     let ucs4_a = vec![0x75, 0x05, 0x03, 0x00, 0x00, 0x00, 0x41];
@@ -291,7 +290,7 @@ fn defined_preserved_character_sets_round_trip_over_wire() {
 #[test]
 fn malformed_legacy_fault_parameters_preserve_existing_value() {
     let mut db = ObjectDatabase::new();
-    let mut ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     ee.set_fault_parameters(Some(FaultParameters::FaultOutOfRange {
         min_normal: 0.0,
         max_normal: 100.0,
@@ -389,7 +388,7 @@ fn recipient_list_framed_wire_round_trip_via_wpm() {
         }],
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf);
+    request.encode(&mut buf).unwrap();
     handle_write_property_multiple(&mut db, &buf).unwrap();
     assert_eq!(
         read_raw(&db, oid, PropertyIdentifier::RECIPIENT_LIST),
@@ -401,7 +400,7 @@ fn recipient_list_framed_wire_round_trip_via_wpm() {
 #[test]
 fn malformed_framed_event_parameters_write_rejected() {
     let mut db = ObjectDatabase::new();
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 
@@ -426,7 +425,7 @@ fn malformed_framed_event_parameters_write_rejected() {
 #[test]
 fn malformed_extended_fault_application_form_is_rejected() {
     let mut db = ObjectDatabase::new();
-    let ee = EventEnrollmentObject::new(1, "EE-1", 0).unwrap();
+    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
     let oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
 

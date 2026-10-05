@@ -22,6 +22,7 @@ use bytes::{Bytes, BytesMut};
 use tokio::time::{timeout, Duration};
 
 use super::*;
+use bacnet_transport::port::TransportProvenance;
 
 const WAIT: Duration = Duration::from_secs(1);
 
@@ -65,12 +66,16 @@ fn encoded_ack(invoke_id: u8, property_value: PropertyValue) -> (Apdu, Bytes) {
 
 fn received(apdu: Bytes, source: &[u8]) -> ReceivedApdu {
     ReceivedApdu {
+        direct_response: None,
         apdu,
         source_mac: MacAddr::from_slice(source),
+        ingress_network: None,
         source_network: None,
         link_layer_group: false,
         is_group: false,
+        global_broadcast: false,
         data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
         reply_tx: None,
     }
 }
@@ -359,4 +364,115 @@ async fn pre_admitted_segmented_response_sends_one_abort_and_releases_exact_leas
     requester.close();
     endpoint.stop().await.unwrap();
     peer.stop().await.unwrap();
+}
+
+#[path = "endpoint_operation_tests.rs"]
+mod operation_tests;
+
+/// A routed destination names one device, as a client's routed confirmed
+/// request does (#1278). DNET 0, DNET 65535 or an empty DADR fails with
+/// `Error::Encoding` before a transaction is reserved, whether the router is
+/// known or reached by local broadcast, while DNET 65534 prepares normally.
+#[tokio::test]
+async fn routed_destination_to_no_single_device_fails_before_registration() {
+    let (endpoint_transport, _peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut endpoint = EndpointIngress::new(endpoint_transport, 2);
+    let ingress = endpoint.start().await.unwrap();
+    let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+    let requester =
+        EndpointRequester::new(ingress.egress.clone(), Arc::clone(&coordinator), config()).unwrap();
+    let prepare = |destination| {
+        requester.prepare_read_property(
+            destination,
+            Vec::new(),
+            object_identifier(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+        )
+    };
+    let routed = |destination_network, destination_mac: &[u8]| EndpointApduDestination::Routed {
+        destination_network,
+        destination_mac: MacAddr::from_slice(destination_mac),
+        router_mac: MacAddr::from_slice(&[0x02]),
+    };
+    let via_broadcast = |destination_network, destination_mac: &[u8]| {
+        EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network,
+            destination_mac: MacAddr::from_slice(destination_mac),
+        }
+    };
+
+    for (dnet, dadr) in [(0, &[3][..]), (u16::MAX, &[3]), (100, &[])] {
+        for destination in [routed(dnet, dadr), via_broadcast(dnet, dadr)] {
+            let refused = prepare(destination.clone()).err();
+            assert!(
+                matches!(refused, Some(Error::Encoding(_))),
+                "{destination:?}: {refused:?}"
+            );
+            assert_eq!(coordinator.active_count().unwrap(), 0);
+            assert_eq!(requester.inner.tsm.lock().unwrap().pending_count(), 0);
+        }
+    }
+    let prepared = prepare(routed(u16::MAX - 1, &[3])).unwrap();
+    assert_eq!(coordinator.active_count().unwrap(), 1);
+    drop(prepared);
+    assert_eq!(coordinator.active_count().unwrap(), 0);
+
+    endpoint.stop().await.unwrap();
+}
+
+/// A direct destination that reaches a group of nodes, as named or once a
+/// routed one naming the endpoint's own network is localized to it, is a
+/// local broadcast (#1479). The requester refuses it before it registers a
+/// transaction, so no lease or invoke ID is held afterwards, rather than
+/// leaving the refusal to the egress.
+#[tokio::test(start_paused = true)]
+async fn a_group_destination_fails_before_registration() {
+    use bacnet_types::network_number::NetworkNumber;
+
+    let (mut endpoint_transport, _peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    endpoint_transport.set_broadcast_mac(vec![0xFF]);
+    let mut endpoint = EndpointIngress::new(endpoint_transport, 2);
+    let ingress = endpoint.start().await.unwrap();
+    ingress
+        .egress
+        .local_network_number()
+        .publish(NetworkNumber::configured(7).unwrap());
+    let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+    let requester =
+        EndpointRequester::new(ingress.egress.clone(), Arc::clone(&coordinator), config()).unwrap();
+    let broadcast = || MacAddr::from_slice(&[0xFF]);
+    for destination in [
+        EndpointApduDestination::Direct {
+            destination_mac: broadcast(),
+        },
+        EndpointApduDestination::Routed {
+            destination_network: 7,
+            destination_mac: broadcast(),
+            router_mac: MacAddr::from_slice(&[0x02]),
+        },
+        EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network: 7,
+            destination_mac: broadcast(),
+        },
+    ] {
+        let refused = requester
+            .prepare_read_property(
+                destination.clone(),
+                Vec::new(),
+                object_identifier(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
+            .err();
+        assert!(
+            matches!(&refused, Some(Error::Encoding(message))
+                if message.contains("broadcast or group address")),
+            "{destination:?}: {refused:?}"
+        );
+        assert_eq!(coordinator.active_count().unwrap(), 0);
+        assert_eq!(requester.inner.tsm.lock().unwrap().pending_count(), 0);
+    }
+
+    endpoint.stop().await.unwrap();
 }

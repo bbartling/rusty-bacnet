@@ -1,17 +1,18 @@
 //! End-to-end Event Enrollment notification lifecycle regressions.
 
 use super::*;
+use crate::server::test_transport::TestTransport;
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::{ChangeOfValueChoice, NotificationParameters};
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
     ChangeOfValueCriteria, FaultParameters,
 };
 use bacnet_types::enums::{EventState, EventType, Reliability};
-use bacnet_types::primitives::BACnetTimeStamp;
-use std::sync::{Arc as StdArc, Mutex as StdMutex};
+use bacnet_types::primitives::{BACnetTimeStamp, StatusFlags};
 
 #[path = "event_enrollment_notification_test_support.rs"]
 mod support;
@@ -143,7 +144,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
                 EventType::OUT_OF_RANGE,
                 NotificationParameters::OutOfRange {
                     exceeding_value: 85.0,
-                    status_flags: 0,
+                    status_flags: StatusFlags::empty(),
                     deadband: 2.0,
                     exceeded_limit: 80.0,
                 },
@@ -152,7 +153,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
                 EventType::FLOATING_LIMIT,
                 NotificationParameters::FloatingLimit {
                     reference_value: 65.0,
-                    status_flags: 0,
+                    status_flags: StatusFlags::empty(),
                     setpoint_value: 50.0,
                     error_limit: 10.0,
                 },
@@ -161,20 +162,20 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
                 EventType::CHANGE_OF_STATE,
                 NotificationParameters::ChangeOfState {
                     new_state: BACnetPropertyStates::BinaryValue(1),
-                    status_flags: 0,
+                    status_flags: StatusFlags::empty(),
                 },
             ),
             (
                 EventType::CHANGE_OF_BITSTRING,
                 NotificationParameters::ChangeOfBitstring {
                     referenced_bitstring: (5, vec![0xe0]),
-                    status_flags: 0,
+                    status_flags: StatusFlags::empty(),
                 },
             ),
         ])
         .enumerate()
     {
-        assert_eq!(notification.event_type, expected_type.to_raw());
+        assert_eq!(notification.event_type, expected_type);
         assert_eq!(
             notification.timestamp,
             BACnetTimeStamp::SequenceNumber(index as u16)
@@ -188,7 +189,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
             history_timestamp(
                 &db,
                 notification.event_object_identifier,
-                EventState::from_raw(notification.to_state),
+                notification.to_state,
             ),
             "wire time must be the committed transition coordinate"
         );
@@ -227,16 +228,16 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
     let cov = drain_notifications(&sent);
     assert_eq!(cov.len(), 2, "both CHANGE_OF_VALUE choices deliver");
     for notification in &cov {
-        assert_eq!(notification.event_type, EventType::CHANGE_OF_VALUE.to_raw());
-        assert_eq!(notification.from_state, EventState::NORMAL.to_raw());
-        assert_eq!(notification.to_state, EventState::NORMAL.to_raw());
+        assert_eq!(notification.event_type, EventType::CHANGE_OF_VALUE);
+        assert_eq!(notification.from_state, EventState::NORMAL);
+        assert_eq!(notification.to_state, EventState::NORMAL);
     }
     assert_eq!(cov[0].timestamp, BACnetTimeStamp::SequenceNumber(4));
     assert_eq!(
         cov[0].event_values,
         Some(NotificationParameters::ChangeOfValue {
             new_value: ChangeOfValueChoice::ChangedValue(8.0),
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
         })
     );
     assert_eq!(cov[1].timestamp, BACnetTimeStamp::SequenceNumber(5));
@@ -247,7 +248,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
                 unused_bits: 5,
                 data: vec![0xa0],
             },
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
         })
     );
 
@@ -264,7 +265,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
             .read_property(PropertyIdentifier::RECORD_COUNT, None)
             .unwrap(),
         PropertyValue::Unsigned(0),
-        "this slice deliberately has no Event Log side effect"
+        "a clockless server has no timestamp for an Event Log record"
     );
     drop(db);
     server.stop().await.unwrap();
@@ -313,30 +314,36 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
             )
             .unwrap();
         let mut replacement = NotificationClass::new(0, "NC-replaced").unwrap();
-        replacement.ack_required = [false; 3];
-        replacement.add_destination(
-            crate::server::event_notifications_tests::local_broadcast_destination(),
-        );
+        replacement.ack_required = EventTransitionBits::empty();
+        replacement
+            .add_destination(
+                crate::server::event_notifications_tests::local_broadcast_destination(),
+            )
+            .unwrap();
         guard.add(Box::new(replacement)).unwrap();
     }
 
-    let sent = StdArc::new(StdMutex::new(Vec::new()));
-    BACnetServer::<RecordingTransport>::build_and_send_event_notification(
-        &db,
-        &Arc::new(NetworkLayer::new(RecordingTransport {
-            sent: StdArc::clone(&sent),
-            lock_probe: StdArc::default(),
-        })),
-        &Arc::new(AtomicU8::new(0)),
-        &Arc::new(Mutex::new(ServerTsm::new())),
-        &NotificationTransactions::new(),
+    let capture = NotificationCapture::default();
+    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
+        &crate::server::event_delivery::EventDelivery {
+            db: &db,
+            network: &Arc::new(NetworkLayer::new(capture.transport())),
+            comm_state: &Arc::new(CommState::default()),
+            learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
+            notification_transactions: &NotificationTransactions::new(),
+            device_bindings: &Arc::new(RwLock::new(
+                crate::server::device_bindings::DeviceBindingTable::new(),
+            )),
+            suppressions: &Default::default(),
+            retry_timeout_ms: 1000,
+            local_apdu_capacity: 1476,
+        },
         &enrollment_oid,
         transition,
-        1000,
     )
     .await;
 
-    let notifications = drain_notifications(&sent);
+    let notifications = drain_notifications(&capture.sent);
     assert_eq!(notifications.len(), 1);
     assert!(
         notifications[0].ack_required,
@@ -346,7 +353,7 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
         notifications[0].event_values,
         Some(NotificationParameters::OutOfRange {
             exceeding_value: 85.0,
-            status_flags: 0,
+            status_flags: StatusFlags::empty(),
             deadband: 2.0,
             exceeded_limit: 80.0,
         }),
@@ -615,7 +622,7 @@ async fn local_suppression_paths_commit_only_the_applicable_transitions() {
         Some(suppressed_target_oid),
         out_of_range_parameters(0),
     );
-    event_enable_suppressed.set_event_enable(0);
+    event_enable_suppressed.set_event_enable(bacnet_types::bitstring::EventTransitionBits::empty());
     let event_enable_oid = event_enable_suppressed.object_identifier();
     db.add(Box::new(event_enable_suppressed)).unwrap();
 
@@ -703,30 +710,28 @@ async fn local_suppression_paths_commit_only_the_applicable_transitions() {
 
 #[tokio::test(start_paused = true)]
 async fn dcc_suppresses_event_enrollment_io_without_suppressing_commit() {
-    for dcc_state in [1, 2] {
-        let mut db = ObjectDatabase::new();
-        let target = ObservedObject::new(40 + dcc_state as u32, PropertyValue::Real(85.0));
-        let target_oid = target.object_identifier();
-        db.add(Box::new(target)).unwrap();
-        let enrollment = enrollment(
-            40 + dcc_state as u32,
-            EventType::OUT_OF_RANGE,
-            Some(target_oid),
-            out_of_range_parameters(1),
-        );
-        let enrollment_oid = enrollment.object_identifier();
-        db.add(Box::new(enrollment)).unwrap();
+    let mut db = ObjectDatabase::new();
+    let target = ObservedObject::new(42, PropertyValue::Real(85.0));
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+    let enrollment = enrollment(
+        42,
+        EventType::OUT_OF_RANGE,
+        Some(target_oid),
+        out_of_range_parameters(1),
+    );
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
 
-        let (mut server, sent) = start_server(db, true).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        server.comm_state.store(dcc_state, Ordering::Release);
-        tokio::time::sleep(Duration::from_secs(1)).await;
+    let (mut server, sent) = start_server(db, true).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    server.comm_state.set_for_test(DccState::DisableInitiation);
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
-        assert!(drain_notifications(&sent).is_empty());
-        let db = server.database().write().await;
-        assert_eq!(event_state(&db, enrollment_oid), EventState::HIGH_LIMIT);
-        assert_eq!(db.reserve_event_sequence_number().number(), 1);
-        drop(db);
-        server.stop().await.unwrap();
-    }
+    assert!(drain_notifications(&sent).is_empty());
+    let db = server.database().write().await;
+    assert_eq!(event_state(&db, enrollment_oid), EventState::HIGH_LIMIT);
+    assert_eq!(db.reserve_event_sequence_number().number(), 1);
+    drop(db);
+    server.stop().await.unwrap();
 }

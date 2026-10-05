@@ -86,10 +86,11 @@ fn lighting_output_pv_out_of_range() {
     );
     assert!(result.is_err());
 
+    // -1.0 is the WARN special value; -0.5 is just out of range.
     let result = obj.write_property(
         PropertyIdentifier::PRESENT_VALUE,
         None,
-        PropertyValue::Real(-1.0),
+        PropertyValue::Real(-0.5),
         Some(16),
     );
     assert!(result.is_err());
@@ -126,13 +127,13 @@ fn lighting_output_priority_array_read() {
 }
 
 #[test]
-fn lighting_output_priority_array_direct_write() {
+fn lighting_output_priority_array_tracks_present_value_command() {
     let mut obj = LightingOutputObject::new(1, "LO-1").unwrap();
     obj.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(5),
-        PropertyValue::Real(33.0),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Real(33.0),
+        Some(5),
     )
     .unwrap();
     let pv = obj
@@ -160,24 +161,24 @@ fn lighting_output_lighting_properties() {
         .unwrap();
     assert_eq!(tv, PropertyValue::Real(0.0));
 
-    // LIGHTING_COMMAND
+    // LIGHTING_COMMAND: operation NONE until written.
     let lc = obj
         .read_property(PropertyIdentifier::LIGHTING_COMMAND, None)
         .unwrap();
-    assert_eq!(lc, PropertyValue::OctetString(vec![]));
+    assert_eq!(lc, PropertyValue::ApplicationData(vec![0x09, 0x00]));
 
-    // Write LIGHTING_COMMAND
+    // Write LIGHTING_COMMAND: STEP_UP (3).
     obj.write_property(
         PropertyIdentifier::LIGHTING_COMMAND,
         None,
-        PropertyValue::OctetString(vec![0x01, 0x02]),
+        PropertyValue::ApplicationData(vec![0x09, 0x03]),
         None,
     )
     .unwrap();
     let lc = obj
         .read_property(PropertyIdentifier::LIGHTING_COMMAND, None)
         .unwrap();
-    assert_eq!(lc, PropertyValue::OctetString(vec![0x01, 0x02]));
+    assert_eq!(lc, PropertyValue::ApplicationData(vec![0x09, 0x03]));
 
     // LIGHTING_COMMAND_DEFAULT_PRIORITY
     let lcdp = obj
@@ -371,13 +372,13 @@ fn binary_lighting_output_priority_array() {
 }
 
 #[test]
-fn binary_lighting_output_priority_array_direct_write() {
+fn binary_lighting_output_priority_array_tracks_present_value_command() {
     let mut obj = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
     obj.write_property(
-        PropertyIdentifier::PRIORITY_ARRAY,
-        Some(3),
-        PropertyValue::Enumerated(1),
+        PropertyIdentifier::PRESENT_VALUE,
         None,
+        PropertyValue::Enumerated(1),
+        Some(3),
     )
     .unwrap();
     let pv = obj

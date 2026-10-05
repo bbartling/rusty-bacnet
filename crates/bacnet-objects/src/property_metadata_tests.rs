@@ -1,21 +1,71 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use crate::analog::AnalogInputObject;
-use crate::binary::BinaryInputObject;
+use crate::access_control::{
+    AccessCredentialObject, AccessDoorObject, AccessPointObject, AccessRightsObject,
+    AccessUserObject, AccessZoneObject, CredentialDataInputObject,
+};
+use crate::audit::{AuditLogObject, AuditLogPersistence, AuditLogSnapshot};
+use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,
 };
 use crate::traits::BACnetObject;
-use crate::value_types::{DateValueObject, TimeValueObject};
+use crate::value_types::{
+    BitStringValueObject, CharacterStringValueObject, DatePatternValueObject,
+    DateTimePatternValueObject, DateTimeValueObject, DateValueObject, IntegerValueObject,
+    LargeAnalogValueObject, OctetStringValueObject, PositiveIntegerValueObject,
+    TimePatternValueObject, TimeValueObject,
+};
+
+mod analog;
+mod intrinsic;
+
+/// Whether `property` reads the way its metadata row promises: with a value,
+/// or, for a log's Log_Buffer, with the PROPERTY / READ_ACCESS_DENIED that
+/// marks a present row only ReadRange (and AuditLogQuery) serve
+/// (Clauses 12.25.14, 12.27.13, 12.30.19 and 12.64.10).
+pub(crate) fn metadata_row_reads(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    let result = object.read_property(property, None);
+    if matches!(
+        object.object_identifier().object_type(),
+        ObjectType::AUDIT_LOG
+            | ObjectType::EVENT_LOG
+            | ObjectType::TREND_LOG
+            | ObjectType::TREND_LOG_MULTIPLE
+    ) && property == PropertyIdentifier::LOG_BUFFER
+    {
+        return matches!(result, Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::READ_ACCESS_DENIED.to_raw() as u32);
+    }
+    result.is_ok()
+}
 
 struct InstanceMetadataObject {
     oid: ObjectIdentifier,
     include_description: bool,
+}
+
+#[derive(Default)]
+struct MemoryAuditLogPersistence(Mutex<Option<AuditLogSnapshot>>);
+
+impl AuditLogPersistence for MemoryAuditLogPersistence {
+    fn load(&self, _expected_object: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+
+    fn commit(&self, snapshot: &AuditLogSnapshot) -> Result<(), Error> {
+        *self.0.lock().unwrap() = Some(snapshot.clone());
+        Ok(())
+    }
 }
 
 impl InstanceMetadataObject {
@@ -142,7 +192,7 @@ fn assert_unique_and_canonical(object: &dyn BACnetObject) {
 fn property_metadata_contract_time_value() {
     let object = TimeValueObject::new(1, "TV-1").unwrap();
     assert_unique_and_canonical(&object);
-    assert_eq!(object.property_metadata().len(), 11);
+    assert_eq!(object.property_metadata().len(), 12);
 
     let present_value = metadata_row(&object, PropertyIdentifier::PRESENT_VALUE);
     assert_eq!(present_value.conformance, PropertyConformance::RequiredRead);
@@ -160,7 +210,7 @@ fn property_metadata_contract_time_value() {
     );
     assert_eq!(
         priority_array.write_capability,
-        PropertyWriteCapability::Always
+        PropertyWriteCapability::ReadOnly
     );
 
     let status_flags = metadata_row(&object, PropertyIdentifier::STATUS_FLAGS);
@@ -175,7 +225,7 @@ fn property_metadata_contract_time_value() {
 fn property_metadata_contract_binary_input() {
     let object = BinaryInputObject::new(1, "BI-1").unwrap();
     assert_unique_and_canonical(&object);
-    assert_eq!(object.property_metadata().len(), 24);
+    assert_eq!(object.property_metadata().len(), 27);
 
     let present_value = metadata_row(&object, PropertyIdentifier::PRESENT_VALUE);
     assert_eq!(present_value.conformance, PropertyConformance::RequiredRead);
@@ -200,7 +250,7 @@ fn property_metadata_contract_binary_input() {
     assert_eq!(event_enable.conformance, PropertyConformance::Optional);
     assert_eq!(
         event_enable.presence_condition,
-        Some(PropertyPresenceCondition::IntrinsicReporting)
+        Some(PropertyPresenceCondition::IntrinsicReportingRequired)
     );
     assert_eq!(
         event_enable.write_capability,
@@ -220,16 +270,82 @@ fn property_metadata_contract_binary_input() {
 
 #[test]
 fn property_metadata_contract_all_migrated_rows_are_readable() {
-    let objects: [Box<dyn BACnetObject>; 2] = [
+    let objects: [Box<dyn BACnetObject>; 54] = [
+        Box::new(crate::device::DeviceObject::new(Default::default()).unwrap()),
         Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
+        Box::new(IntegerValueObject::new(1, "IV-1").unwrap()),
+        Box::new(PositiveIntegerValueObject::new(1, "PIV-1").unwrap()),
+        Box::new(LargeAnalogValueObject::new(1, "LAV-1").unwrap()),
+        Box::new(CharacterStringValueObject::new(1, "CSV-1").unwrap()),
+        Box::new(OctetStringValueObject::new(1, "OSV-1").unwrap()),
+        Box::new(BitStringValueObject::new(1, "BSV-1").unwrap()),
+        Box::new(DateValueObject::new(1, "DV-1").unwrap()),
+        Box::new(DateTimeValueObject::new(1, "DTV-1").unwrap()),
+        Box::new(DatePatternValueObject::new(1, "DPV-1").unwrap()),
+        Box::new(TimePatternValueObject::new(1, "TPV-1").unwrap()),
+        Box::new(DateTimePatternValueObject::new(1, "DTPV-1").unwrap()),
         Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
+        Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
+        Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
+        Box::new(MultiStateInputObject::new(1, "MSI-1", 3).unwrap()),
+        Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()),
+        Box::new(MultiStateOutputObject::new(1, "MSO-1", 3).unwrap()),
+        Box::new(crate::loop_obj::LoopObject::new(1, "LOOP-1", 62).unwrap()),
+        Box::new(crate::program::ProgramObject::new(1, "PRG-1").unwrap()),
+        Box::new(crate::file::FileObject::new(1, "FILE-1", "raw").unwrap()),
+        Box::new(crate::trend::TrendLogObject::new(1, "TL-1", 3).unwrap()),
+        Box::new(crate::trend::TrendLogMultipleObject::new(1, "TLM-1", 3).unwrap()),
+        Box::new(crate::event_log::EventLogObject::new(1, "EL-1", 3).unwrap()),
+        Box::new(crate::schedule::ScheduleObject::new(1, "SCH-1", PropertyValue::Null).unwrap()),
+        Box::new(crate::schedule::CalendarObject::new(1, "CAL-1").unwrap()),
+        Box::new(crate::life_safety::LifeSafetyPointObject::new(1, "LSP-1").unwrap()),
+        Box::new(crate::life_safety::LifeSafetyZoneObject::new(1, "LSZ-1").unwrap()),
+        Box::new(
+            AuditLogObject::new(1, "AL-1", 3, Arc::new(MemoryAuditLogPersistence::default()))
+                .unwrap(),
+        ),
+        Box::new(crate::timer::TimerObject::new(1, "TMR-1").unwrap()),
+        Box::new(crate::averaging::AveragingObject::new(1, "AVG-1").unwrap()),
+        Box::new(crate::command::CommandObject::new(1, "CMD-1").unwrap()),
+        Box::new(crate::group::GroupObject::new(1, "GRP-1").unwrap()),
+        Box::new(crate::group::GlobalGroupObject::new(1, "GG-1").unwrap()),
+        Box::new(crate::group::StructuredViewObject::new(1, "SV-1").unwrap()),
+        Box::new(crate::load_control::LoadControlObject::new(1, "LC-1").unwrap()),
+        Box::new(
+            crate::network_port::NetworkPortObject::new_non_bip(
+                1,
+                "NP-1",
+                bacnet_types::enums::NetworkType::from_raw(0),
+                0,
+                Default::default(),
+                1476,
+            )
+            .unwrap(),
+        ),
+        Box::new(crate::elevator::ElevatorGroupObject::new(1, "EG-1").unwrap()),
+        Box::new(crate::elevator::EscalatorObject::new(1, "ESC-1").unwrap()),
+        Box::new(crate::elevator::LiftObject::new(1, "LIFT-1", 3).unwrap()),
+        Box::new(crate::lighting::LightingOutputObject::new(1, "LO-1").unwrap()),
+        Box::new(crate::lighting::BinaryLightingOutputObject::new(1, "BLO-1").unwrap()),
+        Box::new(crate::accumulator::AccumulatorObject::new(1, "ACC-1", 95).unwrap()),
+        Box::new(crate::accumulator::PulseConverterObject::new(1, "PC-1", 62).unwrap()),
+        Box::new(crate::color::ColorObject::new(1, "CLR-1").unwrap()),
+        Box::new(crate::color::ColorTemperatureObject::new(1, "CT-1").unwrap()),
+        Box::new(AccessDoorObject::new(1, "DOOR-1").unwrap()),
+        Box::new(AccessPointObject::new(1, "AP-1").unwrap()),
+        Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
+        Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()),
+        Box::new(AccessUserObject::new(1, "USER-1").unwrap()),
+        Box::new(AccessRightsObject::new(1, "AR-1").unwrap()),
+        Box::new(CredentialDataInputObject::new(1, "CDI-1").unwrap()),
     ];
 
     for object in objects {
+        assert_unique_and_canonical(object.as_ref());
         let metadata = object.property_metadata();
         for row in metadata.iter() {
             assert!(
-                object.read_property(row.property_identifier, None).is_ok(),
+                metadata_row_reads(object.as_ref(), row.property_identifier),
                 "{:?} must read {:?} without an array index",
                 object.object_identifier().object_type(),
                 row.property_identifier
@@ -254,6 +370,7 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
                 PropertyIdentifier::RELIABILITY,
                 PropertyIdentifier::PRIORITY_ARRAY,
                 PropertyIdentifier::RELINQUISH_DEFAULT,
+                PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             ],
         ),
         (
@@ -275,6 +392,9 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
                 PropertyIdentifier::ACKED_TRANSITIONS,
                 PropertyIdentifier::EVENT_TIME_STAMPS,
                 PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+                PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG,
+                PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
+                PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
                 PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::POLARITY,
                 PropertyIdentifier::RELIABILITY,
@@ -324,14 +444,14 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
 }
 
 #[test]
-fn property_metadata_contract_macro_opt_in_and_legacy_default() {
+fn property_metadata_contract_all_value_types_opt_in_to_metadata() {
+    // Every value type now passes `property_metadata:` to the macro, so no
+    // value type exercises the legacy empty-metadata default.
     let time_value = TimeValueObject::new(1, "TV-1").unwrap();
     let date_value = DateValueObject::new(1, "DV-1").unwrap();
-    let analog_input = AnalogInputObject::new(1, "AI-1", 62).unwrap();
 
     assert!(!time_value.property_metadata().is_empty());
-    assert!(date_value.property_metadata().is_empty());
-    assert!(analog_input.property_metadata().is_empty());
+    assert!(!date_value.property_metadata().is_empty());
 }
 
 #[test]
@@ -373,11 +493,12 @@ fn property_metadata_contract_write_capabilities_match_dispatch() {
         );
     }
     assert!(binary_input
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Enumerated(1),
             None,
+            &crate::command_source::test_origin(),
         )
         .is_err());
     assert!(binary_input
@@ -397,11 +518,12 @@ fn property_metadata_contract_write_capabilities_match_dispatch() {
         )
         .unwrap();
     binary_input
-        .write_property(
+        .write_property_from(
             PropertyIdentifier::PRESENT_VALUE,
             None,
             PropertyValue::Enumerated(1),
             None,
+            &crate::command_source::test_origin(),
         )
         .unwrap();
     binary_input
@@ -442,5 +564,81 @@ fn property_metadata_contract_dyn_object_can_return_owned_instance_rows() {
                 .any(|row| row.property_identifier == PropertyIdentifier::DESCRIPTION),
             expect_description
         );
+    }
+}
+
+#[test]
+fn property_metadata_migrated_date_value_exact_required_set() {
+    use PropertyIdentifier as P;
+
+    let object = DateValueObject::new(1, "DV-1").unwrap();
+    let metadata = object.property_metadata();
+    assert!(matches!(metadata, Cow::Borrowed(_)));
+    assert_eq!(metadata.len(), 12);
+    let required = object.required_properties();
+    assert_eq!(
+        required.as_ref(),
+        [
+            P::OBJECT_IDENTIFIER,
+            P::OBJECT_NAME,
+            P::OBJECT_TYPE,
+            P::PRESENT_VALUE,
+            P::STATUS_FLAGS,
+            P::PROPERTY_LIST
+        ]
+    );
+}
+
+#[test]
+fn property_metadata_binary_commandable_exact_required_sets() {
+    use PropertyIdentifier as P;
+
+    let objects: [Box<dyn BACnetObject>; 2] = [
+        Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
+        Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
+    ];
+    // Tables 12-8 and 12-10 require these of an object that reports
+    // intrinsically (#1485), in metadata order.
+    let intrinsic = [
+        P::EVENT_DETECTION_ENABLE,
+        P::EVENT_ENABLE,
+        P::TIME_DELAY,
+        P::NOTIFY_TYPE,
+        P::NOTIFICATION_CLASS,
+        P::ACKED_TRANSITIONS,
+        P::EVENT_TIME_STAMPS,
+    ];
+    for object in objects {
+        let output = object.object_identifier().object_type() == ObjectType::BINARY_OUTPUT;
+        let mut required = vec![
+            P::OBJECT_IDENTIFIER,
+            P::OBJECT_NAME,
+            P::OBJECT_TYPE,
+            P::PRESENT_VALUE,
+        ];
+        if output {
+            // Table 12-8 footnote 4: the COMMAND_FAILURE feedback.
+            required.push(P::FEEDBACK_VALUE);
+        }
+        required.extend([P::STATUS_FLAGS, P::EVENT_STATE]);
+        required.extend(intrinsic);
+        required.push(P::OUT_OF_SERVICE);
+        if output {
+            required.extend([
+                P::PRIORITY_ARRAY,
+                P::RELINQUISH_DEFAULT,
+                P::CURRENT_COMMAND_PRIORITY,
+                P::POLARITY,
+            ]);
+        } else {
+            // Table 12-10 footnote 6: the CHANGE_OF_STATE alarm value.
+            required.push(P::ALARM_VALUE);
+        }
+        required.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
+        required.push(P::PROPERTY_LIST);
+        assert_unique_and_canonical(object.as_ref());
+        assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
+        assert_eq!(object.required_properties().as_ref(), required);
+        assert!(object.is_createable());
     }
 }

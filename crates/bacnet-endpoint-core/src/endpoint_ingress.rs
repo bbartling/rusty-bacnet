@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use bacnet_encoding::apdu::{decode_apdu, Apdu};
-use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
+use bacnet_network::layer::{IssuedApdu, NetworkLayer, ReceivedApdu, RoutedTarget};
 use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_types::enums::NetworkPriority;
 use bacnet_types::error::Error;
@@ -21,12 +21,17 @@ const EFFECTIVE_GROUP_APDU_ERROR: &str =
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EndpointApduDestination {
-    /// Direct unicast on the local data link.
+    /// Direct unicast on the local data link. A MAC that reaches a group of
+    /// nodes here, such as the link's broadcast MAC or a multicast address,
+    /// is a local broadcast, so it carries only an Unconfirmed-Request APDU
+    /// (Clause 6.3, #1479).
     Direct {
         /// Destination MAC on the local data link.
         destination_mac: MacAddr,
     },
-    /// Routed unicast through a known next-hop router.
+    /// Routed unicast through a known next-hop router. An empty
+    /// `destination_mac` asks that router to broadcast on the network, so it
+    /// carries only an Unconfirmed-Request APDU (Clause 6.3, #1479).
     Routed {
         /// Ultimate BACnet network number.
         destination_network: u16,
@@ -36,6 +41,8 @@ pub enum EndpointApduDestination {
         router_mac: MacAddr,
     },
     /// Routed unicast using a local broadcast because the router MAC is unknown.
+    /// An empty `destination_mac` is refused: [`Self::RemoteBroadcast`]
+    /// sends that network's broadcast (#1479).
     RoutedViaLocalBroadcast {
         /// Ultimate BACnet network number.
         destination_network: u16,
@@ -53,80 +60,10 @@ pub enum EndpointApduDestination {
     GlobalBroadcast,
 }
 
-struct NetworkServiceCommand {
-    apdu: Vec<u8>,
-    destination: EndpointApduDestination,
-    expecting_reply: bool,
-    priority: NetworkPriority,
-    data_attributes: Vec<DataAttribute>,
-    completion: oneshot::Sender<Result<(), Error>>,
-}
-
-/// Bounded APDU network-service sender for roles attached to an endpoint session.
-#[doc(hidden)]
-#[derive(Clone)]
-pub struct EndpointEgress {
-    commands: mpsc::Sender<NetworkServiceCommand>,
-    open: Arc<AtomicBool>,
-}
-
-impl EndpointEgress {
-    /// Sends one APDU without granting network lifecycle access.
-    #[doc(hidden)]
-    pub async fn send_apdu(
-        &self,
-        apdu: Vec<u8>,
-        destination: EndpointApduDestination,
-        expecting_reply: bool,
-        priority: NetworkPriority,
-        data_attributes: Vec<DataAttribute>,
-    ) -> Result<(), Error> {
-        if !self.open.load(Ordering::Acquire) {
-            return Err(shutdown_error());
-        }
-
-        let (completion, result) = oneshot::channel();
-        let command = NetworkServiceCommand {
-            apdu,
-            destination,
-            expecting_reply,
-            priority,
-            data_attributes,
-            completion,
-        };
-        match self.commands.try_send(command) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Closed(_)) => return Err(shutdown_error()),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                if !self.open.load(Ordering::Acquire) {
-                    return Err(shutdown_error());
-                }
-                return Err(Error::Encoding("endpoint egress queue is full".into()));
-            }
-        }
-
-        result.await.unwrap_or_else(|_| Err(shutdown_error()))
-    }
-
-    /// Sends one direct unicast APDU without granting network lifecycle access.
-    #[doc(hidden)]
-    pub async fn send_direct(
-        &self,
-        apdu: Vec<u8>,
-        destination_mac: MacAddr,
-        expecting_reply: bool,
-        priority: NetworkPriority,
-    ) -> Result<(), Error> {
-        self.send_apdu(
-            apdu,
-            EndpointApduDestination::Direct { destination_mac },
-            expecting_reply,
-            priority,
-            Vec::new(),
-        )
-        .await
-    }
-}
+#[path = "endpoint_egress.rs"]
+mod egress;
+pub use egress::{EndpointEgress, EndpointEgressAdmissionError, EndpointSend, EndpointSendOutcome};
+use egress::{NetworkServiceCommand, NetworkServicePayload};
 
 /// Destination selected for one decoded APDU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +98,19 @@ pub struct PolicyOutcome {
 
 /// Single-consumer queues produced when endpoint ingress starts.
 pub struct IngressReceivers {
+    /// Opted-in single-link local controls, currently NORMAL B/IP, B/IPv6 and SC;
+    /// other links retain discard behavior.
+    #[doc(hidden)]
+    pub network_controls: Option<mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>>,
+    /// Post-bind registration capability and independently supported port capacity.
+    #[doc(hidden)]
+    pub normal_bip_port: Option<(std::net::SocketAddrV4, u16)>,
+    /// Actual announced IPv4 address and bound UDP port, when this is B/IP.
+    #[doc(hidden)]
+    pub bip_local_address: Option<std::net::SocketAddrV4>,
+    /// Actual IPv4 B/IP broadcast endpoint after transport startup.
+    #[doc(hidden)]
+    pub bip_broadcast_endpoint: Option<std::net::SocketAddrV4>,
     /// Confirmed and unconfirmed request traffic.
     pub inbound_requests: mpsc::Receiver<ReceivedApdu>,
     /// Terminal response and segmentation traffic.
@@ -180,15 +130,17 @@ pub enum ClassifierExit {
     /// The network layer closed its APDU stream.
     InputClosed,
     /// A full policy queue prevented lossless reclamation.
-    PolicyRouteFull(PolicyOutcome),
+    PolicyRouteFull(Box<PolicyOutcome>),
     /// The policy queue was closed.
-    PolicyRouteClosed(PolicyOutcome),
+    PolicyRouteClosed(Box<PolicyOutcome>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lifecycle {
     Ready,
+    Starting,
     Running,
+    Stopping,
     Stopped,
 }
 
@@ -215,6 +167,29 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         }
     }
 
+    /// Pre-start link capability; never retains or exposes a transport reference.
+    #[doc(hidden)]
+    pub fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        self.network.as_ref()?.transport().bip_broadcast_endpoint()
+    }
+
+    /// Pre-bind NORMAL B/IP registration capability.
+    #[doc(hidden)]
+    pub fn normal_bip_endpoint(&self) -> Option<std::net::SocketAddrV4> {
+        self.network.as_ref()?.transport().normal_bip_endpoint()
+    }
+    /// Attach selected-object protection before starting the transport.
+    #[doc(hidden)]
+    pub fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
+        if self.lifecycle != Lifecycle::Ready {
+            return Err(Error::Encoding("ingress already started".into()));
+        }
+        self.network
+            .as_mut()
+            .ok_or_else(|| Error::Encoding("missing network".into()))?
+            .retain_network_port_lease_internal(lease)
+    }
+
     /// Starts the transport, network layer, and classifier task once.
     pub async fn start(&mut self) -> Result<IngressReceivers, Error> {
         if self.lifecycle != Lifecycle::Ready {
@@ -232,16 +207,49 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .network
             .as_mut()
             .ok_or_else(|| Error::Encoding("endpoint ingress network owner is missing".into()))?;
+        self.lifecycle = Lifecycle::Starting;
+        let controls = if network
+            .transport()
+            .supports_local_nonrouter_number_controls()
+        {
+            Some(network.enable_network_control_receiver()?)
+        } else {
+            None
+        };
         let apdu_rx = network.start().await?;
+        let controls = network
+            .transport()
+            .supports_local_nonrouter_number_controls()
+            .then_some(controls)
+            .flatten();
+        let normal_bip_port = network
+            .transport()
+            .normal_bip_endpoint()
+            .map(|address| (address, network.transport().local_receive_apdu_capacity()));
+        let bip_broadcast_endpoint = network.transport().bip_broadcast_endpoint();
+        let bip_local_address = bip_broadcast_endpoint.and_then(|_| {
+            bacnet_transport::bvll::decode_bip_mac(network.local_mac())
+                .ok()
+                .map(|(ip, port)| std::net::SocketAddrV4::new(ip.into(), port))
+        });
         let (inbound_tx, inbound_requests) = mpsc::channel(self.queue_capacity);
         let (terminal_tx, terminal_or_segment) = mpsc::channel(self.queue_capacity);
         let (policy_tx, policy_outcomes) = mpsc::channel(self.queue_capacity);
+        let queues = IngressQueues {
+            inbound_tx,
+            terminal_tx,
+            policy_tx,
+        };
         let (egress_tx, egress_rx) = mpsc::channel(self.queue_capacity);
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let egress_open = Arc::new(AtomicBool::new(true));
+        // The layer moves into the session task below; its number slot stays
+        // shared with the egress, where the endpoint's senders read it.
         let egress = EndpointEgress {
             commands: egress_tx,
             open: Arc::clone(&egress_open),
+            local_network: network.local_network_number().clone(),
+            group_destinations: network.transport().group_destinations(),
         };
         let network = self
             .network
@@ -251,9 +259,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.session_task = Some(tokio::spawn(session_task(
             network,
             apdu_rx,
-            inbound_tx,
-            terminal_tx,
-            policy_tx,
+            queues,
             egress_rx,
             cancel_rx,
             Arc::clone(&egress_open),
@@ -263,6 +269,10 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.lifecycle = Lifecycle::Running;
 
         Ok(IngressReceivers {
+            network_controls: controls,
+            normal_bip_port,
+            bip_local_address,
+            bip_broadcast_endpoint,
             inbound_requests,
             terminal_or_segment,
             policy_outcomes,
@@ -272,11 +282,21 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
 
     /// Cancels classification, stops the network layer, and reports classifier exit.
     pub async fn stop(&mut self) -> Result<ClassifierExit, Error> {
-        if self.lifecycle != Lifecycle::Running {
+        if !matches!(
+            self.lifecycle,
+            Lifecycle::Starting | Lifecycle::Running | Lifecycle::Stopping
+        ) {
             return Err(Error::Encoding("endpoint ingress is not running".into()));
         }
-
-        self.lifecycle = Lifecycle::Stopped;
+        if self.lifecycle == Lifecycle::Starting {
+            if let Some(mut network) = self.network.take() {
+                self.session_task = Some(tokio::spawn(async move {
+                    network.stop().await?;
+                    Ok(ClassifierExit::Cancelled)
+                }));
+            }
+        }
+        self.lifecycle = Lifecycle::Stopping;
         if let Some(open) = self.egress_open.take() {
             open.store(false, Ordering::Release);
         }
@@ -284,14 +304,20 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             let _ = cancel_tx.send(());
         }
 
-        match self.session_task.take() {
-            Some(task) => task.await.map_err(|error| {
-                Error::Encoding(format!("endpoint ingress session failed: {error}"))
-            })?,
+        let result = match self.session_task.as_mut() {
+            Some(task) => match task.await {
+                Ok(result) => result,
+                Err(error) => Err(Error::Encoding(format!(
+                    "endpoint ingress session failed: {error}"
+                ))),
+            },
             None => Err(Error::Encoding(
                 "endpoint ingress session task is missing".into(),
             )),
-        }
+        };
+        self.session_task.take();
+        self.lifecycle = Lifecycle::Stopped;
+        result
     }
 }
 
@@ -309,13 +335,17 @@ impl<T: TransportPort> Drop for EndpointIngress<T> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn session_task<T: TransportPort + 'static>(
-    mut network: NetworkLayer<T>,
-    mut apdu_rx: mpsc::Receiver<ReceivedApdu>,
+/// Senders for the queues a classified inbound APDU can be routed to.
+struct IngressQueues {
     inbound_tx: mpsc::Sender<ReceivedApdu>,
     terminal_tx: mpsc::Sender<ReceivedApdu>,
     policy_tx: mpsc::Sender<PolicyOutcome>,
+}
+
+async fn session_task<T: TransportPort + 'static>(
+    mut network: NetworkLayer<T>,
+    mut apdu_rx: mpsc::Receiver<ReceivedApdu>,
+    queues: IngressQueues,
     mut egress_rx: mpsc::Receiver<NetworkServiceCommand>,
     mut cancel_rx: oneshot::Receiver<()>,
     egress_open: Arc<AtomicBool>,
@@ -343,8 +373,7 @@ async fn session_task<T: TransportPort + 'static>(
             SessionEvent::Cancelled => break ClassifierExit::Cancelled,
             SessionEvent::Received(Some(received)) => {
                 prefer_ingress = !prefer_ingress;
-                if let Some(exit) = route_received(received, &inbound_tx, &terminal_tx, &policy_tx)
-                {
+                if let Some(exit) = route_received(received, &queues) {
                     break exit;
                 }
             }
@@ -355,9 +384,7 @@ async fn session_task<T: TransportPort + 'static>(
                     &network,
                     command,
                     &mut apdu_rx,
-                    &inbound_tx,
-                    &terminal_tx,
-                    &policy_tx,
+                    &queues,
                     &mut cancel_rx,
                     &mut prefer_ingress,
                 )
@@ -375,7 +402,10 @@ async fn session_task<T: TransportPort + 'static>(
     egress_open.store(false, Ordering::Release);
     egress_rx.close();
     while let Ok(command) = egress_rx.try_recv() {
-        let _ = command.completion.send(Err(shutdown_error()));
+        let _ = command.completion.send(EndpointSendOutcome {
+            result: Err(shutdown_error()),
+            attempted: false,
+        });
     }
     network.stop().await?;
     Ok(exit)
@@ -393,46 +423,121 @@ enum EgressDrive {
     Exit(ClassifierExit),
 }
 
+// A select! result consumed on the spot, never stored: boxing the APDU would
+// add a heap allocation per APDU received while a send is in flight.
+#[allow(clippy::large_enum_variant)]
 enum PendingEvent {
     Cancelled,
     Received(Option<ReceivedApdu>),
     Sent(Result<(), Error>),
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn drive_network_service<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
     command: NetworkServiceCommand,
     apdu_rx: &mut mpsc::Receiver<ReceivedApdu>,
-    inbound_tx: &mpsc::Sender<ReceivedApdu>,
-    terminal_tx: &mpsc::Sender<ReceivedApdu>,
-    policy_tx: &mpsc::Sender<PolicyOutcome>,
+    queues: &IngressQueues,
     cancel_rx: &mut oneshot::Receiver<()>,
     prefer_ingress: &mut bool,
 ) -> EgressDrive {
     let NetworkServiceCommand {
-        apdu,
+        payload,
+        response_route,
         destination,
         expecting_reply,
         priority,
         data_attributes,
-        completion,
+        mut completion,
+        deadline,
+        cancel_on_drop,
     } = command;
+    if (cancel_on_drop && completion.is_closed())
+        || deadline.is_some_and(|deadline| deadline <= tokio::time::Instant::now())
+    {
+        let _ = completion.send(EndpointSendOutcome {
+            result: Err(Error::Encoding(
+                "endpoint send expired before execution".into(),
+            )),
+            attempted: false,
+        });
+        return EgressDrive::Complete;
+    }
+    let expiry = async {
+        match deadline {
+            Some(deadline) => tokio::time::sleep_until(deadline).await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::pin!(expiry);
     let outcome = {
-        let send = send_network_service_apdu(
-            network,
-            &apdu,
-            &destination,
-            expecting_reply,
-            priority,
-            &data_attributes,
-        );
+        let send = async {
+            match &payload {
+                NetworkServicePayload::Apdu(apdu) => {
+                    if let Some(route) = &response_route {
+                        let (next_hop, destination) = match &destination {
+                            EndpointApduDestination::Direct { destination_mac } => {
+                                (destination_mac, None)
+                            }
+                            EndpointApduDestination::Routed {
+                                destination_network,
+                                destination_mac,
+                                router_mac,
+                            } => (
+                                router_mac,
+                                Some(bacnet_encoding::npdu::NpduAddress {
+                                    network: *destination_network,
+                                    mac_address: destination_mac.clone(),
+                                }),
+                            ),
+                            _ => {
+                                return Err(Error::Encoding(
+                                    "response requires a unicast destination".into(),
+                                ))
+                            }
+                        };
+                        network
+                            .send_response_apdu_on_issuance(
+                                IssuedApdu {
+                                    apdu,
+                                    next_hop,
+                                    destination: destination.as_ref(),
+                                    expecting_reply,
+                                    priority,
+                                },
+                                route,
+                                || {},
+                            )
+                            .await
+                    } else {
+                        send_network_service_apdu(
+                            network,
+                            apdu,
+                            &destination,
+                            expecting_reply,
+                            priority,
+                            &data_attributes,
+                        )
+                        .await
+                    }
+                }
+                NetworkServicePayload::LocalControl(npdu) => {
+                    network.transport().send_broadcast(npdu).await
+                }
+            }
+        };
         tokio::pin!(send);
         loop {
             let event = if *prefer_ingress {
                 tokio::select! {
                     biased;
                     _ = &mut *cancel_rx => PendingEvent::Cancelled,
+                    _ = &mut expiry => {
+                        let _ = completion.send(EndpointSendOutcome {
+                            result: Err(Error::Encoding("endpoint send deadline expired".into())), attempted: true,
+                        });
+                        return EgressDrive::Complete;
+                    },
+                    _ = completion.closed(), if cancel_on_drop => return EgressDrive::Complete,
                     received = apdu_rx.recv() => PendingEvent::Received(received),
                     result = &mut send => PendingEvent::Sent(result),
                 }
@@ -440,6 +545,13 @@ async fn drive_network_service<T: TransportPort + 'static>(
                 tokio::select! {
                     biased;
                     _ = &mut *cancel_rx => PendingEvent::Cancelled,
+                    _ = &mut expiry => {
+                        let _ = completion.send(EndpointSendOutcome {
+                            result: Err(Error::Encoding("endpoint send deadline expired".into())), attempted: true,
+                        });
+                        return EgressDrive::Complete;
+                    },
+                    _ = completion.closed(), if cancel_on_drop => return EgressDrive::Complete,
                     result = &mut send => PendingEvent::Sent(result),
                     received = apdu_rx.recv() => PendingEvent::Received(received),
                 }
@@ -449,8 +561,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                 PendingEvent::Cancelled => break EgressDrive::Cancelled,
                 PendingEvent::Received(Some(received)) => {
                     *prefer_ingress = !*prefer_ingress;
-                    if let Some(exit) = route_received(received, inbound_tx, terminal_tx, policy_tx)
-                    {
+                    if let Some(exit) = route_received(received, queues) {
                         break EgressDrive::Exit(exit);
                     }
                 }
@@ -459,14 +570,20 @@ async fn drive_network_service<T: TransportPort + 'static>(
                 }
                 PendingEvent::Sent(result) => {
                     *prefer_ingress = !*prefer_ingress;
-                    let _ = completion.send(result);
+                    let _ = completion.send(EndpointSendOutcome {
+                        result,
+                        attempted: true,
+                    });
                     return EgressDrive::Complete;
                 }
             }
         }
     };
 
-    let _ = completion.send(Err(shutdown_error()));
+    let _ = completion.send(EndpointSendOutcome {
+        result: Err(shutdown_error()),
+        attempted: true,
+    });
     outcome
 }
 
@@ -478,7 +595,9 @@ async fn send_network_service_apdu<T: TransportPort + 'static>(
     priority: NetworkPriority,
     data_attributes: &[DataAttribute],
 ) -> Result<(), Error> {
-    validate_effective_group_apdu(apdu, destination)?;
+    validate_effective_group_apdu(apdu, destination, |mac| {
+        network.transport().is_group_destination(mac)
+    })?;
     match destination {
         EndpointApduDestination::Direct { destination_mac } => {
             network
@@ -499,9 +618,11 @@ async fn send_network_service_apdu<T: TransportPort + 'static>(
             network
                 .send_apdu_routed_with_data_attributes(
                     apdu,
-                    *destination_network,
-                    destination_mac,
-                    router_mac,
+                    RoutedTarget {
+                        network: *destination_network,
+                        mac: destination_mac,
+                        router_mac,
+                    },
                     expecting_reply,
                     priority,
                     data_attributes,
@@ -559,16 +680,27 @@ async fn send_network_service_apdu<T: TransportPort + 'static>(
     }
 }
 
+/// Refuse anything but a valid Unconfirmed-Request APDU to a group: the
+/// three broadcast destinations, and a direct one to a MAC that reaches a
+/// group of nodes ([`TransportPort::is_group_destination`]), which with no
+/// DNET is a local broadcast (Clause 6.3, #1479). The network layer refuses
+/// the routed forms with no DADR itself.
 fn validate_effective_group_apdu(
     apdu: &[u8],
     destination: &EndpointApduDestination,
+    is_group_destination: impl FnOnce(&[u8]) -> bool,
 ) -> Result<(), Error> {
-    if !matches!(
-        destination,
+    let group = match destination {
         EndpointApduDestination::LocalBroadcast
-            | EndpointApduDestination::RemoteBroadcast { .. }
-            | EndpointApduDestination::GlobalBroadcast
-    ) {
+        | EndpointApduDestination::RemoteBroadcast { .. }
+        | EndpointApduDestination::GlobalBroadcast => true,
+        EndpointApduDestination::Direct { destination_mac } => {
+            is_group_destination(destination_mac)
+        }
+        EndpointApduDestination::Routed { .. }
+        | EndpointApduDestination::RoutedViaLocalBroadcast { .. } => false,
+    };
+    if !group {
         return Ok(());
     }
 
@@ -578,12 +710,12 @@ fn validate_effective_group_apdu(
     }
 }
 
-fn route_received(
-    received: ReceivedApdu,
-    inbound_tx: &mpsc::Sender<ReceivedApdu>,
-    terminal_tx: &mpsc::Sender<ReceivedApdu>,
-    policy_tx: &mpsc::Sender<PolicyOutcome>,
-) -> Option<ClassifierExit> {
+fn route_received(received: ReceivedApdu, queues: &IngressQueues) -> Option<ClassifierExit> {
+    let IngressQueues {
+        inbound_tx,
+        terminal_tx,
+        policy_tx,
+    } = queues;
     let route = match classify(&received) {
         Ok(route) => route,
         Err(reason) => return send_policy(policy_tx, PolicyOutcome { reason, received }),
@@ -637,10 +769,10 @@ fn send_policy(
     match policy_tx.try_send(outcome) {
         Ok(()) => None,
         Err(mpsc::error::TrySendError::Full(outcome)) => {
-            Some(ClassifierExit::PolicyRouteFull(outcome))
+            Some(ClassifierExit::PolicyRouteFull(Box::new(outcome)))
         }
         Err(mpsc::error::TrySendError::Closed(outcome)) => {
-            Some(ClassifierExit::PolicyRouteClosed(outcome))
+            Some(ClassifierExit::PolicyRouteClosed(Box::new(outcome)))
         }
     }
 }
@@ -652,3 +784,7 @@ mod tests;
 #[cfg(test)]
 #[path = "endpoint_network_service_tests.rs"]
 mod network_service_tests;
+
+#[cfg(test)]
+#[path = "endpoint_egress_deadline_tests.rs"]
+mod deadline_tests;

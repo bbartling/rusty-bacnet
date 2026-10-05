@@ -5,6 +5,7 @@ use super::*;
 
 async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
     let data = ws_hub.recv().await.unwrap();
+    super::tests::identity_tests::assert_request_uuid(&data, [1; 16]);
     let req = decode_sc_message(&data).unwrap();
     assert_eq!(req.function, ScFunction::ConnectRequest);
 
@@ -14,7 +15,7 @@ async fn hub_accept(ws_hub: &LoopbackWebSocket, hub_vmac: Vmac) {
 async fn send_connect_accept(ws_hub: &LoopbackWebSocket, message_id: u16, hub_vmac: Vmac) {
     let mut accept_payload = Vec::with_capacity(26);
     accept_payload.extend_from_slice(&hub_vmac);
-    accept_payload.extend_from_slice(&[0u8; 16]);
+    accept_payload.extend_from_slice(&[0x33; 16]);
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
     accept_payload.extend_from_slice(&1476u16.to_be_bytes());
 
@@ -90,6 +91,7 @@ async fn primary_restore_duplicate_vmac_reseed_is_reused_by_next_probe() {
     let failover_hub_vmac = [0x20; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(100)
         .with_heartbeat_interval_ms(5_000)
         .with_reconnect(ScReconnectConfig {
@@ -111,11 +113,13 @@ async fn primary_restore_duplicate_vmac_reseed_is_reused_by_next_probe() {
 
     let primary_restore_task = tokio::spawn(async move {
         let stale = primary_hub.recv().await.unwrap();
+        super::tests::identity_tests::assert_request_uuid(&stale, [1; 16]);
         let stale_req = decode_sc_message(&stale).unwrap();
         assert_eq!(stale_req.function, ScFunction::ConnectRequest);
         assert_eq!(&stale_req.payload[0..6], &client_vmac);
 
         let first = primary_hub.recv().await.unwrap();
+        super::tests::identity_tests::assert_request_uuid(&first, [1; 16]);
         let first_req = decode_sc_message(&first).unwrap();
         assert_eq!(first_req.function, ScFunction::ConnectRequest);
         assert_eq!(&first_req.payload[0..6], &client_vmac);
@@ -129,6 +133,7 @@ async fn primary_restore_duplicate_vmac_reseed_is_reused_by_next_probe() {
         .await;
 
         let second = primary_hub.recv().await.unwrap();
+        super::tests::identity_tests::assert_request_uuid(&second, [1; 16]);
         let second_req = decode_sc_message(&second).unwrap();
         assert_eq!(second_req.function, ScFunction::ConnectRequest);
         let retry_vmac: Vmac = second_req.payload[0..6].try_into().unwrap();
@@ -159,6 +164,7 @@ async fn primary_restore_reseed_failure_blocks_stale_restore_retry() {
     let failover_hub_vmac = [0x20; 6];
 
     let mut transport = ScTransport::new(primary_client, client_vmac)
+        .with_device_uuid([1; 16])
         .with_connect_timeout_ms(100)
         .with_heartbeat_interval_ms(5_000)
         .with_reconnect(ScReconnectConfig {
@@ -197,12 +203,13 @@ async fn primary_restore_reseed_failure_blocks_stale_restore_retry() {
         )
         .await;
 
-        match tokio::time::timeout(Duration::from_millis(200), primary_hub.recv()).await {
-            Ok(Ok(data)) => panic!(
+        if let Ok(Ok(data)) =
+            tokio::time::timeout(Duration::from_millis(200), primary_hub.recv()).await
+        {
+            panic!(
                 "primary restore retried with stale VMAC after reseed failure: {:02x?}",
                 data
-            ),
-            Ok(Err(_)) | Err(_) => {}
+            )
         }
     });
 

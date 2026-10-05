@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
-use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::database::{LocalDevice, ObjectDatabase};
 use bacnet_objects::event::EventTransition;
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
 };
@@ -22,11 +23,15 @@ pub(super) enum SetpointRead {
     Transient,
 }
 
+/// Read a FLOATING_LIMIT setpoint. The reference resolves as the monitored
+/// one does: unqualified or naming this device reads `db`, and one naming
+/// another device is unavailable here, like an unreachable local object.
 pub(super) fn read_setpoint(
     db: &ObjectDatabase,
+    local_device: LocalDevice,
     reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
 ) -> SetpointRead {
-    if reference.device_identifier.is_some() {
+    if !local_device.is_local(reference.device_identifier) {
         return SetpointRead::Transient;
     }
     let Some(object) = db.get(&reference.object_identifier) else {
@@ -57,7 +62,7 @@ pub(super) fn passes_for_delay(delay_secs: u32, interval_secs: u64) -> u32 {
 pub(super) fn ack_required_for_transition(
     db: &ObjectDatabase,
     enrollment: &dyn BACnetObject,
-    transition_bit: u8,
+    transition_bit: EventTransitionBits,
 ) -> bool {
     let Ok(PropertyValue::Unsigned(instance)) =
         enrollment.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
@@ -75,7 +80,7 @@ pub(super) fn ack_required_for_transition(
     };
     match notification_class.read_property(PropertyIdentifier::ACK_REQUIRED, None) {
         Ok(PropertyValue::BitString { data, .. }) => {
-            bacnet_types::bitstring::unpack_octet(&data, 3) & transition_bit != 0
+            EventTransitionBits::from_bacnet(&data).intersects(transition_bit)
         }
         _ => false,
     }
@@ -156,20 +161,33 @@ pub(super) fn classify_required_property_read_error(error: &Error) -> LocalConfi
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The enrollment under evaluation and the reliability, event state and
+/// Event_Enable it held when the pass read it.
+pub(super) struct ReliabilitySubject<'a> {
+    pub(super) db: &'a ObjectDatabase,
+    pub(super) enrollment: &'a dyn BACnetObject,
+    pub(super) enrollment_oid: ObjectIdentifier,
+    pub(super) previous: Reliability,
+    pub(super) current_state: EventState,
+    pub(super) event_enable: EventTransitionBits,
+}
+
 pub(super) fn queue_reliability_transition(
-    db: &ObjectDatabase,
-    enrollment: &dyn BACnetObject,
     updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
-    enrollment_oid: ObjectIdentifier,
+    subject: &ReliabilitySubject<'_>,
     monitored_oid: Option<ObjectIdentifier>,
-    previous: Reliability,
     desired: Reliability,
-    current_state: EventState,
-    event_enable: u8,
     cause: EventEnrollmentReliabilityCause,
     referenced_value: CapturedReferencedValue,
 ) {
+    let ReliabilitySubject {
+        db,
+        enrollment,
+        enrollment_oid,
+        previous,
+        current_state,
+        event_enable,
+    } = *subject;
     let target = if desired == Reliability::NO_FAULT_DETECTED {
         EventState::NORMAL
     } else {
@@ -188,7 +206,7 @@ pub(super) fn queue_reliability_transition(
             desired,
             from: current_state,
             to: target,
-            distribute: event_enable & transition_bit != 0,
+            distribute: event_enable.contains(transition_bit),
             ack_required: ack_required_for_transition(db, enrollment, transition_bit),
             cause,
             referenced_value,
