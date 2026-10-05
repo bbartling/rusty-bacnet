@@ -6,7 +6,7 @@ description: "Review the breaking changes by area before replacing a working int
 Do not treat this pre-1.0 update as a drop-in replacement merely because the package name stayed the same. v0.12.0 changes Rust and Python APIs, some on-the-wire behavior, BACnet/SC trust and identity, and how several objects answer. This page groups what changes for code and deployments built on v0.11.0.
 
 :::note[This guide and the changelog]
-The [0.12.0 section of the changelog](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/CHANGELOG.md) lists every change in the order it was made, so some of its entries concern APIs that were added and then changed again during the 0.12 cycle. This guide covers only what changes for code written against v0.11.0; the changelog's migration notes give the exact replacements.
+The [0.12.0 section of the changelog](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/CHANGELOG.md) lists every change by area and issue, and its migration notes give the exact replacements. This guide groups what changes for code written against v0.11.0.
 :::
 
 ## Before updating
