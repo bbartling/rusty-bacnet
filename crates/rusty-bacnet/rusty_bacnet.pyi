@@ -1456,8 +1456,10 @@ class PropertyValue:
       rules: ``Port_Filter[2]`` is a port_permission, ``Event_Time_Stamps[1]``
       a timestamp.
 
-    Two values are equal when they carry the same octets and, for a typed
-    read, the same element production.
+    Two values are equal when they have the same tag and value: numbers
+    compare as numbers (``real(0.0) == real(-0.0)``, and a NaN equals
+    nothing), a list item by item, and a typed read by its octets and
+    element production. Equal values hash alike.
 
     ``copy.copy``, ``copy.deepcopy`` and ``pickle`` (every protocol) rebuild
     an equal value through the constructor its ``tag`` names, a list from
@@ -1505,7 +1507,9 @@ class PropertyValue:
     def list(items: list[PropertyValue]) -> PropertyValue:
         """Create a List (array) value from a list of PropertyValue items.
         Items that are all elements of one typed constructed collection (from
-        indexed reads) make that collection, equal to its whole read."""
+        indexed reads) make that collection, equal to its whole read. Lists
+        nest at most 32 deep, the decoder's nesting limit; a deeper one
+        raises ValueError."""
         ...
     @staticmethod
     def application_data(bytes: bytes) -> PropertyValue:

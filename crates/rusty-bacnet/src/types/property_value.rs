@@ -1,3 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use bacnet_encoding::tags::MAX_CONTEXT_NESTING_DEPTH;
 use pyo3::types::PyTuple;
 
 use super::constructed_read::Element;
@@ -202,8 +206,24 @@ impl PyPropertyValue {
     /// Create a List (array) property value from a list of PropertyValue items.
     /// Items that are all elements of one typed constructed read (#1310)
     /// make that typed collection, as a whole read of them would.
+    ///
+    /// Lists nest at most 32 deep, the decoder's nesting limit
+    /// (`MAX_CONTEXT_NESTING_DEPTH`), and a deeper one raises ValueError
+    /// (#1506). The pickle and copy rebuilds come through here too, so no
+    /// value is deeper: reading, comparing, hashing and dropping one recurse
+    /// once per level.
     #[staticmethod]
-    fn list(items: Vec<PyPropertyValue>) -> Self {
+    fn list(items: Vec<PyPropertyValue>) -> PyResult<Self> {
+        let depth = 1 + items
+            .iter()
+            .map(|item| list_depth(&item.inner))
+            .max()
+            .unwrap_or(0);
+        if depth > MAX_CONTEXT_NESTING_DEPTH {
+            return Err(PyValueError::new_err(format!(
+                "lists nest at most {MAX_CONTEXT_NESTING_DEPTH} deep"
+            )));
+        }
         let element = items
             .first()
             .and_then(|first| first.element)
@@ -214,10 +234,10 @@ impl PyPropertyValue {
                 })
             });
         let list = primitives::PropertyValue::List(items.into_iter().map(|pv| pv.inner).collect());
-        match element {
+        Ok(match element {
             Some(element) => Self::constructed(list, element),
             None => Self::from_rust(list),
-        }
+        })
     }
 
     /// Create an ApplicationData value from pre-encoded application-layer
@@ -281,18 +301,19 @@ impl PyPropertyValue {
     }
 
     /// Equal when both carry the same value and, for a typed constructed
-    /// read, the same element production.
+    /// read, the same element production. Numbers compare as numbers, so
+    /// `real(0.0) == real(-0.0)` and a NaN equals nothing; a list compares
+    /// item by item, and a typed element by its octets.
     fn __eq__(&self, other: &Self) -> bool {
         self == other
     }
 
+    /// Equal values hash alike (#1506); see [`hash_value`].
     fn __hash__(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        std::mem::discriminant(&self.inner).hash(&mut h);
-        format!("{:?}", self.inner).hash(&mut h);
-        self.element.hash(&mut h);
-        h.finish()
+        let mut state = DefaultHasher::new();
+        hash_value(&self.inner, &mut state);
+        self.element.hash(&mut state);
+        state.finish()
     }
 
     /// What `copy` and `pickle` call (#1500): the constructor `tag` names
@@ -379,6 +400,53 @@ impl PyPropertyValue {
     }
 }
 
+/// How many lists deep `value` nests: 0 for a scalar, 1 for a list of
+/// scalars. [`PyPropertyValue::list`] keeps every value it builds within
+/// [`MAX_CONTEXT_NESTING_DEPTH`], and a decoded one is a flat list at most,
+/// so the walk recurses no deeper than that.
+fn list_depth(value: &primitives::PropertyValue) -> usize {
+    match value {
+        primitives::PropertyValue::List(items) => {
+            1 + items.iter().map(list_depth).max().unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+/// Feeds `value` to `state` the way the derived `PartialEq` compares it, so
+/// that equal values hash alike (#1506). A float's zero hashes as +0.0,
+/// since `0.0 == -0.0`; every other float, a NaN included, hashes its bits.
+/// A NaN equals nothing, itself included, so its hash needn't match another.
+fn hash_value(value: &primitives::PropertyValue, state: &mut impl Hasher) {
+    use primitives::PropertyValue as V;
+    std::mem::discriminant(value).hash(state);
+    match value {
+        V::Null => {}
+        V::Boolean(value) => value.hash(state),
+        V::Unsigned(value) => value.hash(state),
+        V::Signed(value) => value.hash(state),
+        V::Real(value) => (if *value == 0.0 { 0.0 } else { *value })
+            .to_bits()
+            .hash(state),
+        V::Double(value) => (if *value == 0.0 { 0.0 } else { *value })
+            .to_bits()
+            .hash(state),
+        V::OctetString(octets) | V::ApplicationData(octets) => octets.hash(state),
+        V::CharacterString(value) => value.hash(state),
+        V::BitString { unused_bits, data } => (unused_bits, data).hash(state),
+        V::Enumerated(value) => value.hash(state),
+        V::Date(date) => date.hash(state),
+        V::Time(time) => time.hash(state),
+        V::ObjectIdentifier(oid) => oid.hash(state),
+        V::List(items) => {
+            items.len().hash(state);
+            for item in items {
+                hash_value(item, state);
+            }
+        }
+    }
+}
+
 /// The tag of a value with no typed constructed form.
 fn tag(value: &primitives::PropertyValue) -> &'static str {
     match value {
@@ -441,3 +509,7 @@ fn repr(value: &primitives::PropertyValue) -> String {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "property_value_tests.rs"]
+mod tests;
