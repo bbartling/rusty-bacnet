@@ -57,16 +57,15 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNone(result["first_sequence_number"])
                 for reader in (role, client):
                     for options in ({"range_type": "time"}, {"range_type": "position"},
-                                    {"range_type": "sequence", "count": 0},
-                                    {"range_type": "position", "count": 32768},
-                                    {"range_type": "position", "count": -32769}, {"array_index": 0}):
+                                    {"range_type": "sequence", "count": 0}, {"array_index": 0}):
                         with self.subTest(reader=type(reader), options=options):
                             # Bad destination would fail parsing if validation were delayed.
                             with self.assertRaises(ValueError):
                                 reader.read_range("not-an-address", oid, pid, **options)
-                    for count in (1 << 31, -(1 << 31) - 1):
+                    # Outside INTEGER16 overflows (#1360), before address
+                    # parsing and I/O.
+                    for count in (32768, -32769, 1 << 31, -(1 << 31) - 1):
                         with self.subTest(reader=type(reader), overflowing_count=count):
-                            # Native argument conversion precedes address parsing and I/O.
                             with self.assertRaises(OverflowError):
                                 reader.read_range("not-an-address", oid, pid,
                                                   range_type="position", count=count)

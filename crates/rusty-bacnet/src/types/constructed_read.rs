@@ -75,7 +75,8 @@ pub(crate) enum Element {
     TimeStamp,
     /// An Active_COV_Subscriptions element, as a mapping.
     CovSubscription,
-    /// A command source: `None`, an object reference, or an address mapping.
+    /// A command source: `None`, an object reference, or an address mapping
+    /// with `kind` `"address"`.
     ValueSource,
     /// An Accumulator's Scale: a `float` for a float scale, an `int` for a
     /// power-of-ten scale.

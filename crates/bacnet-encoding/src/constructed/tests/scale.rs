@@ -1,6 +1,7 @@
 //! `BACnetScale` CHOICE and `BACnetPrescale` SEQUENCE vectors (Clause 21).
 use super::*;
 use bacnet_types::constructed::{BACnetPrescale, BACnetScale};
+use bacnet_types::error::DecodingKind;
 
 fn encode_one_scale(value: &BACnetScale) -> Vec<u8> {
     let mut buf = BytesMut::new();
@@ -37,6 +38,9 @@ fn scale_vectors() -> Vec<(BACnetScale, Vec<u8>)> {
         (BACnetScale::IntegerScale(0), vec![0x19, 0x00]),
         (BACnetScale::IntegerScale(-3), vec![0x19, 0xFD]),
         (BACnetScale::IntegerScale(300), vec![0x1A, 0x01, 0x2C]),
+        // A sign octet the fewest octets still need: +128 and -129.
+        (BACnetScale::IntegerScale(128), vec![0x1A, 0x00, 0x80]),
+        (BACnetScale::IntegerScale(-129), vec![0x1A, 0xFF, 0x7F]),
         (
             BACnetScale::IntegerScale(i32::MIN),
             vec![0x1C, 0x80, 0x00, 0x00, 0x00],
@@ -95,35 +99,79 @@ fn scale_and_prescale_decode_at_an_offset_and_leave_what_follows() {
     );
 }
 
+/// The kind of a decode fault, or `None` for any other result.
+fn kind<T>(result: Result<T, Error>) -> Option<DecodingKind> {
+    match result {
+        Err(Error::Decoding { kind, .. }) => Some(kind),
+        _ => None,
+    }
+}
+
 #[test]
 fn scale_and_prescale_reject_other_tags_and_malformed_contents() {
-    let scales: &[(&str, &[u8])] = &[
-        ("application REAL", &[0x44, 0x3F, 0x80, 0x00, 0x00]),
-        ("application INTEGER", &[0x31, 0x02]),
-        ("context tag 2", &[0x29, 0x01]),
-        ("framed float", &[0x0E, 0x44, 0x3F, 0x80, 0x00, 0x00, 0x0F]),
-        ("three-octet float", &[0x0B, 0x3F, 0x80, 0x00]),
-        ("empty integer", &[0x18]),
-        ("five-octet integer", &[0x1D, 0x05, 0x01, 0, 0, 0, 0]),
+    use DecodingKind::{InvalidEncoding, InvalidTag, Missing, OutOfRange};
+    let scales: &[(&str, &[u8], DecodingKind)] = &[
+        ("nothing", &[], Missing),
+        (
+            "application REAL",
+            &[0x44, 0x3F, 0x80, 0x00, 0x00],
+            InvalidTag,
+        ),
+        ("application INTEGER", &[0x31, 0x02], InvalidTag),
+        ("context tag 2", &[0x29, 0x01], InvalidTag),
+        (
+            "framed float",
+            &[0x0E, 0x44, 0x3F, 0x80, 0x00, 0x00, 0x0F],
+            InvalidTag,
+        ),
+        ("a closing tag at the top", &[0x0F], InvalidTag),
+        (
+            "three-octet float",
+            &[0x0B, 0x3F, 0x80, 0x00],
+            InvalidEncoding,
+        ),
+        ("empty integer", &[0x18], InvalidEncoding),
+        (
+            "five-octet integer",
+            &[0x1D, 0x05, 0x01, 0, 0, 0, 0],
+            InvalidEncoding,
+        ),
     ];
-    for (name, bytes) in scales {
-        assert!(
-            matches!(decode_scale(bytes, 0), Err(Error::Decoding { .. })),
+    for (name, bytes, expected) in scales {
+        assert_eq!(
+            kind(decode_scale(bytes, 0)),
+            Some(*expected),
             "{name}: {:?}",
             decode_scale(bytes, 0)
         );
     }
-    let prescales: &[(&str, &[u8])] = &[
-        ("application Unsigneds", &[0x21, 0x05, 0x21, 0x64]),
-        ("modulo divide missing", &[0x09, 0x05]),
-        ("members swapped", &[0x19, 0x64, 0x09, 0x05]),
-        ("empty multiplier", &[0x08, 0x19, 0x64]),
+    // The closing tag of a frame around the CHOICE: the value was left out.
+    assert_eq!(kind(decode_scale(&[0x3E, 0x3F], 1)), Some(Missing));
+    let prescales: &[(&str, &[u8], DecodingKind)] = &[
+        ("nothing", &[], Missing),
+        (
+            "application Unsigneds",
+            &[0x21, 0x05, 0x21, 0x64],
+            InvalidTag,
+        ),
+        ("modulo divide missing", &[0x09, 0x05], Missing),
+        ("members swapped", &[0x19, 0x64, 0x09, 0x05], Missing),
+        ("empty multiplier", &[0x08, 0x19, 0x64], InvalidEncoding),
+        // Past unsigned32, the width the object keeps.
+        (
+            "multiplier past unsigned32",
+            &[0x0D, 0x05, 0x01, 0, 0, 0, 0, 0x19, 0x01],
+            OutOfRange,
+        ),
     ];
-    for (name, bytes) in prescales {
-        assert!(decode_prescale(bytes, 0).is_err(), "{name}");
+    for (name, bytes, expected) in prescales {
+        assert_eq!(
+            kind(decode_prescale(bytes, 0)),
+            Some(*expected),
+            "{name}: {:?}",
+            decode_prescale(bytes, 0)
+        );
     }
-    // Past unsigned32, the width the object keeps.
-    assert!(decode_prescale(&[0x0D, 0x05, 0x01, 0, 0, 0, 0, 0x19, 0x01], 0).is_err());
     assert!(matches!(
         decode_scale(&[0x0C, 0x3F, 0x80], 0),
         Err(Error::BufferTooShort { .. })

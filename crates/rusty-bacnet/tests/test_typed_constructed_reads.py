@@ -299,10 +299,37 @@ class TypedConstructedReadTests(unittest.IsolatedAsyncioTestCase):
                              members=await value(USER_1, P.MEMBERS),
                              member_of=await value(USER_1, P.MEMBER_OF))
         copy.configure_audit_recipient(await value(DEVICE_ID, P.AUDIT_NOTIFICATION_RECIPIENT))
+        copy.add_audit_reporter(1, "Reporter")
+        copy.configure_audit_reporters([{"instance": 1, "audit_level": "none",
+                                         "auditable_operations": 0,
+                                         "issue_confirmed_notifications": False}])
         copy.add_accumulator(1, "kWh", 70, scale=await value(ACC_1, P.SCALE),
                              prescale=await value(ACC_1, P.PRESCALE))
         copy.add_accumulator(2, "Pulses", scale=await value(ACC_2, P.SCALE))
-        self.assertEqual(copy._pending_registration_count(), 5)
+        await copy.start()
+        try:
+            # The copy serves what the original does, octet for octet.
+            copy_device = ObjectIdentifier(ObjectType.DEVICE, DEVICE + 2)
+            for oid, prop in (
+                (RIGHTS_1, P.POSITIVE_ACCESS_RULES),
+                (RIGHTS_1, P.NEGATIVE_ACCESS_RULES),
+                (RIGHTS_1, P.ACCOMPANIMENT),
+                (ZONE_1, P.ENTRY_POINTS),
+                (ZONE_1, P.EXIT_POINTS),
+                (USER_1, P.CREDENTIALS),
+                (USER_1, P.MEMBERS),
+                (USER_1, P.MEMBER_OF),
+                (DEVICE_ID, P.AUDIT_NOTIFICATION_RECIPIENT),
+                (ACC_1, P.SCALE),
+                (ACC_1, P.PRESCALE),
+                (ACC_2, P.SCALE),
+            ):
+                with self.subTest(prop=prop):
+                    served = await copy.read_property(
+                        copy_device if oid == DEVICE_ID else oid, prop)
+                    self.assertEqual(served, await self.server.read_property(oid, prop))
+        finally:
+            await copy.stop()
 
 
 class AccumulatorKeywordTests(unittest.TestCase):
@@ -322,6 +349,7 @@ class AccumulatorKeywordTests(unittest.TestCase):
             ({"scale": 2**31}, OverflowError),
             ({"scale": float("inf")}, ValueError),
             ({"prescale": (5,)}, ValueError),
+            ({"prescale": (5, 0)}, ValueError),  # fits the type, divides by nothing
             ({"prescale": "5/100"}, TypeError),
             ({"prescale": (-1, 100)}, OverflowError),
             ({"prescale": (1, 2**32)}, OverflowError),

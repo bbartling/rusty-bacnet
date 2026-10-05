@@ -96,17 +96,42 @@ pub(crate) fn integer(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i128> {
     })
 }
 
-/// An integer read as `T`, the fixed-width type of the field it fills: a
-/// value outside `T` (negative for an unsigned type, or too wide) raises
-/// OverflowError.
-pub(crate) fn fixed_integer<T: TryFrom<i128>>(value: &Bound<'_, PyAny>, name: &str) -> PyResult<T> {
-    let value = integer(value, name)?;
+/// A fixed-width integer type a field is read as, with its bounds for the
+/// errors to name.
+pub(crate) trait FixedWidth: TryFrom<i128> + Copy + PartialOrd + Display {
+    /// The smallest value the type holds.
+    const MIN: i128;
+    /// The largest value the type holds.
+    const MAX: i128;
+}
+
+macro_rules! fixed_width {
+    ($($type:ty),*) => {
+        $(impl FixedWidth for $type {
+            const MIN: i128 = <$type>::MIN as i128;
+            const MAX: i128 = <$type>::MAX as i128;
+        })*
+    };
+}
+
+fixed_width!(u8, u16, u32, u64, i32);
+
+/// `value` as `T`; outside `T` (negative for an unsigned type, or too wide)
+/// raises OverflowError naming the range `T` holds.
+pub(crate) fn fit<T: FixedWidth>(value: i128, name: &str) -> PyResult<T> {
     T::try_from(value).map_err(|_| {
         PyOverflowError::new_err(format!(
-            "{name} is out of range for {}, got {value}",
-            std::any::type_name::<T>()
+            "{name} must be {}..={}, got {value}",
+            T::MIN,
+            T::MAX
         ))
     })
+}
+
+/// An integer read as `T`, the fixed-width type of the field it fills: a
+/// value outside `T` raises OverflowError.
+pub(crate) fn fixed_integer<T: FixedWidth>(value: &Bound<'_, PyAny>, name: &str) -> PyResult<T> {
+    fit(integer(value, name)?, name)
 }
 
 /// An integer read as `T` and then held to `range`, the values BACnet allows
@@ -118,7 +143,7 @@ pub(crate) fn ranged_integer<T>(
     range: RangeInclusive<T>,
 ) -> PyResult<T>
 where
-    T: TryFrom<i128> + PartialOrd + Display,
+    T: FixedWidth,
 {
     let value = fixed_integer::<T>(value, name)?;
     if !range.contains(&value) {

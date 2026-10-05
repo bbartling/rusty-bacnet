@@ -113,8 +113,10 @@ impl Decoded {
             Self::ValueSource(source) => match source {
                 BACnetValueSource::None => py.None(),
                 BACnetValueSource::Object(reference) => object_reference_to_py(py, &reference)?,
+                // The address form the recipient mappings use, `kind` included.
                 BACnetValueSource::Address(address) => {
                     let dict = PyDict::new(py);
+                    dict.set_item("kind", "address")?;
                     dict.set_item("network_number", address.network_number)?;
                     dict.set_item("mac_address", PyBytes::new(py, &address.mac_address))?;
                     dict.into_any().unbind()

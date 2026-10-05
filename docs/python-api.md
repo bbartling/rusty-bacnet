@@ -348,7 +348,7 @@ its octets.
 | Schedule | Effective_Period (one value) | `"date_range"` | `(start_date, end_date)` | none |
 | Calendar | Date_List | `"calendar_entry"` | `{"kind": "date", "date"}`, `{"kind": "date_range", "start_date", "end_date"}` or `{"kind": "week_n_day", "month", "week_of_month", "day_of_week"}` | none |
 | any | Event_Time_Stamps, Command_Time_Array; Last_Command_Time (one value) | `"timestamp"` | a `BACnetTimeStamp` | none |
-| any | Value_Source_Array; Value_Source (one value) | `"value_source"` | `None` (none), an `ObjectIdentifier` or `(device, object)` (an object), or `{"network_number", "mac_address"}` (an address) | none |
+| any | Value_Source_Array; Value_Source (one value) | `"value_source"` | `None` (none), an `ObjectIdentifier` or `(device, object)` (an object), or an `AuditRecipientAddress` mapping, `{"kind": "address", "network_number", "mac_address"}` (an address) | none |
 | Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
 | Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
 
@@ -990,10 +990,9 @@ raw = await client.get_event_information("192.168.1.100:47808")
 Read a range of items from a list or log object. This method is shared by
 `BACnetClient` and `EndpointClient`. Python supports all-items (`range_type=None`),
 position and sequence forms; ByTime remains Rust-only. Invalid selectors,
-array index zero and omitted/zero/out-of-INTEGER16 counts for a selected range
-raise `ValueError` before address parsing or I/O, provided the supplied count fits
-a signed 32-bit integer. Counts outside that native argument range raise
-`OverflowError` before address parsing or I/O. Omitted reference values default
+array index zero and omitted or zero counts for a selected range raise
+`ValueError` before address parsing or I/O. A count outside INTEGER16
+(-32768 to 32767) raises `OverflowError` before address parsing or I/O (#1360). Omitted reference values default
 to zero; zero position/sequence references are valid and may return no matches.
 The typed `ReadRangeResult` dictionary preserves raw item bytes, the three-boolean
 flags tuple and optional first sequence number. Endpoint responses must be
@@ -1506,8 +1505,12 @@ listed above and include every optional key with either its decoded value or
 
 All mappings reject unknown keys. A non-mapping container, wrong field
 container, or wrong wrapper/value type raises `TypeError`; missing required
-keys, bad discriminators, reserved values, and out-of-range integers raise
-`ValueError`. Native validation, transport, and protocol failures use the
+keys, bad discriminators, reserved values, and integers that fit their field
+but fall outside BACnet's range (a `target_priority` of 17) raise
+`ValueError`. An integer outside its field's type raises `OverflowError`
+(#1360): `invoke_id` or `source_user_role` past 255, `source_user_id`,
+`requested_count` or a `network_number` past 65535, a negative or too wide
+`start_at_sequence_number` or `operations` mask. Native validation, transport, and protocol failures use the
 existing `BacnetError` hierarchy. Validation and native encoding complete
 before an APDU can be sent.
 
@@ -2159,8 +2162,8 @@ child.add_device_binding(9, await parent.local_address())
 - `auditable_operations` is a required non-Boolean integer mask, not a list or
   an operation ordinal: WRITE is `1 << AuditOperation.WRITE.to_raw()` (`2`).
   Bits 0–15 are standard operations; bits 32–63 are preserved proprietary positions.
-  Reserved bits 16–31, negatives and u64 overflow raise `ValueError`; wrong types,
-  including bool, raise `TypeError`. Accepting a bit does not implement its source.
+  Reserved bits 16–31 raise `ValueError`, and negatives and u64 overflow
+  `OverflowError` (#1360); wrong types, including bool, raise `TypeError`. Accepting a bit does not implement its source.
 - `issue_confirmed_notifications` requires actual `True` or `False`; integers
   and truthy objects raise `TypeError`. The three optional dict fields are
   `monitored_objects`, `audit_priority_filter`, and `maximum_send_delay`.
@@ -2175,7 +2178,7 @@ child.add_device_binding(9, await parent.local_address())
   mappings or other element types raise `TypeError`, with an index for bad elements.
 - `audit_priority_filter=None` (or omission) selects all priorities (`0xFFFF`).
   Otherwise it is a strict non-Boolean integer mask in `0..=65535`; `0x0000` is
-  valid. Wrong types/bool raise `TypeError`, negatives/overflow raise `ValueError`.
+  valid. Wrong types/bool raise `TypeError`, negatives/overflow raise `OverflowError`.
   Bit 0 selects priority 1 through bit 15 selecting priority 16. For example,
   `1 << 7` selects priority 8; `1 << 15` selects priority 16, also used by a write
   with omitted priority. Filtering applies to commandable-property writes, not
@@ -2257,8 +2260,10 @@ creation-time keyword arguments on `add_analog_value` and `add_binary_value`:
 - `auditable_operations`: `None` (absent) or a u64 operation mask. Reserved bits 16–31 are rejected.
 - `audit_priority_filter`: `None` (absent), `"inherit"` (present BACnet NULL), or a 16-bit mask. Bit 0 selects priority 1.
 
-Validation occurs before registration, with no I/O. Invalid names/ranges raise
-ValueError; noninteger masks, including bool, raise TypeError. Endpoint pending
+Validation occurs before registration, with no I/O. Invalid names and reserved
+operation bits raise ValueError; a mask outside its integer type (negative, past
+unsigned64 for `auditable_operations` or past 65535 for `audit_priority_filter`)
+raises OverflowError (#1360); noninteger masks, including bool, raise TypeError. Endpoint pending
 registrations retain the typed policy across their existing startup retry paths.
 These options provision readable optional rows; they do not enable an endpoint
 target Reporter or broaden its executing service set. The standalone target

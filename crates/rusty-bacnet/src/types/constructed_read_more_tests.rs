@@ -605,7 +605,8 @@ fn value_sources_read_as_none_references_or_addresses() {
         });
         let expected = eval(
             py,
-            cr"[None, ai1, (device, ai2), {'network_number': 5, 'mac_address': b'\x0a'}]",
+            cr"[None, ai1, (device, ai2),
+                {'kind': 'address', 'network_number': 5, 'mac_address': b'\x0a'}]",
         );
         assert_collection(
             py,
@@ -641,13 +642,31 @@ fn a_single_value_that_is_not_one_element_falls_back() {
         read(O::ANALOG_VALUE, P::VALUE_SOURCE, Some(1), &[0x08]).element,
         None
     );
-    // An access rule with a time-range specifier and no time range, and a
-    // date list entry of the wrong length, keep their octets.
+    // An access rule whose specifiers disagree with its references, either
+    // way, and a date list entry of the wrong length, keep their octets.
     for (object_type, property, octets) in [
+        // SPECIFIED with no time range.
         (
             O::ACCESS_RIGHTS,
             P::POSITIVE_ACCESS_RULES,
             &[0x09, 0x00, 0x29, 0x01, 0x49, 0x01][..],
+        ),
+        // ALWAYS with a time range (Schedule 1's Present_Value).
+        (
+            O::ACCESS_RIGHTS,
+            P::NEGATIVE_ACCESS_RULES,
+            &[
+                0x09, 0x01, 0x1E, 0x0C, 0x04, 0x40, 0x00, 0x01, 0x19, 0x55, 0x1F, 0x29, 0x01, 0x49,
+                0x01,
+            ][..],
+        ),
+        // ALL with a location (Access Point 2).
+        (
+            O::ACCESS_RIGHTS,
+            P::POSITIVE_ACCESS_RULES,
+            &[
+                0x09, 0x01, 0x29, 0x01, 0x3E, 0x1C, 0x08, 0x40, 0x00, 0x02, 0x3F, 0x49, 0x01,
+            ][..],
         ),
         (O::CALENDAR, P::DATE_LIST, &[0x0B, 0x7E, 0x0C, 0x19][..]),
     ] {

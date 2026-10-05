@@ -67,9 +67,9 @@ fn instance_identifier(
         return Err(invalid());
     }
     // Outside unsigned32 overflows (#1360); past 4194303 is out of range.
-    let instance = instance
-        .extract::<u32>()
-        .map_err(|_| PyOverflowError::new_err(format!("{name} must be in 0..=4194303")))?;
+    let instance = instance.extract::<u32>().map_err(|_| {
+        PyOverflowError::new_err(format!("{name} must be 0..=4294967295, got {instance}"))
+    })?;
     ObjectIdentifier::new(object_type, instance).map_err(|_| invalid())
 }
 

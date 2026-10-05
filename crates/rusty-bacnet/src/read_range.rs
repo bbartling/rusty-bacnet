@@ -12,8 +12,11 @@ pub(crate) fn request(
     range_type: Option<&str>,
     reference_index: Option<u64>,
     reference_seq: Option<u64>,
-    count: Option<i32>,
+    // The count is an INTEGER16 on the wire, so the parameter is an i16 and
+    // a count outside it raises OverflowError (#1360).
+    count: Option<i16>,
 ) -> PyResult<ReadRangeRequest> {
+    let count = count.map(i32::from);
     let range = match range_type {
         Some("position") => Some(RangeSpec::ByPosition {
             reference_index: reference_index.unwrap_or(0),

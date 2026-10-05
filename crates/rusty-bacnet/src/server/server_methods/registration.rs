@@ -648,7 +648,7 @@ impl BACnetServer {
     /// Add an Accumulator object to the server (before starting). `scale`
     /// sets Scale: a float for a float scale, an int for a power-of-ten
     /// scale. `prescale`, a `(multiplier, modulo_divide)` pair, serves the
-    /// optional Prescale (#1487).
+    /// optional Prescale (#1487); a `modulo_divide` of 0 raises ValueError.
     #[pyo3(signature = (instance, name, units=62, *, scale=None, prescale=None))]
     fn add_accumulator(
         &self,
@@ -663,6 +663,12 @@ impl BACnetServer {
             obj.set_scale(crate::types::scale_from_py(scale)?);
         }
         if let Some((multiplier, modulo_divide)) = prescale {
+            // It fits the type, but a divisor of 0 converts no pulse.
+            if modulo_divide == 0 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "prescale's modulo_divide must be at least 1",
+                ));
+            }
             obj.set_prescale(bacnet_types::constructed::BACnetPrescale {
                 multiplier,
                 modulo_divide,

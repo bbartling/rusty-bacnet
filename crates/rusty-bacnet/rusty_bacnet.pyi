@@ -1057,7 +1057,7 @@ class ObjectIdentifier:
     """BACnet Object Identifier (10-bit type + 22-bit instance number).
 
     For u32-representable values, types above 1023 or instances above 4,194,303
-    raise ValueError. Integers outside u32 retain their argument-conversion errors.
+    raise ValueError. Integers outside u32 raise OverflowError.
     Valid proprietary types and the wire wildcard instance are accepted.
     """
 
@@ -2310,10 +2310,10 @@ class BACnetClient:
         """Read a range of items from a list or log object.
 
         ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
-        ByTime is not exposed. Invalid selectors, array index zero and missing,
-        zero or non-INTEGER16 counts raise ValueError before I/O when the supplied
-        count fits a signed 32-bit integer. Counts outside that native argument
-        range raise OverflowError before address parsing or I/O. Position/sequence
+        ByTime is not exposed. Invalid selectors, array index zero and missing
+        or zero counts raise ValueError before I/O; a count outside INTEGER16
+        (-32768..=32767) raises OverflowError before address parsing or I/O
+        (#1360). Position/sequence
         reference zero is valid; omitted references default to zero.
         Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
         "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,
@@ -4072,10 +4072,10 @@ class EndpointClient:
         """Read a range of items from a list or log object.
 
         ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
-        ByTime is not exposed. Invalid selectors, array index zero and missing,
-        zero or non-INTEGER16 counts raise ValueError before I/O when the supplied
-        count fits a signed 32-bit integer. Counts outside that native argument
-        range raise OverflowError before address parsing or I/O. Position/sequence
+        ByTime is not exposed. Invalid selectors, array index zero and missing
+        or zero counts raise ValueError before I/O; a count outside INTEGER16
+        (-32768..=32767) raises OverflowError before address parsing or I/O
+        (#1360). Position/sequence
         reference zero is valid; omitted references default to zero.
         Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
         "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,

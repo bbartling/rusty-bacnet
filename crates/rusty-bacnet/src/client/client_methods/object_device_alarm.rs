@@ -305,7 +305,7 @@ impl BACnetClient {
         range_type: Option<String>,
         reference_index: Option<u64>,
         reference_seq: Option<u64>,
-        count: Option<i32>,
+        count: Option<i16>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let request = crate::read_range::request(

@@ -11,7 +11,7 @@ use bacnet_types::constructed::{BACnetPrescale, BACnetScale};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use super::tagged::{decode_ctx_primitive, decode_ctx_real, decode_ctx_unsigned};
+use super::tagged::{decode_ctx_primitive, decode_ctx_real, decode_ctx_unsigned, misplaced_tag};
 use crate::{primitives, tags};
 
 const SCALE: &str = "BACnetScale";
@@ -28,10 +28,16 @@ pub fn encode_scale(buf: &mut BytesMut, scale: &BACnetScale) {
 /// Decode one `BACnetScale` CHOICE at `offset`.
 ///
 /// Returns the scale and the offset just past it; a caller holding exactly
-/// one value must check that offset reaches the end of its data. Any tag but
-/// a primitive context `[0]` or `[1]`, a REAL that isn't four octets, an
-/// INTEGER of no octets or more than four, or truncated contents fails with
-/// [`Error::Decoding`] or [`Error::BufferTooShort`].
+/// one value must check that offset reaches the end of its data. No tag at
+/// all is [`DecodingKind::Missing`], and any tag but a primitive context
+/// `[0]` or `[1]` the kind [`misplaced_tag`] gives (InvalidTag, or Missing for
+/// a closing tag that ends the enclosing frame). A REAL that isn't four
+/// octets or an INTEGER of no octets or more than four is
+/// [`DecodingKind::InvalidEncoding`], and truncated contents
+/// [`Error::BufferTooShort`].
+///
+/// [`DecodingKind::Missing`]: bacnet_types::error::DecodingKind::Missing
+/// [`DecodingKind::InvalidEncoding`]: bacnet_types::error::DecodingKind::InvalidEncoding
 pub fn decode_scale(data: &[u8], offset: usize) -> Result<(BACnetScale, usize), Error> {
     let (tag, _) = tags::decode_tag(data, offset)?;
     if tag.is_context(0) {
@@ -48,7 +54,10 @@ pub fn decode_scale(data: &[u8], offset: usize) -> Result<(BACnetScale, usize), 
         })?;
         return Ok((BACnetScale::IntegerScale(power), end));
     }
-    Err(Error::decoding(
+    Err(misplaced_tag(
+        data,
+        &tag,
+        None,
         offset,
         format!("{SCALE}: expected float-scale [0] or integer-scale [1]"),
     ))
@@ -61,8 +70,16 @@ pub fn encode_prescale(buf: &mut BytesMut, prescale: &BACnetPrescale) {
 }
 
 /// Decode one `BACnetPrescale` SEQUENCE at `offset`; returns it and the
-/// offset past its `[1]` member. A missing member, members out of order or a
-/// value past unsigned32, the width the object keeps, is a decode error.
+/// offset past its `[1]` member. A member left out (the data ends, or `[1]`
+/// comes first) is [`DecodingKind::Missing`], another tag where a member is
+/// due [`DecodingKind::InvalidTag`], an Unsigned of no octets
+/// [`DecodingKind::InvalidEncoding`], and a value past unsigned32, the width
+/// the object keeps, [`DecodingKind::OutOfRange`].
+///
+/// [`DecodingKind::Missing`]: bacnet_types::error::DecodingKind::Missing
+/// [`DecodingKind::InvalidTag`]: bacnet_types::error::DecodingKind::InvalidTag
+/// [`DecodingKind::InvalidEncoding`]: bacnet_types::error::DecodingKind::InvalidEncoding
+/// [`DecodingKind::OutOfRange`]: bacnet_types::error::DecodingKind::OutOfRange
 pub fn decode_prescale(data: &[u8], offset: usize) -> Result<(BACnetPrescale, usize), Error> {
     let (multiplier, pos) = decode_ctx_unsigned::<u32>(data, offset, 0, PRESCALE)?;
     let (modulo_divide, end) = decode_ctx_unsigned::<u32>(data, pos, 1, PRESCALE)?;

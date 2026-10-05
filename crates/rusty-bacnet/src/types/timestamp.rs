@@ -37,13 +37,8 @@ fn integer(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i128> {
 
 /// `value` as `T`, the width of the field it fills; outside `T` raises
 /// OverflowError, as a parameter of that type does (#1360).
-fn fixed<T: TryFrom<i128>>(value: i128, name: &str) -> PyResult<T> {
-    T::try_from(value).map_err(|_| {
-        PyOverflowError::new_err(format!(
-            "{name} is out of range for {}, got {value}",
-            std::any::type_name::<T>()
-        ))
-    })
+fn fixed<T: super::mapping::FixedWidth>(value: i128, name: &str) -> PyResult<T> {
+    super::mapping::fit(value, name)
 }
 
 /// An octet field: outside unsigned8 raises OverflowError, and an octet

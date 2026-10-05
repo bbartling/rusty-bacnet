@@ -123,11 +123,11 @@ fn malformed_destinations_raise_value_or_type_errors() {
         ),
         (
             format!("{{{device}, 'process_identifier': 2**32}}"),
-            "OverflowError: recipients[0].process_identifier is out of range for u32",
+            "OverflowError: recipients[0].process_identifier must be 0..=4294967295, got 4294967296",
         ),
         (
             format!("{{{device}, 'process_identifier': 1, 'valid_days': 256}}"),
-            "OverflowError: recipients[0].valid_days is out of range for u8",
+            "OverflowError: recipients[0].valid_days must be 0..=255, got 256",
         ),
         (
             format!("{{{device}, 'process_identifier': 1, 'valid_days': 128}}"),
