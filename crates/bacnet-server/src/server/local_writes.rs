@@ -100,7 +100,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
         })?;
         object.set_life_safety_operation_expected_internal(operation)?;
-        commit.changed(*oid);
+        // Only a Life Safety Point or Zone reports the change. Another object
+        // whose setter takes the operation owes no COV, as before (#1520).
+        if crate::life_safety_cov::is_life_safety_object(*oid) {
+            commit.changed(*oid);
+        }
         let fanout =
             super::cov_fanout::CovFanout::new(&self.local_cov_context(), &self.event_suppressions);
         self.finish_in_task(&runtime, async move {

@@ -330,7 +330,10 @@ async fn life_safety_rearm_dropped_after_its_change_still_notifies_operation_exp
     h.notification().await;
     h.set_clock(41);
     let table = Arc::clone(&h.server.cov_table).write_owned().await;
-    // Changed, and dropped where the timestamped capture waits on the table.
+    // Changed, then dropped while the caller waits for the work it owes.
+    // With that work in the caller's future, the held table would park the
+    // timestamped capture there and the drop would skip it and the fanout;
+    // in its own task, the work runs on once the table is free.
     let point = lsp1();
     commit_and_drop(&h, silence(&h, &point));
 
@@ -347,6 +350,74 @@ async fn life_safety_rearm_dropped_after_its_change_still_notifies_operation_exp
     assert_eq!(rows.len(), 1, "{report:?}");
     assert_eq!(rows[0].value, value.to_vec());
     assert_eq!(rows[0].time_of_change, Some(time(41)), "{report:?}");
+    h.server.stop().await.unwrap();
+}
+
+/// AV-2, a custom object that takes a Life Safety rearm by changing its
+/// Description, though it isn't a Life Safety object.
+struct Rearmable(bacnet_objects::analog::AnalogValueObject);
+
+impl bacnet_objects::traits::BACnetObject for Rearmable {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.0.object_identifier()
+    }
+
+    fn object_name(&self) -> &str {
+        self.0.object_name()
+    }
+
+    fn read_property(&self, p: PropertyIdentifier, i: Option<u32>) -> Result<PropertyValue, Error> {
+        self.0.read_property(p, i)
+    }
+
+    fn write_property(
+        &mut self,
+        p: PropertyIdentifier,
+        i: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+    ) -> Result<(), Error> {
+        self.0.write_property(p, i, value, priority)
+    }
+
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        self.0.property_list()
+    }
+
+    fn supports_cov(&self) -> bool {
+        true
+    }
+
+    fn set_life_safety_operation_expected_internal(
+        &mut self,
+        operation: LifeSafetyOperation,
+    ) -> Result<(), Error> {
+        self.0
+            .set_description(format!("rearmed {}", operation.to_raw()));
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rearm_of_an_object_that_isnt_life_safety_owes_no_cov() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        let inner = bacnet_objects::analog::AnalogValueObject::new(2, "AV-2", 62).unwrap();
+        db.add(Box::new(Rearmable(inner))).unwrap();
+    })
+    .await;
+    let av2 = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap();
+    let description = PropertyIdentifier::DESCRIPTION;
+    h.subscribe_specs(false, vec![(av2, vec![(description, false)])])
+        .await;
+    h.notification().await;
+    silence(&h, &av2).await.unwrap();
+    let rearmed = format!("rearmed {}", LifeSafetyOperation::SILENCE.to_raw());
+    assert_eq!(
+        read_db(&h, av2, description, None).await,
+        PropertyValue::CharacterString(rearmed)
+    );
+    // As before #1520, only a Life Safety Point or Zone reports a rearm.
+    h.no_notification().await;
     h.server.stop().await.unwrap();
 }
 
