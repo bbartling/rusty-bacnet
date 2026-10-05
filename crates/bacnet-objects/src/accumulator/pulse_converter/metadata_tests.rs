@@ -139,9 +139,10 @@ fn property_metadata_pulse_converter_exact_sets_readable_rows_and_indexed_list()
         object.read_property(P::SCALE_FACTOR, None).unwrap(),
         PropertyValue::Real(1.0)
     );
+    // Unset (#1417): [0] accumulator 4194303, [1] present-value.
     assert_eq!(
         object.read_property(P::INPUT_REFERENCE, None).unwrap(),
-        PropertyValue::Null
+        PropertyValue::ApplicationData(vec![0x0C, 0x05, 0xFF, 0xFF, 0xFF, 0x19, 0x55])
     );
     assert_eq!(
         object.read_property(P::COV_PERIOD, None).unwrap(),
@@ -344,9 +345,11 @@ fn property_metadata_pulse_converter_writes_store_verbatim_with_range_gates() {
             PropertyValue::Real(2.5)
         );
         // Input_Reference stores a local reference, its Clause 21 members
-        // ([0] accumulator 1, [1] present-value), and Null clears it.
+        // ([0] accumulator 1, [1] present-value), and the unset form
+        // ([0] accumulator 4194303) clears it (#1417).
         let reference =
             PropertyValue::ApplicationData(vec![0x0C, 0x05, 0xC0, 0x00, 0x01, 0x19, 0x55]);
+        let unset = PropertyValue::ApplicationData(vec![0x0C, 0x05, 0xFF, 0xFF, 0xFF, 0x19, 0x55]);
         object
             .write_property(P::INPUT_REFERENCE, None, reference.clone(), None)
             .unwrap();
@@ -355,11 +358,11 @@ fn property_metadata_pulse_converter_writes_store_verbatim_with_range_gates() {
             reference
         );
         object
-            .write_property(P::INPUT_REFERENCE, None, PropertyValue::Null, None)
+            .write_property(P::INPUT_REFERENCE, None, unset.clone(), None)
             .unwrap();
         assert_eq!(
             object.read_property(P::INPUT_REFERENCE, None).unwrap(),
-            PropertyValue::Null
+            unset
         );
         // Mistyped values are rejected without changing state.
         for (p, value) in [
@@ -367,6 +370,7 @@ fn property_metadata_pulse_converter_writes_store_verbatim_with_range_gates() {
             (P::ADJUST_VALUE, PropertyValue::Unsigned(1)),
             (P::COV_INCREMENT, PropertyValue::Null),
             (P::INPUT_REFERENCE, PropertyValue::Unsigned(1)),
+            (P::INPUT_REFERENCE, PropertyValue::Null),
             (P::DESCRIPTION, PropertyValue::Unsigned(1)),
             (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
         ] {

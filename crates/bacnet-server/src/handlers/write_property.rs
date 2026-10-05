@@ -527,8 +527,10 @@ pub(crate) fn decode_write_property_value(
     // Object_Property_Reference reach the object as raw reference bytes, which
     // it decodes with the shared device-reference helpers, after the handler
     // has put any reference naming this device in its local form; a Trend Log
-    // Multiple's index 0, the array size, stays an Unsigned. An application
-    // Null alone is the empty single reference (#1234, #1313).
+    // Multiple's index 0, the array size, stays an Unsigned (#1234, #1313).
+    // An application Null alone reaches it as Null, which it refuses as the
+    // wrong datatype, so the write is judged as a relinquish (`relinquish`,
+    // #1417).
     if array_index != Some(0)
         && matches!(
             property,
@@ -543,8 +545,8 @@ pub(crate) fn decode_write_property_value(
     }
     // The Loop and Pulse Converter references reach the object as their raw
     // octets too, which it decodes with the shared codecs: an empty value is
-    // a Setpoint_Reference holding no reference, and an application Null
-    // alone clears one of the other three (#1312).
+    // a Setpoint_Reference holding no reference (#1312). An application Null
+    // alone reaches the object as Null, judged as above (#1417).
     if matches!(
         property,
         PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE

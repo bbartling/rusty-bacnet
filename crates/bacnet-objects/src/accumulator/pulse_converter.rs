@@ -78,9 +78,11 @@ impl PulseConverterObject {
         self.description = desc.into();
     }
 
-    /// Set the input reference.
+    /// Set Input_Reference, the property the input is counted from. A
+    /// reference to the reserved instance 4194303 clears it, as a client's
+    /// write of the unset form does (#1417).
     pub fn set_input_reference(&mut self, r: BACnetObjectPropertyReference) {
-        self.input_reference = Some(r);
+        self.input_reference = reference::set_or_unset(r);
     }
 
     /// The current Count.
@@ -209,10 +211,15 @@ impl BACnetObject for PulseConverterObject {
             // Periodic COV notifications are not implemented, and zero is the
             // value that says so (Clause 13.1).
             p if p == PropertyIdentifier::COV_PERIOD => Ok(PropertyValue::Unsigned(0)),
-            // The reference's Clause 21 encoding, or Null when unset (#1312).
-            p if p == PropertyIdentifier::INPUT_REFERENCE => Ok(
-                reference::object_property_reference_value(self.input_reference.as_ref()),
-            ),
+            // The reference's Clause 21 encoding (#1312), or while unset an
+            // Accumulator's Present_Value, the usual input (Clause 12.23.6),
+            // at the reserved instance (#1417).
+            p if p == PropertyIdentifier::INPUT_REFERENCE => {
+                Ok(reference::object_property_reference_value(
+                    self.input_reference.as_ref(),
+                    ObjectType::ACCUMULATOR,
+                ))
+            }
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
@@ -277,7 +284,7 @@ impl BACnetObject for PulseConverterObject {
                 }
             }
             // Input_Reference is BACnetObjectPropertyReference (Table
-            // 12-27): its context-tagged members, or Null to clear it.
+            // 12-27): its context-tagged members, the unset form clearing it.
             p if p == PropertyIdentifier::INPUT_REFERENCE => {
                 self.input_reference =
                     reference::decode_reference_write(&value, ReferenceFrame::Bare)?;

@@ -2755,7 +2755,15 @@ class BACnetServer:
         Recipient_List a client wrote, once saved, wins over the seed. ``port_filter`` serves Port_Filter as
         ``(port_id, enabled)`` pairs; the server receives through Port_ID 0.
         Without it Port_Filter is absent."""
-    def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
+    def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None:
+        """Add a Trend Log (Clause 12.25) to the server (before starting).
+
+        Log_DeviceObjectProperty reads as ``application_data`` holding the
+        context-tagged reference; while unset it reads as Analog Input
+        4194303's Present_Value, and writing a reference to instance 4194303
+        unsets it. A null written to it succeeds and changes nothing.
+        """
+        ...
     def add_trend_log_multiple(
         self,
         instance: int,
@@ -2903,6 +2911,12 @@ class BACnetServer:
         omitted) and Priority_For_Writing (16 when omitted). Units above 65535
         or a priority outside 1..=16 raise BacnetProtocolError with
         VALUE_OUT_OF_RANGE. Peers can write Action (DIRECT until written).
+
+        Controlled_Variable_Reference and Manipulated_Variable_Reference read
+        as ``application_data`` holding the context-tagged reference; while
+        unset they name instance 4194303 (an Analog Input and an Analog Output
+        respectively), and writing a reference to that instance unsets them.
+        A null written to any Loop reference succeeds and changes nothing.
         """
         ...
     def add_command(
@@ -3270,6 +3284,12 @@ class BACnetServer:
         and ``window_samples`` sets Window_Samples (15 when omitted). Peers
         can write both, and each write discards the samples. An interval of 0,
         or a sample count of 0 or above 1440, raises VALUE_OUT_OF_RANGE.
+
+        Object_Property_Reference reads as ``application_data`` holding the
+        context-tagged reference; while unset it reads as Analog Input
+        4194303's Present_Value, and writing a reference whose object or
+        Device is at instance 4194303 unsets it. A null written to it succeeds
+        and changes nothing.
         """
 
     # --- Value objects ---
@@ -3282,7 +3302,15 @@ class BACnetServer:
 
     # --- Counters/accumulators ---
     def add_accumulator(self, instance: int, name: str, units: int = 62) -> None: ...
-    def add_pulse_converter(self, instance: int, name: str, units: int = 62) -> None: ...
+    def add_pulse_converter(self, instance: int, name: str, units: int = 62) -> None:
+        """Add a Pulse Converter (Clause 12.23) to the server (before starting).
+
+        Input_Reference reads as ``application_data`` holding the
+        context-tagged reference; while unset it reads as Accumulator
+        4194303's Present_Value, and writing a reference to instance 4194303
+        unsets it. A null written to it succeeds and changes nothing.
+        """
+        ...
 
     # --- Files/network ---
     def add_file(self, instance: int, name: str, file_type: str = "application/octet-stream") -> None: ...
@@ -3473,7 +3501,8 @@ class BACnetServer:
 
         The server samples an object holding an Object_Property_Reference
         itself, every Window_Interval / Window_Samples seconds. For an object
-        without one, the application samples about that often and passes each
+        without one (its reference reads as the unset form, instance
+        4194303), the application samples about that often and passes each
         result here; on one the server samples, a call is one more attempt and
         doesn't move the server's schedule. The value is a BOOLEAN (FALSE and
         TRUE count as 0 and 1), Signed, Unsigned, Enumerated or finite REAL;

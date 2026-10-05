@@ -6,7 +6,9 @@
 //! when a sample falls due (`ObjectDatabase::sample_due_averaging_objects`),
 //! and the application can feed samples of its own.
 
-use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
+};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -119,12 +121,14 @@ impl AveragingObject {
     }
 
     /// Set the object property reference (the property being averaged) and
-    /// discard the samples taken from the previous one.
+    /// discard the samples taken from the previous one. `None`, or a
+    /// reference to the reserved instance 4194303, leaves the object without
+    /// one (#1417).
     pub fn set_object_property_reference(
         &mut self,
         reference: Option<BACnetObjectPropertyReference>,
     ) {
-        self.object_property_reference = reference;
+        self.object_property_reference = reference.filter(|reference| !reference.is_unset());
         self.window.reset();
     }
 
@@ -204,17 +208,19 @@ impl BACnetObject for AveragingObject {
                 Ok(PropertyValue::Unsigned(self.window.capacity().into()))
             }
             // Table 12-5 types the property as a
-            // BACnetDeviceObjectPropertyReference. The object keeps only local
-            // references, so what it serves never has a Device member; with
-            // no reference it reads Null (#1182).
-            p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => Ok(self
-                .object_property_reference
-                .as_ref()
-                .map_or(PropertyValue::Null, |reference| {
-                    device_reference::reference_value(&device_reference::local_property_reference(
-                        reference,
-                    ))
-                })),
+            // BACnetDeviceObjectPropertyReference (#1182). The object keeps
+            // only local references, so what it serves never has a Device
+            // member; with no reference it reads as the unset form, an
+            // Analog Input's Present_Value at the reserved instance (#1417).
+            p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
+                Ok(device_reference::optional_reference_value(
+                    self.object_property_reference
+                        .as_ref()
+                        .map(device_reference::local_property_reference)
+                        .as_ref(),
+                    ObjectType::ANALOG_INPUT,
+                ))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -243,16 +249,16 @@ impl BACnetObject for AveragingObject {
             // any other with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED rather than
             // silently dropping the device. The object can't tell which
             // Device holds it; the bundled server drops a Device member naming
-            // its own Device before the value gets here (#1153). Null clears
-            // the reference, and the flat application-tagged list is
-            // INVALID_DATA_TYPE.
+            // its own Device before the value gets here (#1153). The unset
+            // form, whatever its Device member, clears the reference (#1417);
+            // Null and the flat application-tagged list are INVALID_DATA_TYPE.
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
-                let reference = match value {
-                    PropertyValue::Null => None,
-                    value => Some(device_reference::into_local_property_reference(
-                        device_reference::decode_reference(&value)?,
-                    )?),
-                };
+                let reference: BACnetDeviceObjectPropertyReference =
+                    device_reference::decode_reference(&value)?;
+                device_reference::check_device_member(reference.device_identifier)?;
+                let reference = device_reference::set_or_unset(reference)
+                    .map(device_reference::into_local_property_reference)
+                    .transpose()?;
                 self.set_object_property_reference(reference);
                 Ok(())
             }

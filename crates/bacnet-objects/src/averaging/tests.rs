@@ -101,13 +101,19 @@ fn averaging_property_list() {
     }
 }
 
+/// The unset form an Averaging object without a reference reads as (#1417):
+/// [0] analog-input 4194303, [1] present-value.
+fn unset() -> PropertyValue {
+    PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55])
+}
+
 #[test]
-fn averaging_object_property_reference_default_null() {
+fn averaging_object_property_reference_default_unset() {
     let avg = AveragingObject::new(1, "AVG-1").unwrap();
     assert_eq!(
         avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
             .unwrap(),
-        PropertyValue::Null
+        unset()
     );
 }
 
@@ -146,26 +152,95 @@ fn averaging_write_object_property_reference() {
 }
 
 #[test]
-fn averaging_write_null_clears_reference() {
+fn averaging_write_of_the_unset_form_clears_reference() {
+    let set = || {
+        let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
+        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        avg.set_object_property_reference(Some(BACnetObjectPropertyReference::new(
+            oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )));
+        avg
+    };
+    // The form a read serves, another object type at the reserved instance,
+    // and a Device member at it all clear the reference, the last although
+    // a Device member is otherwise refused.
+    for octets in [
+        vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55],
+        vec![0x0C, 0x00, 0xBF, 0xFF, 0xFF, 0x19, 0x55],
+        vec![
+            0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 0x55, 0x3C, 0x02, 0x3F, 0xFF, 0xFF,
+        ],
+    ] {
+        let mut avg = set();
+        avg.write_property(
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+            None,
+            PropertyValue::ApplicationData(octets),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+                .unwrap(),
+            unset()
+        );
+    }
+    // So does the setter given the unset form.
+    let mut avg = set();
+    avg.set_object_property_reference(Some(BACnetObjectPropertyReference::new(
+        ObjectIdentifier::new(
+            ObjectType::ANALOG_VALUE,
+            ObjectIdentifier::WILDCARD_INSTANCE,
+        )
+        .unwrap(),
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )));
+    assert_eq!(
+        avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+            .unwrap(),
+        unset()
+    );
+}
+
+#[test]
+fn averaging_null_reference_write_is_another_datatype() {
+    // A NULL is no BACnetDeviceObjectPropertyReference: INVALID_DATA_TYPE,
+    // which the server turns into the Clause 15.9.2 no-op (#1417). The
+    // reference and the samples stay.
     let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     avg.set_object_property_reference(Some(BACnetObjectPropertyReference::new(
         oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     )));
-
-    avg.write_property(
-        PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
-        None,
-        PropertyValue::Null,
-        None,
-    )
-    .unwrap();
-
+    avg.add_sample(4.0).unwrap();
+    let before = avg
+        .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+        .unwrap();
+    let err = avg
+        .write_property(
+            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+            None,
+            PropertyValue::Null,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Protocol { class, code }
+            if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                && code == bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32),
+        "{err:?}"
+    );
     assert_eq!(
         avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
             .unwrap(),
-        PropertyValue::Null
+        before
+    );
+    assert_eq!(
+        avg.read_property(PropertyIdentifier::VALID_SAMPLES, None)
+            .unwrap(),
+        PropertyValue::Unsigned(1)
     );
 }
 
@@ -266,7 +341,7 @@ fn averaging_reference_write_refuses_the_flat_list_forms() {
         assert_eq!(
             avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
                 .unwrap(),
-            PropertyValue::Null
+            unset()
         );
     }
 }

@@ -28,30 +28,22 @@
 
 use bacnet_encoding::constructed::decode_access_rule;
 use bacnet_encoding::tags::Tag;
-use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectPropertyReference};
-use bacnet_types::enums::{
-    AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier, ObjectType, PropertyIdentifier,
-};
+use bacnet_types::constructed::BACnetAccessRule;
+use bacnet_types::enums::{AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier, ObjectType};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::PropertyValue;
 
 use super::rights::{check_access_rule, check_rule_count, checked_rules};
-use crate::common;
+use crate::{common, device_reference};
 
-/// The rule an index-0 write appends when it lengthens an array.
+/// The rule an index-0 write appends when it lengthens an array, its two
+/// references in the shared unset form (`device_reference.rs`, #1417).
 pub(super) fn grown_rule() -> BACnetAccessRule {
-    let unspecified = |object_type| {
-        ObjectIdentifier::new(object_type, ObjectIdentifier::MAX_INSTANCE)
-            .expect("the reserved instance is a valid identifier")
-    };
     BACnetAccessRule {
         time_range_specifier: AccessRuleTimeRangeSpecifier::SPECIFIED,
-        time_range: Some(BACnetDeviceObjectPropertyReference::new_local(
-            unspecified(ObjectType::SCHEDULE),
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        )),
+        time_range: Some(device_reference::unset_reference(ObjectType::SCHEDULE)),
         location_specifier: AccessRuleLocationSpecifier::SPECIFIED,
-        location: Some(unspecified(ObjectType::ACCESS_POINT).into()),
+        location: Some(device_reference::unset_identifier(ObjectType::ACCESS_POINT).into()),
         enable: false,
     }
 }

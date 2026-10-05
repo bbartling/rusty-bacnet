@@ -26,26 +26,25 @@ pub(super) fn decode_event_parameters(value: PropertyValue) -> Result<BACnetEven
     Ok(parameters)
 }
 
-pub(super) fn decode_fault_parameters(
-    value: PropertyValue,
-) -> Result<Option<FaultParameters>, Error> {
+/// A written Fault_Parameters value: the context-tagged BACnetFaultParameter
+/// (the `none` choice included), or the flat form older internal clients
+/// use. An application NULL is no member of the CHOICE, whose `none` is
+/// context-tagged, so it is INVALID_DATA_TYPE like any other value of the
+/// wrong datatype, which the server turns into the no-op Clause 15.9.2 makes
+/// of it (#1417).
+pub(super) fn decode_fault_parameters(value: PropertyValue) -> Result<FaultParameters, Error> {
     let parameters = match value {
-        PropertyValue::Null => None,
         PropertyValue::ApplicationData(bytes) => {
             match bacnet_encoding::constructed::decode_fault_parameters(&bytes, 0) {
-                Ok((parameters, consumed)) if consumed == bytes.len() => Some(parameters),
+                Ok((parameters, consumed)) if consumed == bytes.len() => parameters,
                 _ => return Err(common::invalid_data_type_error()),
             }
         }
-        other => Some(
-            FaultParameters::decode_property_value(&other)
-                .map_err(|_| common::invalid_data_type_error())?,
-        ),
+        other => FaultParameters::decode_property_value(&other)
+            .map_err(|_| common::invalid_data_type_error())?,
     };
 
-    if let Some(parameters) = &parameters {
-        bacnet_encoding::constructed::encode_fault_parameters(&mut BytesMut::new(), parameters)
-            .map_err(|_| common::invalid_data_type_error())?;
-    }
+    bacnet_encoding::constructed::encode_fault_parameters(&mut BytesMut::new(), &parameters)
+        .map_err(|_| common::invalid_data_type_error())?;
     Ok(parameters)
 }

@@ -112,7 +112,8 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                 Ok(if configured {
                     &[0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 85]
                 } else {
-                    &[0x00]
+                    // Unset: analog-input 4194303's present-value (#1417).
+                    &[0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 85]
                 }),
             ),
             (

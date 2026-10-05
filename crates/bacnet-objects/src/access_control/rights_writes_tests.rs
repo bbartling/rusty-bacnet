@@ -4,8 +4,9 @@
 //! arrays as they were.
 
 use bacnet_encoding::constructed::encode_access_rule;
-use bacnet_types::constructed::BACnetDeviceObjectReference;
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
+use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use super::*;

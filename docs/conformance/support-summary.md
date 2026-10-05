@@ -104,8 +104,8 @@ Row counts by priority and status are not committed, so concurrent ledger PRs me
 | `BACNET-12-LIGHTING-OUTPUT-COMMAND` | Clauses 12.54, 15.9.1.3 and 21; Tables 12-64, 12-66 and 12-67 | P1 | in-progress | 2 |
 | `BACNET-12-COLOR-COMMAND` | Addenda 135-2020ca and 135-2020cc; Clauses 15.9.1.3, 21 and 23; Table 23-1 | P1 | in-progress | 1 |
 | `BACNET-12-LIGHTING-OUTPUT-PRESENT-VALUE` | Clauses 12.54, 12.54.4, 12.54.5, 12.54.22 and 15.9.1.3 | P1 | in-progress | 2 |
-| `BACNET-12-REFERENCE-PROPERTY-WRITABILITY` | Clauses 12.5.13, 12.17.12, 12.17.13, 12.17.16, 12.23.6, 20.2.16; Table 12-5, 12-20, 12-27; Clause 21 | P1 | supported-with-clause-evidence | 2 |
-| `BACNET-12-DEVICE-REFERENCE-PROPERTIES` | Clauses 12.5.13, 12.12.8, 12.15.29, 12.16.26, 12.16.27, 12.25.8 and 12.30.11; Clause 21 | P1 | supported-with-clause-evidence | 2 |
+| `BACNET-12-REFERENCE-PROPERTY-WRITABILITY` | Clauses 12.1, 12.5.13, 12.17.12, 12.17.13, 12.17.16, 12.23.6, 15.9.2, 20.2.16; Table 12-5, 12-20, 12-27; Clause 21 | P1 | supported-with-clause-evidence | 2 |
+| `BACNET-12-DEVICE-REFERENCE-PROPERTIES` | Clauses 12.1, 12.5.13, 12.12.8, 12.15.29, 12.16.26, 12.16.27, 12.25.8, 12.30.11, 15.9.2; Clause 21 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` | Clause 12.52 and Table 12-61; Clause 21 BACnetNotifyType; Clause 15.7 ReadPropertyMultiple | P1 | supported-with-clause-evidence | 4 |
 | `BACNET-12-CALENDAR-PROPERTY-SET` | Clause 12.9 and Table 12-11; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-12-ENROLLMENT-EVENT-TIME-STAMPS` | Clause 12.12 Table 12-14; Clause 12.52 Table 12-61; Clause 12.1.5.1; Clause 13.2.2.1; Clause 21 BACnetTimeStamp | P1 | implementation-present-needs-state-machine-audit | 0 |

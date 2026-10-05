@@ -151,6 +151,9 @@ impl EventEnrollmentObject {
 
     /// Set Object_Property_Reference, the property the enrollment monitors,
     /// or `None` for none. The property is read-only over the network.
+    /// A reference whose object or Device is at the reserved instance
+    /// 4194303 is the unset form, so it leaves the enrollment without one
+    /// (#1417).
     ///
     /// A reference whose device identifier isn't a Device object is refused
     /// with PROPERTY / VALUE_OUT_OF_RANGE and the reference set before is
@@ -162,7 +165,7 @@ impl EventEnrollmentObject {
         if let Some(reference) = &reference {
             crate::device_reference::check_device_member(reference.device_identifier)?;
         }
-        self.object_property_reference = reference;
+        self.object_property_reference = reference.and_then(crate::device_reference::set_or_unset);
         self.pending = None;
         Ok(())
     }
@@ -308,12 +311,12 @@ impl BACnetObject for EventEnrollmentObject {
                 Ok(PropertyValue::ApplicationData(buf.to_vec()))
             }
             // Table 12-14's BACnetDeviceObjectPropertyReference, its optional
-            // index and Device members present only when set; Null while the
-            // enrollment has no reference (#1182).
+            // index and Device members present only when set (#1182); the
+            // unset form while the enrollment has no reference (#1417).
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
-                Ok(self.object_property_reference.as_ref().map_or(
-                    PropertyValue::Null,
-                    crate::device_reference::reference_value,
+                Ok(crate::device_reference::optional_reference_value(
+                    self.object_property_reference.as_ref(),
+                    ObjectType::ANALOG_INPUT,
                 ))
             }
             p if p == PropertyIdentifier::EVENT_STATE => {
@@ -425,7 +428,10 @@ impl BACnetObject for EventEnrollmentObject {
             return Ok(());
         }
         if property == PropertyIdentifier::FAULT_PARAMETERS {
-            self.fault_parameters = parameters::decode_fault_parameters(value)?;
+            // The context-tagged `none` choice is the unset form (#1417).
+            let parameters = parameters::decode_fault_parameters(value)?;
+            self.fault_parameters =
+                (!matches!(parameters, FaultParameters::FaultNone)).then_some(parameters);
             return Ok(());
         }
         if property == PropertyIdentifier::TIME_DELAY_NORMAL {

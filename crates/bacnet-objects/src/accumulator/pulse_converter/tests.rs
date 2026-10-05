@@ -109,13 +109,19 @@ fn pulse_converter_write_wrong_type_rejected() {
     assert!(result.is_err());
 }
 
+/// The unset Input_Reference (#1417): [0] accumulator 4194303, [1]
+/// present-value.
+fn unset() -> PropertyValue {
+    PropertyValue::ApplicationData(vec![0x0C, 0x05, 0xFF, 0xFF, 0xFF, 0x19, 0x55])
+}
+
 #[test]
-fn pulse_converter_input_reference_defaults_null() {
+fn pulse_converter_input_reference_defaults_unset() {
     let pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
     assert_eq!(
         pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
             .unwrap(),
-        PropertyValue::Null
+        unset()
     );
 }
 
@@ -169,18 +175,28 @@ fn pulse_converter_write_framed_indexed_input_reference_lands() {
             .unwrap(),
         PropertyValue::ApplicationData(buf.to_vec())
     );
-    // Null clears it again.
-    pc.write_property(
-        PropertyIdentifier::INPUT_REFERENCE,
-        None,
-        PropertyValue::Null,
-        None,
-    )
-    .unwrap();
+    // Null is no reference, so it is refused as another datatype and the
+    // reference stays (#1417).
+    assert!(pc
+        .write_property(
+            PropertyIdentifier::INPUT_REFERENCE,
+            None,
+            PropertyValue::Null,
+            None,
+        )
+        .is_err());
     assert_eq!(
         pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
             .unwrap(),
-        PropertyValue::Null
+        PropertyValue::ApplicationData(buf.to_vec())
+    );
+    // The unset form it reads as without one clears it.
+    pc.write_property(PropertyIdentifier::INPUT_REFERENCE, None, unset(), None)
+        .unwrap();
+    assert_eq!(
+        pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
+            .unwrap(),
+        unset()
     );
 }
 
@@ -218,7 +234,7 @@ fn pulse_converter_write_malformed_framed_input_reference_rejected() {
     assert_eq!(
         pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
             .unwrap(),
-        PropertyValue::Null
+        unset()
     );
 }
 

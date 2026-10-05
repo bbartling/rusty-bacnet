@@ -307,14 +307,8 @@ mod tests {
                         );
                         continue;
                     }
-                    if p == P::LOG_DEVICE_OBJECT_PROPERTY && kind == ObjectType::TREND_LOG {
-                        // Null is a Trend Log's empty reference (#1234).
-                        object
-                            .write_property(p, None, PropertyValue::Null, None)
-                            .unwrap();
-                        assert_eq!(object.read_property(p, None).unwrap(), PropertyValue::Null);
-                        continue;
-                    }
+                    // Null is no reference on either trend object; their
+                    // unset form is a reference to instance 4194303 (#1417).
                     assert_error(
                         object
                             .write_property(p, None, PropertyValue::Null, None)

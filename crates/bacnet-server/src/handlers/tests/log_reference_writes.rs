@@ -30,8 +30,11 @@ const LOCAL_DEVICE: [u8; 5] = [0x3C, 0x02, 0x00, 0x03, 0x58];
 const REMOTE_DEVICE: [u8; 5] = [0x3C, 0x02, 0x00, 0x00, 0x09];
 /// A [3] member naming analog-input 9, which is no Device.
 const NOT_A_DEVICE: [u8; 5] = [0x3C, 0x00, 0x00, 0x00, 0x09];
-/// A [3] member naming Device 4194303: an empty Trend Log Multiple element.
+/// A [3] member naming Device 4194303: an empty Trend Log Multiple element,
+/// and an unset Trend Log reference (#1417).
 const WILDCARD_DEVICE: [u8; 5] = [0x3C, 0x02, 0x3F, 0xFF, 0xFF];
+/// The unset form (#1417): [0] analog-input 4194303, [1] present-value.
+const UNSET: [u8; 7] = [0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55];
 
 fn tl1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::TREND_LOG, 1).unwrap()
@@ -201,8 +204,8 @@ fn multiple_data(db: &ObjectDatabase, index: usize) -> LogData {
 #[test]
 fn trend_log_reference_reads_and_writes_in_the_clause_21_form() {
     let mut db = database();
-    // No reference yet: Null.
-    assert_eq!(rp(&db, tl1(), None).unwrap(), [0x00]);
+    // No reference yet: the unset form (#1417).
+    assert_eq!(rp(&db, tl1(), None).unwrap(), UNSET);
 
     wp(&mut db, tl1(), None, &AV1_PV).unwrap();
     assert_eq!(rp(&db, tl1(), None).unwrap(), AV1_PV);
@@ -224,10 +227,26 @@ fn trend_log_reference_reads_and_writes_in_the_clause_21_form() {
     // A reference naming this device's Device is the local one it stands for.
     wp(&mut db, tl1(), None, &[&AV1_PV[..], &LOCAL_DEVICE].concat()).unwrap();
     assert_eq!(rp(&db, tl1(), None).unwrap(), AV1_PV);
-    // Null takes the reference away, as a read of an unset one shows.
+    // A NULL is no reference: it succeeds and changes nothing, the buffer
+    // included (Clause 15.9.2, #1417).
     wp(&mut db, tl1(), None, &[0x00]).unwrap();
-    assert_eq!(rp(&db, tl1(), None).unwrap(), [0x00]);
+    wpm(&mut db, tl1(), &[0x00]).unwrap();
+    assert_eq!(rp(&db, tl1(), None).unwrap(), AV1_PV);
     assert_eq!(record_count(&db, tl1()), 1);
+    // The unset form takes the reference away, a change that purges.
+    wp(&mut db, tl1(), None, &UNSET).unwrap();
+    assert_eq!(rp(&db, tl1(), None).unwrap(), UNSET);
+    assert_eq!(record_count(&db, tl1()), 1);
+    // So does a reference naming Device 4194303, which names no device.
+    wp(&mut db, tl1(), None, &AV1_PV).unwrap();
+    wp(
+        &mut db,
+        tl1(),
+        None,
+        &[&AV2_PV[..], &WILDCARD_DEVICE].concat(),
+    )
+    .unwrap();
+    assert_eq!(rp(&db, tl1(), None).unwrap(), UNSET);
 }
 
 #[test]
@@ -248,7 +267,7 @@ fn trend_log_reference_write_refusals_change_nothing() {
         .unwrap();
         bytes.to_vec()
     };
-    let cases: [(Vec<u8>, ErrorClass, ErrorCode, &str); 7] = [
+    let cases: [(Vec<u8>, ErrorClass, ErrorCode, &str); 6] = [
         (
             flat,
             ErrorClass::PROPERTY,
@@ -284,12 +303,6 @@ fn trend_log_reference_write_refusals_change_nothing() {
             ErrorClass::PROPERTY,
             ErrorCode::INVALID_DATA_ENCODING,
             "no reference",
-        ),
-        (
-            [&AV2_PV[..], &WILDCARD_DEVICE].concat(),
-            ErrorClass::PROPERTY,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-            "Device 4194303, which names no device",
         ),
     ];
     for (value, class, code, what) in cases {

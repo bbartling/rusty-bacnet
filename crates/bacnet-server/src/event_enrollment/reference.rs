@@ -34,8 +34,9 @@ impl MonitoredReference {
 /// The reference an Event Enrollment's Object_Property_Reference read holds:
 /// exactly one BACnetDeviceObjectPropertyReference in its Clause 21 encoding
 /// (#1182). Any property identifier counts, ASHRAE's above 4194303 included
-/// (#887). Anything else, Null for an enrollment without a reference
-/// included, is `None`.
+/// (#887). Anything else is `None`, and so is the unset form an enrollment
+/// without a reference reads as, its object or Device at the reserved
+/// instance 4194303 (#1417).
 pub(crate) fn decode_reference_value(
     value: &PropertyValue,
 ) -> Option<BACnetDeviceObjectPropertyReference> {
@@ -43,7 +44,7 @@ pub(crate) fn decode_reference_value(
         return None;
     };
     let (reference, end) = decode_device_object_property_reference(bytes, 0).ok()?;
-    (end == bytes.len()).then_some(reference)
+    (end == bytes.len() && !reference.is_unset()).then_some(reference)
 }
 
 /// Read the object-property reference from an Event Enrollment object.

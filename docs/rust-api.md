@@ -1915,7 +1915,10 @@ framing, through the shared `bacnet-encoding` codecs.
   BACnetEventParameter and BACnetFaultParameter CHOICE framing. Modeled
   alternatives round-trip. An alternative the stack does not model is kept as
   opaque bytes, and omitted, deprecated and reserved choices, or trailing bytes
-  after a framed element, are rejected.
+  after a framed element, are rejected. Fault_Parameters without a fault
+  algorithm reads as the context-tagged `none` choice (`08`), and writing that
+  clears it. The CHOICE has no application NULL, so a NULL written to it
+  succeeds and changes nothing (#1417).
 - **BACnetTimeStamp** (Clause 21) has one codec for every producer and consumer.
   The time form is a primitive tag holding raw Time octets, the sequence number
   must fit 0..=65535 on both encode and decode, and the date-and-time form is an
@@ -2275,10 +2278,13 @@ An Event Enrollment's Object_Property_Reference, set with
 identifier that isn't a Device with VALUE_OUT_OF_RANGE), reads as the
 context-tagged
 `BACnetDeviceObjectPropertyReference` in one `PropertyValue::ApplicationData`,
-its array index and Device members present only when set (Null while unset;
-#1182), and it stays read-only over the network. The server's evaluation and
-CHANGE_OF_RELIABILITY notifications decode that encoding, so a notification's
-property values carry the reference in it.
+its array index and Device members present only when set (#1182), and it
+stays read-only over the network. Without a reference it reads as the unset
+form, Analog Input 4194303's Present_Value (#1417), and a reference whose
+object or Device is at instance 4194303 given to the setter leaves it unset.
+The server's evaluation and CHANGE_OF_RELIABILITY notifications decode that
+encoding, so a notification's property values carry the reference in it; the
+evaluation treats the unset form as no reference.
 
 `ScheduleObject::add_object_property_reference` retains a complete local
 `BACnetObjectPropertyReference`, including its optional target array index;
@@ -2433,11 +2439,14 @@ status, or a time change. `TrendLogMultipleObject::add_record` takes one and
 
 Log_DeviceObjectProperty reads as the context-tagged
 `BACnetDeviceObjectPropertyReference` (#1234): one
-`PropertyValue::ApplicationData` on a Trend Log (Null while unset), and on a
-Trend Log Multiple a BACnetARRAY with one such value per element, which an
-array index reads singly (index 0 is the count). Both are writable over
-WriteProperty, WritePropertyMultiple and `write_local`, in that encoding: a
-Trend Log takes one reference, or Null to unset it; a Trend Log Multiple takes
+`PropertyValue::ApplicationData` on a Trend Log, and on a Trend Log Multiple a
+BACnetARRAY with one such value per element, which an array index reads singly
+(index 0 is the count). A Trend Log without a reference reads as the unset
+form, Analog Input 4194303's Present_Value, the empty element a Trend Log
+Multiple grows by (#1417). Both are writable over WriteProperty,
+WritePropertyMultiple and `write_local`, in that encoding: a Trend Log takes
+one reference, any whose object or Device is at instance 4194303 unsetting it,
+and a NULL succeeds and changes nothing; a Trend Log Multiple takes
 the whole array, at any length up to `trend::MAX_LOG_DEVICE_OBJECT_PROPERTIES`
 (64, RESOURCES / NO_SPACE_TO_WRITE_PROPERTY past it), or one element by index.
 An Unsigned written to index 0 resizes it: a smaller size drops the trailing
@@ -2665,15 +2674,19 @@ writes it to the Manipulated_Variable_Reference target.
 
 Controlled_Variable_Reference and Manipulated_Variable_Reference read as the
 context-tagged `BACnetObjectPropertyReference` in one
-`PropertyValue::ApplicationData`, Null while unset. Setpoint_Reference reads
-as the `BACnetSetpointReference`: the same members inside opening and closing
-tag 0, or an empty `ApplicationData` while unset, since the sequence's only
-member is optional (#1312). All three take writes in those encodings over
+`PropertyValue::ApplicationData`. While unset they read as the unset form, the
+reserved instance 4194303's Present_Value of an Analog Input and an Analog
+Output respectively (#1417). Setpoint_Reference reads as the
+`BACnetSetpointReference`: the same members inside opening and closing tag 0,
+or an empty `ApplicationData` while unset, since the sequence's only member is
+optional (#1312). All three take writes in those encodings over
 WriteProperty, WritePropertyMultiple and `write_local`, so a value read writes
-back unchanged; Null clears a variable reference and the empty value clears
-Setpoint_Reference. Another datatype is INVALID_DATA_TYPE: the flat
-`[ObjectIdentifier, Enumerated, Unsigned?]` list these used to read as, Null
-on Setpoint_Reference, or the setpoint frame on a variable reference.
+back unchanged; any reference to instance 4194303 clears a variable reference
+(so do the setters given one), and the empty value clears Setpoint_Reference.
+Another datatype is INVALID_DATA_TYPE: the flat
+`[ObjectIdentifier, Enumerated, Unsigned?]` list these used to read as, Null,
+or the setpoint frame on a variable reference. The server turns that refusal
+of a NULL into the success that changes nothing (#1396, #1417).
 Malformed octets, such as a Device member `[3]` the production lacks or an
 empty frame `0E 0F`, are INVALID_DATA_ENCODING. These refusals are the device
 references' single-reference codes (#1395): anything after the one reference
@@ -2852,8 +2865,10 @@ Device member.
 
 Object_Property_Reference reads as the context-tagged
 `BACnetDeviceObjectPropertyReference`, a `PropertyValue::ApplicationData` with
-no Device member (Null while unset), and a write takes that encoding back
-(#1182). The flat application-tagged list reads used to serve is now
+no Device member, and a write takes that encoding back (#1182). While unset it
+reads as Analog Input 4194303's Present_Value, and writing a reference whose
+object or Device is at instance 4194303 unsets it; a NULL succeeds and changes
+nothing (#1417). The flat application-tagged list reads used to serve is now
 INVALID_DATA_TYPE, as are octets that don't open with the object
 identifier's context tag 0 (#1312); anything after the one reference is
 INVALID_DATA_ENCODING, and a Device member that isn't a Device identifier
@@ -3395,9 +3410,11 @@ as the device's.
 
 A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
 takes writes like the Loop's variable references: the context-tagged
-`BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, Null
-while unset, with the flat list refused as INVALID_DATA_TYPE (#1312). The
-object doesn't follow it; the application feeds Count with `add_pulses`.
+`BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, with
+the flat list refused as INVALID_DATA_TYPE (#1312). While unset it reads as
+Accumulator 4194303's Present_Value, and writing a reference to instance
+4194303 unsets it (#1417). The object doesn't follow it; the application feeds
+Count with `add_pulses`.
 
 #### System (3)
 

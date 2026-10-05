@@ -61,10 +61,10 @@ fn expect_protocol(
 }
 
 #[test]
-fn object_property_reference_reads_as_its_members_or_null() {
+fn object_property_reference_reads_as_its_members_or_the_unset_form() {
     // [0] analog-input 5, [1] present-value (85).
     assert_eq!(
-        object_property_reference_value(Some(&ai_ref(5, 85))),
+        object_property_reference_value(Some(&ai_ref(5, 85)), ObjectType::ANALOG_INPUT),
         PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x05, 0x19, 0x55])
     );
     // [0] analog-output 3, [1] relinquish-default (104), [2] index 2.
@@ -74,10 +74,19 @@ fn object_property_reference_reads_as_its_members_or_null() {
         2,
     );
     assert_eq!(
-        object_property_reference_value(Some(&indexed)),
+        object_property_reference_value(Some(&indexed), ObjectType::ANALOG_INPUT),
         PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x40, 0x00, 0x03, 0x19, 0x68, 0x29, 0x02])
     );
-    assert_eq!(object_property_reference_value(None), PropertyValue::Null);
+    // Unset (#1417): [0] the named type at instance 4194303, [1]
+    // present-value (85).
+    assert_eq!(
+        object_property_reference_value(None, ObjectType::ANALOG_INPUT),
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55])
+    );
+    assert_eq!(
+        object_property_reference_value(None, ObjectType::ACCUMULATOR),
+        PropertyValue::ApplicationData(vec![0x0C, 0x05, 0xFF, 0xFF, 0xFF, 0x19, 0x55])
+    );
 }
 
 #[test]
@@ -104,7 +113,7 @@ fn read_values_write_back_unchanged() {
     let indexed =
         BACnetObjectPropertyReference::new_indexed(ai_ref(7, 88).object_identifier, 88, 12);
     for reference in [None, Some(ai_ref(5, 85)), Some(indexed)] {
-        let bare = object_property_reference_value(reference.as_ref());
+        let bare = object_property_reference_value(reference.as_ref(), ObjectType::ANALOG_OUTPUT);
         assert_eq!(
             decode_reference_write(&bare, ReferenceFrame::Bare).unwrap(),
             reference
@@ -118,18 +127,38 @@ fn read_values_write_back_unchanged() {
 }
 
 #[test]
-fn null_clears_except_on_setpoint_reference() {
-    assert_eq!(
-        decode_reference_write(&PropertyValue::Null, ReferenceFrame::Bare).unwrap(),
-        None
-    );
-    // BACnetSetpointReference has its own empty value; Null is another
-    // datatype there.
-    expect_protocol(
-        decode_reference_write(&PropertyValue::Null, ReferenceFrame::Setpoint),
-        ErrorCode::INVALID_DATA_TYPE,
-        "Null on Setpoint_Reference",
-    );
+fn null_is_another_datatype_on_every_reference() {
+    // Neither production has an application NULL member (#1417), so the
+    // server turns this refusal into the Clause 15.9.2 no-op.
+    for frame in [ReferenceFrame::Bare, ReferenceFrame::Setpoint] {
+        expect_protocol(
+            decode_reference_write(&PropertyValue::Null, frame),
+            ErrorCode::INVALID_DATA_TYPE,
+            &format!("Null on {frame:?}"),
+        );
+    }
+}
+
+#[test]
+fn a_bare_reference_to_the_reserved_instance_clears() {
+    // [0] analog-input 4194303, [1] present-value, and the same object with
+    // another property and an index: both unset (#1417).
+    for octets in [
+        vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55],
+        vec![0x0C, 0x05, 0xFF, 0xFF, 0xFF, 0x19, 0x57, 0x29, 0x02],
+    ] {
+        let value = PropertyValue::ApplicationData(octets);
+        assert_eq!(
+            decode_reference_write(&value, ReferenceFrame::Bare).unwrap(),
+            None,
+            "{value:?}"
+        );
+    }
+    // One instance short of it is an ordinary reference.
+    let value = PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x3F, 0xFF, 0xFE, 0x19, 0x55]);
+    assert!(decode_reference_write(&value, ReferenceFrame::Bare)
+        .unwrap()
+        .is_some());
 }
 
 #[test]

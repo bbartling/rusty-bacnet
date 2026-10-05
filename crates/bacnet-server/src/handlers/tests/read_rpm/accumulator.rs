@@ -379,7 +379,8 @@ fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
         let input_reference: &[u8] = if configured {
             &[0x0C, 0x05, 0xC0, 0x00, 0x01, 0x19, 0x55]
         } else {
-            &[0x00]
+            // Unset: Accumulator 4194303's present-value (#1417).
+            &[0x0C, 0x05, 0xFF, 0xFF, 0xFF, 0x19, 0x55]
         };
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (P::OBJECT_TYPE, None, Ok(&[0x91, 24])),

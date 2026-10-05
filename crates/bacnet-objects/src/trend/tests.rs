@@ -324,12 +324,16 @@ fn trendlog_log_buffer_in_property_list() {
 }
 
 #[test]
-fn trendlog_log_device_object_property_null_by_default() {
+fn trendlog_log_device_object_property_unset_by_default() {
     let tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
     let val = tl
         .read_property(PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Null);
+    // Analog Input 4194303's Present_Value, the unset form (#1417).
+    assert_eq!(
+        val,
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55])
+    );
 }
 
 #[test]

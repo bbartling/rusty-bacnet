@@ -59,8 +59,8 @@ enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Member {
     /// A Trend Log Multiple element naming object or device instance 4194303,
-    /// which Clause 12.30.11 treats as empty, or the missing reference of a
-    /// triggered Trend Log.
+    /// which Clause 12.30.11 treats as empty, or the unset reference of a
+    /// triggered Trend Log, which reads the same way (#1417).
     Unspecified,
     /// A property to read, at one element when `index` is present.
     Reference {
@@ -398,19 +398,13 @@ fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
         let PropertyValue::List(elements) = &reference else {
             return None;
         };
-        elements
-            .iter()
-            .map(|element| member(element, true))
-            .collect::<Option<Vec<_>>>()?
+        elements.iter().map(member).collect::<Option<Vec<_>>>()?
     } else {
-        match member(&reference, false) {
-            Some(member) => vec![member],
-            // A Trigger on a log with no reference is still served, with a
-            // failure, so it doesn't stay TRUE.
-            None if mode == Mode::Triggered && reference == PropertyValue::Null => {
-                vec![Member::Unspecified]
-            }
-            None => return None,
+        match member(&reference)? {
+            // A log with no reference polls nothing. A Trigger on one is
+            // still served, with a failure, so it doesn't stay TRUE.
+            Member::Unspecified if mode != Mode::Triggered => return None,
+            member => vec![member],
         }
     };
     // A Trigger is served even with no members, so it never stays TRUE.
@@ -426,17 +420,12 @@ fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
 
 /// One reference as a read serves it: a single
 /// BACnetDeviceObjectPropertyReference in its Clause 21 encoding (#1234).
-/// Anything else, Null included, leaves the log unpolled.
-/// `wildcard_is_empty` applies the Trend Log Multiple rule for instance
-/// 4194303.
-fn member(value: &PropertyValue, wildcard_is_empty: bool) -> Option<Member> {
+/// Anything else leaves the log unpolled. An unset reference, its object or
+/// Device at instance 4194303, names nothing: an empty Trend Log Multiple
+/// element (Clause 12.30.11), or a Trend Log without a reference (#1417).
+fn member(value: &PropertyValue) -> Option<Member> {
     let reference: BACnetDeviceObjectPropertyReference = decode_reference(value).ok()?;
-    let empty =
-        |oid: &ObjectIdentifier| oid.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE;
-    if wildcard_is_empty
-        && (empty(&reference.object_identifier)
-            || reference.device_identifier.as_ref().is_some_and(empty))
-    {
+    if reference.is_unset() {
         return Some(Member::Unspecified);
     }
     Some(Member::Reference {

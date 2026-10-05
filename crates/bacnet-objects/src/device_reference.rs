@@ -42,6 +42,17 @@
 //!   [`check_device_member`] (VALUE_OUT_OF_RANGE), and on properties held to
 //!   this device then by [`check_local_member`].
 //!
+//! # Unset references
+//!
+//! A property holding at most one reference (Averaging and Event Enrollment
+//! Object_Property_Reference, Trend Log Log_DeviceObjectProperty) keeps no
+//! reference while unset, and reads as [`unset_reference`] then, since the
+//! production has no empty encoding (#1417). Writing a reference that
+//! [`BACnetDeviceObjectPropertyReference::is_unset`] clears the property, so
+//! a value read writes back unchanged. A NULL is no reference: it is refused
+//! as INVALID_DATA_TYPE, which the bundled server turns into the success
+//! that changes nothing (Clause 15.9.2, `handlers::relinquish`).
+//!
 //! The single-reference rule lives in `common::decode_single_element`, which
 //! the Loop and Pulse Converter references in [`crate::reference`] use too
 //! (#1395). Those hold a `BACnetObjectPropertyReference`, which has no Device
@@ -55,7 +66,7 @@ use bacnet_encoding::tags::Tag;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetObjectPropertyReference,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
@@ -149,6 +160,51 @@ pub(crate) fn reference_run<R: DeviceReference>(references: &[R]) -> PropertyVal
         reference.encode(&mut encoded);
     }
     PropertyValue::ApplicationData(encoded.to_vec())
+}
+
+/// `object_type` at the reserved instance 4194303, the identifier Clause 12.1
+/// lets a property hold to mean uninitialized or unused.
+pub(crate) fn unset_identifier(object_type: ObjectType) -> ObjectIdentifier {
+    ObjectIdentifier::new(object_type, ObjectIdentifier::WILDCARD_INSTANCE)
+        .expect("a standard object type at the reserved instance is a valid identifier")
+}
+
+/// The standard form of a reference that names nothing (#1417): the
+/// Present_Value of `object_type` at the reserved instance, in this device.
+///
+/// A reference production has no empty encoding, so this is what a reference
+/// property serves while unset, what a client writes to clear one, and what
+/// an array element gets when an index-0 write grows the array: a Trend Log
+/// Multiple's Log_DeviceObjectProperty (Clause 12.30.11) or an Access Rights
+/// rule's time range (Clauses 12.34.9.3 and 12.34.10.1). Each property picks
+/// the object type its references usually name; the reserved instance alone
+/// marks the reference unset
+/// ([`BACnetDeviceObjectPropertyReference::is_unset`]).
+pub(crate) fn unset_reference(object_type: ObjectType) -> BACnetDeviceObjectPropertyReference {
+    BACnetDeviceObjectPropertyReference::new_local(
+        unset_identifier(object_type),
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )
+}
+
+/// A reference property that holds at most one reference, as a read serves
+/// it: `reference`, or the unset form naming `unset_type` without one.
+pub(crate) fn optional_reference_value(
+    reference: Option<&BACnetDeviceObjectPropertyReference>,
+    unset_type: ObjectType,
+) -> PropertyValue {
+    match reference {
+        Some(reference) => reference_value(reference),
+        None => reference_value(&unset_reference(unset_type)),
+    }
+}
+
+/// `reference`, or `None` when it is the unset form, which a reference
+/// property stores as no reference at all.
+pub(crate) fn set_or_unset(
+    reference: BACnetDeviceObjectPropertyReference,
+) -> Option<BACnetDeviceObjectPropertyReference> {
+    (!reference.is_unset()).then_some(reference)
 }
 
 /// A reference to a property of an object in this device, in the

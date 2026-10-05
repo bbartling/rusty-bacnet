@@ -584,6 +584,10 @@ fn malformed_reference_shapes_do_not_become_local() {
             PropertyValue::ObjectIdentifier(foreign_device),
         ]),
         PropertyValue::Null,
+        // The unset form an enrollment without a reference reads as (#1417):
+        // analog-input 4194303, and a reference naming Device 4194303.
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55]),
+        PropertyValue::ApplicationData([&good[..7], &[0x3C, 0x02, 0x3F, 0xFF, 0xFF][..]].concat()),
         // Cut inside the Device member.
         PropertyValue::ApplicationData(good[..good.len() - 1].to_vec()),
         // A context tag [4] after the reference.
