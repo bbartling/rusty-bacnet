@@ -1,8 +1,8 @@
 ---
 section: Changed
 ---
-- **Breaking (Python API):** Audit_Notification_Recipient, Global Group and
-  Schedule members, schedules, Date_List, timestamps, Active_COV_Subscriptions,
-  Value_Source and the other constructed properties listed in
+- **Breaking (Python API):** Date_List, schedules, timestamps, Value_Source
+  and the other constructed properties in
   [the Python API guide](docs/python-api.md#typed-constructed-values) read as
-  typed values instead of `application_data` octets (#1345).
+  typed values. In 0.11.0 a local read gave the stored octets or flat list,
+  and a client read only the first application-tagged value (#1345).

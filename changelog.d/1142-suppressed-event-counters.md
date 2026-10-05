@@ -1,5 +1,8 @@
 ---
 section: Added
 ---
-- `BACnetServer::event_notification_counters()`, in Rust and Python, counts
-  the event notifications the server did not deliver, by cause (#1142).
+- `event_notification_counters()` has a count per cause, including
+  device_recipient_unbound, recipient_unroutable,
+  confirmed_broadcast_recipient, unconfirmed_send_failed, apdu_too_large,
+  received_not_forwarded, forwarding_cap_dropped, received_not_logged (#1142,
+  #1160, #1196, #1225, #1259, #1346).

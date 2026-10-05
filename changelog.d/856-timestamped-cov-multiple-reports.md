@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- **Wire and Rust API:** timestamped COV-multiple reports carry each change's
-  commit time, keep changes until they are sent and honour
-  Max_Notification_Delay; `CovCounters::timed_changes_dropped` counts drops
-  (#856).
+- **Wire:** timestamped COV-multiple reports carry each change's commit time
+  and keep it until delivered, honouring Max_Notification_Delay. An oversized
+  report splits in capture order, value by value if need be; a value no
+  notification can carry is dropped (#856, #986, #1008, #1090).
