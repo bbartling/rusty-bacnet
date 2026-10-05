@@ -52,4 +52,4 @@ Each owner has a bounded serial Number worker separate from APDU dispatch. Holdi
 
 ## Next steps
 
-Use the [transport and evidence matrix](/rusty-bacnet/development/transports/) to distinguish actual wire, simulated and platform coverage. For complete state, capacity and per-media rules, read [Local Network Number controls](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/rust-api.md#local-network-number-controls) and the `BACNET-06-NONROUTER-NETWORK-NUMBER` row in the [canonical ledger](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/conformance/bacnet-135-2020.json).
+Use the [transport and evidence matrix](/rusty-bacnet/development/transports/) to distinguish actual wire, simulated and platform coverage. For complete state, capacity and per-media rules, read [Local Network Number controls](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/rust-api.md#local-network-number-controls).

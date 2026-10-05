@@ -158,6 +158,4 @@ table.
 the buckets. `crates/rusty-bacnet/src/server/server_methods/time_sync_policy_tests.rs`
 covers the Python dict, and `crates/rusty-bacnet/tests/test_time_sync_policy.py`
 sends requests to a running B/IP server from raw sockets and reads
-Local_Date and Local_Time back. The ledger row is
-`BACNET-16-LOCAL-INBOUND-SOURCE-POLICIES` in
-[bacnet-135-2020.json](conformance/bacnet-135-2020.json).
+Local_Date and Local_Time back.

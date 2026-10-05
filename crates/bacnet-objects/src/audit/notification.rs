@@ -44,7 +44,7 @@ pub trait AuditLogNotificationSink: Send + Sync {
             .map(|outcome| (outcome, false))
     }
 
-    /// Check the durable completed-confirmed ledger without mutating it.
+    /// Check the durable completed confirmed receipts without mutating them.
     fn has_completed_confirmed_receipt(
         &self,
         _key: &[u8],

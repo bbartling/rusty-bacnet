@@ -117,7 +117,7 @@ pub(super) fn insert(
             .enumerate()
             .min_by_key(|(index, stored)| (stored.completed_at_unix_millis(), *index))
             .map(|(index, _)| index)
-            .expect("a full receipt ledger is nonempty");
+            .expect("a full receipt list is nonempty");
         receipts.remove(oldest);
     }
     receipts.push(receipt);

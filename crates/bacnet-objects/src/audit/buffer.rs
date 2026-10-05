@@ -15,7 +15,7 @@
 //! purge leaves one BUFFER_PURGED status record, which also carries
 //! LOG_DISABLED while logging is off; it is written either way, since a
 //! log-status record ignores Log_Enable (Clause 12.64.10). Total_Record_Count
-//! and the completed-receipt ledger survive the purge, so sequence numbers
+//! and the completed receipts survive the purge, so sequence numbers
 //! keep counting and a confirmed notification sent again after it is still
 //! recognized as a duplicate.
 //!

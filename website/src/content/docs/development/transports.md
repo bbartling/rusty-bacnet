@@ -30,7 +30,7 @@ The CLI has its own [configuration surface](https://github.com/jscott3201/rusty-
 | Isolated Linux Ethernet | Full server/standalone client MAC, LLC, length, payload and padding; raw-FD stop/drop and canceled-stop ownership | Opt-in virtual-link fixture needs raw-socket capability; excluded from ordinary CI |
 | Isolated Linux B/IPv6 | Full server/standalone Rust client selected-link OriginalBroadcast and configured-foreign DBTN; independent bytes/address/interface; normal installed-Python evidence | Explicit external ignored tests; no physical LAN, IPv6 endpoint builder or full Annex U claim |
 
-Standalone-client BBMD/foreign cases retain BDT/FDT admission, alternate-sender compatibility and registration NAK/retry behavior, and prove requester progress plus awaited-stop socket release. Independent standalone-client MS/TP frame qualification remains under #879. Other implemented opt-ins are not automatically independently qualified by this table. The authoritative row is `BACNET-06-NONROUTER-NETWORK-NUMBER` in the [machine-readable conformance ledger](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/conformance/bacnet-135-2020.json). Its notes distinguish positive wire observations, FIFO refusal fences, controlled lifecycle tests and retained limitations.
+Standalone-client BBMD/foreign cases retain BDT/FDT admission, alternate-sender compatibility and registration NAK/retry behavior, and prove requester progress plus awaited-stop socket release. Independent standalone-client MS/TP frame qualification remains under #879. Other implemented opt-ins are not automatically independently qualified by this table.
 
 ## Select IPv6 explicitly when discovery is ambiguous
 
@@ -42,7 +42,7 @@ Incoming destination and interface checks run before VMAC learning/application d
 
 Record the source revision, interface, feature set, OS and native artifact. Start with a known peer and bounded read. Add registration, discovery, subscriptions or writes only when the intended operation needs them. Preserve the distinction between a successful build, a loopback test, simulated serial frames, an actual isolated wire capture and a hardware deployment test.
 
-[Support and conformance](/rusty-bacnet/project/support/) explains the ledger's role. [MS/TP qualification](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/mstp-qualification.md) covers the separate hardware path. No page here claims BTL certification.
+[Support and conformance](/rusty-bacnet/project/support/) summarizes what is supported. [MS/TP qualification](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/mstp-qualification.md) covers the separate hardware path. No page here claims BTL certification.
 
 ## Next steps
 

@@ -34,7 +34,7 @@ fn retention_boundary_and_future_timestamp_fail_open() {
 }
 
 #[test]
-fn full_ledger_evicts_oldest_completion_then_oldest_tie() {
+fn full_receipt_list_evicts_oldest_completion_then_oldest_tie() {
     let mut receipts = (0..MAX_COMPLETED_AUDIT_RECEIPTS)
         .map(|index| completed(index, 100))
         .collect::<Vec<_>>();
