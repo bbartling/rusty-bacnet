@@ -43,11 +43,17 @@ permissions:
   contents: read
 
 concurrency:
-  # Per event and ref: a scheduled or manual run never cancels a push to main,
-  # PR runs and dev-merge runs never cancel each other, and a newer merge to dev
-  # cancels the previous merge's run (the newer one tests a superset).
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Per event, so a scheduled or manual run never cancels a push's run, nor a
+  # PR's run a merge's. Within an event, per ref: a newer push to a PR, to
+  # main or to a tag cancels the superseded run, and a newer scheduled or
+  # manual run on a branch cancels the older one. Pushes to dev are the
+  # exception, as in native-tests.yml: each commit gets a group of its own,
+  # keyed by its SHA, and nothing cancels it, so two merges minutes apart each
+  # get a CI result, and a late duplicate push event for an older commit can't
+  # cancel the run for dev's head. (A shared group without cancel-in-progress
+  # would still let a newer pending run replace an older one.)
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/dev' }}
 
 env:
   CARGO_TERM_COLOR: always

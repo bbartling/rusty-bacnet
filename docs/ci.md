@@ -6,7 +6,7 @@ GitHub-hosted runners, the [release](#release) included.
 
 | Host | Runs |
 | --- | --- |
-| GitHub (hosted runners) | Linux CI, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml); [native macOS and Windows tests](#native-tests-macos-and-windows), [`native-tests.yml`](../.github/workflows/native-tests.yml); website validation and the GitHub Pages deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); [releases](#release), built and tested on each platform and published to crates.io, PyPI and GitHub Releases, [`release.yml`](../.github/workflows/release.yml) |
+| GitHub (hosted runners) | Linux CI, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml); [native macOS and Windows tests](#native-tests-macos-and-windows), [`native-tests.yml`](../.github/workflows/native-tests.yml); the nightly [flake hunt](#flake-hunt), [`flake-hunt.yml`](../.github/workflows/flake-hunt.yml); website validation and the GitHub Pages deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); [releases](#release), built and tested on each platform and published to crates.io, PyPI and GitHub Releases, [`release.yml`](../.github/workflows/release.yml) |
 
 | Platform | Where it is checked |
 | --- | --- |
@@ -48,7 +48,13 @@ Merge pushes to `dev` run the Lean jobs, for two reasons (#904).
   repo's merge commits, the `dev` run is the only test of what actually
   landed, after any merges since.
 
-A newer merge cancels the previous merge's run, since it tests a superset.
+Each push to `dev` gets a concurrency group of its own, keyed by its commit,
+and nothing cancels its run, as in the
+[native tests](#native-tests-macos-and-windows): two merges minutes apart each
+get a result, and a late duplicate push event for an older commit can't
+cancel the run for `dev`'s head. Every other run is grouped by event and ref,
+so a newer push to a PR, to `main` or to a tag, or a newer scheduled or manual
+run on a branch, cancels the one it supersedes.
 **After merging, check the `dev` run.** It isn't a required status, so a red
 merge run is the only signal of merge skew; fix it forward on `dev` right away.
 The weekly scheduled run checks the default branch (`dev`) with the Heavy jobs
@@ -226,7 +232,8 @@ any entry unused for seven days. On 4 October 2026 the caches had reached
 12.3 GB, mostly entries no run would restore again (#1471).
 
 - **Saves.** Only runs on `dev` save Rust caches: merges, the weekly run and
-  manual runs there. PR runs only restore them.
+  manual runs there. PR runs only restore them, and so does the
+  [flake hunt](#flake-hunt), which never saves.
 - **Pruning.** After a green run on `dev`, each workflow's **Prune caches**
   job runs [`scripts/ci/prune-caches.sh`](../scripts/ci/prune-caches.sh) with
   `actions: write`. It keeps the two newest rust-cache entries of each family
@@ -426,6 +433,98 @@ gh run list -R jscott3201/rusty-bacnet --workflow native-tests.yml --branch <bra
 gh run view -R jscott3201/rusty-bacnet <run id> --log-failed
 gh workflow run native-tests.yml -R jscott3201/rusty-bacnet --ref <branch>  # run by hand
 ```
+
+## Flake hunt
+
+[`.github/workflows/flake-hunt.yml`](../.github/workflows/flake-hunt.yml) runs
+tests over and over to catch failures too rare for a PR's single run. A
+deadlock that failed about 3 runs in 1,000 got past PR CI and showed up only
+as a rare macOS Python failure on `dev`. No check here is required for
+merging; every job's name starts with `Hunt:`, so none can pass for `CI OK`
+or `Native OK`, and the release's [CI gate](#ci-gate) reads only `ci.yml` and
+`native-tests.yml` runs.
+
+**When.** Nightly at 07:37 UTC, on the default branch (`dev`); by hand (see
+below); and on a PR to `dev` or `main` that changes the workflow or its
+script, [`scripts/ci/flake-hunt.py`](../scripts/ci/flake-hunt.py), with small
+values (2 Python rounds, 2 minutes of stress), so that PR exercises the hunt
+in about 15 minutes. A newer push to the PR cancels its older run; nightly and
+manual runs are never cancelled, and a manual run waits for the one before it.
+
+**Jobs.** **Hunt: settings** checks the values and sizes each hunt job's
+timeout to fit them. Each hunt then runs on Linux x86_64 (`ubuntu-24.04`) and
+macOS arm64 (`macos-latest`):
+
+- **Hunt: Python suite** builds the extension as CI does (`ci.yml`'s Python
+  bindings job on Linux, `native-tests.yml`'s Lint and Python job on macOS)
+  and runs `python -m unittest discover -s crates/rusty-bacnet/tests` round
+  after round, 20 by default. A round took about a minute in October 2026
+  (63 s on Linux, 67 s on macOS). A failing round doesn't stop the loop:
+  each failing test is recorded with its round, and the round's output goes
+  in the job log and the job's artifact. The suite runs with `-v`, so a hang
+  or crash names the test it happened in, and with `-X faulthandler`. A round
+  still running after 10 minutes is a hang: SIGABRT makes faulthandler print
+  every thread's Python stack, then the round's processes are killed. Rounds
+  stop early, with a warning, when the next could overrun the job's timeout.
+- **Hunt: nextest stress** runs `cargo nextest run --stress-duration 20m`
+  over `bacnet-server`, `bacnet-client`, `bacnet-endpoint` and
+  `bacnet-network`, about 3,500 tests an iteration, with the `ci` profile and
+  CI's features for those crates: `LINUX_FEATURES` from `ci.yml` on Linux and
+  `local-macos.sh`'s list on macOS, less the features of crates outside the
+  build, which cargo refuses. The profile's `fail-fast = false` keeps the run
+  going through failures, and its 2-minute limit per test turns a hang into a
+  `TIMEOUT`. nextest finishes the iteration that is running when the time is
+  up. Each failing test is recorded with its iteration, and
+  `--status-level slow` keeps passing tests out of the log.
+
+With the defaults each hunt job has a 60-minute timeout. Each job restores the
+Rust cache of the CI job that builds the same way (Python bindings, Test,
+Lint and Python, Tests) by naming that job in rust-cache's `key`, with
+`add-job-id-key: false`, and saves nothing. rust-cache hashes every `CARGO*`,
+`RUST*`, `CC*`, `CFLAGS*`, `CXX*` and `CMAKE*` variable and the feature list
+into its key, so the workflow's `env` must keep matching `ci.yml`'s and
+`native-tests.yml`'s; if it drifts, the jobs only build from cold.
+
+**Bigger runs.** Dispatch it with any of three inputs:
+
+```bash
+gh workflow run flake-hunt.yml -R jscott3201/rusty-bacnet --ref dev \
+  -f python_rounds=100 -f stress_duration=2h
+gh workflow run flake-hunt.yml -R jscott3201/rusty-bacnet --ref dev -f stress_count=50
+```
+
+- `python_rounds`: 1 to 300 (default 20).
+- `stress_duration`: `<n>s`, `<n>m` or `<n>h`, up to 5 hours (default `20m`).
+- `stress_count`: 1 to 1,000 iterations, which replaces the duration
+  (default empty).
+
+The settings job sizes the timeouts, up to GitHub's 6-hour limit: 20 minutes
+plus 2 a round for the Python jobs, and for the stress jobs 40 minutes plus
+the duration, or 30 plus 3 an iteration; never under 60. `--ref` picks the
+branch. A long run holds two of the account's 5 macOS slots (see
+[Native tests](#native-tests-macos-and-windows), "macOS capacity") for its
+whole length, so PRs' native tests queue longer meanwhile.
+
+**Where failures go.** When a hunt job fails, or times out in a run nobody
+cancelled, **Hunt: report** gathers every job's records and opens the issue
+**Nightly flake hunt: failures** with the `flake-hunt` label, which it
+creates the first time. While that issue is open it comments on it instead:
+the oldest open issue with the label, or else with that exact title. Reports
+run one at a time, so two can't open two issues. Each report gives the run's
+URL, the commit, the settings, each job's result, and the failing tests, each
+with its job and the Python rounds or stress iterations it failed in. Close
+the issue once its failures are fixed or filed; the next failure opens a new
+one.
+
+- Only the report job can write issues (`issues: write`); every other job only
+  reads the repository.
+- Test names come from test output, so they reach the issue only through the
+  jobs' record files and inside a code block, never a shell command or a
+  `${{ }}` expression in a script.
+- The artifacts, `flake-hunt-<job>-<platform>`, hold each job's records, the
+  output of each failing round and the stress log, for 14 days.
+- On a PR the report always runs, as a dry run: it writes the report to the
+  job summary, logs what it would create or comment on, and writes nothing.
 
 ## Local checks
 
