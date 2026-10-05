@@ -80,6 +80,8 @@ pub struct Bip6Transport {
     foreign_device: Option<Bip6ForeignDeviceConfig>,
     /// Foreign device re-registration task handle.
     registration_task: Option<JoinHandle<()>>,
+    /// See [`Self::forwarded_group_origin_drops`].
+    forwarded_group_origin_drops: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Configuration for BIPv6 foreign device registration.
@@ -140,6 +142,7 @@ impl Bip6Transport {
             broadcast_scope: Bip6BroadcastScope::SiteLocal,
             foreign_device: None,
             registration_task: None,
+            forwarded_group_origin_drops: Arc::default(),
         }
     }
 
@@ -159,6 +162,16 @@ impl Bip6Transport {
     /// Must be called before `start()`.
     pub fn register_as_foreign_device(&mut self, config: Bip6ForeignDeviceConfig) {
         self.foreign_device = Some(config);
+    }
+
+    /// Forwarded-NPDUs dropped since this transport was created because
+    /// their original source address is an IPv6 multicast group, one of this
+    /// link's group destinations ([`TransportPort::is_group_destination`],
+    /// #1493). No node sends from one, so such a frame is malformed and never
+    /// reaches the network layer. The total survives a restart.
+    pub fn forwarded_group_origin_drops(&self) -> u64 {
+        self.forwarded_group_origin_drops
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -385,6 +398,7 @@ impl TransportPort for Bip6Transport {
                 .as_ref()
                 .map(|fd| (fd.bbmd_ip, fd.bbmd_port)),
             vmac_table: self.vmac_table.clone(),
+            forwarded_group_origin_drops: Arc::clone(&self.forwarded_group_origin_drops),
         };
         let recv_task = tokio::spawn(receiver.run());
 
@@ -539,7 +553,7 @@ impl TransportPort for Bip6Transport {
 /// Whether a B/IPv6 MAC names an IPv6 multicast group (ff00::/8) at any
 /// port: the BACnet groups [`TransportPort::is_broadcast_mac`] knows and
 /// any other, such as ff02::1, all of which reach more than one node (#1479).
-fn is_bip6_group(mac: &[u8]) -> bool {
+pub(super) fn is_bip6_group(mac: &[u8]) -> bool {
     mac.len() == 18 && mac[0] == 0xFF
 }
 

@@ -2131,8 +2131,11 @@ finally:
   reachability or authentication. Duplicate Device identifiers raise `ValueError`,
   even for the same address, without changing the first binding. There is no update/removal,
   routed-binding or discovery API. The Rust builder's 4096-binding capacity check
-  runs at `start()` before registrations transfer (`ValueError`); concrete
-  transport broadcast checks remain in the subsequent Rust build step.
+  runs at `start()` before registrations transfer (`ValueError`). The Rust
+  build step then refuses a binding at a broadcast or other group address of
+  the link, such as a multicast address, 255.255.255.255 or the configured
+  broadcast IP at another port: `start()` raises `BacnetError` naming the
+  device and the address (#1493). Bind each device at its unicast address.
 - `configure_audit_log_parent(instance: int, *, parent_device_instance: int,
   parent_audit_log_instance: int) -> None` sets the registered local log's
   `Member_Of` reference. All identifiers must be integers in `0..=4194303`, not
@@ -3370,7 +3373,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `recipient_list_too_long` | Transitions sent nowhere because a custom class served more than 32 destinations |
 | `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired |
 | `recipient_unroutable` | Matched recipients skipped because they can't be routed as written: a Device identifier that isn't a Device (or a binding unusable on this link), or a MAC on network 65535 |
-| `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, which only unconfirmed requests may use (Clause 6.3) |
+| `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, or another group address such as a multicast one, which only unconfirmed requests may use (Clause 6.3) |
 | `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |

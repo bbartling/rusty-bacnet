@@ -55,6 +55,7 @@ async fn receiver() -> (Receiver, mpsc::Receiver<ReceivedNpdu>) {
         wildcard_bind: false,
         foreign_bbmd: None,
         vmac_table: VmacTable::new(),
+        forwarded_group_origin_drops: Arc::default(),
     };
     (receiver, rx)
 }
@@ -197,4 +198,98 @@ fn every_multicast_group_is_a_group_destination() {
     }
     assert!(!transport.is_broadcast_mac(&mac("ff02::1".parse().unwrap(), 0xBAC0)));
     assert!(!transport.is_group_destination(&[0xFF; 16]));
+}
+
+/// A Forwarded-NPDU from `origin`, carrying a ReadProperty request.
+fn forwarded_from(origin: SocketAddrV6) -> BytesMut {
+    let mut payload = origin.ip().octets().to_vec();
+    payload.extend_from_slice(&origin.port().to_be_bytes());
+    payload.extend_from_slice(CONFIRMED_REQUEST);
+    let mut buf = BytesMut::new();
+    encode_bvlc6(
+        &mut buf,
+        Bvlc6Function::ForwardedNpdu,
+        &SENDER_VMAC,
+        &payload,
+    )
+    .unwrap();
+    buf
+}
+
+/// #1493: the original source of a Forwarded-NPDU becomes the NPDU's source,
+/// so one that is a multicast group, a group destination at any port, makes
+/// the frame malformed. It is dropped and counted, and never handed up; one
+/// from a node's own address still is.
+#[tokio::test]
+async fn a_forwarded_npdu_from_a_multicast_origin_is_dropped_and_counted() {
+    let (receiver, mut rx) = receiver().await;
+    let origins: [(Ipv6Addr, u16); 3] = [
+        (BACNET_IPV6_MULTICAST_SITE_LOCAL, 0xBAC0),
+        ("ff02::1".parse().unwrap(), 0xBAC0),
+        ("ff0e::1:3".parse().unwrap(), 0x1234),
+    ];
+    for (ip, port) in origins {
+        let frame = forwarded_from(SocketAddrV6::new(ip, port, 0, 0));
+        receiver
+            .handle_datagram(
+                &frame,
+                &datagram(&frame, BACNET_IPV6_MULTICAST_SITE_LOCAL, None),
+            )
+            .await;
+        assert!(rx.try_recv().is_err(), "{ip}");
+    }
+    assert_eq!(
+        receiver
+            .forwarded_group_origin_drops
+            .load(std::sync::atomic::Ordering::Relaxed),
+        origins.len() as u64
+    );
+
+    let station = SocketAddrV6::new("2001:db8::20".parse().unwrap(), 0xBAC0, 0, 0);
+    let frame = forwarded_from(station);
+    receiver
+        .handle_datagram(
+            &frame,
+            &datagram(&frame, BACNET_IPV6_MULTICAST_SITE_LOCAL, None),
+        )
+        .await;
+    let npdu = rx.try_recv().expect("a unicast origin is handed up");
+    assert_eq!(
+        npdu.source_mac.as_slice(),
+        &encode_bip6_mac(*station.ip(), station.port())
+    );
+}
+
+/// The transport reports the receiver's count.
+#[tokio::test]
+async fn a_running_transport_counts_multicast_origins() {
+    let bbmd = tokio::net::UdpSocket::bind("[::1]:0").await.unwrap();
+    let SocketAddr::V6(bbmd_addr) = bbmd.local_addr().unwrap() else {
+        unreachable!()
+    };
+    let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(45));
+    transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
+        bbmd_ip: *bbmd_addr.ip(),
+        bbmd_port: bbmd_addr.port(),
+        ttl: 60,
+    });
+    let mut rx = transport.start().await.unwrap();
+    let (_, port) = decode_bip6_mac(transport.local_mac()).unwrap();
+    let to = SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0);
+    let station = SocketAddrV6::new("2001:db8::20".parse().unwrap(), 0xBAC0, 0, 0);
+    let group = SocketAddrV6::new("ff02::1".parse().unwrap(), 0xBAC0, 0, 0);
+    for origin in [group, station] {
+        bbmd.send_to(&forwarded_from(origin), to).await.unwrap();
+    }
+    let received = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("the station's frame arrives")
+        .unwrap();
+    assert_eq!(
+        received.source_mac.as_slice(),
+        &encode_bip6_mac(*station.ip(), station.port()),
+        "the group origin went nowhere"
+    );
+    assert_eq!(transport.forwarded_group_origin_drops(), 1);
+    transport.stop().await.unwrap();
 }

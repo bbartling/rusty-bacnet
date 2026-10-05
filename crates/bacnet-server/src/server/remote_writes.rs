@@ -44,7 +44,9 @@
 
 use super::binding_probes::{ProbeStep, WhoIsScope};
 use super::device_bindings::{DeviceBindingTable, DeviceResolution};
-use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
+use super::event_recipient_route::{
+    ConfirmedRecipientRoute, ConfirmedRouteRefusal, RecipientRoute,
+};
 use super::notification_transactions::{
     run_attempts, Attempt, AttemptsEnd, NotificationReserveError,
 };
@@ -343,27 +345,40 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
     }
 
     fn resolve(&self, table: &DeviceBindingTable, device: ObjectIdentifier) -> DeviceResolution {
-        table.resolve_at(&device, Instant::now(), |mac| {
-            self.network.transport().is_broadcast_mac(mac)
-        })
+        table.resolve_at(&device, Instant::now(), |mac| self.is_group(mac))
+    }
+
+    /// Whether `mac` reaches a group of nodes on this link: no binding takes
+    /// one, and no request goes to one (#1493).
+    fn is_group(&self, mac: &[u8]) -> bool {
+        self.network.transport().is_group_destination(mac)
     }
 
     /// The confirmed route `resolution` gives, or `missing` when it gives
     /// none. A binding routed through this network's own number, read now,
     /// is the local device it is (#1358): the write goes straight to its MAC
-    /// with no DNET and is answered from there, and one at the link's
-    /// broadcast MAC names no device, so it gives no route.
+    /// with no DNET and is answered from there, and one at a group address,
+    /// the link's broadcast MAC or another, names no device, so it gives no
+    /// route (#1493).
     fn confirmed(
         &self,
         resolution: DeviceResolution,
         missing: RemoteRequestError,
     ) -> Result<ConfirmedRecipientRoute, RemoteRequestError> {
+        let is_group = |mac: &[u8]| self.is_group(mac);
         RecipientRoute::from_device_resolution(resolution)
-            .localize(self.network.local_network_number().get(), |mac| {
-                self.network.transport().is_broadcast_mac(mac)
+            .localize(
+                self.network.local_network_number().get(),
+                is_group,
+                is_group,
+            )
+            .into_confirmed(is_group)
+            .map_err(|refusal| {
+                if refusal == ConfirmedRouteRefusal::GroupNextHop {
+                    warn!("No request sent to another device at a group address");
+                }
+                missing
             })
-            .into_confirmed()
-            .ok_or(missing)
     }
 
     /// Broadcast a Who-Is whose limits are both `device`'s instance across

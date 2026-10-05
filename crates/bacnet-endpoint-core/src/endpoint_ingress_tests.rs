@@ -357,7 +357,8 @@ async fn request_route_preserves_the_complete_envelope_and_reply_sender() {
     let (transport, handle) = test_transport();
     let mut endpoint = EndpointIngress::new(transport, 2);
     let mut ingress = endpoint.start().await.unwrap();
-    let apdu = [0x00, 0x05, 0x33, 0x0c];
+    // A global broadcast carries only an Unconfirmed-Request (#1491).
+    let apdu = [0x10, 0x08];
     let source_network = NpduAddress {
         network: 77,
         mac_address: MacAddr::from_slice(&[0x44, 0x55]),

@@ -145,7 +145,7 @@ async fn sc_builder_rejects_broadcast_binding_before_tls_prerequisites() {
         panic!("invalid SC binding unexpectedly started a server");
     };
     assert!(
-        error.to_string().contains("broadcast address"),
+        error.to_string().contains("broadcast or group address"),
         "binding validation must precede TLS prerequisites: {error}"
     );
 }

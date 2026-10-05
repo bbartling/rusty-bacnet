@@ -77,6 +77,7 @@ async fn dbtn_registered_foreign_device_fans_out_without_origin_echo() {
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
+        forwarded_origins: super::groups::ForwardedOrigins::detached(),
     };
     let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);
     let msg = BvllMessage {
@@ -154,6 +155,7 @@ async fn dbtn_registered_foreign_device_naks_when_forwarding_fails() {
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: true,
+        forwarded_origins: super::groups::ForwardedOrigins::detached(),
     };
     let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);
     let msg = BvllMessage {

@@ -103,7 +103,12 @@ impl DiscoveryPolicy {
 }
 
 /// Operational counters for discovery requests and responses.
+///
+/// Non-exhaustive, so a counter can be added without breaking callers: read
+/// it from [`BACnetServer::discovery_counters`](crate::server::BACnetServer::discovery_counters)
+/// and its fields rather than building one.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DiscoveryCounters {
     /// Total Who-Is requests received.
     pub who_is_received: u64,

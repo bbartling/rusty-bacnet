@@ -13,7 +13,7 @@ fn assert_keyed_apdu(
     source: &[u8],
     id: u16,
 ) {
-    assert_eq!(apdu.apdu.as_ref(), id.to_be_bytes());
+    assert_eq!(apdu.apdu.as_ref(), apdu_of(id));
     assert_eq!(apdu.ingress_network, Some(network(port)));
     assert_eq!(apdu.source_mac.as_slice(), source);
     // Identical routed source on every port: it must not become the quota key.

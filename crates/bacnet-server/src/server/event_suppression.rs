@@ -23,8 +23,8 @@ use std::sync::atomic::AtomicU64;
 /// the transition's destinations are still served. They are grouped by what
 /// fixes them: a Device recipient the server holds no current address for,
 /// a recipient that can never be routed as written, and a confirmed
-/// recipient at a broadcast address. The warning logged with each skip names
-/// the finer reason.
+/// recipient at a broadcast or other group address. The warning logged with
+/// each skip names the finer reason.
 ///
 /// The next three count confirmed notifications to one recipient that were
 /// never acknowledged.
@@ -69,9 +69,11 @@ pub struct EventNotificationCounters {
     pub recipient_unroutable: u64,
     /// Recipients configured for confirmed notifications at a broadcast
     /// address (local, remote or global, the link's own broadcast MAC
-    /// included). Clause 6.3 lets only unconfirmed requests be broadcast,
-    /// and sending one unconfirmed would drop the acknowledgment the
-    /// destination asks for. No invoke ID is reserved for them.
+    /// included), or at any other group address the link reports
+    /// ([`TransportPort::is_group_destination`], such as a B/IP multicast
+    /// address, #1493). Clause 6.3 lets only unconfirmed requests be
+    /// broadcast, and sending one unconfirmed would drop the acknowledgment
+    /// the destination asks for. No invoke ID is reserved for them.
     pub confirmed_broadcast_recipient: u64,
     /// Confirmed notifications not sent because no confirmed transaction
     /// could be reserved, normally because every invoke ID was in use.
