@@ -117,10 +117,7 @@ pub(super) fn extract_raw_context(
                 .checked_add(tag.length as usize)
                 .ok_or_else(|| Error::decoding(content_start, "tag length overflow"))?;
             if pos > data.len() {
-                return Err(Error::decoding(
-                    content_start,
-                    format!("tag data overflows buffer: need {} bytes", tag.length),
-                ));
+                return Err(Error::buffer_too_short(pos, data.len()));
             }
         }
     }

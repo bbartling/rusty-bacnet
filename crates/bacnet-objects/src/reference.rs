@@ -21,17 +21,19 @@
 //! Any other written value holds one reference and is decoded by
 //! `common::decode_single_element`, the decoder behind the device references'
 //! single-reference rule (#1395; the codes are listed in
-//! [`crate::device_reference`]). Another kind of value, a list mixing raw
-//! chunks with decoded values, or octets that don't open the way the
-//! property's datatype does is PROPERTY / INVALID_DATA_TYPE. Octets that open
-//! right but aren't exactly one whole reference (none, one cut short, or
-//! anything after it) are PROPERTY / INVALID_DATA_ENCODING. The production
-//! has no device-qualifying member \[3\], so one counts as octets after the
-//! reference.
+//! [`crate::device_reference`]), with the shared offset-taking codecs as its
+//! element decoders, so that decoder alone judges what follows the reference
+//! (#1414). Another kind of value, a list mixing raw chunks with decoded
+//! values, or octets that don't open the way the property's datatype does is
+//! PROPERTY / INVALID_DATA_TYPE. Octets that open right but aren't exactly
+//! one whole reference (none, one cut short, or anything after it) are
+//! PROPERTY / INVALID_DATA_ENCODING. The production has no device-qualifying
+//! member \[3\]; the codec refuses one, so it draws the same code as other
+//! octets after the reference.
 
 use bacnet_encoding::constructed::{
-    decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
-    encode_setpoint_reference,
+    decode_object_property_reference_at, decode_setpoint_reference_at,
+    encode_object_property_reference, encode_setpoint_reference,
 };
 use bacnet_encoding::tags::Tag;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
@@ -91,13 +93,19 @@ pub(crate) fn decode_reference_write(
     match frame {
         ReferenceFrame::Bare => match value {
             PropertyValue::Null => Ok(None),
-            value => common::decode_single_element(value, opens_bare, decode_bare).map(Some),
+            value => common::decode_single_element(
+                value,
+                opens_bare,
+                decode_object_property_reference_at,
+            )
+            .map(Some),
         },
         ReferenceFrame::Setpoint => {
             if common::chunks(value)?.iter().all(|chunk| chunk.is_empty()) {
                 return Ok(None);
             }
-            common::decode_single_element(value, opens_setpoint, decode_setpoint).map(Some)
+            common::decode_single_element(value, opens_setpoint, decode_setpoint_reference_at)
+                .map(Some)
         }
     }
 }
@@ -111,31 +119,6 @@ fn opens_bare(tag: &Tag) -> bool {
 /// The setpoint frame opens with opening tag 0.
 fn opens_setpoint(tag: &Tag) -> bool {
     tag.is_opening_tag(0)
-}
-
-/// The bare members from `offset` on. The shared codec takes them as a whole
-/// payload, so a reference it returns runs to the end of `bytes`; anything
-/// after the members fails the codec instead.
-fn decode_bare(
-    bytes: &[u8],
-    offset: usize,
-) -> Result<(BACnetObjectPropertyReference, usize), Error> {
-    let reference = decode_object_property_reference(&bytes[offset..])?;
-    Ok((reference, bytes.len()))
-}
-
-/// The setpoint frame from `offset` on, taken as a whole payload as in
-/// [`decode_bare`]. The frame has opened there, so the codec never sees the
-/// empty value that holds no reference.
-fn decode_setpoint(
-    bytes: &[u8],
-    offset: usize,
-) -> Result<(BACnetObjectPropertyReference, usize), Error> {
-    match decode_setpoint_reference(&bytes[offset..])? {
-        Some(reference) => Ok((reference, bytes.len())),
-        // Unreachable: `opens_setpoint` only lets a value with octets here.
-        None => Err(Error::decoding(offset, "BACnetSetpointReference: no frame")),
-    }
 }
 
 #[cfg(test)]

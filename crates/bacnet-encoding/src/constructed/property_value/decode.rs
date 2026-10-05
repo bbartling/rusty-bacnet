@@ -217,7 +217,7 @@ fn decode_with_boundaries_detailed(
         })?;
     if property_end > data.len() {
         return Err(PropertyValueDecodeError::syntax(
-            Error::decoding(content_start, "BACnetPropertyValue property-id truncated"),
+            Error::buffer_too_short(property_end, data.len()),
             content_start,
             PropertyValueDecodeStage::PropertyIdentifier,
             RejectReason::INVALID_DATA_ENCODING,
@@ -284,7 +284,7 @@ fn decode_with_boundaries_detailed(
                 })?;
             if end > data.len() {
                 return Err(PropertyValueDecodeError::syntax(
-                    Error::decoding(content_start, "BACnetPropertyValue array-index truncated"),
+                    Error::buffer_too_short(end, data.len()),
                     content_start,
                     PropertyValueDecodeStage::ArrayIndex,
                     RejectReason::INVALID_DATA_ENCODING,
@@ -388,7 +388,7 @@ fn decode_with_boundaries_detailed(
             })?;
             if end > data.len() {
                 return Err(PropertyValueDecodeError::syntax(
-                    Error::decoding(new_pos, "BACnetPropertyValue truncated at priority"),
+                    Error::buffer_too_short(end, data.len()),
                     new_pos,
                     PropertyValueDecodeStage::Priority,
                     RejectReason::INVALID_DATA_ENCODING,

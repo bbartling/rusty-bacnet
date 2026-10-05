@@ -309,7 +309,11 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
 /// Reads from `offset` (immediately after the opening tag) through the
 /// matching closing tag, handling nested opening/closing tags.
 ///
-/// Returns the enclosed bytes and the offset past the closing tag.
+/// Returns the enclosed bytes and the offset past the closing tag. A member
+/// inside whose contents run past the end of `data` is
+/// [`Error::BufferTooShort`], as it is outside a frame; any other fault (a
+/// malformed tag, a closing tag that doesn't match, too deep a nesting, or
+/// no closing tag before the data ends) is [`Error::Decoding`].
 pub fn extract_context_value(
     data: &[u8],
     offset: usize,
@@ -360,13 +364,7 @@ pub fn extract_context_value(
                 .checked_add(tag.length as usize)
                 .ok_or_else(|| Error::decoding(new_pos, "tag length overflow"))?;
             if content_end > data.len() {
-                return Err(Error::decoding(
-                    new_pos,
-                    format!(
-                        "tag data overflows buffer: need {} bytes at offset {new_pos}",
-                        tag.length
-                    ),
-                ));
+                return Err(Error::buffer_too_short(content_end, data.len()));
             }
             pos = content_end;
         }
@@ -832,10 +830,13 @@ mod tests {
 
     #[test]
     fn extract_context_value_tag_data_overflows_buffer() {
-        // Opening tag 0, a data tag claiming 100 bytes of content but only 2 available
+        // Opening tag 0, a data tag claiming 100 bytes of content but only 2
+        // available: a short buffer, as the same member outside a frame is.
         let data = [0x0E, 0x25, 100, 0x01, 0x02, 0x0F];
-        let result = extract_context_value(&data, 1, 0);
-        assert!(result.is_err());
+        assert!(matches!(
+            extract_context_value(&data, 1, 0),
+            Err(Error::BufferTooShort { need: 103, have: 6 })
+        ));
     }
 
     #[test]

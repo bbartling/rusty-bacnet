@@ -19,21 +19,24 @@
 //! - bytes left after a value that must fill its input: `{what}: 2 trailing
 //!   byte(s)`.
 //!
-//! Contents that run past the end of the data fail with
-//! [`Error::BufferTooShort`]; every other refusal is [`Error::Decoding`],
-//! including a tag header cut short, which [`tags::decode_tag`] refuses. A
-//! fixed-size context-tagged member (an object identifier, REAL, BOOLEAN, or
-//! any type read with [`decode_ctx_fixed`]) has its length checked against
-//! the header before its contents are read, so a wrong length is reported as
-//! such even when the data also stops early. So does a fixed-size
-//! application-tagged member read with [`decode_app_fixed`] or
-//! [`decode_app_object_id`].
+//! One error-kind rule holds across the crate's decoders (#1333):
 //!
-//! One exception remains: a member cut short inside a constructed frame is
-//! found while [`decode_ctx_constructed`] or `decode_framed_value` extracts
-//! the frame, and [`tags::extract_context_value`] reports it as
-//! [`Error::Decoding`]. Once a frame's body is extracted, every member in it
-//! fits.
+//! - Contents that run past the end of the data fail with
+//!   [`Error::BufferTooShort`], wherever the member stands: at the top level,
+//!   or inside a constructed frame, where [`tags::extract_context_value`]
+//!   finds it while [`decode_ctx_constructed`] or `decode_framed_value`
+//!   extracts the frame.
+//! - A fixed-size member has its length checked against its header before
+//!   its contents are read, so a wrong length is [`Error::Decoding`] even
+//!   when the data also stops early. That covers the context-tagged ones (an
+//!   object identifier, REAL, BOOLEAN, or any type read with
+//!   [`decode_ctx_fixed`]), the application-tagged ones read with
+//!   [`decode_app_fixed`] or [`decode_app_object_id`], and the REAL, Double,
+//!   Date, Time and object identifier that
+//!   [`primitives::decode_application_value`] reads.
+//! - Every other refusal is [`Error::Decoding`], including a tag header cut
+//!   short, which [`tags::decode_tag`] refuses, and a frame whose closing tag
+//!   never comes.
 //!
 //! The helpers another crate needs are public: the peeks for an optional
 //! member, a frame's opening and closing tags and its body, the context
@@ -141,10 +144,10 @@ pub fn expect_closing(data: &[u8], offset: usize, tag: u8, what: &str) -> Result
 /// octets between its opening and closing tags, with nested frames balanced)
 /// and the offset past its closing tag.
 ///
-/// The one exception to this module's error-kind rule: a member inside the
-/// frame whose contents run past the end of the data is found while the
-/// frame is extracted, and is [`Error::Decoding`], not
-/// [`Error::BufferTooShort`].
+/// A member inside the frame whose contents run past the end of the data is
+/// found while the frame is extracted, and is [`Error::BufferTooShort`], as
+/// it would be outside the frame. Once the body is extracted, every member
+/// in it fits.
 pub fn decode_ctx_constructed<'a>(
     data: &'a [u8],
     offset: usize,

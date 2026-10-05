@@ -123,7 +123,8 @@ pub use lighting_command::{
 pub use log_multiple_record::{decode_log_multiple_record, encode_log_multiple_record};
 pub use log_record::{decode_log_record, encode_log_record};
 pub use object_property_reference::{
-    decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
+    decode_object_property_reference, decode_object_property_reference_at,
+    decode_setpoint_reference, decode_setpoint_reference_at, encode_object_property_reference,
     encode_setpoint_reference,
 };
 pub use port_permission::{decode_port_permission, encode_port_permission};
@@ -510,4 +511,4 @@ pub(crate) fn validate_extended_parameters(data: &[u8], what: &str) -> Result<()
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

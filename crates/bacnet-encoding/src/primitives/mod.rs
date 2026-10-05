@@ -489,6 +489,12 @@ pub fn encode_ctx_bit_string(buf: &mut BytesMut, tag: u8, unused_bits: u8, data:
 /// interpret them. Application-tagged content is decoded into the typed
 /// variants as before.
 ///
+/// Errors follow the rule of
+/// [`constructed::tagged`](crate::constructed::tagged): a fixed-size value
+/// (REAL, Double, Date, Time, object identifier) whose header gives another
+/// length is [`Error::Decoding`], and contents that run past the end of
+/// `data` are [`Error::BufferTooShort`].
+///
 /// Returns the decoded `PropertyValue` and the new offset past the consumed bytes.
 pub fn decode_application_value(
     data: &[u8],
@@ -542,6 +548,28 @@ pub fn decode_application_value(
 
     if tag.number == app_tag::BOOLEAN {
         return Ok((PropertyValue::Boolean(tag.length != 0), content_start));
+    }
+
+    // A fixed-size value's length is judged before its contents are read, so
+    // a wrong length is reported as such even when the data also stops early.
+    let fixed = match tag.number {
+        app_tag::REAL => Some(("REAL", 4)),
+        app_tag::DOUBLE => Some(("Double", 8)),
+        app_tag::DATE => Some(("Date", 4)),
+        app_tag::TIME => Some(("Time", 4)),
+        app_tag::OBJECT_IDENTIFIER => Some(("BACnetObjectIdentifier", 4)),
+        _ => None,
+    };
+    if let Some((kind, octets)) = fixed {
+        if tag.length != octets {
+            return Err(Error::decoding(
+                offset,
+                format!(
+                    "application {kind} has {} contents octets, expected {octets}",
+                    tag.length
+                ),
+            ));
+        }
     }
 
     if data.len() < content_end {
@@ -746,104 +774,51 @@ pub fn encode_timestamp_choice(buf: &mut BytesMut, ts: &BACnetTimeStamp) -> Resu
 /// Returns the decoded timestamp and the new offset past its encoding. Only
 /// the Clause 20.2.1.5-conformant tag forms described on
 /// [`encode_timestamp_choice`] are accepted; `sequence-number` contents
-/// beyond `0..=65535` are rejected.
+/// beyond `0..=65535` are rejected. Errors follow the rule of
+/// [`constructed::tagged`](crate::constructed::tagged): a Time or Date with
+/// the wrong length is [`Error::Decoding`], contents that run past the end of
+/// `data` are [`Error::BufferTooShort`].
 pub fn decode_timestamp_choice(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetTimeStamp, usize), Error> {
-    let (inner_tag, inner_pos) = tags::decode_tag(data, offset)?;
+    use crate::constructed::tagged;
+    const WHAT: &str = "BACnetTimeStamp";
 
-    let (ts, after_inner) = if inner_tag.is_context(0) {
-        let end = inner_pos
-            .checked_add(inner_tag.length as usize)
-            .ok_or_else(|| Error::decoding(inner_pos, "BACnetTimeStamp Time length overflow"))?;
-        if end > data.len() {
-            return Err(Error::decoding(inner_pos, "BACnetTimeStamp Time truncated"));
-        }
-        let t = Time::decode(&data[inner_pos..end])?;
-        (BACnetTimeStamp::Time(t), end)
-    } else if inner_tag.is_context(1) {
-        let end = inner_pos
-            .checked_add(inner_tag.length as usize)
-            .ok_or_else(|| {
-                Error::decoding(inner_pos, "BACnetTimeStamp SequenceNumber length overflow")
-            })?;
-        if end > data.len() {
-            return Err(Error::decoding(
-                inner_pos,
-                "BACnetTimeStamp SequenceNumber truncated",
-            ));
-        }
-        let n = decode_unsigned(&data[inner_pos..end])?;
+    let (inner_tag, inner_pos) = tags::decode_tag(data, offset)?;
+    if inner_tag.is_context(0) {
+        let (octets, end) = tagged::decode_ctx_fixed(data, offset, 0, 4, "Time", WHAT)?;
+        return Ok((BACnetTimeStamp::Time(Time::decode(octets)?), end));
+    }
+    if inner_tag.is_context(1) {
+        let (octets, end) = tagged::decode_ctx_primitive(data, offset, 1, WHAT)?;
+        let n = decode_unsigned(octets)?;
         if n > MAX_TIMESTAMP_SEQUENCE_NUMBER {
             return Err(Error::decoding(
                 inner_pos,
                 format!("BACnetTimeStamp sequence-number {n} exceeds 65535"),
             ));
         }
-        (
-            BACnetTimeStamp::SequenceNumber(
-                u16::try_from(n).expect("BACnetTimeStamp sequence range checked above"),
-            ),
-            end,
-        )
-    } else if inner_tag.is_opening_tag(2) {
-        let (date_tag, date_pos) = tags::decode_tag(data, inner_pos)?;
-        if date_tag.class != TagClass::Application || date_tag.number != app_tag::DATE {
-            return Err(Error::decoding(
-                inner_pos,
-                "BACnetTimeStamp DateTime expected Date",
-            ));
-        }
-        let date_end = date_pos
-            .checked_add(date_tag.length as usize)
-            .ok_or_else(|| {
-                Error::decoding(date_pos, "BACnetTimeStamp DateTime Date length overflow")
-            })?;
-        if date_end > data.len() {
-            return Err(Error::decoding(
-                date_pos,
-                "BACnetTimeStamp DateTime Date truncated",
-            ));
-        }
-        let date = Date::decode(&data[date_pos..date_end])?;
-
-        let (time_tag, time_pos) = tags::decode_tag(data, date_end)?;
-        if time_tag.class != TagClass::Application || time_tag.number != app_tag::TIME {
-            return Err(Error::decoding(
-                date_end,
-                "BACnetTimeStamp DateTime expected Time",
-            ));
-        }
-        let time_end = time_pos
-            .checked_add(time_tag.length as usize)
-            .ok_or_else(|| {
-                Error::decoding(time_pos, "BACnetTimeStamp DateTime Time length overflow")
-            })?;
-        if time_end > data.len() {
-            return Err(Error::decoding(
-                time_pos,
-                "BACnetTimeStamp DateTime Time truncated",
-            ));
-        }
-        let time = Time::decode(&data[time_pos..time_end])?;
-
-        let (close_tag, close_pos) = tags::decode_tag(data, time_end)?;
-        if !close_tag.is_closing_tag(2) {
-            return Err(Error::decoding(
-                time_end,
-                "BACnetTimeStamp DateTime missing closing tag 2",
-            ));
-        }
-        (BACnetTimeStamp::DateTime { date, time }, close_pos)
-    } else {
-        return Err(Error::decoding(
-            offset,
-            "BACnetTimeStamp: unexpected inner choice tag",
-        ));
-    };
-
-    Ok((ts, after_inner))
+        let n = u16::try_from(n).expect("BACnetTimeStamp sequence range checked above");
+        return Ok((BACnetTimeStamp::SequenceNumber(n), end));
+    }
+    if inner_tag.is_opening_tag(2) {
+        const DATE_TIME: &str = "BACnetTimeStamp DateTime";
+        let (date, date_end) =
+            tagged::decode_app_fixed(data, inner_pos, app_tag::DATE, 4, DATE_TIME)?;
+        let (time, time_end) =
+            tagged::decode_app_fixed(data, date_end, app_tag::TIME, 4, DATE_TIME)?;
+        let end = tagged::expect_closing(data, time_end, 2, DATE_TIME)?;
+        let date_time = BACnetTimeStamp::DateTime {
+            date: Date::decode(date)?,
+            time: Time::decode(time)?,
+        };
+        return Ok((date_time, end));
+    }
+    Err(Error::decoding(
+        offset,
+        "BACnetTimeStamp: unexpected inner choice tag",
+    ))
 }
 
 /// Encode a BACnetTimeStamp wrapped in a context opening/closing tag pair.
@@ -898,3 +873,6 @@ pub fn decode_timestamp(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod length_first_tests;

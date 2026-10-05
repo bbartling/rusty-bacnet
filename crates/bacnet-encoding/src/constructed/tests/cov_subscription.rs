@@ -390,3 +390,19 @@ fn cov_subscription_recipient_mac_holds_to_the_bacnet_address_bound() {
         assert!(buf.is_empty(), "{len}-octet MAC left output behind");
     }
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let mut framed = 0;
+    for octets in [DEVICE_SUBSCRIPTION, ADDRESS_SUBSCRIPTION] {
+        framed += assert_members_cut_short("BACnetCOVSubscription", octets, |data| {
+            decode_cov_subscription(data, 0)
+        });
+    }
+    for octets in [DEVICE_MULTIPLE, ADDRESS_MULTIPLE] {
+        framed += assert_members_cut_short("BACnetCOVMultipleSubscription", octets, |data| {
+            decode_cov_multiple_subscription(data, 0)
+        });
+    }
+    assert!(framed > 0);
+}

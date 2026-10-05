@@ -1,5 +1,6 @@
 //! What a peer receives for a confirmed request whose contents stop before
-//! a member's header says they should (#1303, #1304, #1374).
+//! a member's header says they should (#1303, #1304, #1374), at the top
+//! level or inside a constructed frame (#1333).
 //!
 //! The decoders behind these services report such a member as a short
 //! buffer, where some used to call it malformed. The server answers both
@@ -251,6 +252,66 @@ async fn inline_members_cut_short_draw_services_other() {
     for (service, member, body) in cases {
         let error = error_for(&mut h, service, body).await;
         assert!(error.error_data.is_empty(), "{service:?} {member}");
+    }
+    h.server.stop().await.unwrap();
+}
+
+/// A member cut short inside a constructed frame, which the decoders now
+/// report as a short buffer too (#1333), draws the same reply.
+#[tokio::test(start_paused = true)]
+async fn members_cut_short_inside_a_frame_draw_services_other() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    let file = [0xC4, 0x02, 0x80, 0x00, 0x01];
+    let cases: [(ConfirmedServiceChoice, &str, Vec<u8>); 6] = [
+        (
+            ConfirmedServiceChoice::WRITE_PROPERTY,
+            "a REAL in the [3] value",
+            [&AV_1[..], &[0x19, 0x55, 0x3E, 0x44, 0x42, 0x90]].concat(),
+        ),
+        (
+            ConfirmedServiceChoice::READ_RANGE,
+            "the reference index in [3] by-position",
+            [&AV_1[..], &[0x19, 0x55, 0x3E, 0x22, 0x01]].concat(),
+        ),
+        (
+            ConfirmedServiceChoice::ATOMIC_READ_FILE,
+            "the octet count in [0] stream access",
+            [&file[..], &[0x0E, 0x31, 0x00, 0x22, 0x01]].concat(),
+        ),
+        (
+            ConfirmedServiceChoice::ATOMIC_WRITE_FILE,
+            "the file data in [0] stream access",
+            [&file[..], &[0x0E, 0x31, 0x00, 0x63, 0x01, 0x02]].concat(),
+        ),
+        (
+            ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
+            "the recipient device in the [1] enrollment filter",
+            vec![0x09, 0x00, 0x1E, 0x0E, 0x0C, 0x02, 0x00],
+        ),
+        (
+            ConfirmedServiceChoice::AUDIT_LOG_QUERY,
+            "the target device in [1] by-target",
+            vec![0x0C, 0x0F, 0x40, 0x00, 0x01, 0x1E, 0x0E, 0x0C, 0x02, 0x00],
+        ),
+    ];
+    for (service, member, body) in cases {
+        let error = error_for(&mut h, service, &body).await;
+        assert!(error.error_data.is_empty(), "{service:?} {member}");
+    }
+    // The formal-error services: an initial value's property identifier in
+    // CreateObject's [1] list, and a list element in [3].
+    let create = ConfirmedServiceChoice::CREATE_OBJECT;
+    let body = [0x0E, 0x09, 0x02, 0x0F, 0x1E, 0x0A, 0x00];
+    let formal = CreateObjectError::try_from(&error_for(&mut h, create, &body).await).unwrap();
+    assert_eq!(formal.first_failed_element_number, 0);
+    let elements_cut = [&AV_1[..], &[0x19, 0x55, 0x3E, 0x22, 0x01]].concat();
+    for service in [
+        ConfirmedServiceChoice::ADD_LIST_ELEMENT,
+        ConfirmedServiceChoice::REMOVE_LIST_ELEMENT,
+    ] {
+        let error = error_for(&mut h, service, &elements_cut).await;
+        let formal = ChangeListError::try_from(&error).unwrap();
+        assert_eq!(formal.first_failed_element_number, 0, "{service:?}");
     }
     h.server.stop().await.unwrap();
 }

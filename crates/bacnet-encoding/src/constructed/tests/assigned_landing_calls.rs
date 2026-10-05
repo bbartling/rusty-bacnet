@@ -174,3 +174,14 @@ fn assigned_landing_calls_reject_more_than_the_item_limit() {
         Err(Error::Decoding { .. })
     ));
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let mut framed = 0;
+    for (_, wire) in golden_vectors() {
+        framed += super::assert_members_cut_short("BACnetAssignedLandingCalls", &wire, |data| {
+            decode_assigned_landing_calls(data, 0)
+        });
+    }
+    assert!(framed > 0);
+}

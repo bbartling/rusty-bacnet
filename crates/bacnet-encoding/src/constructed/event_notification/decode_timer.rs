@@ -30,7 +30,7 @@ fn decode_date_time(
         .ok_or_else(|| Error::decoding(content_start, format!("{field} Date length overflow")))?;
     let date = Date::decode(
         data.get(content_start..content_end)
-            .ok_or_else(|| Error::decoding(content_start, format!("{field} truncated Date")))?,
+            .ok_or_else(|| Error::buffer_too_short(content_end, data.len()))?,
     )?;
     pos = content_end;
 
@@ -49,7 +49,7 @@ fn decode_date_time(
         .ok_or_else(|| Error::decoding(content_start, format!("{field} Time length overflow")))?;
     let time = Time::decode(
         data.get(content_start..content_end)
-            .ok_or_else(|| Error::decoding(content_start, format!("{field} truncated Time")))?,
+            .ok_or_else(|| Error::buffer_too_short(content_end, data.len()))?,
     )?;
     pos = content_end;
 

@@ -225,3 +225,12 @@ fn value_source_address_mac_holds_to_the_bacnet_address_bound() {
         assert_eq!(&encoded[..], &[0xaa], "{len}-octet MAC left output behind");
     }
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    for (_, wire) in vectors() {
+        super::assert_members_cut_short("BACnetValueSource", wire, |data| {
+            decode_value_source(data, 0)
+        });
+    }
+}

@@ -340,6 +340,14 @@ fn legacy_opaque_sentinel_stays_local_to_event_parameters() {
         }
     );
     assert_eq!(end, historical.len());
+    // A wrapper that stops before it has room for its closing pair is cut
+    // short.
+    for cut in [&historical[..2], &historical[..3]] {
+        assert!(matches!(
+            decode_event_parameter(cut, 0),
+            Err(Error::BufferTooShort { need: 4, have }) if have == cut.len()
+        ));
+    }
 }
 
 // --- Negatives ----------------------------------------------------------------
@@ -515,4 +523,54 @@ fn wrong_inner_field_tag_rejected() {
         0x4E, 0x09, 0x03, 0x11, 0x00, 0x2C, 0x3F, 0x80, 0x00, 0x00, 0x4F,
     ];
     assert!(decode_event_parameter(&data, 0).is_err());
+}
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    let mut reference = dopr_ai(5, 85);
+    reference.device_identifier =
+        Some(ObjectIdentifier::new(bacnet_types::enums::ObjectType::DEVICE, 100).unwrap());
+    for value in [
+        BACnetEventParameter::ChangeOfBitstring {
+            time_delay: 5,
+            bitmask: (5, vec![0xE0]),
+            list_of_values: vec![(0, vec![0xFF]), (3, vec![0xA0])],
+        },
+        BACnetEventParameter::ChangeOfState {
+            time_delay: 7,
+            list_of_values: vec![
+                BACnetPropertyStates::BooleanValue(true),
+                BACnetPropertyStates::UnsignedValue(42),
+            ],
+        },
+        BACnetEventParameter::OutOfRange {
+            time_delay: 65535,
+            low_limit: -1.5,
+            high_limit: 250.25,
+            deadband: 0.0,
+        },
+        BACnetEventParameter::FloatingLimit {
+            time_delay: 1,
+            setpoint_reference: reference,
+            low_diff_limit: 0.5,
+            high_diff_limit: 0.5,
+            deadband: 0.25,
+        },
+        BACnetEventParameter::Extended {
+            vendor_id: 42,
+            extended_event_type: 99,
+            parameters: vec![0x73, 0x01, 0x03, 0x52],
+        },
+        BACnetEventParameter::Opaque {
+            tag: 8,
+            data: vec![0x09, 0x2A],
+        },
+    ] {
+        let mut octets = BytesMut::new();
+        encode_event_parameter(&mut octets, &value).unwrap();
+        let framed = assert_members_cut_short("BACnetEventParameter", &octets, |data| {
+            decode_event_parameter(data, 0)
+        });
+        assert!(framed > 0, "{value:?}");
+    }
 }

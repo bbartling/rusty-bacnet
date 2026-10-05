@@ -22,7 +22,7 @@ pub(super) fn decode_context<'a>(
         .checked_add(tag.length as usize)
         .ok_or_else(|| Error::decoding(pos, format!("{field} length overflow")))?;
     if end > data.len() {
-        return Err(Error::decoding(pos, format!("{field} truncated")));
+        return Err(Error::buffer_too_short(end, data.len()));
     }
     Ok((&data[pos..end], end))
 }

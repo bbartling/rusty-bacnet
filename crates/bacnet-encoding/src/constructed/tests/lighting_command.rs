@@ -270,3 +270,12 @@ fn lighting_command_keeps_any_value_that_fits_and_re_encodes_it_shortest() {
         [0x09, 0x01, 0x1C, 0x7F, 0xC0, 0x00, 0x00, 0x49, 0x01, 0x59, 0x00]
     );
 }
+
+#[test]
+fn members_cut_short_are_a_short_buffer() {
+    for (_, wire) in golden_vectors() {
+        super::assert_members_cut_short("BACnetLightingCommand", &wire, |data| {
+            decode_lighting_command(data, 0)
+        });
+    }
+}
