@@ -2965,7 +2965,10 @@ class BACnetServer:
         Invalid instance/address or duplicate Device raises ValueError. No overwrite,
         routing or discovery. Syntax validation precedes the frozen-state check; after
         start() consumes configuration, parseable calls raise RuntimeError before the
-        transport/shape checks, including after stop. Broadcast validation stays in start().
+        transport/shape checks, including after stop. start() refuses a binding at a
+        broadcast or other group address of the link (a multicast address,
+        255.255.255.255, or the broadcast IP at another port), raising BacnetError
+        naming the device and the address; bind each device at its unicast address.
         """
         ...
     def configure_audit_log_parent(
@@ -3735,7 +3738,8 @@ class BACnetServer:
         not counted. The next three count matched destinations skipped while
         their route was resolved: a Device recipient with no current binding,
         a recipient that can't be routed as configured, and a confirmed
-        recipient at a broadcast address. The confirmed fields count
+        recipient at a group address (a broadcast or a multicast one). The
+        confirmed fields count
         notifications to one recipient that found no free invoke ID, were
         answered with an Error, Reject or Abort, or drew no acknowledgment
         after the last retry. unconfirmed_send_failed counts unconfirmed

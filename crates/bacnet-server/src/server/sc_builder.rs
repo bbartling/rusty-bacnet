@@ -238,6 +238,7 @@ impl ScServerBuilder {
                 "SC server builder: device_uuid is required and must not be all zero".into(),
             ));
         }
+        // The SC link's only group address is its broadcast VMAC.
         DeviceBindingTable::from_configured(self.configured_device_bindings.clone(), |mac| {
             mac == bacnet_transport::sc_frame::BROADCAST_VMAC
         })?;

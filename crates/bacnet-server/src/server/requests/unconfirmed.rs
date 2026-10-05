@@ -66,7 +66,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 &received.source_mac,
                 received.source_network.as_ref(),
                 Instant::now(),
-                |mac| network.transport().is_broadcast_mac(mac),
+                // An I-Am from a group address binds nothing (#1493).
+                |mac| network.transport().is_group_destination(mac),
             );
             match outcome {
                 device_bindings::ObservationOutcome::RejectedInvalid => {

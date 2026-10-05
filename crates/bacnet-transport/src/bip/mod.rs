@@ -128,6 +128,8 @@ pub struct BipTransport {
     fanout_task: Option<JoinHandle<()>>,
     /// Operational counters for broadcast forwarding fanout.
     fanout_counters: Arc<fanout::AtomicFanoutCounters>,
+    /// See [`Self::forwarded_group_origin_drops`].
+    forwarded_group_origin_drops: Arc<std::sync::atomic::AtomicU64>,
     /// Rate limiter for broadcast forwarding fanout.
     fanout_limiter: Arc<std::sync::Mutex<fanout::FanoutRateLimiter>>,
     /// Forwards this BBMD's own broadcasts to BDT peers and foreign devices
@@ -177,6 +179,7 @@ impl BipTransport {
             fanout_policy,
             fanout_task: None,
             fanout_counters,
+            forwarded_group_origin_drops: Arc::default(),
             fanout_limiter,
             own_broadcast: None,
             #[cfg(test)]
@@ -709,6 +712,10 @@ impl TransportPort for BipTransport {
             pending_bvlc_response: self.pending_bvlc_response.clone(),
             management_limiter: Arc::clone(&self.management_limiter),
             fanout: Some(fanout_dispatcher),
+            forwarded_origins: groups::ForwardedOrigins::new(
+                self.groups(),
+                Arc::clone(&self.forwarded_group_origin_drops),
+            ),
             #[cfg(test)]
             force_dbtn_forward_failure: false,
         };
@@ -885,6 +892,8 @@ mod dbtn_tests;
 mod fanout_tests;
 #[cfg(test)]
 mod fdt_tests;
+#[cfg(test)]
+mod forwarded_origin_tests;
 #[cfg(test)]
 mod forwarded_tests;
 #[cfg(test)]

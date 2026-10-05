@@ -139,13 +139,25 @@ pub(super) fn address(network: u16, mac: &[u8]) -> NpduAddress {
     }
 }
 
+/// The opaque APDU a test arrival `id` carries: an Unconfirmed-Request type
+/// octet, the only type a broadcast may carry (#1491), then the id.
+pub(super) fn apdu_of(id: u16) -> [u8; 3] {
+    let [high, low] = id.to_be_bytes();
+    [0x10, high, low]
+}
+
+/// The id [`apdu_of`] put in `apdu`.
+pub(super) fn id_of(apdu: &[u8]) -> u16 {
+    u16::from_be_bytes([apdu[1], apdu[2]])
+}
+
 pub(super) fn incoming(destination: Option<NpduAddress>, id: u16) -> ReceivedNpdu {
     let npdu = Npdu {
         destination,
         source: Some(address(300, &[0x55])),
         hop_count: 10,
         expecting_reply: true,
-        payload: Bytes::copy_from_slice(&id.to_be_bytes()),
+        payload: Bytes::copy_from_slice(&apdu_of(id)),
         ..Npdu::default()
     };
     let mut bytes = BytesMut::new();
@@ -271,10 +283,7 @@ pub(super) async fn branch_forward(peers: &mut [Peer], branch: LocalBranch, port
             SendRequest::Unicast { .. } => panic!("expected broadcast for {branch:?}"),
         }
     };
-    assert_eq!(
-        decode_npdu(npdu).unwrap().payload.as_ref(),
-        id.to_be_bytes()
-    );
+    assert_eq!(decode_npdu(npdu).unwrap().payload.as_ref(), apdu_of(id));
     assert_eq!(data_attributes, incoming(None, id).data_attributes);
 }
 
@@ -301,10 +310,7 @@ pub(super) async fn forwarding_progress(peers: &mut [Peer], port: usize) {
         }
     };
     assert_eq!(mac.as_slice(), &[9]);
-    assert_eq!(
-        decode_npdu(npdu).unwrap().payload.as_ref(),
-        1000u16.to_be_bytes()
-    );
+    assert_eq!(decode_npdu(npdu).unwrap().payload.as_ref(), apdu_of(1000));
     barrier(&mut peers[port]).await;
 }
 
@@ -329,7 +335,7 @@ pub(super) fn assert_quiet(peers: &mut [Peer]) {
 }
 
 pub(super) fn assert_apdu(apdu: &ReceivedApdu, branch: LocalBranch, port: usize, id: u16) {
-    assert_eq!(apdu.apdu.as_ref(), id.to_be_bytes());
+    assert_eq!(apdu.apdu.as_ref(), apdu_of(id));
     assert_eq!(apdu.source_mac, incoming(None, id).source_mac);
     assert_eq!(apdu.ingress_network, Some(network(port)));
     assert_eq!(apdu.source_network, Some(address(300, &[0x55])));

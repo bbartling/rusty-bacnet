@@ -2,6 +2,7 @@
 //! admitted it to the selected link.
 
 use std::net::{Ipv6Addr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use bacnet_encoding::npdu::decode_npdu;
@@ -18,6 +19,7 @@ use super::ingress::{
     forwarded_npdu_is_trusted, forwarded_source_is_usable, group_destination,
     original_destination_matches, LocalBinding,
 };
+use super::port::is_bip6_group;
 use super::socket::Bip6Socket;
 use super::vmac_table::VmacTable;
 use super::{
@@ -45,6 +47,9 @@ pub(super) struct Receiver {
     pub(super) foreign_bbmd: Option<(Ipv6Addr, u16)>,
     /// Learned VMAC to address mappings.
     pub(super) vmac_table: VmacTable,
+    /// Forwarded-NPDUs refused for a group origin (#1493), shared with the
+    /// transport.
+    pub(super) forwarded_group_origin_drops: Arc<AtomicU64>,
 }
 
 impl Receiver {
@@ -182,6 +187,20 @@ impl Receiver {
 
             Bvlc6Function::ForwardedNpdu => match decode_forwarded_npdu_payload(&frame.payload) {
                 Ok((source_addr, npdu_bytes)) => {
+                    // The origin is taken as the NPDU's source, so a group
+                    // there would bind a forged I-Am to every node in it, or
+                    // send a request's answer to them all. No node sends from
+                    // one: the frame is malformed, and counted (#1493).
+                    let source_mac = encode_bip6_mac(*source_addr.ip(), source_addr.port());
+                    if is_bip6_group(&source_mac) {
+                        self.forwarded_group_origin_drops
+                            .fetch_add(1, Ordering::Relaxed);
+                        debug!(
+                            source = %source_addr,
+                            "Dropping Forwarded-NPDU whose origin is a group address"
+                        );
+                        return;
+                    }
                     if npdu_bytes.is_empty() {
                         debug!("ForwardedNpdu with no NPDU payload, ignoring");
                         return;
@@ -198,7 +217,6 @@ impl Receiver {
                         return;
                     }
                     self.vmac_table.learn(frame.source_vmac, source_addr).await;
-                    let source_mac = encode_bip6_mac(*source_addr.ip(), source_addr.port());
                     if self
                         .tx
                         .try_send(ReceivedNpdu {

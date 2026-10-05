@@ -688,13 +688,15 @@ async fn send_network_service_apdu<T: TransportPort + 'static>(
 fn validate_effective_group_apdu(
     apdu: &[u8],
     destination: &EndpointApduDestination,
-    is_broadcast_mac: impl FnOnce(&[u8]) -> bool,
+    is_group_destination: impl FnOnce(&[u8]) -> bool,
 ) -> Result<(), Error> {
     let group = match destination {
         EndpointApduDestination::LocalBroadcast
         | EndpointApduDestination::RemoteBroadcast { .. }
         | EndpointApduDestination::GlobalBroadcast => true,
-        EndpointApduDestination::Direct { destination_mac } => is_broadcast_mac(destination_mac),
+        EndpointApduDestination::Direct { destination_mac } => {
+            is_group_destination(destination_mac)
+        }
         EndpointApduDestination::Routed { .. }
         | EndpointApduDestination::RoutedViaLocalBroadcast { .. } => false,
     };
