@@ -2,10 +2,7 @@
 //! written `BACnetLightingCommand` and checking it against its operation.
 //!
 //! A write reaches the object as the SEQUENCE's octets in one
-//! `ApplicationData`. Error pairings follow Clause 15.9.1.3 and the Loop
-//! references (#1312): a value that doesn't open with the operation field,
-//! such as any application-tagged value, is INVALID_DATA_TYPE; octets that then
-//! fail to decode as exactly one command are INVALID_DATA_ENCODING; and a
+//! `ApplicationData`, decoded as `common::decode_command_write` describes; a
 //! command its operation can't take is VALUE_OUT_OF_RANGE.
 //!
 //! What an operation takes comes from Table 12-67 and the Lighting_Command
@@ -28,7 +25,6 @@
 use std::ops::RangeInclusive;
 
 use bacnet_encoding::constructed::{decode_lighting_command_value, encode_lighting_command};
-use bacnet_encoding::tags;
 use bacnet_types::constructed::BACnetLightingCommand;
 use bacnet_types::enums::LightingOperation;
 use bacnet_types::error::Error;
@@ -113,21 +109,7 @@ pub(super) fn check(command: &BACnetLightingCommand) -> Result<(), Error> {
 
 /// Decode and check a Lighting_Command write.
 pub(super) fn decode_write(value: PropertyValue) -> Result<BACnetLightingCommand, Error> {
-    let PropertyValue::ApplicationData(bytes) = value else {
-        return Err(common::invalid_data_type_error());
-    };
-    match tags::decode_tag(&bytes, 0) {
-        Ok((tag, _)) if tag.is_context(0) => {}
-        Ok(_) => return Err(common::invalid_data_type_error()),
-        Err(_) => return Err(common::invalid_data_encoding_error()),
-    }
-    // The codec reports a field too wide for its type as a local OutOfRange
-    // error, and only once the octets are otherwise exactly one command; any
-    // other failure is a broken encoding.
-    let command = decode_lighting_command_value(&bytes).map_err(|error| match error {
-        Error::OutOfRange(_) => common::value_out_of_range_error(),
-        _ => common::invalid_data_encoding_error(),
-    })?;
+    let command = common::decode_command_write(value, decode_lighting_command_value)?;
     check(&command)?;
     Ok(command)
 }

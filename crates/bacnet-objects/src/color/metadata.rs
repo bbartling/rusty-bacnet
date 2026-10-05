@@ -9,20 +9,17 @@ use crate::property_metadata::{
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
-// Canonical effective rows for the Color pair (dispatch-first; table codes
-// unverifiable from the local sources):
-// - Color (type 63) and Color Temperature (type 64) carry the color module
-//   header anchor "ASHRAE 135-2020 Addendum bj, Clauses 12.55-12.56", which is
-//   unverified in the local PDF (whose Table of Contents already assigns
-//   12.55 to Binary Lighting Output and 12.56 to Network Port) and the
-//   addendum text is not in scope. The color module header is left stale by
-//   directive; no clause or table conformance code below is claimed from that
-//   anchor. Conformance codes instead mirror the Accumulator/Elevator heritage
-//   pattern: served rows the dispatch treats as core state carry the R-like
-//   RequiredRead code, secondary tuning rows carry the O-like Optional code,
-//   and writability mirrors the write arms exactly (Elevator precedent: a
-//   served row with a routed arm is RequiredRead/Always, never an invented
-//   RequiredWrite without a table basis).
+// Canonical effective rows for the Color pair (dispatch-first):
+// - Color (type 63) and Color Temperature (type 64) come from Addendum
+//   135-2020ca, which the 2020 PDF doesn't contain. The rows below haven't
+//   been reconciled with the addendum's property tables (no issue), so no
+//   conformance code is claimed from them. The codes mirror the
+//   Accumulator/Elevator heritage pattern instead: served rows the dispatch
+//   treats as core state carry the R-like RequiredRead code, secondary tuning
+//   rows carry the O-like Optional code, and writability mirrors the write
+//   arms exactly (Elevator precedent: a served row with a routed arm is
+//   RequiredRead/Always, never an invented RequiredWrite without a table
+//   basis).
 // Order preserves each legacy projection; PROPERTY_LIST is appended so the
 // projection helper omits it while required_properties keeps it. Only
 // implemented rows are described: table rows the objects do not serve stay
@@ -34,9 +31,9 @@ use crate::property_metadata::{
 // CharacterString arm, so Optional/Always. Out_Of_Service carries
 // RequiredRead with the routed Boolean arm, so RequiredRead/Always.
 // Color Present_Value has no write arm (non-commandable, no priority array),
-// so RequiredRead/ReadOnly. Color Color_Command (opaque OctetString arm) and
-// Default_Fade_Time (Unsigned arm rejecting values above 86_400_000) are
-// served rows with routed arms, so RequiredRead/Always.
+// so RequiredRead/ReadOnly. Color Color_Command (BACnetColorCommand arm, see
+// command.rs) and Default_Fade_Time (Unsigned arm rejecting values above
+// 86_400_000) are served rows with routed arms, so RequiredRead/Always.
 // Color Temperature Present_Value carries the routed Unsigned arm
 // (u64_to_u32 plus the min/max clamp, with no Out_Of_Service gate), so
 // RequiredRead/Always; Color_Command likewise RequiredRead/Always.
@@ -255,9 +252,10 @@ mod tests {
                 PropertyValue::Real(0.3290),
             ])
         );
+        // Color_Command reads operation NONE until written.
         assert_eq!(
             object.read_property(P::COLOR_COMMAND, None).unwrap(),
-            PropertyValue::OctetString(vec![])
+            PropertyValue::ApplicationData(vec![0x09, 0x00])
         );
         // The xy lists are BACnetLIST-style productions, so an index is
         // rejected; Present_Value is scalar and likewise rejects one.
@@ -385,7 +383,13 @@ mod tests {
                         capability.is_writable(),
                         "{p:?}"
                     );
-                    let value = object.read_property(p, None).unwrap();
+                    // Color_Command reads NONE until written, and NONE can't
+                    // be written, so write STOP instead.
+                    let value = if p == P::COLOR_COMMAND {
+                        PropertyValue::ApplicationData(vec![0x09, 0x06])
+                    } else {
+                        object.read_property(p, None).unwrap()
+                    };
                     let result = object.write_property(p, None, value, None);
                     if capability.is_writable() {
                         result.unwrap();
@@ -413,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn property_metadata_color_writes_store_verbatim_with_fade_time_gate() {
+    fn property_metadata_color_writes_store_with_fade_time_gate() {
         for out_of_service in [false, true] {
             let mut object = ColorObject::new(1, "CLR-1").unwrap();
             object
@@ -424,8 +428,8 @@ mod tests {
                     None,
                 )
                 .unwrap();
-            // Color_Command stores the opaque OctetString verbatim.
-            let command = PropertyValue::OctetString(vec![0x01, 0x02, 0x03]);
+            // Color_Command serves the command written: STOP.
+            let command = PropertyValue::ApplicationData(vec![0x09, 0x06]);
             object
                 .write_property(P::COLOR_COMMAND, None, command.clone(), None)
                 .unwrap();
@@ -560,8 +564,8 @@ mod tests {
                 object.read_property(P::PRESENT_VALUE, None).unwrap(),
                 PropertyValue::Unsigned(30000)
             );
-            // Color_Command stores the opaque OctetString verbatim.
-            let command = PropertyValue::OctetString(vec![0x04, 0x05]);
+            // Color_Command serves the command written: STEP_UP_CCT.
+            let command = PropertyValue::ApplicationData(vec![0x09, 0x04]);
             object
                 .write_property(P::COLOR_COMMAND, None, command.clone(), None)
                 .unwrap();

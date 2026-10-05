@@ -11,8 +11,9 @@ use serde::Deserialize;
 bacnet_enum! {
     /// BACnet property identifiers (Clause 21).
     ///
-    /// Standard properties are 0-511; vendor-proprietary IDs are 512+.
-    /// The 22-bit property field allows values 0-4,194,303.
+    /// ASHRAE assigns 0 to 511 and everything from 4,194,304 up; vendors use
+    /// 512 to 4,194,303 (Clause 23, Table 23-1). A property identifier is an
+    /// ENUMERATED, so any `u32` is a valid wire value.
     pub struct PropertyIdentifier(u32);
 
     // 0-50
@@ -533,12 +534,30 @@ bacnet_enum! {
     const SEND_NOW = 505;
     const FLOOR_NUMBER = 506;
     const DEVICE_UUID = 507;
-    /// New in 135-2020 Addendum bj (Color objects).
-    const COLOR_COMMAND = 508;
-    /// New in 135-2020 Addendum bj (Color Temperature objects).
-    const DEFAULT_COLOR_TEMPERATURE = 509;
-    /// New in 135-2020 Addendum bj (Color objects).
-    const DEFAULT_COLOR = 510;
+
+    // 508-511 (Network Port, Addendum 135-2020cc)
+    /// A Network Port's further reference ports (Addendum 135-2020cc).
+    const ADDITIONAL_REFERENCE_PORTS = 508;
+    /// A Network Port's certificate signing request file (Addendum
+    /// 135-2020cc).
+    const CERTIFICATE_SIGNING_REQUEST_FILE = 509;
+    /// The result of a Network Port's last validated command (Addendum
+    /// 135-2020cc).
+    const COMMAND_VALIDATION_RESULT = 510;
+    /// A Network Port's issuer certificate files (Addendum 135-2020cc).
+    const ISSUER_CERTIFICATE_FILES = 511;
+
+    // 4194304 and up (the second ASHRAE range)
+    /// A Color object's start-up colour (Addendum 135-2020ca).
+    const DEFAULT_COLOR = 4194330;
+    /// A Color Temperature object's start-up colour temperature (Addendum
+    /// 135-2020ca).
+    const DEFAULT_COLOR_TEMPERATURE = 4194331;
+    /// The BACnetColorCommand of a Color or Color Temperature object
+    /// (Addendum 135-2020ca). The addendum's Clause 21 list leaves this
+    /// property unnumbered; 4194334 is the value bacnet-stack, Wireshark and
+    /// BACnet4J use.
+    const COLOR_COMMAND = 4194334;
 }
 
 #[cfg(feature = "serde")]
@@ -587,6 +606,10 @@ mod serde_tests {
             PropertyIdentifier::ACKED_TRANSITIONS
         );
         assert_eq!(parse("default-color"), PropertyIdentifier::DEFAULT_COLOR);
+        assert_eq!(
+            parse("issuer-certificate-files"),
+            PropertyIdentifier::ISSUER_CERTIFICATE_FILES
+        );
     }
 
     #[test]

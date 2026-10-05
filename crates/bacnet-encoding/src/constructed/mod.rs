@@ -43,6 +43,7 @@ mod audit_notification;
 mod audit_record;
 pub mod calendar;
 mod channel_value;
+mod color_command;
 pub mod cov_subscription;
 mod event_log_record;
 mod event_notification;
@@ -91,6 +92,10 @@ pub use calendar::{
     encode_calendar_entry_list, encode_date_range,
 };
 pub use channel_value::{channel_value_end, is_lighting_command_channel_value};
+pub use color_command::{
+    decode_color_command, decode_color_command_value, decode_xy_color, encode_color_command,
+    encode_xy_color,
+};
 pub use cov_subscription::{
     decode_cov_multiple_subscription, decode_cov_subscription, encode_cov_multiple_subscription,
     encode_cov_multiple_subscription_list, encode_cov_subscription, encode_cov_subscription_list,

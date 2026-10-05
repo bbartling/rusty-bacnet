@@ -145,31 +145,25 @@ fn add_member_refuses_a_member_without_properties() {
 }
 
 #[test]
-fn add_member_refuses_a_property_identifier_past_22_bits() {
-    // The property field holds 22 bits; 4194303 is the last identifier.
+fn add_member_takes_property_identifiers_past_22_bits() {
+    // ASHRAE assigns identifiers from 4194304 up (Table 23-1), such as
+    // Default_Color, so a member may name any of them (#887).
     let mut group = configured();
-    let before = group.members().to_vec();
-    let past = PropertyIdentifier::from_raw(4_194_304);
-    let refusal = group
-        .add_member(member(
-            oid(ObjectType::ANALOG_INPUT, 3),
-            &[(PropertyIdentifier::PRESENT_VALUE, None), (past, Some(1))],
-        ))
-        .unwrap_err();
-    assert_eq!(refusal, GroupMemberRefusal::PropertyOutOfRange(past));
-    assert_eq!(
-        refusal.to_string(),
-        "property identifier 4194304 is above 4194303"
-    );
-    assert_property_error(refusal.into(), ErrorCode::VALUE_OUT_OF_RANGE);
-    assert_eq!(group.members(), before);
-    let last = PropertyIdentifier::from_raw(4_194_303);
-    group
-        .add_member(member(
-            oid(ObjectType::ANALOG_INPUT, 3),
-            &[(last, Some(u32::MAX))],
-        ))
-        .unwrap();
+    let color = oid(ObjectType::COLOR, 3);
+    for property in [
+        PropertyIdentifier::from_raw(4_194_303),
+        PropertyIdentifier::from_raw(4_194_304),
+        PropertyIdentifier::DEFAULT_COLOR,
+        PropertyIdentifier::from_raw(u32::MAX),
+    ] {
+        group
+            .add_member(member(color, &[(property, Some(u32::MAX))]))
+            .unwrap();
+        assert_eq!(
+            group.members().last().unwrap().list_of_property_references[0].property_identifier,
+            property
+        );
+    }
 }
 
 #[test]

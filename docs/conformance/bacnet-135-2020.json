@@ -2561,7 +2561,7 @@
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{property_references_encode_and_decode_with_and_without_an_index,read_access_specifications_decode_one_element_at_an_offset}",
     "crates/bacnet-services/src/rpm_tests.rs::{request_codec_is_the_shared_specification_codec_back_to_back,read_access_result_encodes_alone_as_in_the_ack}",
-    "crates/bacnet-objects/src/group/group_members_tests.rs::{list_of_group_members_goes_out_as_read_access_specifications,add_member_accepts_other_properties_of_a_group,the_object_alone_serves_an_empty_present_value}",
+    "crates/bacnet-objects/src/group/group_members_tests.rs::{list_of_group_members_goes_out_as_read_access_specifications,add_member_accepts_other_properties_of_a_group,the_object_alone_serves_an_empty_present_value,add_member_takes_property_identifiers_past_22_bits}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group_present_value.rs::{group_present_value_holds_one_read_access_result_per_member,each_member_reads_as_read_property_multiple_reads_its_specification,group_present_value_is_rebuilt_on_each_read,read_range_pages_the_rebuilt_present_value}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group.rs::rpm_group_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/server/group_present_value_wire_tests.rs::group_present_value_bip_wire_rebuilds_from_members",
@@ -2576,7 +2576,7 @@
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{malformed_property_references_are_refused,malformed_read_access_specifications_are_refused}",
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::contents_cut_short_are_a_short_buffer",
-    "crates/bacnet-objects/src/group/group_members_tests.rs::{add_member_refuses_a_member_that_reports_a_group_present_value,add_member_refuses_a_member_without_properties,group_lists_refuse_an_array_index,add_member_refuses_a_property_identifier_past_22_bits}",
+    "crates/bacnet-objects/src/group/group_members_tests.rs::{add_member_refuses_a_member_that_reports_a_group_present_value,add_member_refuses_a_member_without_properties,group_lists_refuse_an_array_index}",
     "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group_present_value.rs::member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::group_present_value_past_the_work_limit_aborts_as_any_rpm_does",
@@ -2616,7 +2616,7 @@
     "Every read plans its rows, a Group's member rows included and ALL, REQUIRED and OPTIONAL expanded, before it reads a value. A request samples the COV table once, under the database guard and before the COV table guard, only when a planned row names the Device's Active_COV_Subscriptions or Active_COV_Multiple_Subscriptions, directly or through the Device wildcard; a request past its work limit samples nothing (#1171, #1213).",
     "The shared endpoint has no ReadPropertyMultiple budget: its ReadProperty charges a Group's Present_Value to SessionConfig::read_work_limit (default 256, zero refused), also set with the endpoint builders' read_work_limit, and aborts with OUT_OF_RESOURCES past it (#1215).",
     "Python BipEndpoint, ScEndpoint and MstpEndpoint take a keyword-only read_work_limit (default 256; zero raises ValueError) and register Groups with add_group, whose members use the read_property_multiple spec shape and pass through GroupObject::add_member (#1250).",
-    "GroupObject::add_member also refuses a property identifier above 4194303, and returns a GroupMemberRefusal naming the broken rule, which converts to PROPERTY / VALUE_OUT_OF_RANGE; Python add_group puts that rule and the member's position in its ValueError.",
+    "GroupObject::add_member returns a GroupMemberRefusal naming the broken rule, which converts to PROPERTY / VALUE_OUT_OF_RANGE, and takes any property identifier, those above 4194303 included; Python add_group puts the rule and position in its ValueError.",
     "PropertyReference and ReadAccessSpecification moved from bacnet-services into bacnet_types::constructed, with their codecs as free functions in bacnet_encoding::constructed, so the Group stores them the way other objects store their Clause 21 types; the ReadPropertyMultiple, COV and Audit codecs call the same functions. Not covered: writable List_Of_Group_Members; the Audit_Level, Auditable_Operations, Tags and profile rows.",
     "Python BACnetServer.add_group takes the endpoint owners' members through the same group_members conversion and checks, and rpm_max_result_elements limits a read of the Group's Present_Value.",
     "Python BACnetServer.read_property goes through BACnetServer::read_local, so a local read of a Group's Present_Value equals a network read. Python readers return the rebuilt results as read_property_multiple result mappings, List_Of_Group_Members in the add_group spec shape, and no members as an empty list."
@@ -4875,6 +4875,50 @@
    ],
    "gaps": [
     "#1384: a command doesn't fade, ramp, step, blink-warn or start egress; Present_Value, Tracking_Value and In_Progress don't change"
+   ]
+  },
+  {
+   "id": "BACNET-12-COLOR-COMMAND",
+   "standard_anchor": "Addenda 135-2020ca and 135-2020cc; Clauses 15.9.1.3, 21 and 23; Table 23-1",
+   "priority": "P1",
+   "summary": "Color and Color Temperature serve Color_Command as a typed BACnetColorCommand checked against each object's operations, and the colour properties use their standard identifiers.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-types/src/enums/property_id.rs::PropertyIdentifier",
+    "crates/bacnet-types/src/constructed/color.rs::BACnetColorCommand",
+    "crates/bacnet-encoding/src/constructed/color_command.rs::decode_color_command",
+    "crates/bacnet-encoding/src/constructed/color_command.rs::encode_color_command",
+    "crates/bacnet-objects/src/color/command.rs",
+    "crates/bacnet-objects/src/common/command_write.rs::decode_command_write",
+    "crates/bacnet-server/src/handlers/write_property.rs::decode_write_property_value"
+   ],
+   "positive_tests": [
+    "crates/bacnet-types/src/enums/tests.rs::property_identifiers_508_to_511_are_network_port_and_color_is_extended",
+    "crates/bacnet-encoding/src/constructed/tests/color_command.rs::{color_command_golden_vectors_round_trip_for_each_operation,xy_color_is_two_application_reals,color_command_decodes_at_an_offset_and_stops_at_the_next_other_tag,color_command_keeps_any_value_that_fits}",
+    "crates/bacnet-objects/src/color/command_tests.rs::color_commands_start_at_none_and_serve_what_was_written",
+    "crates/bacnet-server/src/handlers/tests/color_command_writes.rs::{color_command_reads_none_until_written_then_what_was_written,color_properties_answer_to_their_standard_identifiers}",
+    "crates/bacnet-objects/src/group/group_members_tests.rs::add_member_takes_property_identifiers_past_22_bits"
+   ],
+   "negative_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/color_command.rs::{color_command_cut_inside_a_field_is_a_short_buffer,color_command_wrong_tags_and_lengths_are_malformed,color_command_fields_too_wide_for_their_type_are_out_of_range,color_command_unsigned_past_four_octets_with_a_leading_zero_is_malformed}",
+    "crates/bacnet-objects/src/color/command_tests.rs::{color_commands_refuse_other_datatypes_and_broken_encodings,color_object_takes_fade_to_color_and_stop_only,color_temperature_object_takes_the_cct_operations_and_stop,color_objects_no_longer_answer_to_508_to_510}",
+    "crates/bacnet-server/src/handlers/tests/color_command_writes.rs::{color_command_refuses_other_datatypes_and_broken_encodings,color_command_checks_what_each_object_takes,color_objects_no_longer_answer_to_508_to_511}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#lighting--color-5"
+   ],
+   "notes": [
+    "`DEFAULT_COLOR` is 4194330 and `DEFAULT_COLOR_TEMPERATURE` 4194331 (135-2020ca). The addendum leaves `COLOR_COMMAND` unnumbered; it is 4194334, the value bacnet-stack, Wireshark and BACnet4J use.",
+    "508 to 511 are the Network Port identifiers of 135-2020cc; no object serves them. Any `u32` is a property identifier, so Group members and Event Enrollment references take those past 4194303.",
+    "A Color object takes FADE_TO_COLOR, with a target colour whose coordinates are 0.0 to 1.0, and STOP. A Color Temperature object takes the four CCT operations and STOP, targets 1000 to 30000 K.",
+    "Fade time is 100 to 86,400,000 ms and ramp rate and step increment 1 to 30000 where the operation uses them; unused fields are kept unchecked. A missing target is VALUE_OUT_OF_RANGE, as on Lighting Output.",
+    "Color_Command reads operation NONE until written. A value not opening with the operation field is INVALID_DATA_TYPE; octets that aren't exactly one command are INVALID_DATA_ENCODING."
+   ],
+   "gaps": [
+    "Neither object carries a command out: Present_Value, Tracking_Value and In_Progress don't change (no issue)",
+    "A Channel value's xy-colour and colour-command alternatives aren't decoded (no issue)",
+    "The colour objects' property rows aren't reconciled with the addendum's property tables (no issue)"
    ]
   },
   {

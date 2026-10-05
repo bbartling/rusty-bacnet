@@ -461,7 +461,8 @@ pub(crate) fn decode_write_property_value(
     // array: index 0, the array size, stays an Unsigned (#1151). A Lighting
     // Output decodes its Lighting_Command whole too, so a command keeps its
     // fields together and any other datatype is the object's to refuse
-    // (#1263).
+    // (#1263), and so do Color and Color Temperature their Color_Command
+    // (#1386).
     if matches!(
         property,
         PropertyIdentifier::RECIPIENT_LIST
@@ -469,6 +470,7 @@ pub(crate) fn decode_write_property_value(
             | PropertyIdentifier::VALUE_SOURCE
             | PropertyIdentifier::EFFECTIVE_PERIOD
             | PropertyIdentifier::LIGHTING_COMMAND
+            | PropertyIdentifier::COLOR_COMMAND
     ) || (property == PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
         && array_index != Some(0))
     {

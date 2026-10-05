@@ -146,11 +146,12 @@ fn rpm_color_indexed_reads_and_bytes_are_unchanged() {
         if configured {
             // Application-level color plus the two routed arms.
             object.set_present_value(1.0, 0.5);
+            // STOP.
             object
                 .write_property(
                     P::COLOR_COMMAND,
                     None,
-                    PropertyValue::OctetString(vec![0x01, 0x02]),
+                    PropertyValue::ApplicationData(vec![0x09, 0x06]),
                     None,
                 )
                 .unwrap();
@@ -194,9 +195,9 @@ fn rpm_color_indexed_reads_and_bytes_are_unchanged() {
                 P::COLOR_COMMAND,
                 None,
                 Ok(if configured {
-                    &[0x62, 0x01, 0x02]
+                    &[0x09, 0x06]
                 } else {
-                    &[0x60]
+                    &[0x09, 0x00]
                 }),
             ),
             (
@@ -275,19 +276,21 @@ fn rpm_color_indexed_reads_and_bytes_are_unchanged() {
             (
                 P::PROPERTY_LIST,
                 None,
+                // Color_Command is 4194334 (0x40001E) and Default_Color
+                // 4194330 (0x40001A), three octets each.
                 Ok(&[
-                    0x91, 0x1C, 0x91, 0x55, 0x91, 0xA4, 0x92, 0x01, 0xFC, 0x92, 0x01, 0x7A, 0x92,
-                    0x01, 0xFE, 0x92, 0x01, 0x76, 0x92, 0x01, 0x81, 0x91, 0x6F, 0x91, 0x24, 0x91,
-                    0x51, 0x91, 0x67,
+                    0x91, 0x1C, 0x91, 0x55, 0x91, 0xA4, 0x93, 0x40, 0x00, 0x1E, 0x92, 0x01, 0x7A,
+                    0x93, 0x40, 0x00, 0x1A, 0x92, 0x01, 0x76, 0x92, 0x01, 0x81, 0x91, 0x6F, 0x91,
+                    0x24, 0x91, 0x51, 0x91, 0x67,
                 ]),
             ),
             (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 12])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 0x1C])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 0x55])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 0xA4])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0xFC])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x93, 0x40, 0x00, 0x1E])),
             (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0x7A])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x92, 0x01, 0xFE])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x93, 0x40, 0x00, 0x1A])),
             (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0x76])),
             (P::PROPERTY_LIST, Some(8), Ok(&[0x92, 0x01, 0x81])),
             (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 0x6F])),
@@ -328,11 +331,12 @@ fn rpm_color_temperature_indexed_reads_and_bytes_are_unchanged() {
             // Present_Value needs no Out_Of_Service gate; the command and
             // fade defaults below are exercised through the read arms only.
             object.set_present_value(5000);
+            // STEP_UP_CCT by 1 K.
             object
                 .write_property(
                     P::COLOR_COMMAND,
                     None,
-                    PropertyValue::OctetString(vec![0x04, 0x05]),
+                    PropertyValue::ApplicationData(vec![0x09, 0x04, 0x59, 0x01]),
                     None,
                 )
                 .unwrap();
@@ -382,9 +386,9 @@ fn rpm_color_temperature_indexed_reads_and_bytes_are_unchanged() {
                 P::COLOR_COMMAND,
                 None,
                 Ok(if configured {
-                    &[0x62, 0x04, 0x05]
+                    &[0x09, 0x04, 0x59, 0x01]
                 } else {
-                    &[0x60]
+                    &[0x09, 0x00]
                 }),
             ),
             (
@@ -479,19 +483,22 @@ fn rpm_color_temperature_indexed_reads_and_bytes_are_unchanged() {
             (
                 P::PROPERTY_LIST,
                 None,
+                // Color_Command is 4194334 (0x40001E) and
+                // Default_Color_Temperature 4194331 (0x40001B).
                 Ok(&[
-                    0x91, 0x1C, 0x91, 0x55, 0x91, 0xA4, 0x92, 0x01, 0xFC, 0x92, 0x01, 0x7A, 0x92,
-                    0x01, 0xFD, 0x92, 0x01, 0x76, 0x92, 0x01, 0x77, 0x92, 0x01, 0x78, 0x92, 0x01,
-                    0x81, 0x91, 0x45, 0x91, 0x41, 0x91, 0x6F, 0x91, 0x24, 0x91, 0x51, 0x91, 0x67,
+                    0x91, 0x1C, 0x91, 0x55, 0x91, 0xA4, 0x93, 0x40, 0x00, 0x1E, 0x92, 0x01, 0x7A,
+                    0x93, 0x40, 0x00, 0x1B, 0x92, 0x01, 0x76, 0x92, 0x01, 0x77, 0x92, 0x01, 0x78,
+                    0x92, 0x01, 0x81, 0x91, 0x45, 0x91, 0x41, 0x91, 0x6F, 0x91, 0x24, 0x91, 0x51,
+                    0x91, 0x67,
                 ]),
             ),
             (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 16])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 0x1C])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 0x55])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 0xA4])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0xFC])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x93, 0x40, 0x00, 0x1E])),
             (P::PROPERTY_LIST, Some(5), Ok(&[0x92, 0x01, 0x7A])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x92, 0x01, 0xFD])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x93, 0x40, 0x00, 0x1B])),
             (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0x76])),
             (P::PROPERTY_LIST, Some(8), Ok(&[0x92, 0x01, 0x77])),
             (P::PROPERTY_LIST, Some(9), Ok(&[0x92, 0x01, 0x78])),
