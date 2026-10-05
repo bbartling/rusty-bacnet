@@ -64,8 +64,9 @@
 //!
 //! Dropping an object waits for the saves it has queued. The server's
 //! DeleteObject therefore drops a removed object on a blocking thread after
-//! releasing the guard; application code that removes one, or drops the
-//! database, should do the same. An object dropped with a write still
+//! releasing the guard, and a server dropped without `stop()` in async code
+//! drops its database there too (#1409); application code that removes an
+//! object, or drops the last handle on the database, should do the same. An object dropped with a write still
 //! staged for a request that never came back first saves the state it
 //! serves, so storage never keeps a state no client was told about, and
 //! waits for that save too (#1363). The server's `stop()` settles such

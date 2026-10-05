@@ -4897,6 +4897,12 @@ and a warning naming the objects still saving is logged after 5 s and every
 30 s after that. `stop()` doesn't wait while the application holds the
 database; the objects then settle once it lets go, and put storage back when
 they are dropped.
+Call `stop()` before dropping the server. A server dropped without it in async
+code aborts its tasks and hands its object database to a task that drops it on
+Tokio's blocking pool once those tasks have let go (#1409), so the drop doesn't
+block a runtime worker while the objects' last saves run; nothing waits for
+those saves, though. An application still holding `server.database()` drops
+the last handle itself, best off the runtime as well.
 The target-Audit drain retains the ingress needed for acknowledgments until its
 existing completion/deadline boundary. Cancelling a stop waiter retains cleanup:
 call `stop()` again to join it. Transport cleanup errors retain the owner for retry;
