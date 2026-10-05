@@ -3,6 +3,7 @@ use super::*;
 use crate::command_lists::TakenRuns;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::staging::StagingWritePlan;
+use bacnet_types::constructed::BACnetRecipient;
 
 #[cfg(test)]
 #[path = "input_present_value_tests.rs"]
@@ -25,7 +26,7 @@ mod local_index_staged_release_tests;
 /// Inputs and noncommandable Values distinguish application updates from
 /// network-equivalent writes, including their Out_Of_Service ownership checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LocalWrite {
+pub(super) enum LocalWrite<'s> {
     /// A trusted local program performing a network-equivalent property write.
     Property {
         property: PropertyIdentifier,
@@ -49,13 +50,15 @@ pub(super) enum LocalWrite {
     /// and its Channel_Number is still `number`; otherwise the write is
     /// skipped and queues nothing. With `inhibit_delay`, the run it queues
     /// loses its delays when Allow_Group_Delay_Inhibit is TRUE at that moment.
-    /// It comes from the network, so it carries no local command source and
-    /// makes no Audit record.
+    /// It comes from the network: `requester`, the device that sent the
+    /// WriteGroup, is the source its Audit record names, with no invoke ID
+    /// (#1318).
     WriteGroup {
         group: u32,
         number: u16,
         priority: u8,
         inhibit_delay: bool,
+        requester: &'s BACnetRecipient,
     },
 }
 
@@ -320,7 +323,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     async fn write_local_as(
         &self,
         oid: &ObjectIdentifier,
-        write: LocalWrite,
+        write: LocalWrite<'_>,
         value: PropertyValue,
         source: Option<crate::LocalCommandSource>,
     ) -> Result<(), Error> {
@@ -541,7 +544,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
     pub(super) async fn write(
         &self,
         oid: &ObjectIdentifier,
-        write: LocalWrite,
+        write: LocalWrite<'_>,
         value: PropertyValue,
         source: Option<crate::LocalCommandSource>,
     ) -> Result<TakenRuns, Error> {
@@ -636,12 +639,38 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                         audit
                     }
                 }
+                // Audited as the WriteProperty of the Channel's Present_Value
+                // it amounts to, from the device that sent the WriteGroup.
+                LocalWrite::WriteGroup {
+                    priority,
+                    requester,
+                    ..
+                } => {
+                    let mut audit = audit_reporter::WriteAudit::requested_by(
+                        self.config,
+                        self.network,
+                        self.notification_transactions,
+                        requester.clone(),
+                        None,
+                    );
+                    let encoded = audit_reporter::small_value(&value).unwrap_or_default();
+                    audit.before(
+                        &db,
+                        WriteTarget {
+                            oid: *oid,
+                            property: PropertyIdentifier::PRESENT_VALUE,
+                            array_index: None,
+                            priority: Some(priority),
+                            value: &encoded,
+                        },
+                    );
+                    Some(audit)
+                }
                 LocalWrite::ApplicationPresentValue
                 | LocalWrite::ApplicationControlledVariableValue
                 | LocalWrite::ApplicationAveragingSample
                 | LocalWrite::ApplicationAveragingMiss
-                | LocalWrite::ApplicationTrackingValue
-                | LocalWrite::WriteGroup { .. } => None,
+                | LocalWrite::ApplicationTrackingValue => None,
             };
             let value = match write {
                 LocalWrite::Property { property, .. } => {
@@ -836,7 +865,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
 fn precheck(
     db: &ObjectDatabase,
     oid: &ObjectIdentifier,
-    write: LocalWrite,
+    write: LocalWrite<'_>,
     value: &PropertyValue,
 ) -> Result<(), Error> {
     let object = db.get(oid).ok_or(Error::Protocol {

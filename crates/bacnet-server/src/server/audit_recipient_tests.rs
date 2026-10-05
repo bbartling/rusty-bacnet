@@ -520,7 +520,7 @@ async fn recipient_wpm_authorizer_denies_after_committed_prefix_without_suffix_a
     let decisions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let captured = Arc::clone(&decisions);
     fixture.server.config.mutation_authorizer = Some(Arc::new(move |context| {
-        assert_eq!(context.invoke_id, 77);
+        assert_eq!(context.invoke_id, Some(77));
         assert_eq!(context.source_mac.as_slice(), SOURCE);
         captured.fetch_add(1, Ordering::AcqRel) == 0
     }));

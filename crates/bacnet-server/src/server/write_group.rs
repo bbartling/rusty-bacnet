@@ -34,23 +34,43 @@
 //! when that Channel's Allow_Group_Delay_Inhibit is TRUE (Clause 12.53.13);
 //! otherwise each member waits its Execution_Delay as usual.
 //!
-//! WriteGroup carries no invoke ID and isn't one of the confirmed services
-//! the mutation authorizer decides, so a server that restricts network
-//! writes, with [`MutationPolicy::DenyAll`] or an installed authorizer, drops
-//! every WriteGroup rather than let one past its policy (#1319 tracks letting
-//! the authorizer decide). These drops aren't counted in the mutation
-//! decision counters. The writes make no Audit records (#1318). Under DCC's
-//! DISABLE_INITIATION a WriteGroup still runs: it initiates nothing.
+//! Local mutation policy decides each Channel write on its own, just before
+//! it is made and with no database guard held (#1319):
+//! [`MutationPolicy::DenyAll`] denies it, and an installed authorizer sees a
+//! [`MutationTarget::WriteGroup`] naming the Channel, the entry and the
+//! priority, with the requester's addresses and provenance, no invoke ID and
+//! the unconfirmed service. A denied write is skipped with nothing sent back,
+//! since the service is unconfirmed, and counted in the WriteGroup mutation
+//! decision counters; the other Channels are decided on their own.
+//!
+//! Each write that goes ahead is audited as a WRITE, the operation Table 19-5
+//! gives WriteGroup, of that Channel's Present_Value at the priority used:
+//! one record per Channel written, as Clause 19.6.5 asks of a service with
+//! several targets. The requester is the source (the Device bound to its
+//! address, when the audit profile knows one), with no invoke ID, which an
+//! unconfirmed request doesn't have (Table 19-4). A denied write makes no
+//! record (#1318). Under DCC's DISABLE_INITIATION a WriteGroup still runs: it
+//! initiates nothing.
 
+use super::audit_reporter::WriteAudit;
 use super::command_runs::CommandRunner;
 use super::local_writes::{LocalWrite, LocalWriter};
 use super::request_services::UnconfirmedServices;
 use super::*;
 use crate::command_lists::TakenRuns;
-use crate::mutation::MutationPolicy;
+use crate::mutation::{
+    MutationAuthorizationContext, MutationDecision, MutationDecisions, MutationPolicy,
+    MutationService, MutationTarget, MutationTrust, WriteGroupTarget,
+};
+use bacnet_network::layer::ReceivedApdu;
 use bacnet_objects::command::RunPlan;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::write_group::WriteGroupRequest;
+use bacnet_transport::port::TransportProvenance;
+use bacnet_types::constructed::BACnetRecipient;
+
+const WRITE_GROUP: MutationService =
+    MutationService::Unconfirmed(UnconfirmedServiceChoice::WRITE_GROUP);
 
 /// One Channel Present_Value write a WriteGroup asks for.
 #[derive(Debug, Clone, PartialEq)]
@@ -64,9 +84,54 @@ struct GroupWrite<'r> {
     priority: u8,
 }
 
-/// Whether local policy lets an inbound WriteGroup change anything.
-fn admitted(config: &ServerConfig) -> bool {
-    config.mutation_policy == MutationPolicy::Permissive && config.mutation_authorizer.is_none()
+/// Who sent a WriteGroup, and the policy its Channel writes are made under.
+struct Requester<'a> {
+    config: &'a ServerConfig,
+    decisions: &'a MutationDecisions,
+    source_mac: &'a [u8],
+    source_network: Option<&'a NpduAddress>,
+    provenance: TransportProvenance,
+    /// The source the writes' Audit records name.
+    audit_source: BACnetRecipient,
+}
+
+impl Requester<'_> {
+    /// Whether local policy lets `write`, one Channel write of `request`, go
+    /// ahead; the decision is counted.
+    fn admits(&self, request: &WriteGroupRequest, write: &GroupWrite<'_>) -> bool {
+        let decision = if self.config.mutation_policy == MutationPolicy::DenyAll {
+            MutationDecision::PolicyDeny
+        } else if let Some(authorizer) = &self.config.mutation_authorizer {
+            let context = MutationAuthorizationContext {
+                source_mac: MacAddr::from_slice(self.source_mac),
+                source_network: self.source_network.cloned(),
+                provenance: self.provenance,
+                trust: MutationTrust::from_provenance(self.provenance),
+                invoke_id: None,
+                service_choice: WRITE_GROUP,
+                target: MutationTarget::WriteGroup(WriteGroupTarget {
+                    channel: write.channel,
+                    group_number: request.group_number.get(),
+                    channel_number: write.number,
+                    priority: write.priority,
+                    value: write.value.to_vec(),
+                    inhibit_delay: request.inhibit_delay == Some(true),
+                }),
+            };
+            // A callback that panics denies, as for the confirmed services.
+            let allowed =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| authorizer(&context)));
+            if allowed.unwrap_or(false) {
+                MutationDecision::Allow
+            } else {
+                MutationDecision::Deny
+            }
+        } else {
+            MutationDecision::Allow
+        };
+        self.decisions.record(WRITE_GROUP, decision);
+        matches!(decision, MutationDecision::Allow)
+    }
 }
 
 /// The Channel_Number `object` serves, if it serves one that fits.
@@ -147,12 +212,14 @@ fn plan<'r>(db: &ObjectDatabase, request: &'r WriteGroupRequest) -> Vec<GroupWri
         .collect()
 }
 
-/// Write one value to its Channel; the runs that queued. [`LocalWriter`]
-/// checks the Channel again and applies the inhibit under its write guard.
+/// Write one value to its Channel on behalf of `requester`; the runs that
+/// queued. [`LocalWriter`] checks the Channel again and applies the inhibit
+/// under its write guard.
 async fn write_channel<T: TransportPort + 'static>(
     writer: &LocalWriter<'_, T>,
     request: &WriteGroupRequest,
     write: &GroupWrite<'_>,
+    requester: &BACnetRecipient,
 ) -> Result<TakenRuns, Error> {
     // A Channel's Present_Value is one value, never a list.
     let value = handlers::decode_write_property_value(
@@ -166,6 +233,7 @@ async fn write_channel<T: TransportPort + 'static>(
         number: write.number,
         priority: write.priority,
         inhibit_delay: request.inhibit_delay == Some(true),
+        requester,
     };
     writer.write(&write.channel, write_group, value, None).await
 }
@@ -175,6 +243,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     pub(super) async fn execute_write_group(
         services: &UnconfirmedServices<T>,
         service_request: &[u8],
+        received: &ReceivedApdu,
     ) {
         let request = match WriteGroupRequest::decode(service_request) {
             Ok(request) => request,
@@ -183,31 +252,52 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return;
             }
         };
-        if !admitted(&services.config) {
-            debug!(
-                group = request.group_number.get(),
-                "Ignoring WriteGroup: local mutation policy restricts network writes"
-            );
-            return;
-        }
         let writes = plan(&*services.db.read().await, &request);
         if writes.is_empty() {
             return;
         }
-        apply(&CommandRunner::for_unconfirmed(services), &request, &writes).await;
+        let audit_source = WriteAudit::<T>::requester(
+            &services.config,
+            &services.notification_transactions,
+            &services.device_bindings,
+            &received.source_mac,
+            received.source_network.as_ref(),
+            services.network.local_network_number().get(),
+        )
+        .await;
+        let requester = Requester {
+            config: &services.config,
+            decisions: &services.mutation_decisions,
+            source_mac: &received.source_mac,
+            source_network: received.source_network.as_ref(),
+            provenance: received.provenance,
+            audit_source,
+        };
+        let runner = CommandRunner::for_unconfirmed(services);
+        apply(&runner, &requester, &request, &writes).await;
     }
 }
 
-/// Make `writes` in order and start the runs they queue. A refused write is
-/// logged and the rest still go.
+/// Make `writes` in order, each one `requester`'s policy admits, and start
+/// the runs they queue. A denied or refused write is logged and the rest
+/// still go.
 async fn apply<T: TransportPort + 'static>(
     runner: &CommandRunner<T>,
+    requester: &Requester<'_>,
     request: &WriteGroupRequest,
     writes: &[GroupWrite<'_>],
 ) {
     let writer = runner.writer();
     for write in writes {
-        match write_channel(&writer, request, write).await {
+        if !requester.admits(request, write) {
+            debug!(
+                channel = %write.channel,
+                priority = write.priority,
+                "WriteGroup value denied by local mutation policy"
+            );
+            continue;
+        }
+        match write_channel(&writer, request, write, &requester.audit_source).await {
             Ok(runs) => runner.start(runs),
             Err(error) => debug!(
                 channel = %write.channel,

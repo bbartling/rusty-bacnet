@@ -245,7 +245,7 @@ async fn hub_mediated_unknown_leaf_never_satisfies_verified_only_rule() {
 #[tokio::test]
 async fn allow_for_one_service_is_not_allow_for_another() {
     let (authorizer, seen) =
-        capturing(|context| context.service_choice == ConfirmedServiceChoice::SUBSCRIBE_COV);
+        capturing(|context| context.service_choice == ConfirmedServiceChoice::SUBSCRIBE_COV.into());
     let fixture = Fixture::new(authorizer);
     let decisions = Arc::new(crate::mutation::MutationDecisions::default());
     let cases = cases();
@@ -301,8 +301,8 @@ async fn debug_and_counters_carry_no_secrets_or_inputs() {
         }),
         provenance: TransportProvenance::unverified(),
         trust: MutationTrust::Unverified,
-        invoke_id: 7,
-        service_choice: ConfirmedServiceChoice::ATOMIC_WRITE_FILE,
+        invoke_id: Some(7),
+        service_choice: ConfirmedServiceChoice::ATOMIC_WRITE_FILE.into(),
         target: crate::mutation::MutationTarget::AtomicWriteFile(request),
     };
     let rendered = format!("{context:?}");

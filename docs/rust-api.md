@@ -3223,11 +3223,18 @@ runs: one that has left the group or changed its number by then is skipped,
 and one whose Allow_Group_Delay_Inhibit is FALSE by then keeps its delays.
 Nothing is answered and a malformed request is dropped. DCC's
 DISABLE_INITIATION leaves WriteGroup running, as it only stops what the device
-starts (the server refuses the deprecated DISABLE outright). Every WriteGroup is dropped while the server's
-`mutation_policy` is `DenyAll` or a `mutation_authorizer` is installed, because
-the authorizer only decides confirmed services (#1319); those drops aren't
-counted in `mutation_decision_counters()`. The Channel writes make no Audit
-records (#1318), and the endpoint responder ignores WriteGroup.
+starts (the server refuses the deprecated DISABLE outright). Local mutation
+policy decides each Channel write on its own (#1319): `MutationPolicy::DenyAll`
+denies it, and an installed `mutation_authorizer` is called once per Channel
+with a `MutationTarget::WriteGroup` (the Channel, group, channel number,
+priority, value and inhibit flag), no invoke ID and
+`MutationService::Unconfirmed(WRITE_GROUP)`, so it can allow some Channels and
+not others. A denied write is skipped with nothing answered and counted in
+`mutation_decision_counters().write_group`. Each Channel written makes one
+WRITE Audit record (Table 19-5) of its Present_Value at the priority used,
+naming the requester (its bound Device, when the audit profile knows one) and
+no invoke ID; a denied one makes none (#1318). The endpoint responder ignores
+WriteGroup.
 
 Channel runs are owned as Command runs are (#1178). A `write_local` dropped
 after the Channel took its value ends the distribution FAILED without
@@ -4963,10 +4970,13 @@ malformed input; other covered services authorize once after service decoding.
 Callbacks must be fast, nonblocking, and side-effect-free. Context addresses and
 process IDs are claimed, not authenticated identities. DCC/Reinit, Audit/LifeSafety,
 reads, discovery, trusted local writes and unconfirmed services other than WriteGroup
-are unchanged. The callback can't decide an inbound WriteGroup, so an installed
-authorizer, even one that allows everything, drops every inbound WriteGroup without
-being called, and so does `MutationPolicy::DenyAll` (#1319 tracks letting the
-authorizer decide). Those drops aren't counted in `mutation_decision_counters()`.
+are unchanged. An inbound WriteGroup is decided once per Channel write it would make
+(#1319): the context's `target` is `MutationTarget::WriteGroup`, its `invoke_id` is
+`None` and its `service_choice` is `MutationService::Unconfirmed(WRITE_GROUP)`
+(a confirmed request's is `MutationService::Confirmed`, with `Some` invoke ID).
+`MutationPolicy::DenyAll` denies each one. A denied Channel write is skipped silently,
+since nothing answers an unconfirmed request, and counted in the `write_group` row of
+`mutation_decision_counters()`.
 
 Each decision context also carries the reassembled ingress snapshot
 (`provenance: TransportProvenance`) and the derived channel/relay scope

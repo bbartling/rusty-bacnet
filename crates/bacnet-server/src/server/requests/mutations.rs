@@ -75,8 +75,8 @@ impl Request<'_> {
             source_network: self.source_network.cloned(),
             provenance: self.provenance,
             trust: MutationTrust::from_provenance(self.provenance),
-            invoke_id: self.req.invoke_id,
-            service_choice: self.req.service_choice,
+            invoke_id: Some(self.req.invoke_id),
+            service_choice: self.req.service_choice.into(),
             target,
         };
         if audit_notification::fail_closed_authorize(|| authorizer(&context)) {

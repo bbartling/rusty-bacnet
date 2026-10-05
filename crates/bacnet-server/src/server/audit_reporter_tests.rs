@@ -692,6 +692,9 @@ mod local_source;
 #[path = "audit_dcc_tests.rs"]
 mod dcc;
 
+#[path = "audit_write_group_tests.rs"]
+mod write_group;
+
 #[tokio::test(start_paused = true)]
 async fn immediate_and_delayed_reporter_raw_1474_emit_header_1024() {
     for delayed in [false, true] {

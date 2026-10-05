@@ -2994,7 +2994,9 @@ mutation authorization. The constructor's keyword-only
 valid inbound property writes (WP/WPM), object creation/deletion, list additions/
 removals, file writes, and the three COV subscription services through the same
 Rust gate. Denials return SERVICES / SERVICE_REQUEST_DENIED, preserving WPM's
-failed-reference error shape. Remote reads and trusted local writes still work.
+failed-reference error shape. It also denies each Channel write of an inbound
+WriteGroup, silently, since nothing answers one. Remote reads and trusted local
+writes still work.
 No Python callback or duplicate gate is involved.
 
 Invalid mode strings raise `ValueError`; non-strings raise `TypeError` during

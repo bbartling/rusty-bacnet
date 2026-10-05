@@ -82,8 +82,12 @@ mod policy_precommit;
 /// priority filtering is irrelevant. Admission follows the service decoder's
 /// acceptance boundary, which refuses octets after the request's last member.
 /// Decoder rejections and configured payload/count budget Aborts remain silent.
-/// The Channel writes an inbound WriteGroup makes are not recorded, so complete
-/// WRITE coverage is not claimed.
+/// An inbound WriteGroup reports WRITE (Table 19-5) once per Channel it writes,
+/// as a WriteProperty of that Channel's Present_Value at the priority used, with
+/// the requester as source and no invoke ID; a Channel write the mutation
+/// authorizer denied makes none (#1318). A Channel's Present_Value counts as
+/// commandable for the priority and its filter, since it passes its priority
+/// through to the members.
 ///
 /// READ covers completed, unsegmented RP/RPM responses, one record per
 /// returned property outcome in result order, including inline RPM errors.
@@ -198,8 +202,8 @@ fn recipient(db: &ObjectDatabase, device: ObjectIdentifier) -> Option<BACnetReci
         .map(|(value, _)| value)
 }
 
-/// Where a confirmed request came from: the peer's link address, its network
-/// address when routed, and the request's invoke ID.
+/// Where a request came from: the peer's link address, its network address
+/// when routed, and a confirmed request's invoke ID.
 #[derive(Clone, Copy)]
 pub(super) struct RequestSource<'s> {
     pub(super) mac: &'s [u8],
@@ -263,11 +267,55 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
         request: RequestSource<'_>,
     ) -> Self {
         let RequestSource {
-            mac: source_mac,
+            mac,
             network: source_network,
             invoke_id,
             local_network,
         } = request;
+        let source = Self::requester(
+            config,
+            transactions,
+            bindings,
+            mac,
+            source_network,
+            local_network,
+        )
+        .await;
+        Self::requested_by(config, network, transactions, source, Some(invoke_id))
+    }
+
+    /// The audit of writes `source` asked for, in a request carrying
+    /// `invoke_id`; `None` for an unconfirmed one (Table 19-4).
+    pub(super) fn requested_by(
+        config: &'a ServerConfig,
+        network: &'a Arc<NetworkLayer<T>>,
+        transactions: &'a Arc<NotificationTransactions>,
+        source: BACnetRecipient,
+        invoke_id: Option<u8>,
+    ) -> Self {
+        Self {
+            config,
+            network,
+            transactions,
+            source,
+            invoke_id,
+            pending: None,
+        }
+    }
+
+    /// The device a request from `source_mac`, routed from `source_network`,
+    /// came from, as an Audit record names it: the Device bound to that
+    /// address, while the audit profile is on and one is, otherwise the
+    /// address. `local_network` is this network's number as read for the
+    /// request.
+    pub(super) async fn requester(
+        config: &ServerConfig,
+        transactions: &Arc<NotificationTransactions>,
+        bindings: &Arc<RwLock<DeviceBindingTable>>,
+        source_mac: &[u8],
+        source_network: Option<&NpduAddress>,
+        local_network: Option<u16>,
+    ) -> BACnetRecipient {
         // Entries were checked against the concrete link at configuration or
         // observation admission. Correlation needs no caller code under locks.
         let known_source = if config.audit_reporters.is_some() {
@@ -283,7 +331,7 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
         } else {
             None
         };
-        let source = known_source
+        known_source
             .map(BACnetRecipient::Device)
             .unwrap_or_else(|| {
                 BACnetRecipient::Address(BACnetAddress {
@@ -293,15 +341,7 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
                         |source| source.mac_address.clone(),
                     ),
                 })
-            });
-        Self {
-            config,
-            network,
-            transactions,
-            source,
-            invoke_id: Some(invoke_id),
-            pending: None,
-        }
+            })
     }
 }
 

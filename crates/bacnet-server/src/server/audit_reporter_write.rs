@@ -55,12 +55,15 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
         let Some(object) = db.get(&write.oid) else {
             return;
         };
-        // Standard commandable properties use Present_Value + Priority_Array.
-        // A supplied priority on Description (etc.) must never filter the write.
+        // Standard commandable properties use Present_Value + Priority_Array,
+        // and a Channel's Present_Value passes its priority on to the members
+        // (Clause 19.5.1.4 counts it among the commandable ones). A supplied
+        // priority on Description (etc.) must never filter the write.
         let command_priority = (write.property == PropertyIdentifier::PRESENT_VALUE
-            && object
-                .property_list()
-                .contains(&PropertyIdentifier::PRIORITY_ARRAY))
+            && (write.oid.object_type() == ObjectType::CHANNEL
+                || object
+                    .property_list()
+                    .contains(&PropertyIdentifier::PRIORITY_ARRAY)))
         .then_some(write.priority.unwrap_or(16));
         let object_policy = object.audit_object_policy_internal();
         let policy = object_policy.effective_internal(reporter);
