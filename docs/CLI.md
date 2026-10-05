@@ -1,6 +1,6 @@
 # BACnet CLI Reference
 
-The `bacnet` command-line tool provides interactive and scripted access to BACnet networks for device discovery, property reading/writing, diagnostics, and packet analysis. `bacnet tui` opens a full-screen terminal UI; see [Terminal UI](#terminal-ui).
+The `bacnet` command-line tool provides interactive and scripted access to BACnet networks for device discovery, property reading/writing, diagnostics, and packet analysis. `bacnet tui` opens a full-screen terminal UI in builds with the opt-in `tui` feature; see [Terminal UI](#terminal-ui).
 
 ## Installation
 
@@ -184,10 +184,13 @@ client's discovery table afterwards.
 | `Ctrl-C` | Close the open dialog or cancel the running Who-Is; press again within 2 s to quit |
 | `q` | Quit |
 
-The `tui` cargo feature is on by default. A build with
-`--no-default-features` leaves out ratatui and crossterm, and `bacnet tui` then
-prints rebuild advice. The one-shot commands and their JSON output are the
-same with or without the feature.
+The `tui` cargo feature is off by default until the terminal UI ships in
+0.13.0 (#975), so the release binaries and a plain `cargo install bacnet-cli`
+leave it out. Build it with `cargo install bacnet-cli --features tui`, or with
+`--features bacnet-cli/tui` in a workspace checkout. Without it, ratatui and
+crossterm aren't built and `bacnet tui` prints that rebuild advice. The
+one-shot commands and their JSON output are the same with or without the
+feature.
 
 ### Device Discovery
 

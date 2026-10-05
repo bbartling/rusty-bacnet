@@ -62,8 +62,9 @@ insta = "1.48"
 tokio = { workspace = true, features = ["test-util"] }
 
 [features]
-default = ["tui"]
-# The full-screen terminal UI (`bacnet tui`).
+default = []
+# The full-screen terminal UI (`bacnet tui`). Opt-in until the TUI epic ships in
+# 0.13.0 (#975): release builds and a plain `cargo install` leave it out.
 tui = ["dep:ratatui", "dep:crossterm", "dep:futures-util"]
 sc-tls = [
     "bacnet-client/sc-tls",

@@ -1,7 +1,8 @@
 //! BACnet command-line tool.
 //!
 //! Running `bacnet` with no arguments or with the `shell` subcommand launches
-//! an interactive REPL, and `bacnet tui` opens the full-screen terminal UI.
+//! an interactive REPL, and `bacnet tui` opens the full-screen terminal UI
+//! (with the opt-in `tui` feature).
 //! Subcommands can also be used directly for scripting.
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a command-line tool prints its results
 

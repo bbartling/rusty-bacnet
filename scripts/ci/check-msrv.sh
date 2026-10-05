@@ -95,7 +95,7 @@ done
 FEATURES="bacnet-transport/sc-tls,bacnet-transport/ipv6"
 FEATURES="$FEATURES,bacnet-client/sc-tls,bacnet-client/ipv6"
 FEATURES="$FEATURES,bacnet-server/sc-tls"
-FEATURES="$FEATURES,bacnet-cli/sc-tls"
+FEATURES="$FEATURES,bacnet-cli/sc-tls,bacnet-cli/tui"
 
 echo "MSRV gate covers:"
 for p in $PKGS; do echo "  - $p"; done

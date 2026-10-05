@@ -67,10 +67,10 @@ env:
   # on PATH.
   PYO3_PYTHON: /usr/bin/python3
   # Every optional feature that builds on Linux, including per-crate features
-  # such as bacnet-endpoint/sc-tls and bacnet-cli/{sc-tls,pcap} that nothing
+  # such as bacnet-endpoint/sc-tls and bacnet-cli/{sc-tls,pcap,tui} that nothing
   # else in the workspace turns on (#906). bacnet-benchmarks/console is left
   # out: it needs tokio_unstable.
-  LINUX_FEATURES: bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-cli/sc-tls,bacnet-cli/pcap
+  LINUX_FEATURES: bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/tui
 
 jobs:
   lint:
@@ -197,7 +197,7 @@ jobs:
       - name: Clippy (PyO3 bindings)
         if: ${{ !cancelled() }}
         run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
-      # bacnet-cli without its default `tui` feature, which every other run turns on.
+      # bacnet-cli without its opt-in `tui` feature, which LINUX_FEATURES turns on.
       - name: Clippy (bacnet-cli, no default features)
         if: ${{ !cancelled() }}
         run: cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
@@ -261,8 +261,9 @@ jobs:
       # sc-tls and pcap); LINUX_FEATURES compiles them out.
       - name: bacnet-cli tests (default features)
         run: cargo nextest run -p bacnet-cli --locked --profile ci
-      # And with the default `tui` feature off too, where `bacnet tui` prints
-      # rebuild advice instead.
+      # And with no default features at all. Until `tui` is on by default again
+      # (0.13.0, #975) this matches the run above; both keep `bacnet tui`'s
+      # rebuild advice tested.
       - name: bacnet-cli tests (no default features)
         if: ${{ !cancelled() }}
         run: cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
