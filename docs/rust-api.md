@@ -679,8 +679,8 @@ loopback if none exists), then a unique non-link-local address on that interface
 otherwise a unique link-local address. Multiple interfaces or addresses in the
 selected class fail startup; configure an existing concrete address to resolve
 ambiguity. A concrete address must have one usable local owner. This is local
-selection policy, not an Annex U requirement, and replaced 0.11.0's
-wildcard address fallback in 0.12.0.
+selection policy, not an Annex U requirement. It replaced, in 0.12.0, 0.11.0's
+selection, which asked the routing table for an address and fell back to `::1`.
 
 The selected address and actual UDP port form `local_mac()`. One wildcard socket
 receives selected unicast and BACnet multicast traffic; packet metadata fences

@@ -258,14 +258,14 @@ includes BACnet/IPv6, BACnet/SC and MS/TP, but not Ethernet.
 | Transport | Feature | Notes |
 |---|---|---|
 | BACnet/IP (UDP/IPv4) | none | Includes BBMD and foreign-device registration. NAT traversal and B/IP multicast are not implemented. |
-| BACnet/IPv6 | `ipv6` | Binds one concrete interface and address. With `::`, startup fails if the host has more than one candidate, so pass a concrete address. |
+| BACnet/IPv6 | `ipv6` | Selects one concrete interface and address and keeps traffic on that link. With `::`, startup fails if the host has more than one candidate, so pass a concrete address. |
 | BACnet/SC | `sc-tls` | Nodes, direct connections and a hub over TLS 1.3. Requires a site CA, a certificate and key for each device, and a provisioned device UUID. |
 | MS/TP | `serial` (`serial-gpio` for GPIO direction control) | Standard frames only (no extended or COBS frames). RS-485 kernel options and GPIO are Linux-only. Evidence comes from a simulator and loopback; on-wire timing isn't qualified on any adapter or OS. |
 | Ethernet (802.3 LLC) | `ethernet` | Linux only (`AF_PACKET`). Needs `CAP_NET_RAW` or root. |
 
 The [BACnet/SC guide](https://jscott3201.github.io/rusty-bacnet/guides/bacnet-sc/)
-covers CLI trust and identity. Before 0.12.0, BACnet/IPv6 could fall back to a
-wildcard address and the CLI loaded SC trust from the system roots; the
+covers CLI trust and identity. Before 0.12.0, BACnet/IPv6 could fall back to `::1`
+when it found no address, and the CLI loaded SC trust from the system roots; the
 [upgrade guide](https://jscott3201.github.io/rusty-bacnet/project/upgrading/)
 lists what to change.
 

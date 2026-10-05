@@ -4098,8 +4098,9 @@ server = BACnetServer(
 local link and address. A non-loopback multicast interface is preferred; a unique
 non-link-local address on it is preferred over a unique link-local address.
 Ambiguity fails async client entry or server startup; use a concrete local IPv6
-address to select its unique interface. This replaced 0.11.0's wildcard
-fallback in 0.12.0 without changing constructor signatures. There is no silent `::1`
+address to select its unique interface. In 0.12.0 this replaced 0.11.0's
+selection, which asked the routing table for an address and fell back to `::1`,
+without changing constructor signatures. There is no silent `::1`
 fallback for failed physical selection. Explicit loopback remains node-local.
 
 The selected address and actual bound port are used for outgoing data and control
