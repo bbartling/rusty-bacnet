@@ -177,6 +177,9 @@ oid.object_type   # ObjectType.ANALOG_INPUT
 oid.instance       # 1
 ```
 
+It copies and pickles like the other value classes; see
+[Copying and pickling](#copying-and-pickling).
+
 ---
 
 ## PropertyValue
@@ -196,7 +199,7 @@ PropertyValue.character_string("hello")
 PropertyValue.octet_string(b"\x01\x02")
 PropertyValue.enumerated(1)
 PropertyValue.object_identifier(oid)
-PropertyValue.date(2026, 3, 21, 6)    # year, month, day, day_of_week (1=Mon)
+PropertyValue.date(2026, 3, 21, 6)    # full year, month, day, day_of_week (1=Mon)
 PropertyValue.time(14, 30, 0, 0)      # hour, minute, second, hundredths
 PropertyValue.bit_string(0, b"\xff")  # unused_bits, data
 PropertyValue.list([PropertyValue.unsigned(1), PropertyValue.unsigned(2)])
@@ -223,11 +226,35 @@ v.value   # 72.5 (native Python float)
 | `"enumerated"` | `int` |
 | `"object_identifier"` | `ObjectIdentifier` |
 | `"bit_string"` | `dict` with `"unused_bits"` and `"data"` |
-| `"date"` | `tuple(year, month, day, day_of_week)` |
+| `"date"` | `tuple(year, month, day, day_of_week)`, the full year as [Dates](#dates) gives it |
 | `"time"` | `tuple(hour, minute, second, hundredths)` |
 | `"list"` | `list` of native Python values |
 | `"application_data"` | `bytes`: the encoded value, octet for octet |
 | `"destination"`, `"port_permission"` and the other element tags of [typed constructed values](#typed-constructed-values) | the element in its typed form |
+
+### Dates
+
+Every date the binding reads or takes is a `(year, month, day, day_of_week)`
+tuple with the full year, 1900 to 2154, and 255 for an unspecified year, the
+same 255 as any other unspecified date or time field (#1501). The module
+exports it as `rusty_bacnet.UNSPECIFIED`. That holds for a `"date"` value, a
+`BACnetTimeStamp` date-time, the dates in schedules, calendars and date
+ranges, and the audit log's records. A year outside 1900 to 2154 that isn't
+255 (the year octet 126, say) raises `ValueError`. The time synchronization
+requests take only a specific date and time; see
+[Time Synchronization](#time-synchronization).
+
+```python
+from rusty_bacnet import UNSPECIFIED
+v = PropertyValue.date(2026, 3, 21, 6)
+v.value                                       # (2026, 3, 21, 6)
+PropertyValue.date(UNSPECIFIED, 12, 25, UNSPECIFIED).value  # (255, 12, 25, 255): every Christmas
+BACnetTimeStamp.date_time((2026, 3, 21, 6), (8, 0, 0, 0)).value[0]  # (2026, 3, 21, 6)
+```
+
+A `datetime.date(255, 12, 25)` is Christmas in the year 255 AD, not a
+wildcard: compare a date's year with `UNSPECIFIED` before building a
+`datetime.date` from it.
 
 ### Integer arguments
 
@@ -352,8 +379,8 @@ its octets.
 | Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
 | Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
 
-A date in these forms is a `(year, month, day, day_of_week)` tuple with the
-full year, as `BACnetTimeStamp` takes it, and 255 in any field left
+A date in these forms is a `(year, month, day, day_of_week)` tuple as
+[Dates](#dates) gives it: the full year, and 255 in any field left
 unspecified. An Access Rights rule whose specifiers disagree with the
 references it carries, which no typed write makes, has no `AccessRule` form,
 so its array reads as `application_data`.
@@ -361,6 +388,40 @@ so its array reads as `application_data`.
 A Group's Present_Value results, and an `ActionCommand`'s `property_value`,
 are themselves read results: each value is shaped as a read of the property it
 names would be.
+
+---
+
+## Copying and pickling
+
+`ObjectIdentifier`, `PropertyValue` and `BACnetTimeStamp`, like the
+[enums](#enums), support `copy.copy`, `copy.deepcopy` and `pickle` at every
+protocol, and the copy equals the original (#1500). Every class the module
+exports reports `rusty_bacnet` as its `__module__`.
+
+- An `ObjectIdentifier` rebuilds through its constructor.
+- A `PropertyValue` rebuilds through the constructor its `tag` names, with
+  the value as stored: `PropertyValue.date(2026, 3, 21, 6)` pickles as that
+  call. A list rebuilds from its items as `PropertyValue`s, so a `real` item
+  stays a `real` where `.value` would give a plain `float`. A typed
+  constructed read rebuilds from the octets it was read from, with its
+  element tag, so it still writes back exactly what was read.
+- A `BACnetTimeStamp` rebuilds from its encoded CHOICE, so a timestamp a peer
+  sent with a field outside the ranges `date_time` checks (a month of 0, say)
+  copies too.
+
+```python
+import pickle
+value = await client.read_property(address, schedule, PropertyIdentifier.EXCEPTION_SCHEDULE)
+assert pickle.loads(pickle.dumps(value)) == value
+```
+
+A pickle is for the same rusty-bacnet version that made it: it names the
+classes' private rebuild methods, which may change before 1.0. Don't keep
+pickles across upgrades.
+
+The other classes (`DiscoveredDevice`, `CovNotification`,
+`ScHubCertificateBinding`, and the client, server, endpoint and hub classes)
+raise `TypeError` when pickled; copy the values you need out of them.
 
 ---
 
@@ -861,9 +922,16 @@ await client.time_synchronization(
 )
 ```
 
+The request sets the peer's clock, so the date and time must be specific: a
+real day with the full year (1900 to 2154), month 1 to 12, day 1 to 31 and
+`day_of_week` that day's own weekday (1 = Monday), and every time field in
+range. A field that is `UNSPECIFIED` (255) or a pattern value (month 13 for
+odd months, day 32 for a month's end), or a weekday that doesn't match the
+date, raises `ValueError` before anything is sent.
+
 #### `utc_time_synchronization(address, date, time)`
 
-Same format as `time_synchronization`.
+Same arguments and checks as `time_synchronization`.
 
 ---
 
