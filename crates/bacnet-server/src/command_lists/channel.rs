@@ -5,14 +5,15 @@
 //! distribution starts, so the delays overlap rather than add up
 //! (Clause 12.53.12), and each member is written as soon as its own time is
 //! reached, whatever the members before it are doing (#1343). Members in this
-//! device are written by the distribution itself, in order of delay and list
-//! order among equal delays, so their writes keep that order. A member in
-//! another device is its own future, so a write there that waits for its
-//! answer holds back no member here or in another device. Requests in other
-//! devices wait their turn in the server's queues (`remote_slots`): one at a
-//! time per device and a bounded number across the server, so a member due
-//! while its device is answering another request is written once that one
-//! ends.
+//! device are written one at a time, in order of delay and list order among
+//! equal delays, so their writes keep that order. A member in another device
+//! is its own future, so a write there that waits for its answer holds back
+//! no member here or in another device. Both kinds are polled together, so a
+//! member's future is never left unpolled while another member's write waits
+//! for the database. Requests in other devices wait their turn in the
+//! server's queues (`remote_slots`): one at a time per device and a bounded
+//! number across the server, so a member due while its device is answering
+//! another request is written once that one ends.
 //!
 //! A device that answers none of a request's attempts, or none of the Who-Is
 //! sent to find it when it had no binding (#1322), is taken to be offline for
@@ -53,7 +54,7 @@
 //! Channel's Write_Status becomes SUCCESSFUL or FAILED and its Reliability
 //! takes the kind of the first failure to finish (Clause 12.53.9).
 
-use std::collections::VecDeque;
+use std::pin::pin;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -65,7 +66,7 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::constructed::BACnetActionCommand;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use futures_util::stream::FuturesUnordered;
+use futures_util::stream::{self, FuturesUnordered};
 use futures_util::StreamExt;
 use tokio::time::Instant;
 use tracing::debug;
@@ -132,24 +133,32 @@ pub(super) async fn distribute<H: RunHost>(
         (local, remote)
     };
     local.sort_by_key(|member| member.delay_ms);
-    let mut local = VecDeque::from(local);
+    let shared = &shared;
+    // The members here, one at a time, polled beside the members in other
+    // devices on every wake. A future left unpolled while another is awaited
+    // can still be granted a database guard it is queued for, and then holds
+    // it until it is polled again; were the members here awaited on their
+    // own, the one being written could wait on that guard for good, and with
+    // it every other user of the database.
+    let local = stream::unfold(local.into_iter(), |mut members| async move {
+        let member = members.next()?;
+        tokio::time::sleep_until(shared.due(member)).await;
+        let written = write_member(host, run, distribution, member, None, shared).await;
+        Some((written, members))
+    });
+    // Fused: the loop polls it again after it has ended.
+    let mut local = pin!(local.fuse());
     let mut remote: FuturesUnordered<_> = remote
         .into_iter()
-        .map(|(member, device)| write_remote(host, run, distribution, member, device, &shared))
+        .map(|(member, device)| write_remote(host, run, distribution, member, device, shared))
         .collect();
     let mut outcome = Ok(());
     let mut made = 0;
     loop {
-        let due = local.front().map(|member| shared.due(member));
         let finished = tokio::select! {
             biased;
             Some(finished) = remote.next() => finished,
-            () = tokio::time::sleep_until(due.unwrap_or(shared.start)), if due.is_some() => {
-                let Some(member) = local.pop_front() else {
-                    continue;
-                };
-                write_member(host, run, distribution, member, None, &shared).await
-            }
+            Some(finished) = local.next() => finished,
             else => break,
         };
         // The first failure to finish stands.
