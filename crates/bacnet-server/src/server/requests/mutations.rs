@@ -57,18 +57,20 @@ impl Request<'_> {
         if self.config.mutation_policy == MutationPolicy::Permissive
             && self.config.mutation_authorizer.is_none()
         {
-            self.decisions
-                .record(self.req.service_choice, MutationDecision::Allow);
-            return Ok(());
+            return self.record(MutationDecision::Allow);
         }
         let target = decode().map_err(Error::into_request_reject)?;
+        self.record(self.decide(target))
+    }
+
+    /// What policy decides on `target`, calling the authorizer if one is
+    /// installed and the policy asks it. Nothing is recorded.
+    fn decide(&self, target: MutationTarget) -> MutationDecision {
         if self.config.mutation_policy == MutationPolicy::DenyAll {
-            self.decisions
-                .record(self.req.service_choice, MutationDecision::PolicyDeny);
-            return Err(audit_notification::request_denied());
+            return MutationDecision::PolicyDeny;
         }
         let Some(authorizer) = &self.config.mutation_authorizer else {
-            unreachable!("permissive absence handled above")
+            return MutationDecision::Allow;
         };
         let context = MutationAuthorizationContext {
             source_mac: MacAddr::from_slice(self.source_mac),
@@ -80,13 +82,20 @@ impl Request<'_> {
             target,
         };
         if audit_notification::fail_closed_authorize(|| authorizer(&context)) {
-            self.decisions
-                .record(self.req.service_choice, MutationDecision::Allow);
-            Ok(())
+            MutationDecision::Allow
         } else {
-            self.decisions
-                .record(self.req.service_choice, MutationDecision::Deny);
-            Err(audit_notification::request_denied())
+            MutationDecision::Deny
+        }
+    }
+
+    /// Count `decision` and answer the request with it.
+    fn record(&self, decision: MutationDecision) -> Result<(), Error> {
+        self.decisions.record(self.req.service_choice, decision);
+        match decision {
+            MutationDecision::Allow => Ok(()),
+            MutationDecision::Deny | MutationDecision::PolicyDeny => {
+                Err(audit_notification::request_denied())
+            }
         }
     }
 
@@ -232,17 +241,11 @@ impl Request<'_> {
             command_runs,
             timed_revisits,
         } = effects;
-        // Attempts the objects save first save here, without the guard. That
-        // needs each attempt allowed before the handler reaches it, which only
-        // a permissive policy with no authorizer promises; otherwise those
-        // attempts save in place.
-        let targets = if self.config.mutation_policy == MutationPolicy::Permissive
-            && self.config.mutation_authorizer.is_none()
-        {
-            durable_writes::DurableTarget::write_property_multiple(&self.req.service_request)
-        } else {
-            Vec::new()
-        };
+        // Attempts the objects save first save here, without the guard. Each
+        // is decided before it is staged, and the handler takes the decision
+        // made here when it reaches the attempt (#1321).
+        let mut ahead = wpm_ahead::DecidedAhead::default();
+        let targets = ahead.targets(self, db).await;
         let staged = durable_writes::stage(db, targets).await;
         let database = db;
         let (outcome, exact_changes, plans, schedule_cov) = {
@@ -251,9 +254,12 @@ impl Request<'_> {
             // captured as it commits, under this guard (#856).
             let capture = cov_table.read().await.timed_capture_all();
             let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
-            let authorize = |attempt: &bacnet_services::wpm::WritePropertyAttempt| {
-                self.authorize(|| Ok(MutationTarget::WritePropertyMultiple(attempt.clone())))
-            };
+            let authorize =
+                |attempt: &bacnet_services::wpm::WritePropertyAttempt| match ahead.take(attempt) {
+                    Some(decision) => self.record(decision),
+                    None => self
+                        .authorize(|| Ok(MutationTarget::WritePropertyMultiple(attempt.clone()))),
+                };
             let source = audit.write_source();
             let mut observer = crate::cov::TimedWriteCapture::new(capture, Some(audit));
             let outcome = handlers::handle_write_property_multiple_observed(
@@ -678,6 +684,9 @@ impl Request<'_> {
         }
     }
 }
+
+#[path = "wpm_ahead.rs"]
+mod wpm_ahead;
 
 #[cfg(test)]
 #[path = "mutation_policy_tests.rs"]

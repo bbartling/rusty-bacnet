@@ -86,6 +86,18 @@ fail-closed. Neither the allow nor the deny path generates an audit record for
 the decision itself; audit records arrive only as explicitly authorized
 AuditNotification service receptions.
 
+**WPM elements an object saves first are decided ahead (#1321).** A Notification
+Forwarder's or Notification Class's list, an Access Rights object's rule arrays,
+Enable or Accompaniment, and an Audit Log's Log_Enable or Buffer_Size are saved
+before the object serves them, and the server stages that save so it runs with the
+database write lock released. For such an element the callback is asked before the
+save is staged, under a database read guard, after the element's own validation and
+in wire order; only allowed elements are staged, and the handler applies the
+recorded decision when it reaches the element instead of asking again. The callback
+is still asked once per element, but it can be asked about an element the request
+never reaches, when an earlier element fails for another reason. The decision
+counters and audit records cover only the elements the handler reaches, as before.
+
 Coverage is the ten confirmed `mutation::MutationTarget` services and the Channel
 writes of an inbound WriteGroup, each decided after the change list is decoded and
 matched to the Channels, with no database guard held. Reads, discovery, DCC,

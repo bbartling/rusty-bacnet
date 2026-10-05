@@ -238,3 +238,6 @@ async fn local_index_refusal_reaches_no_audit_record() {
     assert_eq!(emitted[0].notifications[0].target_object, Some(target));
     fixture.server.stop().await.unwrap();
 }
+
+#[path = "audit_reporter_wpm_ahead_tests.rs"]
+mod wpm_ahead;

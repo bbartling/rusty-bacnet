@@ -29,10 +29,6 @@ use std::sync::{mpsc, Mutex as StdMutex};
 use std::time::Duration;
 
 pub(super) const WAIT: Duration = Duration::from_secs(10);
-/// How long the authorizer test watches the database stay held. Only a test
-/// that expects the guard held uses a short wait; the others use [`WAIT`],
-/// so a loaded runner cannot fail them.
-const HELD_FOR: Duration = Duration::from_millis(500);
 pub(super) const SIMPLE_ACK_ADD: [u8; 3] = [0x20, 5, 8];
 pub(super) const SIMPLE_ACK_WRITE: [u8; 3] = [0x20, 5, 15];
 pub(super) const SIMPLE_ACK_WPM: [u8; 3] = [0x20, 5, 16];
@@ -324,36 +320,96 @@ async fn a_write_property_multiple_save_runs_while_the_database_stays_available(
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_write_property_multiple_under_an_authorizer_saves_in_place() {
-    // The authorizer sees each attempt only as the handler reaches it, under
-    // the guard, so the server cannot stage the save ahead of it.
-    let storage = Arc::new(HeldStorage::default());
-    let mut fixture = Fixture::new(Some(Arc::new(|_| true)));
-    fixture.config.mutation_policy = crate::mutation::MutationPolicy::Permissive;
+/// A fixture holding forwarder 1, kept in `storage`, under an authorizer
+/// that denies Subscribed_Recipients writes and counts its calls.
+async fn authorized(
+    storage: &Arc<HeldStorage>,
+) -> (Arc<Fixture>, ObjectIdentifier, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let fixture = Fixture::new(Some(Arc::new(move |context| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        let crate::mutation::MutationTarget::WritePropertyMultiple(attempt) = &context.target
+        else {
+            return true;
+        };
+        attempt.reference.property_identifier != PropertyIdentifier::SUBSCRIBED_RECIPIENTS.to_raw()
+    })));
     let forwarder = NotificationForwarderObject::with_persistence(
         1,
         "NF",
-        Arc::clone(&storage) as Arc<dyn NotificationForwarderPersistence>,
+        Arc::clone(storage) as Arc<dyn NotificationForwarderPersistence>,
     )
     .unwrap();
     let nf = forwarder.object_identifier();
     fixture.db.write().await.add(Box::new(forwarder)).unwrap();
-    let fixture = Arc::new(fixture);
+    (Arc::new(fixture), nf, calls)
+}
+
+fn recipient_list_attempt() -> BACnetPropertyValue {
+    let mut list = BytesMut::new();
+    encode_destination_list(&mut list, &[destination(4)]).unwrap();
+    BACnetPropertyValue {
+        property_identifier: PropertyIdentifier::RECIPIENT_LIST,
+        property_array_index: None,
+        value: list.to_vec(),
+        priority: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_property_multiple_under_an_authorizer_stages_its_save() {
+    // The server asks the authorizer about the attempt before staging it
+    // (#1321), so the save runs with the guard dropped.
+    let storage = Arc::new(HeldStorage::default());
+    let (fixture, nf, calls) = authorized(&storage).await;
     let (response, available) = while_saving(
         &fixture,
         &storage,
         ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
-        wpm_request(nf),
-        HELD_FOR,
+        wpm(nf, vec![recipient_list_attempt()]),
+        WAIT,
     )
     .await;
     assert_eq!(response, SIMPLE_ACK_WPM);
-    assert!(
-        !available,
-        "an authorized WPM attempt saves under the guard"
-    );
+    assert!(available, "the database was held while the forwarder saved");
     assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
+    // Asked once: the handler took the decision made before staging.
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_denied_write_property_multiple_attempt_never_reaches_storage() {
+    let storage = Arc::new(HeldStorage::default());
+    let (fixture, nf, calls) = authorized(&storage).await;
+    // The denied attempt alone stages nothing and saves nothing.
+    let service = ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE;
+    let denied = wire(&fixture, service, wpm_request(nf)).await;
+    // A WritePropertyMultiple-Error opens with SERVICES (5) and
+    // SERVICE_REQUEST_DENIED (29).
+    assert_eq!(denied[..8], [ERROR_PDU, 5, 16, 0x0E, 0x91, 5, 0x91, 29]);
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // After an allowed list attempt, only that one is staged: the one save
+    // holds the Recipient_List, and the denied list never reaches storage.
+    let request = wpm(nf, vec![recipient_list_attempt(), subscriptions_attempt()]);
+    let response = wire(&fixture, service, request).await;
+    assert_eq!(response[..8], denied[..8]);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        storage.load_saved(),
+        Some(ForwarderSnapshot {
+            recipient_list: Some(vec![destination(4)]),
+            subscribed_recipients: Vec::new(),
+        })
+    );
+    assert_eq!(
+        fixture
+            .read(nf, PropertyIdentifier::SUBSCRIBED_RECIPIENTS)
+            .await,
+        PropertyValue::ApplicationData(framed(&[]))
+    );
 }
 
 #[tokio::test]

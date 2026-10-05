@@ -18,6 +18,11 @@
 //! WritePropertyMultiple that provisions an Access Rights object saves its
 //! rule arrays and Enable together, off the guard.
 //!
+//! Under a mutation authorizer, a WritePropertyMultiple decides each attempt
+//! it would stage before staging it, and stages only those allowed (#1321).
+//! The handler then answers each such attempt from the decision made ahead
+//! instead of asking again (`mutations::wpm_ahead`).
+//!
 //! Other requests read and write the database while the save runs. One that
 //! stages a write to the same object waits for the first to land; requests
 //! that stage writes to several objects stage them in object order, so two
@@ -31,7 +36,9 @@ use std::time::Duration;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::durable::{PendingWrite, SaveWait, StageStep};
 use bacnet_services::list_manipulation::ListElementRequest;
-use bacnet_services::wpm::{WritePropertyMultipleCursor, WritePropertyMultipleEvent};
+use bacnet_services::wpm::{
+    WritePropertyAttempt, WritePropertyMultipleCursor, WritePropertyMultipleEvent,
+};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -72,10 +79,12 @@ enum TargetValue {
 }
 
 /// Whether a bundled object of `oid`'s type may save a write of `property`
-/// first. A Notification Class saves only its Recipient_List, and an Access
-/// Rights object its two rule arrays, Enable (property 133, named
-/// `LOG_ENABLE`) and Accompaniment; a forwarder and an Audit Log decide for
-/// themselves, any property.
+/// first. A forwarder saves its Recipient_List and Subscribed_Recipients, a
+/// Notification Class its Recipient_List, an Audit Log its Log_Enable and
+/// Buffer_Size, and an Access Rights object its two rule arrays, Enable
+/// (property 133, named `LOG_ENABLE`) and Accompaniment. Under an
+/// authorizer, only these attempts of a WritePropertyMultiple are decided
+/// ahead of the handler (#1321).
 ///
 /// An object type that takes up [`DurableWrites`] is listed here too, or
 /// the server never stages its writes and they save in place under the
@@ -84,7 +93,14 @@ enum TargetValue {
 /// [`DurableWrites`]: bacnet_objects::durable::DurableWrites
 fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
     match oid.object_type() {
-        ObjectType::NOTIFICATION_FORWARDER | ObjectType::AUDIT_LOG => true,
+        ObjectType::NOTIFICATION_FORWARDER => matches!(
+            property,
+            PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
+        ),
+        ObjectType::AUDIT_LOG => matches!(
+            property,
+            PropertyIdentifier::LOG_ENABLE | PropertyIdentifier::BUFFER_SIZE
+        ),
         ObjectType::NOTIFICATION_CLASS => property == PropertyIdentifier::RECIPIENT_LIST,
         ObjectType::ACCESS_RIGHTS => matches!(
             property,
@@ -149,32 +165,43 @@ impl DurableTarget {
     /// The writes a WritePropertyMultiple request makes to objects that may
     /// save them, in object order and then request order. [`stage`] hands
     /// each object its writes together.
-    pub(super) fn write_property_multiple(service_data: &[u8]) -> Vec<Self> {
+    ///
+    /// `allowed` decides each such attempt, in wire order, before it is
+    /// staged (#1321). The request stops at an attempt it denies, so neither
+    /// that attempt nor any after it is staged or decided.
+    pub(super) fn write_property_multiple(
+        service_data: &[u8],
+        mut allowed: impl FnMut(&WritePropertyAttempt) -> bool,
+    ) -> Vec<Self> {
         let mut cursor = WritePropertyMultipleCursor::new(service_data);
         let mut targets: Vec<Self> = Vec::new();
         while let Ok(Some(event)) = cursor.next_event() {
             let WritePropertyMultipleEvent::WriteAttempt(attempt) = event else {
                 continue;
             };
-            let reference = attempt.reference;
+            let reference = &attempt.reference;
             let oid = reference.object_identifier;
             let property = PropertyIdentifier::from_raw(reference.property_identifier);
             if !may_save(oid, property) {
                 continue;
             }
-            if let Ok(value) = handlers::decode_write_property_value(
+            let Ok(value) = handlers::decode_write_property_value(
                 property,
                 reference.property_array_index,
                 held_as_list(oid, property),
                 &attempt.value,
-            ) {
-                targets.push(Self::write(
-                    oid,
-                    property,
-                    reference.property_array_index,
-                    TargetValue::Written(value),
-                ));
+            ) else {
+                continue;
+            };
+            if !allowed(&attempt) {
+                break;
             }
+            targets.push(Self::write(
+                oid,
+                property,
+                reference.property_array_index,
+                TargetValue::Written(value),
+            ));
         }
         targets.sort_by_key(|target| {
             (

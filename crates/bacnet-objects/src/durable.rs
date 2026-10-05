@@ -45,16 +45,16 @@
 //! leave together. Each write takes its own step of it as the request makes
 //! it, so the object serves the state the last write leaves only once every
 //! write has been made, and a request that stops part way keeps the steps it
-//! took while storage goes back to that served state (#1423).
+//! took while storage goes back to that served state (#1423). Under a
+//! mutation authorizer, the server asks it about such writes before staging
+//! them, and stages only the ones it allows (#1321).
 //!
 //! Some paths still wait for a save while the guard is held. They get the
 //! same outcome through the same writer; the object just queues the save and
 //! waits for it where it is:
 //!
-//! - a write nobody staged: application code writing through the database,
-//!   and a WritePropertyMultiple attempt when a mutation authorizer is
-//!   configured, since the authorizer sees each attempt only as the handler
-//!   reaches it under the guard;
+//! - a write nobody staged, such as application code writing through the
+//!   database;
 //! - an in-place change to an Audit Log, such as `add_record`, which first
 //!   lets a staged commit land, waiting for it if it is still running.
 //!

@@ -2272,10 +2272,9 @@ bundled server stages every network or `write_local` Recipient_List write
 and waits for its save with the database guard dropped. A list that cannot be
 saved is refused with DEVICE / OPERATIONAL_PROBLEM, and the class keeps the
 old one. A WritePropertyMultiple that writes the list more than once stages
-one save of the last (#1423). A WritePropertyMultiple under a
-`mutation_authorizer`, and application code writing through the database,
-save in place; a write such code makes that the class refuses leaves a
-staged write alone (#1424). A staged write
+one save of the last (#1423). Application code writing through the database
+saves in place, and a write it makes that the class refuses leaves a staged
+write alone (#1424). A staged write
 its request releases without making (an earlier WritePropertyMultiple attempt
 failed, say) is dropped, and the class saves the list it serves at once. A
 staged write whose request vanished without releasing it (`stop()` aborted
@@ -5010,6 +5009,12 @@ Audit/LifeSafety's fail-closed absence. False or panic returns
 `SERVICES / SERVICE_REQUEST_DENIED` without the denied mutation. WPM authorizes
 each element in order and retains an authorized prefix on later denial or
 malformed input; other covered services authorize once after service decoding.
+A WPM element that an object saves before serving it (a forwarder or Notification
+Class list, an Access Rights rule array, Enable or Accompaniment, an Audit Log's
+Log_Enable or Buffer_Size) is decided before the server stages its save off the
+database lock (#1321): still once and in order, but possibly for an element the
+request never reaches because an earlier one fails. Counters and audit records
+cover only the elements the handler reaches.
 Callbacks must be fast, nonblocking, and side-effect-free. Context addresses and
 process IDs are claimed, not authenticated identities. DCC/Reinit, Audit/LifeSafety,
 reads, discovery, trusted local writes and unconfirmed services other than WriteGroup
@@ -5395,8 +5400,8 @@ it with the guard dropped (on the blocking pool, as for the Audit Log), and the
 write then takes the saved list. A write
 that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM and leaves the old
 list. WritePropertyMultiple stages too, its writes to both lists as one save
-(#1423), except under a `mutation_authorizer`, which sees each attempt only as
-the handler reaches it; such an attempt saves in place. The operation task's
+(#1423); under a `mutation_authorizer` the server decides each such attempt
+before staging it and stages only those allowed (#1321). The operation task's
 lapse and minute saves coalesce, so a burst
 costs one save of the latest lists; one that fails is logged and retried a
 minute later. `save_counters()` returns a `ForwarderSaveCounters` handle,
