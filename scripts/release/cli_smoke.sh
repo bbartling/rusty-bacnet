@@ -1,37 +1,31 @@
 #!/usr/bin/env bash
-# Smoke-test a release CLI binary (#943), with a Python that has the
+# Smoke-test a release CLI binary (#943, #1472), with a Python that has the
 # rusty_bacnet wheel installed:
-#   scripts/release/cli_smoke.sh [--offline] [--no-capture] [--expect-version V] <bacnet-binary> <python>
+#   scripts/release/cli_smoke.sh [--no-capture] [--expect-version V] <bacnet-binary> <python>
 #
 # - --version and --help run, and with --expect-version, --version names V;
 # - the README quickstart on loopback: a Python server with one analog input,
-#   then `read` and `--json readm` from the CLI (skipped with --offline, where
-#   <python> needs no wheel);
+#   then `read` and `--json readm` from the CLI;
 # - capture --read decodes a one-packet pcap file, which exercises the
 #   statically linked libpcap, including its filter compiler, without needing
 #   capture privileges (skipped with --no-capture, for the macOS and Windows
 #   builds, which have no packet capture).
 #
-# CLI_WRAPPER runs the binary under another command, for example
-# "qemu-aarch64-static -L /usr/aarch64-linux-gnu" for the arm64 build. Bash
-# on Windows is Git Bash, as GitHub's `shell: bash` gives it (#951).
+# Bash on Windows is Git Bash, as GitHub's `shell: bash` gives it (#951).
 set -euo pipefail
 
-offline=false capture=true expect_version=
+capture=true expect_version=''
 while [ $# -gt 2 ]; do
   case "$1" in
-    --offline) offline=true; shift ;;
     --no-capture) capture=false; shift ;;
     --expect-version) expect_version=$2; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
-[ $# -eq 2 ] || { echo "usage: cli_smoke.sh [--offline] [--no-capture] [--expect-version V] <bacnet-binary> <python>" >&2; exit 2; }
+[ $# -eq 2 ] || { echo "usage: cli_smoke.sh [--no-capture] [--expect-version V] <bacnet-binary> <python>" >&2; exit 2; }
 cli=$1
 python=$2
-read -ra wrapper <<<"${CLI_WRAPPER:-}"
-# The +-expansion keeps an empty array legal under set -u in macOS's bash 3.2.
-bacnet() { ${wrapper[@]+"${wrapper[@]}"} "$cli" "$@"; }
+bacnet() { "$cli" "$@"; }
 tmp=$(mktemp -d)
 server=
 cleanup() {
@@ -48,7 +42,6 @@ if [ -n "$expect_version" ] && [ "$version" != "bacnet $expect_version" ]; then
 fi
 bacnet --help >/dev/null
 
-if ! $offline; then
 # The README quickstart server, unchanged.
 cat >"$tmp/local_server.py" <<'EOF'
 import asyncio
@@ -100,7 +93,6 @@ done
 kill "$server"
 wait "$server" 2>/dev/null || true
 server=
-fi
 
 if ! $capture; then
   echo "CLI smoke test passed (no packet capture in this build)"

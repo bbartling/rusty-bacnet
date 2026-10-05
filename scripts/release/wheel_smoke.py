@@ -7,9 +7,9 @@ installed into:
 - the installed distribution is the release version (Cargo's form is given,
   mapped to PEP 440 as maturin does);
 - list_serial_ports() returns a list of port names. On macOS that call goes
-  through IOKit and CoreFoundation, whose symbols the wheel leaves to a flat
-  lookup at load time (scripts/release/macos-frameworks), and the script checks
-  that both frameworks are loaded; on Windows it goes through SetupAPI;
+  through IOKit and CoreFoundation, which the extension module links, and the
+  script checks that both frameworks are loaded; on Windows it goes through
+  SetupAPI;
 - a loopback round trip with the public API: a BACnetServer on 127.0.0.1 with
   an analog input and an analog value, and a BACnetClient that reads the
   input's present value, reads it and the object name with
