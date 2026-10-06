@@ -252,6 +252,21 @@ async fn colour_links_over_the_wire() {
             read(&fixture, output, reference).await,
             read_ack(output, &COLOR_REFERENCE, &none)
         );
+        // The instance alone means none, so ANALOG_VALUE 4194303
+        // (`C4 00 BF FF FF`) is taken too.
+        let none_of_another_type = [0xC4, 0x00, 0xBF, 0xFF, 0xFF];
+        assert_eq!(
+            write(
+                &fixture,
+                output,
+                override_reference,
+                &none_of_another_type,
+                None
+            )
+            .await,
+            SIMPLE_ACK
+        );
+        assert_eq!(fixture.db.read().await.lighting_color(&output), None);
     }
     // An output with no link has none of the rows: ReadProperty (12) answers
     // UNKNOWN_PROPERTY.

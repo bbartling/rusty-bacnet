@@ -307,3 +307,39 @@ fn lighting_color_is_none_with_no_companion_to_follow() {
         assert_eq!(db.lighting_color(&lo), None);
     }
 }
+
+#[test]
+fn instance_4194303_names_no_companion_whatever_its_type() {
+    // The instance alone means none (Clauses 12.54.X and 12.54.Z), so any
+    // type is taken with it.
+    let none = |object_type| oid(object_type, ObjectIdentifier::WILDCARD_INSTANCE);
+    for object_type in [ObjectType::ANALOG_VALUE, ObjectType::DEVICE] {
+        let link = ColorLink {
+            reference: none(object_type),
+            color_override: Some(ColorOverride {
+                active: true,
+                reference: none(object_type),
+            }),
+        };
+        assert_eq!(link.active_reference(), None);
+        for mut object in outputs(Some(link)) {
+            for p in [REFERENCE, OVERRIDE_REFERENCE] {
+                let value = PropertyValue::ObjectIdentifier(none(object_type));
+                object.write_property(p, None, value.clone(), None).unwrap();
+                assert_eq!(object.read_property(p, None).unwrap(), value);
+            }
+        }
+    }
+    let (mut db, _) = linked_database();
+    let lo = oid(ObjectType::LIGHTING_OUTPUT, 1);
+    db.get_mut(&lo)
+        .unwrap()
+        .write_property(
+            REFERENCE,
+            None,
+            PropertyValue::ObjectIdentifier(none(ObjectType::DEVICE)),
+            None,
+        )
+        .unwrap();
+    assert_eq!(db.lighting_color(&lo), None);
+}

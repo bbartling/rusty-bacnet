@@ -343,13 +343,14 @@ async fn a_trim_change_fades_in_on_the_task_and_reports_trim_active() {
     server.stop().await.unwrap();
 }
 
-/// Subscribe `process` to Tracking_Value alone, with `increment`.
+/// Subscribe `process` to Tracking_Value alone, with `increment`, and return
+/// the subscription's key.
 async fn subscribe_tracking(
     server: &BACnetServer<TestTransport>,
     oid: ObjectIdentifier,
     process: u32,
-    increment: f32,
-) {
+    increment: Option<f32>,
+) -> crate::cov::CovSubscriptionKey {
     server
         .cov_table
         .write()
@@ -364,11 +365,13 @@ async fn subscribe_tracking(
             last_notified_observation: None,
             monitored_property: Some(TV),
             monitored_property_array_index: None,
-            cov_increment: Some(increment),
+            cov_increment: increment,
             notification_kind: CovNotificationKind::Single,
             timestamped: false,
         })
-        .unwrap();
+        .unwrap()
+        .key()
+        .clone()
 }
 
 /// Tracking_Value subscribers finer than COV_Increment get denser samples
@@ -389,7 +392,7 @@ async fn the_finest_tracking_value_subscriber_sets_the_sample_step() {
     .await;
     // Increments of 1, 10 and 50 percent on processes 3, 4 and 5.
     for (process, increment) in [(3, 1.0), (4, 10.0), (5, 50.0)] {
-        subscribe_tracking(&server, oid, process, increment).await;
+        subscribe_tracking(&server, oid, process, Some(increment)).await;
     }
     // RAMP_TO 100.0 % at 50.0 %/s, 5 percent each 100 ms, over 2 s.
     let ramp = [
@@ -411,6 +414,58 @@ async fn the_finest_tracking_value_subscriber_sets_the_sample_step() {
             expected.push((5, TV, real(level)));
         }
         assert_eq!(reports(&sent), expected, "at {} ms", u32::from(tenth) * 100);
+    }
+    server.stop().await.unwrap();
+}
+
+/// A subscriber increment finer than COV_Increment but coarser than the ramp
+/// moves in one 100 ms grid cell sets the step itself, and once that
+/// subscriber goes the object's own step comes back (#1510).
+#[tokio::test(start_paused = true)]
+async fn an_unsubscribe_gives_back_the_objects_own_sample_step() {
+    let (mut server, oid, sent) = start(|object| {
+        object
+            .write_property(
+                PropertyIdentifier::COV_INCREMENT,
+                None,
+                PropertyValue::Real(25.0),
+                None,
+            )
+            .unwrap();
+    })
+    .await;
+    // Process 2 gives no increment, so it hears every sample; process 3
+    // asks for 10 percent.
+    subscribe_tracking(&server, oid, 2, None).await;
+    let fine = subscribe_tracking(&server, oid, 3, Some(10.0)).await;
+    // RAMP_TO 100.0 % at 50.0 %/s, 5 percent each 100 ms, over 2 s.
+    let ramp = [
+        0x09, 0x02, 0x1C, 0x42, 0xC8, 0x00, 0x00, 0x2C, 0x42, 0x48, 0x00, 0x00,
+    ];
+    write(&server, oid, LC, command(&ramp), None).await;
+    assert_eq!(reports(&sent), [(2, TV, real(0.0)), (3, TV, real(0.0))]);
+    // 10 percent is two grid cells of this ramp: a sample every 200 ms, not
+    // at every grid point.
+    let mut heard = Vec::new();
+    for _ in 0..4 {
+        advance(100).await;
+        heard.push(reports(&sent));
+    }
+    let both = |level| vec![(2, TV, real(level)), (3, TV, real(level))];
+    assert_eq!(heard, [vec![], both(10.0), vec![], both(20.0)]);
+    // Without process 3, the sample already planned for 600 ms stands; after
+    // it, COV_Increment's quarter, 500 ms, is the step again.
+    server.cov_table.write().await.unsubscribe(&fine);
+    for at in (500..=2_000).step_by(100) {
+        advance(100).await;
+        let expected = match at {
+            600 => vec![(2, TV, real(30.0))],
+            1_100 => vec![(2, TV, real(55.0))],
+            1_600 => vec![(2, TV, real(80.0))],
+            2_000 => vec![(2, TV, real(100.0))],
+            _ => vec![],
+        };
+        assert_eq!(reports(&sent), expected, "at {at} ms");
     }
     server.stop().await.unwrap();
 }

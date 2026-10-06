@@ -3406,9 +3406,11 @@ VALUE_OUT_OF_RANGE.
 - Tracking_Value is held between the trims: an on level below the low trim
   tracks at it, a level above the high trim tracks at that, and off stays
   off. Present_Value keeps the level as commanded.
-- In_Progress reads TRIM_ACTIVE (5, `LightingInProgress::TRIM_ACTIVE`) while
-  the trims keep Tracking_Value from Present_Value, ahead of FADE_ACTIVE or
-  RAMP_ACTIVE.
+- In_Progress reads TRIM_ACTIVE (5, `LightingInProgress::TRIM_ACTIVE`),
+  ahead of FADE_ACTIVE or RAMP_ACTIVE, while Present_Value lies outside the
+  trims, and while moving trims (below) hold Tracking_Value back; the second
+  case is this implementation's, so that IDLE always means Tracking_Value
+  equals Present_Value.
 - The trims stand aside while Present_Value comes from slot 1 or 2.
 - A trim change moves the trims themselves, in a straight line over
   Trim_Fade_Time, and Tracking_Value follows them, sampled for COV as a fade
@@ -3416,9 +3418,21 @@ VALUE_OUT_OF_RANGE.
 - Commands work from Tracking_Value as reported, so a step starts from the
   held level, STOP leaves the held level in the slot, and a fade to a level
   past a trim reaches the trim early and stays there. An egress holds the
-  trimmed level.
+  trimmed level. A STEP_UP while Present_Value is above the high trim writes
+  the trim plus the increment, so it lowers Present_Value, as Table 12-67
+  has it.
+- The levels between off and the low trim are outside the operating range,
+  so a fade or ramp doesn't crawl through them: one up from off starts at
+  the low trim and runs to its target over its whole time, and one down to
+  off runs to the low trim over its whole time and goes off as it ends, both
+  reading FADE_ACTIVE or RAMP_ACTIVE. The addendum leaves this to the
+  implementation.
+- STEP_OFF turns the light off from the low trim while one applies, rather
+  than only from 1.0; STEP_DOWN still stops at 1.0, so Present_Value can go
+  below the trim while Tracking_Value stays at it.
 - A high trim below the low one sets Reliability to CONFIGURATION_ERROR (with
-  Status_Flags' FAULT), and the trims hold nothing until it's put right.
+  Status_Flags' FAULT), and the trims hold nothing until it's put right,
+  which gives back the Reliability the error replaced.
 
 Both lighting outputs take the colour links of Addendum 135-2020ca part 4
 (#1527). `set_color_link` takes a `bacnet_objects::lighting::ColorLink`: a
@@ -3426,9 +3440,10 @@ Both lighting outputs take the colour links of Addendum 135-2020ca part 4
 a `ColorOverride` with its `active` flag (Color_Override) and `reference`
 (Override_Color_Reference). The rows are absent until a link is set, then
 required while present, as the tables' footnotes say, and all of them take
-writes. A reference must name a colour object, Color or Color Temperature, or a write
-is refused with VALUE_OUT_OF_RANGE; instance 4194303 names none, leaving the
-colour to the application.
+writes. A reference must name a colour object, Color or Color Temperature,
+or a write is refused with VALUE_OUT_OF_RANGE. Instance 4194303 names none,
+leaving the colour to the application, and is taken with any object type:
+the clauses give the instance alone that meaning.
 
 The outputs only store the references, and the override never writes a
 colour object: it switches which object the colour comes from, so a fade on

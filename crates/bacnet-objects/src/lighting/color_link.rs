@@ -13,8 +13,10 @@
 //! object: the outputs store and serve the references, and
 //! [`ObjectDatabase::lighting_color`] follows them to the colour shown.
 //!
-//! A reference names a colour object of either type, and instance 4194303
-//! names none, which leaves the colour to the application. A reference to an
+//! A reference names a colour object of either type. Instance 4194303 names
+//! none, whatever the type, which leaves the colour to the application: the
+//! clauses give the instance alone that meaning, so any type is taken with it
+//! for interoperability. A reference to an
 //! object the database doesn't hold is stored and served but not followed:
 //! the clauses put the companion in the same device, and an object
 //! identifier can't name another one.
@@ -34,8 +36,8 @@ use crate::property_metadata::{
 /// A lighting output's link to the colour objects that set its colour
 /// (Addendum 135-2020ca part 4, #1527).
 ///
-/// Each reference must name a colour object, Color or Color Temperature; its
-/// instance may be 4194303, which names none.
+/// Each reference must name a colour object, Color or Color Temperature, or
+/// have instance 4194303, which names none whatever its type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorLink {
     /// Color_Reference: the object that sets the colour.
@@ -79,7 +81,7 @@ impl ColorLink {
     }
 
     /// Check both references: VALUE_OUT_OF_RANGE unless each names a colour
-    /// object of either type.
+    /// object of either type or has instance 4194303.
     pub(super) fn checked(self) -> Result<Self, Error> {
         checked_reference(self.reference)?;
         if let Some(color_override) = self.color_override {
@@ -90,10 +92,12 @@ impl ColorLink {
 }
 
 fn checked_reference(reference: ObjectIdentifier) -> Result<ObjectIdentifier, Error> {
-    if matches!(
-        reference.object_type(),
-        ObjectType::COLOR | ObjectType::COLOR_TEMPERATURE
-    ) {
+    if reference.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE
+        || matches!(
+            reference.object_type(),
+            ObjectType::COLOR | ObjectType::COLOR_TEMPERATURE
+        )
+    {
         Ok(reference)
     } else {
         Err(common::value_out_of_range_error())
@@ -169,6 +173,25 @@ pub(super) fn write(
     })
 }
 
+/// The colour link `output` serves through its properties, if it has one.
+fn read_link(output: &dyn crate::traits::BACnetObject) -> Option<ColorLink> {
+    let read = |property| output.read_property(property, None).ok();
+    let Some(PropertyValue::ObjectIdentifier(reference)) = read(P::COLOR_REFERENCE) else {
+        return None;
+    };
+    let color_override = match (read(P::COLOR_OVERRIDE), read(P::OVERRIDE_COLOR_REFERENCE)) {
+        (
+            Some(PropertyValue::Boolean(active)),
+            Some(PropertyValue::ObjectIdentifier(reference)),
+        ) => Some(ColorOverride { active, reference }),
+        _ => None,
+    };
+    Some(ColorLink {
+        reference,
+        color_override,
+    })
+}
+
 /// The colour a lighting output shows, from the colour object it follows.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LightingColor {
@@ -199,23 +222,7 @@ impl ObjectDatabase {
     /// or Color Temperature object by that identifier. It reads the
     /// properties, so it follows any object that serves them.
     pub fn lighting_color(&self, lighting_output: &ObjectIdentifier) -> Option<LightingColor> {
-        let output = self.get(lighting_output)?;
-        let overridden = matches!(
-            output.read_property(P::COLOR_OVERRIDE, None),
-            Ok(PropertyValue::Boolean(true))
-        );
-        let property = if overridden {
-            P::OVERRIDE_COLOR_REFERENCE
-        } else {
-            P::COLOR_REFERENCE
-        };
-        let Ok(PropertyValue::ObjectIdentifier(source)) = output.read_property(property, None)
-        else {
-            return None;
-        };
-        if source.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE {
-            return None;
-        }
+        let source = read_link(self.get(lighting_output)?)?.active_reference()?;
         let tracking = self
             .get(&source)?
             .read_property(P::TRACKING_VALUE, None)

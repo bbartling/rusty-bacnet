@@ -142,15 +142,16 @@ fn engine_level(value: f32) -> f32 {
 }
 
 /// The level a step operation writes from `tracking`, or `None` when the
-/// operation is to be ignored (Table 12-67).
-fn step_level(operation: Op, tracking: f32, increment: f32) -> Option<f32> {
+/// operation is to be ignored (Table 12-67). `floor` is the dimmest on level
+/// in effect, 1.0 or the low trim (#1528), from which STEP_OFF turns off.
+fn step_level(operation: Op, tracking: f32, increment: f32, floor: f32) -> Option<f32> {
     let up = (tracking + increment).min(100.0);
     let down = (tracking - increment).max(1.0);
     match operation {
         Op::STEP_UP => (tracking != 0.0).then_some(up),
         Op::STEP_DOWN => (tracking != 0.0).then_some(down),
         Op::STEP_ON => Some(if tracking == 0.0 { 1.0 } else { up }),
-        Op::STEP_OFF if tracking == 1.0 => Some(0.0),
+        Op::STEP_OFF if tracking == floor => Some(0.0),
         Op::STEP_OFF => (tracking != 0.0).then_some(down),
         _ => None,
     }
@@ -172,10 +173,14 @@ impl LightingOutputObject {
         self.trimmed(self.untrimmed_at(now), now)
     }
 
-    /// Tracking_Value at `now` before the trims hold it.
+    /// Tracking_Value at `now` before the trims hold it: Present_Value once
+    /// a fade or ramp has arrived, as one down to off under a low trim ends
+    /// its line at the trim (#1528).
     fn untrimmed_at(&self, now: Duration) -> f32 {
         match self.operation {
-            Some(Operation::Moving { run, .. }) => run.transition().value_at(now),
+            Some(Operation::Moving { run, .. }) if !run.transition().is_finished(now) => {
+                run.transition().value_at(now)
+            }
             _ => self.present_value,
         }
     }
@@ -289,13 +294,14 @@ impl LightingOutputObject {
                 if self.highest_priority() != Some(priority) {
                     return;
                 }
+                let (from, to) = self.trimmed_line(tracking, level, now);
                 let transition = if operation == Op::FADE_TO {
                     let fade_time = command.fade_time.unwrap_or(self.default_fade_time);
                     let fade_time = Duration::from_millis(u64::from(fade_time));
-                    Transition::fade(tracking, level, now, fade_time)
+                    Transition::fade(from, to, now, fade_time)
                 } else {
                     let rate = command.ramp_rate.unwrap_or(self.default_ramp_rate);
-                    Transition::ramp(tracking, level, now, f64::from(rate))
+                    Transition::ramp(from, to, now, f64::from(rate))
                 };
                 if let Some(transition) = transition {
                     let run = Run::start(transition, self.sample_step());
@@ -315,7 +321,8 @@ impl LightingOutputObject {
                 // level, which is the override Clause 12.54.6.2 gives
                 // occupants the egress time for, rather than stepping from
                 // the off or relinquished level the egress was heading to.
-                if let Some(level) = step_level(operation, tracking, increment) {
+                let floor = self.step_floor(now);
+                if let Some(level) = step_level(operation, tracking, increment, floor) {
                     self.halt_for(priority);
                     self.set_slot(priority, Some(engine_level(level)));
                 }

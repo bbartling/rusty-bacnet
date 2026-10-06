@@ -317,3 +317,96 @@ fn an_egress_holds_the_trimmed_level_and_ends_off() {
     assert!(f.advance());
     assert_eq!(f.view(), (0.0, 0.0, IDLE));
 }
+
+fn step(operation: Op, increment: f32, priority: u8) -> BACnetLightingCommand {
+    BACnetLightingCommand {
+        step_increment: Some(increment),
+        ..op(operation, Some(priority))
+    }
+}
+
+#[test]
+fn step_off_turns_off_from_the_low_trim_and_step_down_stops_at_one() {
+    let mut f = Fixture::lit(50.0);
+    f.lo.set_low_end_trim(Some(20.0)).unwrap();
+    // STEP_DOWN keeps the table's floor of 1.0: Present_Value goes below the
+    // trim, which holds Tracking_Value at it.
+    f.command(step(Op::STEP_DOWN, 40.0, 8));
+    assert_eq!(f.view(), (10.0, 20.0, TRIM_ACTIVE));
+    f.command(step(Op::STEP_DOWN, 1.0, 8));
+    assert_eq!(f.view(), (19.0, 20.0, TRIM_ACTIVE));
+    // Above the trim STEP_OFF steps down; at it, it turns the light off.
+    f.present(PropertyValue::Real(25.0), 8);
+    f.command(step(Op::STEP_OFF, 1.0, 8));
+    assert_eq!(f.view(), (24.0, 24.0, IDLE));
+    f.present(PropertyValue::Real(20.0), 8);
+    f.command(step(Op::STEP_OFF, 1.0, 8));
+    assert_eq!(f.view(), (0.0, 0.0, IDLE));
+    // From a held level below the trim too.
+    f.present(PropertyValue::Real(5.0), 8);
+    f.command(step(Op::STEP_OFF, 1.0, 8));
+    assert_eq!(f.view(), (0.0, 0.0, IDLE));
+    // With the trims standing aside at priority 2, the floor is 1.0 again.
+    f.present(PropertyValue::Real(20.0), 2);
+    f.command(step(Op::STEP_OFF, 1.0, 2));
+    assert_eq!(f.view(), (19.0, 19.0, IDLE));
+    f.present(PropertyValue::Real(1.0), 2);
+    f.command(step(Op::STEP_OFF, 1.0, 2));
+    assert_eq!(f.slot(2), Some(0.0));
+    // A high trim alone leaves the floor at 1.0.
+    let mut f = Fixture::lit(1.0);
+    f.lo.set_high_end_trim(Some(80.0)).unwrap();
+    f.command(step(Op::STEP_OFF, 1.0, 8));
+    assert_eq!(f.view(), (0.0, 0.0, IDLE));
+}
+
+#[test]
+fn a_fade_or_ramp_up_from_off_starts_at_the_low_trim() {
+    let mut f = Fixture::new();
+    f.lo.set_low_end_trim(Some(20.0)).unwrap();
+    // FADE_TO 50 over 1 s runs 20 to 50 over the whole second.
+    f.command(fade_to(50.0, 1_000, 8));
+    assert_eq!(f.view(), (50.0, 20.0, FADE_ACTIVE));
+    f.at(500);
+    assert_eq!(f.view(), (50.0, 35.0, FADE_ACTIVE));
+    f.at(1_000);
+    assert_eq!(f.view(), (50.0, 50.0, IDLE));
+    assert!(f.advance());
+    // RAMP_TO 50 at 10 percent a second from off: 20 to 50 is 3 s.
+    f.present(PropertyValue::Real(0.0), 8);
+    f.command(BACnetLightingCommand {
+        target_level: Some(50.0),
+        ramp_rate: Some(10.0),
+        ..op(Op::RAMP_TO, Some(8))
+    });
+    assert_eq!(f.view(), (50.0, 20.0, LightingInProgress::RAMP_ACTIVE));
+    f.at(2_500);
+    assert_eq!(f.view(), (50.0, 35.0, LightingInProgress::RAMP_ACTIVE));
+    f.at(4_000);
+    assert_eq!(f.view(), (50.0, 50.0, IDLE));
+}
+
+#[test]
+fn a_fade_down_to_off_ends_at_the_low_trim_then_goes_off() {
+    let mut f = Fixture::lit(60.0);
+    f.lo.set_low_end_trim(Some(20.0)).unwrap();
+    // FADE_TO 0 over 1 s runs 60 to 20 over the whole second, then off.
+    f.command(fade_to(0.0, 1_000, 8));
+    assert_eq!(f.view(), (0.0, 60.0, FADE_ACTIVE));
+    f.at(500);
+    assert_eq!(f.view(), (0.0, 40.0, FADE_ACTIVE));
+    f.at(999);
+    assert!(f.tv() > 20.0 && f.in_progress() == FADE_ACTIVE);
+    // At the fade time it reads off, before the task has run.
+    f.at(1_000);
+    assert_eq!(f.view(), (0.0, 0.0, IDLE));
+    assert!(f.advance());
+    assert_eq!((f.view(), f.deadline()), ((0.0, 0.0, IDLE), None));
+    // From the low trim itself it stays there for the fade, then goes off.
+    f.present(PropertyValue::Real(20.0), 8);
+    f.command(fade_to(0.0, 1_000, 8));
+    f.at(1_500);
+    assert_eq!(f.view(), (0.0, 20.0, FADE_ACTIVE));
+    f.at(2_000);
+    assert_eq!(f.view(), (0.0, 0.0, IDLE));
+}

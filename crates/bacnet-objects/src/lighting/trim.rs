@@ -4,10 +4,13 @@
 //! normalized 1.0 to 100.0 percent range, and Tracking_Value is held in it:
 //! a level above the high trim tracks at the high trim, an on level below
 //! the low trim at the low trim, and off stays off. Present_Value keeps the
-//! level as commanded, and In_Progress reads TRIM_ACTIVE while the trims
-//! keep the two apart, whatever fade or ramp is running (Table 12-68 as the
-//! addendum changes it). The trims stand aside while Present_Value comes
-//! from slot 1 or 2 (Clauses 12.54.Y1 and 12.54.Y2).
+//! level as commanded. In_Progress reads TRIM_ACTIVE, whatever fade or ramp
+//! is running, while Present_Value lies outside the trims (Table 12-68 as
+//! the addendum changes it), and while moving bounds (below) hold
+//! Tracking_Value back; that second case is this implementation's, so that
+//! IDLE always means Tracking_Value equals Present_Value. The trims stand
+//! aside while Present_Value comes from slot 1 or 2 (Clauses 12.54.Y1 and
+//! 12.54.Y2).
 //!
 //! A trim change doesn't move Tracking_Value at once. The bounds themselves
 //! move, in a straight line from where they stood to the new trims over
@@ -22,9 +25,26 @@
 //! the slot. A fade to a level past a trim runs its course behind the trim:
 //! Tracking_Value reaches the trim early and stays there.
 //!
+//! Two choices go past the addendum, which leaves fades under a trim to the
+//! implementation (Clauses 12.54.Y1 and 12.54.Y2):
+//!
+//! - The levels between off and the low trim are outside the operating
+//!   range, so a fade or ramp doesn't crawl through them. One up from off
+//!   starts at the low trim and runs from there to its target over its whole
+//!   time; one down to off runs to the low trim over its whole time and goes
+//!   off as it ends. Either reads FADE_ACTIVE or RAMP_ACTIVE.
+//! - The dimmest on level a step knows is the low trim while one applies, not
+//!   1.0, so STEP_OFF turns the light off from the low trim. STEP_DOWN still
+//!   stops at 1.0, as Table 12-67 has it, which puts Present_Value below the
+//!   trim while Tracking_Value stays at it.
+//!
+//! Steps follow the table otherwise, from the held level. So a STEP_UP while
+//! Present_Value is above the high trim writes the trim plus the increment,
+//! which lowers Present_Value.
+//!
 //! A high trim below the low one is a configuration error: Reliability says
 //! so (Clauses 12.54.Y1 and 12.54.Y2), and the trims hold nothing until it's
-//! put right.
+//! put right. Putting it right gives back the Reliability the trims replaced.
 
 use std::ops::RangeInclusive;
 use std::time::Duration;
@@ -93,6 +113,9 @@ pub(super) struct Trims {
     fade_time: u32,
     /// The bounds moving to the configured ones after a change.
     fade: Option<Run<Bounds>>,
+    /// The Reliability a configuration error of the trims replaced, while it
+    /// stands.
+    replaced: Option<Reliability>,
 }
 
 impl Trims {
@@ -101,6 +124,7 @@ impl Trims {
         low_end: None,
         fade_time: 0,
         fade: None,
+        replaced: None,
     };
 
     pub(super) fn high_end(&self) -> Option<f32> {
@@ -132,6 +156,12 @@ impl Trims {
             low: self.low_end.unwrap_or(Bounds::FULL.low),
             high: self.high_end.unwrap_or(Bounds::FULL.high),
         }
+    }
+
+    /// Whether the bounds are still moving after a trim change at `now`.
+    fn moving(&self, now: Duration) -> bool {
+        self.fade
+            .is_some_and(|run| !run.transition().is_finished(now))
     }
 
     /// The bounds in effect at `now`.
@@ -216,11 +246,20 @@ impl LightingOutputObject {
         self.advance_to(now);
         let from = self.trims.at(now);
         change(&mut self.trims);
-        self.reliability = if self.trims.misconfigured() {
-            Reliability::CONFIGURATION_ERROR
-        } else {
-            Reliability::NO_FAULT_DETECTED
-        };
+        // The trims set CONFIGURATION_ERROR, and clear only what they set.
+        match (self.trims.misconfigured(), self.trims.replaced) {
+            (true, None) => {
+                self.trims.replaced = Some(self.reliability);
+                self.reliability = Reliability::CONFIGURATION_ERROR;
+            }
+            (false, Some(replaced)) => {
+                self.trims.replaced = None;
+                if self.reliability == Reliability::CONFIGURATION_ERROR {
+                    self.reliability = replaced;
+                }
+            }
+            _ => {}
+        }
         let fade_time = Duration::from_millis(u64::from(self.trims.fade_time));
         let fade = Transition::fade(from, self.trims.configured(), now, fade_time);
         self.trims.fade = fade.map(|fade| Run::start(fade, self.sample_step()));
@@ -247,12 +286,45 @@ impl LightingOutputObject {
 
     /// Whether In_Progress reads TRIM_ACTIVE at `now`, where `untrimmed` is
     /// Tracking_Value before the trims hold it: Present_Value lies outside
-    /// the trims, or the bounds of a trim change under way hold Tracking_Value
-    /// back.
+    /// the trims, or the bounds of a trim change still moving hold
+    /// Tracking_Value back.
     pub(super) fn trim_active(&self, untrimmed: f32, now: Duration) -> bool {
         !self.trims_bypassed()
             && (self.trims.configured().hold(self.present_value) != self.present_value
-                || self.trims.at(now).hold(untrimmed) != untrimmed)
+                || (self.trims.moving(now) && self.trims.at(now).hold(untrimmed) != untrimmed))
+    }
+
+    /// The low bound in effect at `now`, or 0.0 when no low trim holds
+    /// anything.
+    fn low_bound(&self, now: Duration) -> f32 {
+        if self.trims_bypassed() {
+            0.0
+        } else {
+            self.trims.at(now).low
+        }
+    }
+
+    /// The dimmest on level a step knows at `now`: the low trim while one
+    /// applies, otherwise 1.0. STEP_OFF turns the light off from it.
+    pub(super) fn step_floor(&self, now: Duration) -> f32 {
+        self.low_bound(now).max(1.0)
+    }
+
+    /// The line a fade or ramp from `from` to `to` runs at `now`: one up from
+    /// off starts at the low trim, and one down to off ends its line there,
+    /// going off as it finishes. Unchanged with no low trim in effect, or
+    /// from the low trim itself, which holds there until the end.
+    pub(super) fn trimmed_line(&self, from: f32, to: f32, now: Duration) -> (f32, f32) {
+        let low = self.low_bound(now);
+        if low <= 0.0 {
+            (from, to)
+        } else if from == 0.0 && to > 0.0 {
+            (low, to)
+        } else if to == 0.0 && from > low {
+            (from, low)
+        } else {
+            (from, to)
+        }
     }
 
     /// Read High_End_Trim, Low_End_Trim or Trim_Fade_Time, if `property` is

@@ -154,7 +154,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         crate::audit::ObjectAuditPolicy::default()
     }
 
-    /// Optional sealed built-in AV/BV policy assignment authority. Custom objects
+    /// Optional sealed built-in policy assignment authority (AV/BV, Color and
+    /// Color Temperature). Custom objects
     /// remain on their ordinary writer path; adapters may forward this capability.
     #[doc(hidden)]
     fn audit_policy_authority_internal(
