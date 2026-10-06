@@ -836,6 +836,7 @@ mod file_list;
 mod lifecycle;
 mod object_mgmt;
 mod property;
+mod read_range;
 mod requests;
 mod response_admission;
 mod routed_path_limits;
@@ -892,6 +893,8 @@ mod device_events_tests;
 #[cfg(test)]
 mod event_notification_tests;
 #[cfg(test)]
+mod fake_device;
+#[cfg(test)]
 mod list_error_tests;
 #[cfg(test)]
 mod list_validation_tests;
@@ -901,6 +904,8 @@ mod peer_max_apdu_tests;
 mod peer_segmentation_tests;
 #[cfg(test)]
 mod rb07_provenance_tests;
+#[cfg(test)]
+mod read_range_tests;
 #[cfg(test)]
 mod request_timer_tests;
 #[cfg(test)]

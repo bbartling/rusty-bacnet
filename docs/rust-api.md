@@ -4644,7 +4644,29 @@ the requested window. It does not iterate an entire file.
 
 ```rust
 let ack = client.read_range(&mac, oid, PropertyIdentifier::LOG_BUFFER, None, Some(RangeSpec::ByPosition { reference_index: 1, count: 10 })).await?;
+let records = ack.trend_log_records()?; // or event_log_records, trend_log_multiple_records, audit_log_records
+
+// Keep a page that breaks a rule, with the rules it broke:
+let reply = client.read_range_with(&mac, &request, ReadRangeValidation::Lenient).await?;
+for rule in &reply.violations { eprintln!("device broke a ReadRange rule: {rule}"); }
 ```
+
+`read_range` checks the acknowledgement against its request
+(`ReadRangeAck::violations`): the echoed object, property and array index, a
+first sequence number present, nonzero and only where the range calls for one,
+MORE_ITEMS never set with the flag for the end the read moves toward, and no
+more items than the count. A broken rule fails with
+`Error::ReadRangeViolation`, naming it; a malformed answer is still
+`Error::Decoding`. `read_range_with` and `ReadRangeValidation::Lenient` keep
+the decoded page instead, with every rule it broke in
+`ReadRangeReply::violations`, so a device that numbers the record after its
+sequence wrap 0 doesn't cost a second request. The endpoint client has the
+same `read_range_with`.
+
+`ReadRangeAck::log_records()` picks the record kind from the object type of a
+Log_Buffer read. Each decoder requires every octet to belong to a record and
+the count to equal `item_count`; a failure is a `LogRecordsError` naming the
+failing record's index and offset, keeping the records before it.
 
 ### List Manipulation
 
@@ -6175,7 +6197,8 @@ The initiating role supports `read_property`, `read_range`, `read_property_multi
 and direct B/IP `write_property`, plus explicit
 endpoint destinations. ReadRange returns a correlated `ReadRangeAck` with raw
 item bytes; empty and multiple-item ACKs each produce one value-free source READ
-record. Request encoding validates before output/transaction admission: ALL,
+record. `read_range_with` takes a `ReadRangeValidation`: a lenient read keeps
+a page that breaks a rule and is audited as a success. Request encoding validates before output/transaction admission: ALL,
 REQUIRED, OPTIONAL, array index zero, zero/non-INTEGER16 counts, and nonconcrete
 ByTime components are rejected. Zero position/sequence references are valid and
 may match no items. Rust supports all-items, position, sequence and ByTime.

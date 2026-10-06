@@ -12,6 +12,5 @@ pub use endpoint_requester::{
     EndpointReadRequest, EndpointRequester, PreparedEndpointOperation,
 };
 mod read_property;
-mod read_range;
 
 mod endpoint_rpm;

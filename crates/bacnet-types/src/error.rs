@@ -140,6 +140,82 @@ pub enum Error {
     /// Value out of valid range.
     #[error("value out of range: {0}")]
     OutOfRange(String),
+
+    /// A well-formed ReadRange acknowledgement that breaks a rule the client
+    /// checks against the request it answers, so the client refused it. The
+    /// acknowledgement decoded; a malformed one is [`Error::Decoding`]
+    /// instead. Read again leniently to keep its items.
+    #[error("ReadRange acknowledgement refused: {0}")]
+    ReadRangeViolation(ReadRangeViolation),
+}
+
+/// A rule a ReadRange acknowledgement can break against the request it
+/// answers (Clause 15.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReadRangeViolation {
+    /// The object identifier isn't the one the request named.
+    ObjectMismatch,
+    /// The property identifier isn't the one the request named.
+    PropertyMismatch,
+    /// The array index isn't the one the request named, or is present when
+    /// the request had none, or the reverse.
+    ArrayIndexMismatch,
+    /// A nonempty answer to a By-Sequence or By-Time read without the
+    /// sequence number of its first item (Clause 15.8.1.2.7).
+    MissingFirstSequenceNumber,
+    /// A nonempty answer to a By-Sequence or By-Time read that numbers its
+    /// first item 0, a number logs never assign: they count from 1 and skip
+    /// 0 when they wrap. Some devices do number the record after the wrap 0.
+    ZeroFirstSequenceNumber,
+    /// A first sequence number in the answer to a read that was by position
+    /// or had no range, which carries none (Clause 15.8.1.2.7).
+    UnexpectedFirstSequenceNumber,
+    /// MORE_ITEMS together with the flag that says the page reached the end
+    /// the read moves toward: LAST_ITEM for a forward read, FIRST_ITEM for a
+    /// backward one. Items left out of a full page lie beyond that end, so
+    /// the two contradict each other (Clause 15.8.2).
+    MoreItemsPastEnd,
+    /// More items than the request's count asked for.
+    ItemCountExceedsRequest,
+}
+
+impl ReadRangeViolation {
+    /// The rule's name in snake case, as the Python bindings report it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ObjectMismatch => "object_mismatch",
+            Self::PropertyMismatch => "property_mismatch",
+            Self::ArrayIndexMismatch => "array_index_mismatch",
+            Self::MissingFirstSequenceNumber => "missing_first_sequence_number",
+            Self::ZeroFirstSequenceNumber => "zero_first_sequence_number",
+            Self::UnexpectedFirstSequenceNumber => "unexpected_first_sequence_number",
+            Self::MoreItemsPastEnd => "more_items_past_end",
+            Self::ItemCountExceedsRequest => "item_count_exceeds_request",
+        }
+    }
+}
+
+impl core::fmt::Display for ReadRangeViolation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::ObjectMismatch => "object identifier does not match the request",
+            Self::PropertyMismatch => "property identifier does not match the request",
+            Self::ArrayIndexMismatch => "array index does not match the request",
+            Self::MissingFirstSequenceNumber => {
+                "nonempty By Sequence/Time answer has no first sequence number"
+            }
+            Self::ZeroFirstSequenceNumber => {
+                "nonempty By Sequence/Time answer has first sequence number 0"
+            }
+            Self::UnexpectedFirstSequenceNumber => {
+                "answer to a read by position or without a range has a first sequence number"
+            }
+            Self::MoreItemsPastEnd => {
+                "MORE_ITEMS is set with the flag for the end the read moves toward"
+            }
+            Self::ItemCountExceedsRequest => "more items than the request's count",
+        })
+    }
 }
 
 /// Which fault a decoder found in the data it refused, so a responder can

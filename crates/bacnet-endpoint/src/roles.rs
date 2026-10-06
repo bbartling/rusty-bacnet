@@ -403,6 +403,50 @@ impl ClientRoleHandle {
         property_array_index: Option<u32>,
         range: Option<bacnet_services::read_range::RangeSpec>,
     ) -> Result<bacnet_services::read_range::ReadRangeAck, Error> {
+        let request = bacnet_services::read_range::ReadRangeRequest {
+            object_identifier,
+            property_identifier,
+            property_array_index,
+            range,
+        };
+        self.read_range_checked(
+            destination,
+            data_attributes,
+            request,
+            bacnet_services::read_range::ReadRangeValidation::Strict,
+        )
+        .await
+        .map(|reply| reply.ack)
+    }
+
+    /// Read a range of items, choosing how to treat an acknowledgement that
+    /// breaks a rule, as
+    /// [`BACnetClient::read_range_with`](bacnet_client::client::BACnetClient::read_range_with)
+    /// does. Audited like [`read_range`](Self::read_range).
+    pub async fn read_range_with(
+        &self,
+        destination_mac: &[u8],
+        request: &bacnet_services::read_range::ReadRangeRequest,
+        validation: bacnet_services::read_range::ReadRangeValidation,
+    ) -> Result<bacnet_services::read_range::ReadRangeReply, Error> {
+        self.read_range_checked(
+            EndpointApduDestination::Direct {
+                destination_mac: bacnet_types::MacAddr::from_slice(destination_mac),
+            },
+            Vec::new(),
+            request.clone(),
+            validation,
+        )
+        .await
+    }
+
+    async fn read_range_checked(
+        &self,
+        destination: EndpointApduDestination,
+        data_attributes: Vec<DataAttribute>,
+        request: bacnet_services::read_range::ReadRangeRequest,
+        validation: bacnet_services::read_range::ReadRangeValidation,
+    ) -> Result<bacnet_services::read_range::ReadRangeReply, Error> {
         self.check_open()?;
         if let Some(source) = &self.source_audit {
             let source = source.upgrade().ok_or_else(shutdown_error)?;
@@ -411,27 +455,13 @@ impl ClientRoleHandle {
                     &self.requester,
                     destination,
                     data_attributes,
-                    bacnet_client::EndpointReadRequest::Range(
-                        bacnet_services::read_range::ReadRangeRequest {
-                            object_identifier,
-                            property_identifier,
-                            property_array_index,
-                            range,
-                        },
-                    ),
+                    bacnet_client::EndpointReadRequest::Range(request, validation),
                 )
                 .await?
                 .into_range();
         }
         self.requester
-            .read_range_with_destination(
-                destination,
-                data_attributes,
-                object_identifier,
-                property_identifier,
-                property_array_index,
-                range,
-            )
+            .read_range_with_destination(destination, data_attributes, request, validation)
             .await
     }
 

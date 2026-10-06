@@ -348,6 +348,80 @@ async fn source_read_range_invalid_preflight_does_not_consume_sequence_or_lease(
     sink.stop().await.unwrap();
 }
 
+/// A page numbered from 0 after the device's wrap: strict refuses it as a
+/// broken rule, lenient keeps it with the rule named, and the audit record
+/// reports each outcome (#1531).
+#[tokio::test]
+async fn source_read_range_lenient_keeps_a_zero_first_sequence_page() {
+    use bacnet_services::read_range::{ReadRangeValidation, ReadRangeViolation};
+
+    let (mut peer, mut requests) = network().await;
+    let (mut sink, mut records) = network().await;
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
+    session.start().await.unwrap();
+    let request = ReadRangeRequest {
+        object_identifier: target(),
+        property_identifier: PropertyIdentifier::LOG_BUFFER,
+        property_array_index: None,
+        range: Some(RangeSpec::BySequenceNumber {
+            reference_seq: 1,
+            count: 2,
+        }),
+    };
+    for validation in [ReadRangeValidation::Strict, ReadRangeValidation::Lenient] {
+        let client = session.cloned_client_handle().unwrap();
+        let mac = peer.local_mac().to_vec();
+        let sent = request.clone();
+        let read =
+            tokio::spawn(async move { client.read_range_with(&mac, &sent, validation).await });
+        let received = receive(&mut requests).await;
+        let (invoke_id, rr) = range_request(&received);
+        let (mut ack, _) = range_ack(invoke_id, &rr, 2);
+        ack.first_sequence_number = Some(0);
+        let mut bytes = BytesMut::new();
+        ack.encode(&mut bytes);
+        let pdu = Apdu::ComplexAck(ComplexAck {
+            segmented: false,
+            more_follows: false,
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: ConfirmedServiceChoice::READ_RANGE,
+            service_ack: bytes.freeze(),
+        });
+        send(&peer, &received.source_mac, pdu).await;
+        let outcome = timeout(WAIT, read).await.unwrap().unwrap();
+        let (record, _) = notification(&receive(&mut records).await, false);
+        match validation {
+            ReadRangeValidation::Strict => {
+                assert!(matches!(
+                    outcome,
+                    Err(Error::ReadRangeViolation(
+                        ReadRangeViolation::ZeroFirstSequenceNumber
+                    ))
+                ));
+                assert_eq!(
+                    record.result,
+                    Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
+                );
+            }
+            ReadRangeValidation::Lenient => {
+                let reply = outcome.unwrap();
+                assert_eq!(
+                    reply.violations,
+                    [ReadRangeViolation::ZeroFirstSequenceNumber]
+                );
+                assert_eq!(reply.ack.item_data, ack.item_data);
+                assert_eq!(record.result, None);
+            }
+        }
+    }
+    session.stop().await.unwrap();
+    assert_eq!(session.active_leases(), 0);
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn source_read_range_cancelled_caller_keeps_one_retry_record_and_stop_releases() {
     let (mut peer, mut requests) = network().await;
