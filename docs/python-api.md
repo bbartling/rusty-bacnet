@@ -1465,8 +1465,10 @@ answers, so the call returns once the request is sent.
     `bytearray` holding the encoded octets (#1359). Either way it must be one
     BACnetChannelValue with no wrapper tag: a single application-tagged
     primitive (`PropertyValue.real(72.0)`, `PropertyValue.null()`), or a
-    context-0 lighting command, given as `bytes` or as the same octets in
-    `PropertyValue.application_data(...)`. Anything else, such as a
+    constructed one given as `bytes` or as the same octets in
+    `PropertyValue.application_data(...)`: a context-0 lighting command, or
+    Addendum 135-2020ca's context-1 xy colour or context-2 colour command
+    (#1474). Anything else, such as a
     `PropertyValue.list(...)`, raises `ValueError`, and a value of another
     type, a list of ints included, raises `TypeError`.
 - `inhibit_delay`: optional Boolean. TRUE skips the execution delays of Channels whose

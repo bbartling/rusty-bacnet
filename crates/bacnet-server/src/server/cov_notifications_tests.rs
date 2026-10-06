@@ -292,7 +292,7 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
             cov_in_flight: &Arc::new(Semaphore::new(255)),
             notification_transactions: &NotificationTransactions::new(),
             comm_state: &Arc::new(CommState::default()),
-            config: &ServerConfig::default(),
+            config: &Arc::default(),
         },
         &ao_oid,
     )
@@ -425,7 +425,7 @@ async fn capture_timestamped_cov_multiple(
             cov_in_flight: &Arc::new(Semaphore::new(255)),
             notification_transactions: &NotificationTransactions::new(),
             comm_state: &Arc::new(CommState::default()),
-            config: &ServerConfig::default(),
+            config: &Arc::default(),
         },
         &ao_oid,
     )
@@ -530,11 +530,11 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
                 .unwrap();
         }
     }
-    let config = ServerConfig {
+    let config = Arc::new(ServerConfig {
         cov_retry_timeout_ms: 100,
         max_apdu_length: 1474,
         ..ServerConfig::default()
-    };
+    });
 
     BACnetServer::<TestTransport>::fire_cov_notifications(
         &crate::server::cov_notify_context::CovNotifyContext {

@@ -507,9 +507,15 @@ use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 `group_number` is a `NonZeroU32` (group 0 is reserved) and `write_priority` is 1 to 16.
 Each `GroupChannelValue` carries a `u16` channel number, an optional override priority
 (1 to 16) and the already-encoded BACnetChannelValue in `value`: one
-application-tagged primitive, or a context-0 lighting command, with no wrapper tag.
-A lighting command is the `encode_lighting_command` octets between an opening and
-a closing context tag 0; its priority, when present, must be 1 to 16.
+application-tagged primitive, a context-0 lighting command, or Addendum
+135-2020ca's context-1 xy colour or context-2 colour command (#1474), with no
+wrapper tag. A lighting command is the `encode_lighting_command` octets between
+an opening and a closing context tag 0; its priority, when present, must be 1
+to 16. The colour alternatives frame the `encode_xy_color` and
+`encode_color_command` octets in tags 1 and 2 the same way.
+`bacnet_encoding::constructed::constructed_channel_value` says which
+constructed alternative some octets hold, as a `ConstructedChannelValue`
+(`LightingCommand`, `XyColor` or `ColorCommand`), or `None` for anything else.
 `encode` is fallible: it rejects priorities outside 1 to 16, an empty change list and
 a value that is not a single BACnetChannelValue with `Error::Encoding`, leaving the
 buffer unchanged. `decode` enforces the same rules and rejects trailing data.
@@ -2973,7 +2979,10 @@ reports its end. `stop()` aborts that task with the other request tasks, and
 a run it hadn't started then ends as if none of its writes were made (#1324):
 In_Process FALSE with every command unsuccessful, or a Channel's Write_Status
 FAILED with Reliability PROCESS_ERROR. The call still returns `Ok(())` then,
-since the write was made. Every local write (`write_local`,
+since the write was made. `set_life_safety_operation_expected_local` hands
+its timestamped capture and COV fanout to such a task the same way, so a
+caller dropped once Operation_Expected has changed still notifies its
+subscribers (#1520). Every local write (`write_local`,
 `write_local_encoded`, `set_present_value_local` and the other `*_local`
 setters) must therefore be awaited inside a Tokio runtime: outside one it
 fails with `Error::Encoding` before anything is written.
@@ -3255,8 +3264,68 @@ values. Each object checks a command against its own table of colour commands:
 Any other operation, NONE and those past STOP included, is refused with
 VALUE_OUT_OF_RANGE, as is a missing target. Any other datatype, an OCTET STRING
 included, is INVALID_DATA_TYPE, and octets that aren't exactly one command are
-INVALID_DATA_ENCODING. Neither object carries a command out: Present_Value,
-Tracking_Value and In_Progress stay as they are.
+INVALID_DATA_ENCODING.
+
+Both objects carry out each command they take (#1474), and `Color_Command`
+keeps reporting it as written. There is no priority array, so at most one fade
+or ramp runs, and Present_Value holds its target from the moment it starts:
+
+- FADE_TO_COLOR, FADE_TO_CCT and RAMP_TO_CCT set Present_Value to the target
+  and move Tracking_Value to it in a straight line from where it stood, over
+  the fade time (or `Default_Fade_Time`) or at the ramp rate (or
+  `Default_Ramp_Rate`), with In_Progress FADE_ACTIVE or RAMP_ACTIVE until it
+  arrives. A Color object's fade moves x and y together, so the colour crosses
+  the xy diagram in a straight line.
+- STEP_UP_CCT and STEP_DOWN_CCT set Present_Value and Tracking_Value at once
+  to Tracking_Value plus or minus the step increment (or
+  `Default_Step_Increment`).
+- A Color Temperature object clamps a target and a step result to
+  `Min_Pres_Value` and `Max_Pres_Value`.
+- STOP ends a fade or ramp, and Present_Value takes the value it reached;
+  with none running it changes nothing. Any other command, or a Present_Value
+  write, ends the one in progress too (Clauses 12.X.6.1 and 12.Y.6.1), and a
+  new fade or ramp starts from where Tracking_Value stood.
+
+In_Progress reads as an ENUMERATED `ColorOperationInProgress` and Transition
+as an ENUMERATED `ColorTransition`, both in `bacnet_types::enums`.
+
+Present_Value is writable on both (Tables 12-X and 12-Y code it W), and
+`set_present_value` takes a value the same way. A Color object takes an xy
+colour, a `PropertyValue::List` of two REALs as a WriteProperty decodes it,
+with both coordinates 0.0 to 1.0. A Color Temperature object refuses a value
+outside 1000 to 30000 K and clamps one inside to `Min_Pres_Value` and
+`Max_Pres_Value` (Clause 12.Y.4), which `set_min_max` sets within that range;
+a Present_Value outside new limits moves to the nearer one. The write halts a
+fade or ramp in progress, then moves as `Transition` says: NONE (the default)
+at once, FADE over `Default_Fade_Time`, or, on a Color Temperature object
+only, RAMP at `Default_Ramp_Rate`.
+
+Fades and ramps run on the server's monotonic task, as a Lighting Output's
+do, and Tracking_Value is worked out from the clock when read. While it
+moves, the task samples it for COV each time it has moved 0.001 along the xy
+line (a Color object) or 10 K (a Color Temperature object), on the shared
+100 ms grid, and once more when it arrives. Neither object has a COV_Increment
+to change that step.
+
+The rows follow the addendum's property tables. Present_Value and
+`Color_Command` are W; `Default_Color`, `Default_Color_Temperature`,
+`Default_Fade_Time`, `Default_Ramp_Rate` and `Default_Step_Increment` are R;
+`Min_Pres_Value`, `Max_Pres_Value` and `Transition` are O. The defaults and
+`Transition` are writable: `Default_Fade_Time` takes 100 to 86,400,000 ms,
+`Default_Ramp_Rate` and `Default_Step_Increment` 1 to 30000, and
+`Default_Color` any colour in range. `Default_Color_Temperature` is clamped as
+Present_Value is, except that 0 is kept: Clause 12.Y.4 gives a zero default a
+meaning of its own at restart. Neither table has `Status_Flags`,
+`Event_State`, `Reliability` or `Out_Of_Service`, so neither object serves
+them, and a whole-object COV report carries Present_Value alone. The optional
+`Value_Source`, audit, `Tags` and profile rows aren't implemented.
+
+Two choices here go past the addendum's text. A new object's
+`Default_Fade_Time` is 100 ms, the shortest the range allows, as Lighting
+Output's is: the addendum gives no initial value, and 0 lies outside its
+range. Neither object models a restart, so `Default_Color` and
+`Default_Color_Temperature` are only stored, and In_Progress never reads
+NOT_CONTROLLED or OTHER.
 
 The colour properties use their standard identifiers: `DEFAULT_COLOR` is
 4194330, `DEFAULT_COLOR_TEMPERATURE` 4194331 and `COLOR_COMMAND` 4194334
@@ -3278,8 +3347,10 @@ delay per member (VALUE_OUT_OF_RANGE otherwise). A member naming the
 server's own Device is stored as the local reference it stands for; one
 naming another Device keeps it (#1264).
 
-Present_Value takes any primitive value or a lighting command framed in
-context tag 0, at priority 1 to 16 (Last_Priority reads 16 when the write
+Present_Value takes any primitive value or one of the constructed
+alternatives: a lighting command framed in context tag 0, or, as Addendum
+135-2020ca adds, an xy colour in tag 1 or a colour command in tag 2 (#1474),
+at priority 1 to 16 (Last_Priority reads 16 when the write
 carried none). Write_Status then reads IN_PROGRESS, and any Present_Value
 write is OBJECT / BUSY until the members are done. A running server writes
 each member through the `write_local` path with the Channel as the initiating
@@ -3287,8 +3358,12 @@ object, at the priority the write carried, once that member's delay has passed;
 every delay counts from the same start. The value is first converted to the
 datatype of the member property's current value by the Table 12-63 rules (a
 REAL 1.0 reaches a Binary Output as ACTIVE, a Multi-state Output as state 1).
-A lighting command goes only to a `Lighting_Command` member, as the command
-without its context-0 framing, which a Lighting Output takes.
+A constructed value goes only to a member of its own datatype, and no
+primitive goes to such a member: a lighting command to a `Lighting_Command`
+and a colour command to a `Color_Command`, each as the command without its
+framing, and an xy colour to a Color object's Present_Value (or
+`Default_Color`) as its two REALs. `MemberDatatype::of` tells those members by
+object type and property.
 Readings of the rules: an Unsigned or ENUMERATED value above 2147483647
 fails for INTEGER, REAL and Double members. A REAL or Double going to an
 integer type keeps its integer part if it lies in 0 to 2147483000 (Unsigned,
@@ -3320,8 +3395,9 @@ a REAL 1.0 reaches a remote Binary Output as ACTIVE. A primitive datatype is
 kept on the Channel until that member, or the whole member list, is written
 again, or a write made with it is refused as a configuration fault (an invalid
 datatype, an unknown property), so later distributions send no read until
-then. No read is sent for a NULL, a lighting command or a `Lighting_Command`
-member. A read that gets no answer after its retries, or whose Who-Is finds
+then. No read is sent for a NULL, a constructed value, or a member whose
+property fixes its datatype (`Lighting_Command`, `Color_Command`, a Color
+object's xy colour). A read that gets no answer after its retries, or whose Who-Is finds
 nothing, counts the device as silent, as a write would (every device executes
 ReadProperty): the member fails as COMMUNICATION_FAILURE with no write sent. A
 read that is refused, or returns NULL or a constructed value, keeps nothing,
@@ -5287,7 +5363,9 @@ actuation still requires application-owned idempotency across tracker expiry
 or restart.
 
 Trusted runtime logic can arm or rearm a Life Safety object through
-`BACnetServer::set_life_safety_operation_expected_local`. The lower-level
+`BACnetServer::set_life_safety_operation_expected_local`, awaited inside a
+Tokio runtime like every local write; a caller dropped once the change is
+made still notifies Operation_Expected's subscribers (#1520). The lower-level
 `BACnetObject::set_life_safety_operation_expected_internal` channel also remains
 available to custom database owners. Protocol WriteProperty and
 WritePropertyMultiple cannot forge `Operation_Expected` or `Silenced`.

@@ -2611,7 +2611,8 @@ class BACnetClient:
         or a ``bytes`` or ``bytearray`` holding one encoded BACnetChannelValue.
         Either way the value must be one BACnetChannelValue: a single
         application-tagged primitive (``PropertyValue.real(72.0)``), or a
-        context-0 lighting command (as ``bytes``, or the same octets in
+        context-0 lighting command, context-1 xy colour or context-2 colour
+        command (as ``bytes``, or the same octets in
         ``PropertyValue.application_data``), with no wrapper tag. Raises
         ``ValueError`` for anything else, a list for one, ``TypeError`` for a
         value of another type (a list of ints included), and ``OverflowError``
