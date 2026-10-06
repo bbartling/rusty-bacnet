@@ -59,14 +59,20 @@ struct FakeLog {
     /// Most records one answer holds, as an APDU size would cut it.
     answer_cap: usize,
     logged: u64,
-    /// bacnet-stack 1.6.1: a sequence reference numerically below the
-    /// oldest record reads from the oldest, instead of matching nothing.
-    clamp_below_oldest: bool,
+    /// bacnet-stack 1.6.1 compares a sequence reference with its oldest
+    /// and newest numbers as plain integers and reads anything outside them
+    /// from the oldest record. Once its records span the wrap the oldest
+    /// number is above the newest, so every reference, before the wrap or
+    /// after it, reads from the oldest record.
+    clamp_across_wrap: bool,
     /// Numbers the record after the top of the range 0, not 1.
     zero_after_wrap: bool,
-    /// Records logged as the next Record_Count read arrives, as a log that
-    /// grows between two requests does.
+    /// Records logged just after the next Record_Count read is answered, as
+    /// a log that grows between two requests does.
     log_on_count_read: u64,
+    /// Records logged just before each coming ReadRange is answered, one
+    /// entry a ReadRange.
+    log_before_range: std::collections::VecDeque<u64>,
 }
 
 impl FakeLog {
@@ -77,9 +83,10 @@ impl FakeLog {
             capacity,
             answer_cap,
             logged: 0,
-            clamp_below_oldest: false,
+            clamp_across_wrap: false,
             zero_after_wrap: false,
             log_on_count_read: 0,
+            log_before_range: Default::default(),
         }
     }
 
@@ -103,15 +110,15 @@ impl FakeLog {
         match service {
             ConfirmedServiceChoice::READ_PROPERTY => {
                 let request = ReadPropertyRequest::decode(data).unwrap();
-                if request.property_identifier == PropertyIdentifier::RECORD_COUNT {
-                    let grown = std::mem::take(&mut self.log_on_count_read);
-                    self.log(grown);
-                }
                 let value = match request.property_identifier {
                     PropertyIdentifier::RECORD_COUNT => self.records.len() as u64,
                     PropertyIdentifier::TOTAL_RECORD_COUNT => self.total,
                     _ => return Err((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
                 };
+                if request.property_identifier == PropertyIdentifier::RECORD_COUNT {
+                    let grown = std::mem::take(&mut self.log_on_count_read);
+                    self.log(grown);
+                }
                 let mut property_value = BytesMut::new();
                 encode_app_unsigned(&mut property_value, value);
                 let mut buf = BytesMut::new();
@@ -124,7 +131,11 @@ impl FakeLog {
                 .encode(&mut buf);
                 Ok(buf.to_vec())
             }
-            ConfirmedServiceChoice::READ_RANGE => Ok(self.read_range(data)),
+            ConfirmedServiceChoice::READ_RANGE => {
+                let grown = self.log_before_range.pop_front().unwrap_or(0);
+                self.log(grown);
+                Ok(self.read_range(data))
+            }
             _ => Err((ErrorClass::SERVICES, ErrorCode::SERVICE_REQUEST_DENIED)),
         }
     }
@@ -147,11 +158,13 @@ impl FakeLog {
                 count,
             } => {
                 let found = self.records.iter().position(|(s, _)| *s == reference_seq);
-                let clamped = self.clamp_below_oldest
-                    && self
-                        .records
-                        .first()
-                        .is_some_and(|(oldest, _)| reference_seq < *oldest);
+                let clamped = self.clamp_across_wrap
+                    && match (self.records.first(), self.records.last()) {
+                        (Some((oldest, _)), Some((newest, _))) => {
+                            reference_seq < *oldest || reference_seq > *newest
+                        }
+                        _ => false,
+                    };
                 (if clamped { Some(0) } else { found }, count, true)
             }
             RangeSpec::ByTime {
@@ -264,8 +277,14 @@ async fn reads_a_wrapped_log_from_the_oldest_record_and_resumes_from_its_checkpo
     assert!(pages[0].result_flags.2);
     let checkpoint = pages.last().unwrap().next;
     assert_eq!(checkpoint, LogCursor::Sequence(9));
-    // Counts once for the oldest record, then one ReadRange a page.
-    assert_eq!(device.count(ConfirmedServiceChoice::READ_PROPERTY), 2);
+    // Only the third page, TOP - 1 to 3, reaches the top of the range.
+    assert_eq!(
+        pages.iter().map(|page| page.wrapped).collect::<Vec<_>>(),
+        [false, false, true, false]
+    );
+    // The counts once (total, count, total) for the oldest record, then one
+    // ReadRange a page.
+    assert_eq!(device.count(ConfirmedServiceChoice::READ_PROPERTY), 3);
     assert_eq!(
         device.count(ConfirmedServiceChoice::READ_RANGE),
         pages.len()
@@ -328,7 +347,7 @@ async fn a_checkpoint_the_log_no_longer_holds_restarts_from_the_oldest_with_a_ga
 #[tokio::test]
 async fn a_device_that_clamps_past_its_wrap_fails_as_not_advancing_and_reads_by_position() {
     let mut log = FakeLog::new(TOP - 6, 20, 5);
-    log.clamp_below_oldest = true;
+    log.clamp_across_wrap = true;
     log.log(20);
     let (mut client, device, _log) = device(log).await;
 
@@ -336,16 +355,82 @@ async fn a_device_that_clamps_past_its_wrap_fails_as_not_advancing_and_reads_by_
     assert!(
         matches!(
             error,
-            Error::LogNotAdvancing { requested: 5, returned: Some(returned) } if returned == TOP - 5
+            Error::LogNotAdvancing { requested: TOP, returned: Some(returned) } if returned == TOP - 5
         ),
         "{error:?}"
     );
-    // Two pages reached the wrap; the third came back as the first again.
-    assert_eq!(device.count(ConfirmedServiceChoice::READ_RANGE), 3);
+    // The first page read from the oldest record either way; the second
+    // came back as the first again.
+    assert_eq!(device.count(ConfirmedServiceChoice::READ_RANGE), 2);
 
     let (read, _) = read_all(&client, LogCursor::Position(1), 20).await.unwrap();
     let expected: Vec<u64> = (TOP - 5..=TOP).chain(1..=14).collect();
     assert_eq!(read, expected);
+    client.stop().await.unwrap();
+}
+
+/// A record logged between the two count reads would make the oldest look
+/// one newer than it is; the total read on both sides catches it.
+#[tokio::test]
+async fn a_record_logged_between_the_count_reads_does_not_hide_the_oldest() {
+    let mut log = FakeLog::new(0, 50, 50);
+    log.log(5);
+    log.log_on_count_read = 1;
+    let (mut client, device, _log) = device(log).await;
+    let page = client
+        .read_log_page(&DEVICE_MAC, trend_log(), LogCursor::Oldest, 50)
+        .await
+        .unwrap();
+    assert_eq!(sequences(&page.records), [1, 2, 3, 4, 5, 6]);
+    assert_eq!(page.gap, None);
+    // Total, count, total; then count and total again once it moved.
+    assert_eq!(device.count(ConfirmedServiceChoice::READ_PROPERTY), 5);
+    client.stop().await.unwrap();
+}
+
+/// A full log that drops its oldest record between the count read and the
+/// ReadRange, once or twice, still reads from the oldest it holds.
+#[tokio::test]
+async fn a_full_log_that_drops_the_oldest_while_read_restarts_with_a_gap() {
+    for (drops, first) in [(1u64, 22u64), (2, 23)] {
+        let mut log = FakeLog::new(0, 10, 50);
+        log.log(30);
+        log.log_before_range = std::iter::repeat_n(1, drops as usize).collect();
+        let (mut client, _device, _log) = device(log).await;
+        let page = client
+            .read_log_page(&DEVICE_MAC, trend_log(), LogCursor::Oldest, 50)
+            .await
+            .unwrap();
+        assert_eq!(
+            sequences(&page.records),
+            (first..=30 + drops).collect::<Vec<_>>(),
+            "{drops} drops"
+        );
+        assert_eq!(
+            page.gap,
+            Some(LogGap {
+                expected: 21,
+                first,
+                skipped: Some(drops),
+            })
+        );
+        client.stop().await.unwrap();
+    }
+
+    // A log that drops its oldest faster than the restarts catch it fails.
+    let mut log = FakeLog::new(0, 10, 50);
+    log.log(30);
+    log.log_before_range = std::iter::repeat_n(1, 10).collect();
+    let (mut client, device, _log) = device(log).await;
+    let error = client
+        .read_log_page(&DEVICE_MAC, trend_log(), LogCursor::Oldest, 50)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::LogNotAdvancing { returned: None, .. }),
+        "{error:?}"
+    );
+    assert_eq!(device.count(ConfirmedServiceChoice::READ_RANGE), 4);
     client.stop().await.unwrap();
 }
 

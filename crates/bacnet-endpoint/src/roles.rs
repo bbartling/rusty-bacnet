@@ -442,7 +442,8 @@ impl ClientRoleHandle {
 
     /// Read one page of `log`'s Log_Buffer from `cursor`, as
     /// [`bacnet_client::log_reader::read_log_page`] does; each request is
-    /// audited like any other read.
+    /// audited like any other read. The endpoint has no request pacing, so
+    /// its requests go back to back, unlike a paced `BACnetClient`'s.
     pub async fn read_log_page(
         &self,
         destination_mac: &[u8],

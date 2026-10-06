@@ -14,7 +14,9 @@
 
 use bacnet_client::client::BACnetClient;
 use bacnet_client::log_reader::{LogCursor, LogGap};
-use bacnet_services::read_range::{LogRecords, ReadRangeAck};
+use bacnet_services::read_range::{
+    LogRecords, ReadRangeAck, ReadRangeRequest, ReadRangeValidation, ReadRangeViolation,
+};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
@@ -53,16 +55,29 @@ pub async fn read_range_cmd<T: TransportPort + 'static>(
         if property != PropertyIdentifier::LOG_BUFFER || index.is_some() {
             return Err("--all pages through a log's Log_Buffer".into());
         }
-        let rows = read_all(client, mac, oid, range, &mut heading).await?;
+        // What was read is printed, with the flags that resume the read,
+        // before any error that stopped it.
+        let (rows, stopped) = read_all(client, mac, oid, range, &mut heading).await?;
         print_records(&heading, &rows, format);
-        return Ok(());
+        return stopped.map_or(Ok(()), Err);
     }
-    let ack = client
-        .read_range(mac, oid, property, index, range.spec()?)
-        .await?;
+    let request = ReadRangeRequest {
+        object_identifier: oid,
+        property_identifier: property,
+        property_array_index: index,
+        range: range.spec()?,
+    };
+    let validation = if range.strict {
+        ReadRangeValidation::Strict
+    } else {
+        ReadRangeValidation::Lenient
+    };
+    let reply = client.read_range_with(mac, &request, validation).await?;
+    let ack = reply.ack;
     heading.item_count = u64::from(ack.item_count);
     heading.result_flags = ack.result_flags;
     heading.first_sequence_number = ack.first_sequence_number;
+    heading.note_violations(&reply.violations);
     match log_rows(&ack) {
         Some(rows) => print_records(&heading, &rows, format),
         None => print_items(&heading, &ack.item_data, format),
@@ -70,37 +85,46 @@ pub async fn read_range_cmd<T: TransportPort + 'static>(
     Ok(())
 }
 
+/// What stopped an `--all` read part way.
+type Stopped = Option<Box<dyn std::error::Error>>;
+
 /// Read every page of `log` from the start `range` names, filling in the
 /// heading: the records, the last page's flags, the first sequence number,
-/// the pages read, any gaps and the checkpoint.
+/// the rules the device broke, the pages read, any gaps and the checkpoint.
+/// An error after the options are checked stops the read but keeps what it
+/// read, for the caller to print first.
 async fn read_all<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],
     log: ObjectIdentifier,
     range: &RangeOptions,
     heading: &mut Heading,
-) -> Result<LogRows, Box<dyn std::error::Error>> {
+) -> Result<(LogRows, Stopped), Box<dyn std::error::Error>> {
     let (mut cursor, page_size) = range.pages()?;
     let mut rows = LogRows::default();
     let mut paged = Paged::default();
-    loop {
-        let page = client.read_log_page(mac, log, cursor, page_size).await?;
+    let stopped = loop {
+        let page = match client.read_log_page(mac, log, cursor, page_size).await {
+            Ok(page) => page,
+            Err(error) => break Some(error.into()),
+        };
         paged.pages += 1;
         if paged.pages == 1 {
             heading.first_sequence_number = page.first_sequence_number;
         }
         heading.item_count += page.records.len() as u64;
         heading.result_flags = page.result_flags;
+        heading.note_violations(&page.violations);
         paged.gaps.extend(page.gap);
         rows.rows.extend(record_rows(&page.records));
         cursor = page.next;
         if page.done {
-            break;
+            break None;
         }
-    }
+    };
     paged.next = cursor_flags(cursor);
     heading.paged = Some(paged);
-    Ok(rows)
+    Ok((rows, stopped))
 }
 
 /// The `read-range` flags that resume from `cursor`.
@@ -133,6 +157,8 @@ struct Heading {
     result_flags: (bool, bool, bool),
     /// The first item's sequence number; with `--all`, the first page's.
     first_sequence_number: Option<u64>,
+    /// The rules the device's answers broke, each once, in the order met.
+    violations: Vec<&'static str>,
     paged: Option<Paged>,
 }
 
@@ -146,6 +172,14 @@ struct Paged {
 }
 
 impl Heading {
+    fn note_violations(&mut self, violations: &[ReadRangeViolation]) {
+        for rule in violations {
+            if !self.violations.contains(&rule.name()) {
+                self.violations.push(rule.name());
+            }
+        }
+    }
+
     /// The first line of the table output.
     fn line(&self) -> String {
         let (first, last, more) = self.result_flags;
@@ -168,6 +202,9 @@ impl Heading {
         );
         if let Some(first) = self.first_sequence_number {
             line.push_str(&format!("  first-seq={first}"));
+        }
+        if !self.violations.is_empty() {
+            line.push_str(&format!("  violations={}", self.violations.join(",")));
         }
         if let Some(paged) = &self.paged {
             line.push_str(&format!("  pages={}  next: {}", paged.pages, paged.next));
@@ -206,6 +243,7 @@ impl Heading {
                 "more_items": more_items,
             },
             "first_sequence_number": self.first_sequence_number,
+            "violations": self.violations,
         });
         if let Some(paged) = &self.paged {
             json["pages"] = paged.pages.into();

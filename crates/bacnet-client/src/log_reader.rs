@@ -3,7 +3,8 @@
 //! [`read_log_page`] reads one page from a cursor and returns the cursor to
 //! read from next, so a caller loops until the page says it is done and
 //! keeps the last cursor as its checkpoint. One request is outstanding at a
-//! time; the client's minimum request interval paces them.
+//! time. On a [`BACnetClient`] the client's minimum request interval paces
+//! them; the endpoint client has no pacing, so its pages go back to back.
 //!
 //! Sequence numbers are the log's own: a log numbers each record with its
 //! Total_Record_Count once the record is added, so the newest record carries
@@ -35,8 +36,10 @@ pub enum LogCursor {
     /// The record with this sequence number, then on by sequence number.
     Sequence(u64),
     /// The record at this one-based position, then on by position. The
-    /// fallback for a device whose sequence numbers can't be trusted; a full
-    /// log that drops its oldest records shifts every position.
+    /// fallback for a device whose sequence numbers are inconsistent, which
+    /// fails a sequence read with [`Error::LogNotAdvancing`]. Not for a log
+    /// that is merely full: each record it drops shifts every position, so a
+    /// position read of a busy full log skips records without a gap.
     Position(u64),
     /// The first record newer than this date and time, which must be
     /// specific; the read goes on by sequence number.
@@ -78,6 +81,11 @@ pub struct LogPage {
     pub next: LogCursor,
     /// The page reached the newest record (LAST_ITEM), or found none.
     pub done: bool,
+    /// The page's records reach the top of the sequence range, so `next`
+    /// wrapped to 1. A device that numbers the record after the top 0
+    /// rather than 1 (against the standard) is then one number ahead of
+    /// `next`; see [`read_log_page`].
+    pub wrapped: bool,
 }
 
 /// What a paged log read needs from a requester: a property read as an
@@ -287,49 +295,82 @@ fn request(log: ObjectIdentifier, cursor: LogCursor, count: i32) -> ReadRangeReq
     }
 }
 
+/// Most times a read reads the counts again because the log moved between
+/// two requests, or starts over from the oldest record because the log
+/// dropped it meanwhile.
+const RETRIES: usize = 3;
+
+/// The records `log` holds now.
+///
+/// Total_Record_Count is read on both sides of Record_Count: a record logged
+/// in between would otherwise make the oldest look one newer than it is, and
+/// the read would skip it without a gap. When the total moves, the counts are
+/// read again, up to [`RETRIES`] times; after that the count goes with the
+/// total read before it, which can only make the oldest look older, a case
+/// the empty-page path in [`read_log_page`] recovers from.
 async fn window<R: LogRequester + ?Sized>(
     requester: &R,
     mac: &[u8],
     log: ObjectIdentifier,
     space: SequenceSpace,
 ) -> Result<Window, Error> {
-    let record_count = requester
-        .read_unsigned(mac, log, PropertyIdentifier::RECORD_COUNT)
-        .await?;
-    let total = requester
-        .read_unsigned(mac, log, PropertyIdentifier::TOTAL_RECORD_COUNT)
-        .await?;
-    space.window(record_count, total)
+    let total = || requester.read_unsigned(mac, log, PropertyIdentifier::TOTAL_RECORD_COUNT);
+    let mut before = total().await?;
+    let mut attempts = 0;
+    loop {
+        let record_count = requester
+            .read_unsigned(mac, log, PropertyIdentifier::RECORD_COUNT)
+            .await?;
+        let after = total().await?;
+        attempts += 1;
+        if after == before || attempts > RETRIES {
+            return space.window(record_count, before);
+        }
+        before = after;
+    }
 }
 
 /// Read one page of `log`'s Log_Buffer from `cursor` through `requester`,
 /// asking for up to `page_size` records (1..=32767).
 ///
-/// - [`LogCursor::Oldest`] reads Record_Count and Total_Record_Count first
-///   to find the oldest record.
+/// - [`LogCursor::Oldest`] reads Total_Record_Count, Record_Count and
+///   Total_Record_Count again first to find the oldest record.
 /// - Each page asks for `page_size` records from the cursor; the next page
 ///   starts at the first sequence number plus the records returned, across
 ///   the wrap. MORE_ITEMS only says the answer was cut short to fit, so any
 ///   page that isn't the last continues; LAST_ITEM or an empty page ends.
 /// - A page whose first record is past the one asked for reports a
 ///   [`LogGap`]. An empty page by sequence number reads the counts again:
-///   past the newest record the read is done; when the log no longer holds
-///   the record asked for, the read starts over from the oldest it does
-///   hold, with a gap; when it holds it (logged since), the read asks again.
-/// - A page that starts before the record asked for, or none where the
-///   counts say records are, fails with [`Error::LogNotAdvancing`] instead
-///   of repeating records or stopping early; read such a log from
-///   [`LogCursor::Position`].
+///   past the newest record the read is done; when the log holds the record
+///   asked for (logged since), the read asks again; when it no longer holds
+///   it, the read starts over from the oldest it does hold, with a gap. A
+///   full log can drop that one too before it is read, so a read starts over
+///   up to three times.
+/// - A page that starts before the record asked for fails with
+///   [`Error::LogNotAdvancing`] instead of repeating records, as does a
+///   record the counts say the log still holds but the device won't return
+///   when asked twice, or a log that drops its oldest record faster than the
+///   restarts catch it. A device that does either because its sequence
+///   numbers are inconsistent can be read from [`LogCursor::Position`].
 /// - The answer is checked leniently: a first sequence number of 0 (a
 ///   device's number for the record after its wrap), a first sequence number
 ///   on a page by position, contradictory flags and a count overrun are
 ///   tolerated and listed in [`LogPage::violations`]. Any other broken rule
 ///   fails with [`Error::ReadRangeViolation`].
+/// - A page whose records don't decode fails with [`Error::Decoding`] naming
+///   the first that fails; the records before it are dropped. Read that range
+///   with `read_range_with` and decode it with
+///   [`ReadRangeAck::log_records`](bacnet_services::read_range::ReadRangeAck::log_records)
+///   to keep them.
 ///
-/// A device that numbers through 0 and is read across its wrap in one page
-/// is advanced in the standard's numbering, one record past its own; such a
-/// device usually also refuses the reference, which surfaces as
-/// [`Error::LogNotAdvancing`].
+/// The standard numbers the record after the top of the range 1. A device
+/// that numbers it 0 instead is one number ahead of this reader past its
+/// wrap: a page that ends at or crosses the top ([`LogPage::wrapped`]) sets
+/// `next` to 1, which that device gave the record after its 0. Reading on
+/// loses that 0 record without a gap; resuming a caught-up log from such a
+/// checkpoint can instead start over from the oldest record without
+/// reporting a skip. Such devices usually also clamp a reference past the
+/// wrap, which fails as [`Error::LogNotAdvancing`].
 pub async fn read_log_page<R: LogRequester + ?Sized>(
     requester: &R,
     mac: &[u8],
@@ -346,46 +387,60 @@ pub async fn read_log_page<R: LogRequester + ?Sized>(
         },
         cursor => cursor,
     };
-    let reply = requester
+    let mut reply = requester
         .read_range_lenient(mac, &request(log, cursor, count))
         .await?;
     let LogCursor::Sequence(expected) = cursor else {
         return page(space, cursor, reply, None);
     };
-    if reply.ack.item_count != 0 {
-        return page(space, cursor, reply, None);
-    }
-    // Nothing from `expected` on. The counts tell whether the log ends
-    // there, or no longer holds that record, or has logged it since.
-    let from = match window(requester, mac, log, space).await? {
-        Window::Records { oldest, newest }
-            if space.distance(expected, space.advance(newest, 1)) != 0 =>
-        {
-            let held =
-                space.distance(oldest, expected) >= 0 && space.distance(expected, newest) >= 0;
-            if held {
-                expected
-            } else {
-                oldest
-            }
+    // Nothing from `asked` on: the counts tell whether the log ends there,
+    // has logged it since, or no longer holds it.
+    let mut asked = expected;
+    let mut asked_while_held = false;
+    let mut restarts = 0;
+    loop {
+        if reply.ack.item_count != 0 {
+            return page(
+                space,
+                LogCursor::Sequence(asked),
+                reply,
+                (asked != expected).then_some(expected),
+            );
         }
-        _ => return page(space, cursor, reply, None),
-    };
-    let reply = requester
-        .read_range_lenient(mac, &request(log, LogCursor::Sequence(from), count))
-        .await?;
-    if reply.ack.item_count == 0 {
-        return Err(Error::LogNotAdvancing {
-            requested: from,
-            returned: None,
-        });
+        if let Some(rule) = fatal(&reply.violations, LogCursor::Sequence(asked)) {
+            return Err(Error::ReadRangeViolation(rule));
+        }
+        if restarts == RETRIES {
+            break;
+        }
+        restarts += 1;
+        asked = match window(requester, mac, log, space).await? {
+            Window::Records { oldest, newest }
+                if space.distance(asked, space.advance(newest, 1)) != 0 =>
+            {
+                let held = space.distance(oldest, asked) >= 0 && space.distance(asked, newest) >= 0;
+                if held && asked_while_held {
+                    break;
+                }
+                // Either way the record asked for next is one the counts
+                // say the log holds.
+                asked_while_held = true;
+                if held {
+                    asked
+                } else {
+                    oldest
+                }
+            }
+            _ => return page(space, LogCursor::Sequence(asked), reply, None),
+        };
+        reply = requester
+            .read_range_lenient(mac, &request(log, LogCursor::Sequence(asked), count))
+            .await?;
     }
-    page(
-        space,
-        LogCursor::Sequence(from),
-        reply,
-        (from != expected).then_some(expected),
-    )
+    Err(Error::LogNotAdvancing {
+        requested: asked,
+        returned: None,
+    })
 }
 
 /// A page with no records, which reads from `next` once the log has any.
@@ -399,7 +454,26 @@ fn empty_page(log: ObjectIdentifier, next: LogCursor) -> LogPage {
         violations: Vec::new(),
         next,
         done: true,
+        wrapped: false,
     }
+}
+
+/// The first rule in `violations` that a read from `cursor` can't
+/// tolerate: an echo that doesn't match, or a page read by sequence number
+/// or time without its first sequence number.
+fn fatal(violations: &[ReadRangeViolation], cursor: LogCursor) -> Option<ReadRangeViolation> {
+    let sequenced = !matches!(cursor, LogCursor::Position(_));
+    violations
+        .iter()
+        .copied()
+        .find(|violation| match violation {
+            ReadRangeViolation::MissingFirstSequenceNumber => sequenced,
+            ReadRangeViolation::ZeroFirstSequenceNumber
+            | ReadRangeViolation::UnexpectedFirstSequenceNumber
+            | ReadRangeViolation::MoreItemsPastEnd
+            | ReadRangeViolation::ItemCountExceedsRequest => false,
+            _ => true,
+        })
 }
 
 /// Assemble the page `reply` answers to a read from `cursor`; `restarted`
@@ -412,16 +486,8 @@ pub(crate) fn page(
     restarted: Option<u64>,
 ) -> Result<LogPage, Error> {
     let ReadRangeReply { ack, violations } = reply;
-    let sequenced = !matches!(cursor, LogCursor::Position(_));
-    if let Some(&fatal) = violations.iter().find(|violation| match violation {
-        ReadRangeViolation::MissingFirstSequenceNumber => sequenced,
-        ReadRangeViolation::ZeroFirstSequenceNumber
-        | ReadRangeViolation::UnexpectedFirstSequenceNumber
-        | ReadRangeViolation::MoreItemsPastEnd
-        | ReadRangeViolation::ItemCountExceedsRequest => false,
-        _ => true,
-    }) {
-        return Err(Error::ReadRangeViolation(fatal));
+    if let Some(rule) = fatal(&violations, cursor) {
+        return Err(Error::ReadRangeViolation(rule));
     }
     let records = match ack.log_records() {
         Some(records) => records?,
@@ -434,6 +500,7 @@ pub(crate) fn page(
     let returned = u64::from(ack.item_count);
     let done = returned == 0 || ack.result_flags.1;
     let mut gap = None;
+    let mut wrapped = false;
     let (first_sequence_number, next) = match (cursor, ack.first_sequence_number) {
         (LogCursor::Position(position), _) => {
             (None, LogCursor::Position(position.saturating_add(returned)))
@@ -458,6 +525,10 @@ pub(crate) fn page(
                     });
                 }
             }
+            // The records run from `first` to `first + returned - 1`: they
+            // reach the top of the range when that passes `max`.
+            wrapped =
+                first != 0 && u128::from(first) + u128::from(returned) > u128::from(space.max);
             (
                 Some(first),
                 LogCursor::Sequence(space.advance(first, returned)),
@@ -472,6 +543,7 @@ pub(crate) fn page(
         violations,
         next,
         done,
+        wrapped,
     })
 }
 

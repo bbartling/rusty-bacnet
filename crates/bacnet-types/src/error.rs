@@ -199,9 +199,11 @@ pub enum ReadRangeViolation {
     /// or had no range, which carries none (Clause 15.8.1.2.7).
     UnexpectedFirstSequenceNumber,
     /// MORE_ITEMS together with the flag that says the page reached the end
-    /// the read moves toward: LAST_ITEM for a forward read, FIRST_ITEM for a
-    /// backward one. Items left out of a full page lie beyond that end, so
-    /// the two contradict each other (Clause 15.8.2).
+    /// a ranged read moves toward: LAST_ITEM for a forward read, FIRST_ITEM
+    /// for a backward one. Items left out of a full page lie beyond that
+    /// end, so the two contradict each other (Clause 15.8.2). A read with no
+    /// range may keep either end, so for it only all three flags together
+    /// break the rule.
     MoreItemsPastEnd,
     /// More items than the request's count asked for.
     ItemCountExceedsRequest,

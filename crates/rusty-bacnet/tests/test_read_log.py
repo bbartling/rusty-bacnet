@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import inspect
+import json
 import socket
 import time
 import unittest
@@ -22,6 +23,7 @@ from rusty_bacnet import (
     BACnetServer,
     BacnetError,
     BacnetLogNotAdvancingError,
+    BacnetReadRangeViolationError,
     BipEndpoint,
     EndpointClient,
     EventType,
@@ -134,6 +136,7 @@ class ReadLogLiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(pages[0]["result_flags"][0])
         self.assertTrue(all(page["gap"] is None for page in pages))
         self.assertTrue(all(page["violations"] == [] for page in pages))
+        self.assertTrue(all(page["wrapped"] is False for page in pages))
         self.assertEqual(pages[-1]["next"], ("sequence", len(records) + 1))
         # Two counts and a ReadRange a page, each at least 20 ms apart.
         requests = 2 + len(pages)
@@ -157,6 +160,40 @@ class ReadLogLiveTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(records, self.everything)
         finally:
             await endpoint.close()
+
+    async def test_a_time_cursor_survives_json(self) -> None:
+        notifications = [
+            r for r in self.everything if r["datum"]["kind"] == "notification"
+        ]
+        async with BACnetClient(interface="127.0.0.1", port=0) as client:
+            # Nothing is newer than the last record: an empty page whose next
+            # cursor is the same time, ready to persist.
+            last = self.everything[-1]["timestamp"]
+            empty = await client.read_log_page(self.address, LOG, ("time", last))
+            self.assertTrue(empty["done"])
+            self.assertEqual(empty["records"], [])
+            self.assertEqual(empty["next"], ("time", last))
+            stored = json.loads(json.dumps(empty["next"]))
+            self.assertIsInstance(stored[1][0], list)
+            again = await client.read_log_page(self.address, LOG, stored)
+            self.assertEqual(again["next"], ("time", last))
+            # A time cursor with records reads the same through JSON.
+            first = ("time", notifications[0]["timestamp"])
+            direct = await client.read_log_page(self.address, LOG, first, page_size=100)
+            through_json = await client.read_log_page(
+                self.address, LOG, json.loads(json.dumps(first)), page_size=100
+            )
+            self.assertEqual(direct["records"], through_json["records"])
+            # read_range takes the nested-list form too.
+            listed = await client.read_range(
+                self.address,
+                LOG,
+                PropertyIdentifier.LOG_BUFFER,
+                range_type="time",
+                reference_time=json.loads(json.dumps(notifications[0]["timestamp"])),
+                count=100,
+            )
+            self.assertEqual(rusty_bacnet.decode_log_records(listed), direct["records"])
 
     async def test_by_time_reads_the_records_newer_than_the_reference(self) -> None:
         notifications = [
@@ -213,9 +250,11 @@ class WrappedDeviceTests(unittest.IsolatedAsyncioTestCase):
                     interface="127.0.0.1", port=0, apdu_timeout_ms=2000
                 ) as client:
                     options = {"range_type": "sequence", "reference_seq": 1, "count": 5}
-                    with self.assertRaises(BacnetError) as refused:
+                    with self.assertRaises(BacnetReadRangeViolationError) as refused:
                         await client.read_range(address, TREND_LOG, PropertyIdentifier.LOG_BUFFER, **options)
                     self.assertIn("first sequence number 0", str(refused.exception))
+                    self.assertEqual(refused.exception.rule, "zero_first_sequence_number")
+                    self.assertIsInstance(refused.exception, BacnetError)
                     kept = await client.read_range(
                         address, TREND_LOG, PropertyIdentifier.LOG_BUFFER,
                         validation="lenient", **options,
@@ -257,6 +296,7 @@ class ReadLogContractTests(unittest.TestCase):
             (analog, None, 10),
             (LOG, None, 0),
             (LOG, None, 32_768),
+            (LOG, None, -1),
             (LOG, ("backwards", 1), 10),
             (LOG, "newest", 10),
         ):

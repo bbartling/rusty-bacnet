@@ -439,8 +439,10 @@ async fn read_log_page_finds_the_oldest_record_and_decodes_its_page() {
     let log = oid(ObjectType::TREND_LOG, 3);
     let read =
         tokio::spawn(async move { client.read_log_page(&mac, log, LogCursor::Oldest, 10).await });
-    // Record_Count and Total_Record_Count both read 42: records 1 to 42.
+    // Total_Record_Count, Record_Count and Total_Record_Count again all read
+    // 42: records 1 to 42.
     for property in [
+        PropertyIdentifier::TOTAL_RECORD_COUNT,
         PropertyIdentifier::RECORD_COUNT,
         PropertyIdentifier::TOTAL_RECORD_COUNT,
     ] {

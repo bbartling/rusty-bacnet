@@ -17,6 +17,7 @@ create_exception!(rusty_bacnet, BacnetTimeoutError, BacnetError);
 create_exception!(rusty_bacnet, BacnetRejectError, BacnetError);
 create_exception!(rusty_bacnet, BacnetAbortError, BacnetError);
 create_exception!(rusty_bacnet, BacnetLogNotAdvancingError, BacnetError);
+create_exception!(rusty_bacnet, BacnetReadRangeViolationError, BacnetError);
 
 /// `BacnetTransportError`, built at first use: pyo3's `create_exception!`
 /// takes one base, and this class derives from both `BacnetError` and
@@ -109,6 +110,16 @@ pub fn to_py_err(err: Error) -> PyErr {
             py_err
         }
         Error::Transport(io) => transport_error(io),
+        Error::ReadRangeViolation(rule) => {
+            // A strict ReadRange refused an answer that broke a rule (#1531):
+            // `rule` names it, so a caller can read again leniently.
+            let py_err = BacnetReadRangeViolationError::new_err(err.to_string());
+            let _ = crate::py_async::attach(|py| {
+                let _ = py_err.value(py).setattr("rule", rule.name());
+                Ok(())
+            });
+            py_err
+        }
         Error::LogNotAdvancing {
             requested,
             returned,
@@ -261,6 +272,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
         "BacnetLogNotAdvancingError",
         m.py().get_type::<BacnetLogNotAdvancingError>(),
+    )?;
+    m.add(
+        "BacnetReadRangeViolationError",
+        m.py().get_type::<BacnetReadRangeViolationError>(),
     )?;
     m.add(
         "BacnetTransportError",

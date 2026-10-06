@@ -80,8 +80,16 @@ impl ReadRangeAck {
         }
 
         let (first_item, last_item, more_items) = self.result_flags;
-        let backward = count.is_some_and(|count| count < 0);
-        if more_items && if backward { first_item } else { last_item } {
+        // A ranged read's reference fixes which end a cut page gives up. A
+        // read with no range has none, and Clause 15.8.2 doesn't say which
+        // items it keeps, so there only a page holding both ends yet still
+        // claiming more is a contradiction.
+        let past_end = match count {
+            Some(count) if count < 0 => first_item,
+            Some(_) => last_item,
+            None => first_item && last_item,
+        };
+        if more_items && past_end {
             found.push(ReadRangeViolation::MoreItemsPastEnd);
         }
         if count.is_some_and(|count| u64::from(self.item_count) > u64::from(count.unsigned_abs())) {

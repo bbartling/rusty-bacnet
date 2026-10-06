@@ -523,10 +523,13 @@ client = BACnetClient(
 )
 ```
 
-`min_request_interval_ms` spaces the confirmed requests the client sends to
-each destination by at least that long (#1535): paging a log or polling then
-leaves a slow device room for its other clients. Requests to different
-destinations don't wait on each other; 0, the default, sends at once.
+`min_request_interval_ms` paces the confirmed requests the client sends to
+each destination (#1535): a request waits until that long after the previous
+one to the same destination finished, by a reply, an error or the caller
+giving up, or until that long after the previous one was sent while it is
+still outstanding. Paging a log or polling then leaves a slow device room for
+its other clients. Requests to different destinations don't wait on each
+other; 0, the default, sends at once. `EndpointClient` has no pacing.
 
 ### MS/TP serial ports
 
@@ -1098,9 +1101,10 @@ raises `ValueError` (convert it first with
 microseconds, rounded down.
 
 `validation="strict"` (the default) refuses an answer that breaks a ReadRange
-rule with `BacnetError` naming the rule: an echo mismatch, a first sequence
-number missing, zero or unexpected, MORE_ITEMS with the flag for the end the
-read moves toward, or more items than `count`. `validation="lenient"` (#1531)
+rule with `BacnetReadRangeViolationError`, whose `rule` names it: an echo
+mismatch, a first sequence number missing, zero or unexpected, MORE_ITEMS
+with the flag for the end a ranged read moves toward (with no range, with
+both FIRST_ITEM and LAST_ITEM), or more items than `count`. `validation="lenient"` (#1531)
 keeps such an answer and lists the rules in `"violations"`, so a device that
 numbers the record after its sequence wrap 0 doesn't cost the page.
 
@@ -1171,10 +1175,14 @@ Record_Count and Total_Record_Count), `("sequence", n)`, `("position", n)` or
 `decode_log_records` gives them), `"first_sequence_number"`, `"result_flags"`,
 `"gap"` (`None`, or `{"expected", "first", "skipped"}` when the log no longer
 holds the records asked for), `"violations"`, `"next"` (the cursor to read
-from next) and `"done"`. Loop until `done`, then keep `next` as the checkpoint;
-a list in place of the tuple works, so it survives JSON. One request is
+from next), `"done"` and `"wrapped"` (the page reached the top of the
+sequence range, so `next` wrapped to 1). Loop until `done`, then keep `next`
+as the checkpoint; lists in place of the tuples work, so it survives
+`json.dumps` and `json.loads`, a time cursor included. One request is
 outstanding at a time, and sequence numbers wrap from the top of their range
-to 1.
+to 1. A page whose records don't decode raises `BacnetError` naming the
+first that fails, and the records before it are dropped; read that range with
+`read_range` and `decode_log_records` to see them.
 
 ```python
 cursor = None
@@ -1189,9 +1197,11 @@ save_checkpoint(cursor)
 
 A device that answers with records from before the one asked for (bacnet-stack
 1.6.1 does past its sequence wrap), or with none where its counts say it holds
-records, raises `BacnetLogNotAdvancingError` instead of looping; read such a
-log from `("position", 1)`. A non-log object or a `page_size` outside 1..=32767
-raises `ValueError` before I/O.
+records, raises `BacnetLogNotAdvancingError` instead of looping. Its sequence
+numbers are inconsistent: read it from `("position", 1)`. A log that is merely
+full doesn't need that; the reader starts over from the oldest record when
+the log drops the one it asked for. A non-log object or a `page_size` outside
+1..=32767 raises `ValueError` before I/O.
 
 ---
 
@@ -3545,6 +3555,7 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetTimeoutError` | Request timed out (APDU retries exhausted) |
 | `BacnetRejectError` | Remote device rejected the request |
 | `BacnetAbortError` | Remote device aborted the request |
+| `BacnetReadRangeViolationError` | A strict `read_range` refused an answer that breaks a ReadRange rule; `rule` names it (for example `"zero_first_sequence_number"`) |
 | `BacnetLogNotAdvancingError` | A paged log read can't advance: the device answered from before the record asked for, or with none its counts say it holds. `requested` and `returned` (`None` when it sent none) name the sequence numbers |
 | `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |
 

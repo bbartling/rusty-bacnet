@@ -66,7 +66,7 @@ impl BACnetClient {
         address: String,
         object_id: PyObjectIdentifier,
         cursor: Option<Bound<'py, PyAny>>,
-        page_size: u32,
+        page_size: i64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let (log, cursor, page_size) =

@@ -111,12 +111,15 @@ fn shell_words_carry_the_same_options() {
         RangeOptions::from_words(&words("d o --all --time 2026-10-05T09:00")).unwrap();
     assert!(options.all);
     assert!(options.time.is_some());
+    let (options, _) = RangeOptions::from_words(&words("d o --sequence 1 --strict")).unwrap();
+    assert!(options.strict);
     for bad in [
         "d o --position",
         "d o --position x",
         "d o --position 1 --sequence 2",
         "d o --count 40000",
         "d o --newest",
+        "d o --all --strict",
     ] {
         assert!(RangeOptions::from_words(&words(bad)).is_err(), "{bad}");
     }

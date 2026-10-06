@@ -115,10 +115,12 @@ pub struct ClientConfig {
     pub segmented_response_accepted: bool,
     /// Proposed window size for segmented transfers (1-127, default 1).
     pub proposed_window_size: u8,
-    /// Least time, in milliseconds, between the confirmed requests this
-    /// client sends to one destination; 0 (the default) sends at once. A
-    /// slow device then serves its other clients between this client's
-    /// requests, whether paging a log or polling (#1535).
+    /// Least time, in milliseconds, from one confirmed request to a
+    /// destination finishing (reply, error or cancellation) to the next
+    /// being sent; while one is still outstanding, the next waits that long
+    /// after it was sent. 0 (the default) sends at once. A slow device then
+    /// serves its other clients between this client's requests, paging a
+    /// log or polling alike (#1535).
     pub min_request_interval_ms: u64,
 }
 

@@ -2,7 +2,7 @@
 section: Migration notes
 ---
 - **ReadRange (Rust API, #1531):** a ReadRange answer that breaks a rule fails
-  with `Error::ReadRangeViolation(rule)` instead of `Error::Decoding` at offset
-  0; add an arm for it where you match `Error` exhaustively. On the endpoint,
-  `EndpointReadRequest::Range` takes a `ReadRangeValidation`, and
-  `EndpointReadAck::Range` and `into_range` carry a `ReadRangeReply`.
+  with `Error::ReadRangeViolation(rule)`, not `Error::Decoding`; match it where
+  you match `Error` exhaustively. Strict now also refuses pages it accepted,
+  such as bacnet-stack 1.6.1's backward By-Position and By-Time pages (FIRST_ITEM
+  with MORE_ITEMS); read such devices with `ReadRangeValidation::Lenient`.

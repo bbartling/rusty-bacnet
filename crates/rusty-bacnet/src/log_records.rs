@@ -18,7 +18,7 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PySequence, PyString};
+use pyo3::types::{PyBytes, PyDict, PyList, PySequence, PyString, PyTuple};
 
 use crate::types::{
     audit_log_record_to_py, date_value, time_value, PyBACnetTimeStamp, PyEventState, PyEventType,
@@ -246,13 +246,32 @@ pub(crate) fn decode_log_records<'py>(
     }
 }
 
+/// `value` with its outer sequence and the sequences in it as tuples, so a
+/// `(date, time)` pair that went through JSON as nested lists reads like
+/// the tuples it was. Anything else comes back as it was, for the tuple
+/// parser to refuse.
+fn as_tuples<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let py = value.py();
+    let Ok(list) = value.cast::<PyList>() else {
+        return Ok(value.clone());
+    };
+    let items = list
+        .iter()
+        .map(|item| match item.cast::<PyList>() {
+            Ok(inner) => Ok(PyTuple::new(py, inner.iter())?.into_any()),
+            Err(_) => Ok(item),
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(PyTuple::new(py, items)?.into_any())
+}
+
 /// A `reference_time`: a naive `datetime.datetime`, taken as the device's
 /// local time, or a `(date, time)` pair of tuples.
 pub(crate) fn reference_time(value: &Bound<'_, PyAny>) -> PyResult<(Date, Time)> {
     let py = value.py();
     let datetime = py.import("datetime")?.getattr("datetime")?;
     if !value.is_instance(&datetime)? {
-        return crate::types::date_time_tuple(value, "reference_time");
+        return crate::types::date_time_tuple(&as_tuples(value)?, "reference_time");
     }
     if !value.getattr("tzinfo")?.is_none() {
         return Err(PyValueError::new_err(
@@ -358,6 +377,7 @@ pub(crate) fn page_to_py(py: Python<'_>, page: LogPage) -> PyResult<Py<PyAny>> {
     result.set_item("violations", violation_names(&page.violations))?;
     result.set_item("next", cursor_to_py(py, page.next)?)?;
     result.set_item("done", page.done)?;
+    result.set_item("wrapped", page.wrapped)?;
     Ok(result.into_any().unbind())
 }
 
@@ -367,7 +387,7 @@ pub(crate) fn page_to_py(py: Python<'_>, page: LogPage) -> PyResult<Py<PyAny>> {
 pub(crate) fn page_request(
     object: &PyObjectIdentifier,
     cursor: Option<&Bound<'_, PyAny>>,
-    size: u32,
+    size: i64,
 ) -> PyResult<(ObjectIdentifier, LogCursor, u16)> {
     let log = object.to_rust();
     if LogRecords::empty_for(log.object_type()).is_none() {
@@ -379,7 +399,7 @@ pub(crate) fn page_request(
 }
 
 /// The page size a Python caller asked for, checked before any I/O.
-fn page_size(page_size: u32) -> PyResult<u16> {
+fn page_size(page_size: i64) -> PyResult<u16> {
     u16::try_from(page_size)
         .ok()
         .filter(|size| (1..=32_767).contains(size))

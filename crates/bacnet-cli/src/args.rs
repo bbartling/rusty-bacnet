@@ -35,8 +35,10 @@ pub(crate) struct Cli {
     #[arg(short, long, default_value_t = 6000, global = true)]
     pub(crate) timeout: u64,
 
-    /// Least time in milliseconds between requests to one device (0: none),
-    /// so paging a log or polling leaves a slow device room for others.
+    /// Least time in milliseconds from one request to a device finishing to
+    /// the next being sent, or from its send while it is still outstanding
+    /// (0: none), so paging a log or polling leaves a slow device room for
+    /// others.
     #[arg(long, default_value_t = 0, global = true)]
     pub(crate) min_interval_ms: u64,
 

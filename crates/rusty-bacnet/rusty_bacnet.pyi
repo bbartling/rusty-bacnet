@@ -1714,6 +1714,17 @@ class BacnetLogNotAdvancingError(BacnetError):
     requested: int
     returned: int | None
 
+class BacnetReadRangeViolationError(BacnetError):
+    """Raised when a strict ``read_range`` refuses an answer that breaks a
+    ReadRange rule (#1531). Read again with ``validation="lenient"`` to keep
+    the answer and the rules it broke.
+
+    Attributes:
+        rule: The rule broken, in snake case, such as
+            ``"zero_first_sequence_number"``.
+    """
+    rule: str
+
 class BacnetTransportError(BacnetError, OSError):
     """Raised when a transport socket or I/O operation fails.
 
@@ -1851,10 +1862,13 @@ class BACnetClient:
         sc_device_uuid: Optional[bytes | bytearray] = None,
         min_request_interval_ms: int = 0,
     ) -> None:
-        """``min_request_interval_ms`` spaces the confirmed requests to each
-        destination by at least that long (default 0, no pacing), so paging a
-        log or polling leaves a slow device room for its other clients;
-        requests to different destinations don't wait on each other (#1535).
+        """``min_request_interval_ms`` (default 0, no pacing) paces the
+        confirmed requests to each destination: a request waits until that
+        long after the previous one to the same destination finished (reply,
+        error or the caller giving up), or after it was sent while it is
+        still outstanding. Paging a log or polling then leaves a slow device
+        room for its other clients; requests to different destinations don't
+        wait on each other (#1535).
         """
         ...
 
@@ -2412,9 +2426,9 @@ class BACnetClient:
         to zero.
 
         ``validation="strict"`` refuses an answer that breaks a ReadRange rule
-        with BacnetError naming the rule; ``"lenient"`` keeps it and lists
-        the rules in ``violations`` (#1531). Decode a log's records with
-        ``decode_log_records``.
+        with BacnetReadRangeViolationError, whose ``rule`` names it;
+        ``"lenient"`` keeps it and lists the rules in ``violations`` (#1531).
+        Decode a log's records with ``decode_log_records``.
         """
         ...
 
@@ -2429,13 +2443,18 @@ class BACnetClient:
 
         ``cursor`` is ``None`` or ``"oldest"`` (the oldest record, found from
         Record_Count and Total_Record_Count), ``("sequence", n)``,
-        ``("position", n)`` or ``("time", reference_time)``; a list works
+        ``("position", n)`` or ``("time", reference_time)``; lists work
         too, so a checkpoint survives JSON. Loop on ``page["next"]`` until
         ``page["done"]``, then keep ``next`` as the checkpoint. One request
         is outstanding at a time. A first record past the one asked for sets
-        ``gap``; a page answered from before it, or none where the counts say
-        records are, raises BacnetLogNotAdvancingError: read such a log from
-        ``("position", 1)``. A non-log object or a ``page_size`` outside
+        ``gap``; when the log drops the record asked for, the read starts
+        over from the oldest. A page answered from before the one asked for,
+        or none where the counts say records are, raises
+        BacnetLogNotAdvancingError: such a device's sequence numbers are
+        inconsistent, so read it from ``("position", 1)``. ``wrapped`` marks
+        a page that reached the top of the sequence range. A page whose
+        records don't decode raises BacnetError, dropping the records before
+        the failing one. A non-log object or a ``page_size`` outside
         1..=32767 raises ValueError before I/O.
         """
         ...
@@ -4158,6 +4177,7 @@ class LogPage(TypedDict):
     violations: list[str]
     next: LogCursor
     done: bool
+    wrapped: bool
 
 class ReadPropertyResult(TypedDict):
     property_id: PropertyIdentifier
@@ -4260,9 +4280,9 @@ class EndpointClient:
         to zero.
 
         ``validation="strict"`` refuses an answer that breaks a ReadRange rule
-        with BacnetError naming the rule; ``"lenient"`` keeps it and lists
-        the rules in ``violations`` (#1531). Decode a log's records with
-        ``decode_log_records``.
+        with BacnetReadRangeViolationError, whose ``rule`` names it;
+        ``"lenient"`` keeps it and lists the rules in ``violations`` (#1531).
+        Decode a log's records with ``decode_log_records``.
         """
         ...
 
@@ -4277,13 +4297,18 @@ class EndpointClient:
 
         ``cursor`` is ``None`` or ``"oldest"`` (the oldest record, found from
         Record_Count and Total_Record_Count), ``("sequence", n)``,
-        ``("position", n)`` or ``("time", reference_time)``; a list works
+        ``("position", n)`` or ``("time", reference_time)``; lists work
         too, so a checkpoint survives JSON. Loop on ``page["next"]`` until
         ``page["done"]``, then keep ``next`` as the checkpoint. One request
         is outstanding at a time. A first record past the one asked for sets
-        ``gap``; a page answered from before it, or none where the counts say
-        records are, raises BacnetLogNotAdvancingError: read such a log from
-        ``("position", 1)``. A non-log object or a ``page_size`` outside
+        ``gap``; when the log drops the record asked for, the read starts
+        over from the oldest. A page answered from before the one asked for,
+        or none where the counts say records are, raises
+        BacnetLogNotAdvancingError: such a device's sequence numbers are
+        inconsistent, so read it from ``("position", 1)``. ``wrapped`` marks
+        a page that reached the top of the sequence range. A page whose
+        records don't decode raises BacnetError, dropping the records before
+        the failing one. A non-log object or a ``page_size`` outside
         1..=32767 raises ValueError before I/O.
         """
         ...

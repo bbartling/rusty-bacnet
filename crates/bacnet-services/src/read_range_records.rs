@@ -23,41 +23,30 @@ use super::ReadRangeAck;
 /// A record kind a log object keeps in its Log_Buffer, decodable one after
 /// another from ReadRange item data.
 pub trait LogBufferRecord: Sized {
-    /// The object type whose Log_Buffer holds this kind of record.
-    const OBJECT_TYPE: ObjectType;
-
     /// Decode one record starting at `offset`, returning it and the offset
     /// just past it.
     fn decode_at(data: &[u8], offset: usize) -> Result<(Self, usize), Error>;
 }
 
 impl LogBufferRecord for BACnetLogRecord {
-    const OBJECT_TYPE: ObjectType = ObjectType::TREND_LOG;
-
     fn decode_at(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
         decode_log_record(data, offset)
     }
 }
 
 impl LogBufferRecord for BACnetEventLogRecord {
-    const OBJECT_TYPE: ObjectType = ObjectType::EVENT_LOG;
-
     fn decode_at(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
         decode_event_log_record(data, offset)
     }
 }
 
 impl LogBufferRecord for BACnetLogMultipleRecord {
-    const OBJECT_TYPE: ObjectType = ObjectType::TREND_LOG_MULTIPLE;
-
     fn decode_at(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
         decode_log_multiple_record(data, offset)
     }
 }
 
 impl LogBufferRecord for BACnetAuditLogRecord {
-    const OBJECT_TYPE: ObjectType = ObjectType::AUDIT_LOG;
-
     fn decode_at(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
         decode_audit_log_record_at(data, offset)
     }

@@ -31,6 +31,10 @@ pub struct RangeOptions {
     /// --sequence or --time, until the newest.
     #[arg(long)]
     pub all: bool,
+    /// Refuse an answer that breaks a ReadRange rule, instead of showing it
+    /// with the rules it broke.
+    #[arg(long, conflicts_with = "all")]
+    pub strict: bool,
 }
 
 impl RangeOptions {
@@ -109,6 +113,7 @@ impl RangeOptions {
                     );
                 }
                 "--all" => options.all = true,
+                "--strict" => options.strict = true,
                 flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
                 _ => rest.push(word.clone()),
             }
@@ -120,6 +125,9 @@ impl RangeOptions {
         ];
         if starts.iter().filter(|start| **start).count() > 1 {
             return Err("give one of --position, --sequence and --time".into());
+        }
+        if options.strict && options.all {
+            return Err("--strict takes one range; --all reads leniently".into());
         }
         Ok((options, rest))
     }

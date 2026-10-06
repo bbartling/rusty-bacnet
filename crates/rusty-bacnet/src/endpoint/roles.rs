@@ -212,7 +212,7 @@ impl PyEndpointClient {
         address: String,
         object_id: PyObjectIdentifier,
         cursor: Option<Bound<'py, PyAny>>,
-        page_size: u32,
+        page_size: i64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (log, cursor, page_size) =
             crate::log_records::page_request(&object_id, cursor.as_ref(), page_size)?;

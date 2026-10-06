@@ -4730,8 +4730,9 @@ for rule in &reply.violations { eprintln!("device broke a ReadRange rule: {rule}
 `read_range` checks the acknowledgement against its request
 (`ReadRangeAck::violations`): the echoed object, property and array index, a
 first sequence number present, nonzero and only where the range calls for one,
-MORE_ITEMS never set with the flag for the end the read moves toward, and no
-more items than the count. A broken rule fails with
+MORE_ITEMS never set with the flag for the end a ranged read moves toward (with
+no range, never with both FIRST_ITEM and LAST_ITEM), and no more items than
+the count. A broken rule fails with
 `Error::ReadRangeViolation`, naming it; a malformed answer is still
 `Error::Decoding`. `read_range_with` and `ReadRangeValidation::Lenient` keep
 the decoded page instead, with every rule it broke in
@@ -4762,33 +4763,49 @@ save_checkpoint(cursor); // resume from it later for the records logged since
 
 `read_log_page` reads one page with one request outstanding:
 
-- `Oldest` finds the oldest record from Record_Count and Total_Record_Count.
+- `Oldest` finds the oldest record from Total_Record_Count, Record_Count and
+  Total_Record_Count again, reading the counts again while the total moves,
+  so a record logged in between can't hide the oldest.
 - Pages go on from the first sequence number plus the records returned,
-  across the wrap from the top of the range to 1.
+  across the wrap from the top of the range to 1; `page.wrapped` marks a page
+  that reaches the top.
 - MORE_ITEMS only says the answer was cut to fit, so any page that isn't the
   last continues; LAST_ITEM or an empty page ends the read, and `next` is the
   checkpoint.
-- An empty page reads the counts again. A checkpoint the log no longer holds
-  restarts from the oldest record with `page.gap` set, as does a first record
-  past the one asked for.
+- An empty page reads the counts again. A record logged since is asked for
+  again. A checkpoint the log no longer holds restarts from the oldest record
+  with `page.gap` set, as does a first record past the one asked for; a full
+  log may drop that one too before it is read, so a read starts over up to
+  three times.
 - A device that answers with records before the one asked for, as
-  bacnet-stack 1.6.1 does past its wrap, fails with
-  `Error::LogNotAdvancing` rather than repeating pages; so does one whose
-  counts say it holds a record it doesn't return. Read such a log from
-  `LogCursor::Position(1)`.
+  bacnet-stack 1.6.1 does past its wrap, fails with `Error::LogNotAdvancing`
+  rather than repeating pages; so does one whose counts say it holds a record
+  it won't return. Such a device's sequence numbers are inconsistent: read it
+  from `LogCursor::Position(1)`. A log that is merely full doesn't need that,
+  and a position read of a busy full log skips the records it drops without
+  a gap.
 - Pages are read leniently: a first sequence number of 0 after a device's
-  wrap is accepted and listed in `page.violations`.
+  wrap is accepted and listed in `page.violations`. A device that numbers the
+  record after the top 0 rather than 1 is one number ahead of `next` after a
+  `wrapped` page: reading on loses that record without a gap.
+- A page whose records don't decode fails with `Error::Decoding`, dropping the
+  records before the failing one; `read_range_with` and
+  `ReadRangeAck::log_records` keep them.
 
 The endpoint client has the same `read_log_page`, and
-`bacnet_client::log_reader::read_log_page` runs over any `LogRequester`.
+`bacnet_client::log_reader::read_log_page` runs over any `LogRequester`. The
+endpoint client isn't paced: its pages go back to back.
 
 ### Pacing
 
-`min_request_interval_ms` on every client builder (and in `ClientConfig`)
-spaces the confirmed requests to each destination by at least that long,
-default 0. It covers paging and polling alike, so a slow device can serve its
-other clients between them; requests to different destinations don't wait on
-each other.
+`min_request_interval_ms` on every `BACnetClient` builder (and in
+`ClientConfig`), default 0, paces the confirmed requests to each destination.
+A request waits until that long after the previous request to the same
+destination finished, by a reply, an error or its caller giving up; while that
+previous request is still outstanding, it waits until that long after it was
+sent. It covers paging and polling alike, so a slow device can serve its other
+clients between them; requests to different destinations don't wait on each
+other. The endpoint client has no pacing.
 
 ```rust
 let client = BACnetClient::bip_builder().min_request_interval_ms(50).build().await?;

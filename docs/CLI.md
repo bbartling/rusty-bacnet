@@ -37,7 +37,7 @@ and its headers (`libpcap-dev` on Debian and Ubuntu).
 | `-p, --port <PORT>` | `47808` | BACnet UDP port |
 | `-b, --broadcast <IP>` | `255.255.255.255` | Broadcast address for WhoIs |
 | `-t, --timeout <MS>` | `6000` | APDU timeout in milliseconds |
-| `--min-interval-ms <MS>` | `0` | Least time between confirmed requests to one device, so paging or polling leaves a slow device room for others |
+| `--min-interval-ms <MS>` | `0` | Least time from one confirmed request to a device finishing (or being sent, while it is still outstanding) to the next, so paging or polling leaves a slow device room for others |
 | `--ipv6` | | Use BACnet/IPv6 transport |
 | `--ipv6-interface <IP>` | | IPv6 interface address |
 | `--device-instance <N>` | | Device instance for BIP6 VMAC derivation |
@@ -251,11 +251,15 @@ bacnet --min-interval-ms 50 read-range 192.168.1.100 trend-log:1 --all --sequenc
 (default 100; negative reads backward). `--time` takes the device's local time
 as `YYYY-MM-DDTHH:MM[:SS[.hh]]`. The heading shows the result flags
 (FIRST_ITEM, LAST_ITEM, MORE_ITEMS) and the first sequence number, so a page
-that left items out says so. `--all` pages through a log's Log_Buffer from the
-oldest record, or from the start given, `--count` records a page, and ends with
-`pages=` and `next:`, the flags that resume the read later; JSON adds `pages`,
-`next` and `gaps`. A device that can't be read by sequence number (it answers
-from before the record asked for) fails; read it with `--all --position 1`.
+that left items out says so. A read shows an answer that breaks a ReadRange
+rule anyway and names the rules under `violations` (in the heading and the
+JSON); `--strict` refuses such an answer instead. `--all` pages through a
+log's Log_Buffer from the oldest record, or from the start given, `--count`
+records a page, and ends with `pages=` and `next:`, the flags that resume the
+read later; JSON adds `pages`, `next` and `gaps`. When an error stops it part
+way, such as a timeout, it prints what it read and `next:` first. A device
+whose sequence numbers are inconsistent (it answers from before the record
+asked for) fails; read it with `--all --position 1`.
 
 `read-range` decodes the Log_Buffer of a Trend Log, Event Log, Trend Log
 Multiple or Audit Log record by record, showing each record's timestamp, datum

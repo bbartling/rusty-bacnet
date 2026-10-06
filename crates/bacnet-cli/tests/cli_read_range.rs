@@ -214,6 +214,7 @@ async fn read_range_prints_decoded_log_records() {
             "item_count": 2,
             "result_flags": {"first_item": true, "last_item": true, "more_items": false},
             "first_sequence_number": null,
+            "violations": [],
             "records": [
                 {
                     "timestamp": "2026-10-03 08:00:00.00",
@@ -238,6 +239,7 @@ async fn read_range_prints_decoded_log_records() {
             "item_count": 2,
             "result_flags": {"first_item": true, "last_item": true, "more_items": false},
             "first_sequence_number": null,
+            "violations": [],
             "records": [
                 {
                     "timestamp": "2026-10-03 08:00:00.00",

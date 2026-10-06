@@ -1,7 +1,7 @@
 ---
 section: Added
 ---
-- **Breaking (Rust API):** the client builders and `ClientConfig` take
-  `min_request_interval_ms`, a least time between confirmed requests to one
-  destination (default 0), so paging or polling a slow device leaves it room
-  for its other clients (#1535).
+- **Breaking (Rust API):** `BACnetClient` builders and `ClientConfig` take
+  `min_request_interval_ms` (default 0): a request to a destination waits that
+  long after the previous one to it finished, or was sent while still
+  outstanding, so a slow device keeps room for its other clients (#1535).

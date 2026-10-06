@@ -137,7 +137,19 @@ fn more_items_contradicts_the_flag_for_the_end_the_read_moves_toward() {
         flagged(&backward, (true, false, true)).violations(&backward),
         [V::MoreItemsPastEnd]
     );
+    // A read with no range may give up either end when the page is cut;
+    // only a page holding both ends and still claiming more contradicts.
     let all = request(None);
+    for flags in [
+        (false, true, true),
+        (true, false, true),
+        (false, false, true),
+    ] {
+        assert!(
+            flagged(&all, flags).violations(&all).is_empty(),
+            "{flags:?}"
+        );
+    }
     assert_eq!(
         flagged(&all, (true, true, true)).violations(&all),
         [V::MoreItemsPastEnd]
