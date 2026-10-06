@@ -1,4 +1,12 @@
 //! Socket identity, admission, and fresh-only recovery after NAK expiry.
+//!
+//! Every test here runs on tokio's paused clock. The NAK budget, the reconnect
+//! backoff, the 40 ms connect timeout and the heartbeat all read tokio's clock,
+//! so the paused clock orders them exactly. On real time a runner stall could:
+//! - fire the 240 ms budget and the 600 ms `wait_for_state` deadline in one
+//!   turn, where the test future is polled first and the deadline wins (#1547);
+//! - outlast the connect timeout before the test answers a redial, or the
+//!   heartbeat timeout between accepted heartbeats (#1017).
 
 use super::*;
 
@@ -58,7 +66,7 @@ async fn accept(hub: &LoopbackWebSocket, vmac: Vmac, npdu: u16, bvlc: u16) {
     hub.send(&response).await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_no_factory_never_rehandshakes_or_flushes_retired_socket() {
     for retries in [0, 3] {
         let (client, hub, observed) = GateSocket::pair();
@@ -73,7 +81,7 @@ async fn rejection_deadline_no_factory_never_rehandshakes_or_flushes_retired_soc
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_without_reconnect_does_not_dial_or_consume_failover() {
     let (client, hub, observed) = GateSocket::pair();
     let (failover, _failover_hub, failover_observed) = GateSocket::pair();
@@ -93,12 +101,12 @@ async fn rejection_deadline_without_reconnect_does_not_dial_or_consume_failover(
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_fresh_redial_validates_probe_identity_limits_and_publication() {
     fresh_redial_validates_probe(2).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn empty_npdu_rejection_deadline_fresh_redial_validates_probe_identity_limits_and_publication(
 ) {
     fresh_redial_validates_probe(3).await;
@@ -197,14 +205,12 @@ async fn fresh_redial_validates_probe(wire_index: usize) {
     assert_retired(&observed, old);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn unknown_function_rejection_deadline_fresh_redial_validates_probe_identity_limits_and_publication(
 ) {
     fresh_redial_validates_probe(4).await;
 }
 
-// Paused clock: on real time, a runner stall between two of the 30 ms-spaced
-// heartbeats could outlast the 240 ms timeout and redial mid-loop (#1017).
 #[tokio::test(start_paused = true)]
 async fn rejection_deadline_unused_failover_works_but_poisoned_primary_never_restores() {
     let (client, hub, observed) = GateSocket::pair();
@@ -241,7 +247,7 @@ async fn rejection_deadline_unused_failover_works_but_poisoned_primary_never_res
     assert_retired(&observed, old);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_fresh_primary_restore_and_outstanding_disconnect_cleanup() {
     let (client, hub, observed) = GateSocket::pair();
     let (failover, failover_hub, failover_observed) = GateSocket::pair();
@@ -304,7 +310,7 @@ async fn rejection_deadline_fresh_primary_restore_and_outstanding_disconnect_cle
     assert_retired(&fresh_observed, fresh_before);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_active_failover_expiry_does_not_reuse_or_change_recovery_order() {
     let (client, hub, observed) = GateSocket::pair();
     drop(hub); // Initial primary handshake fails, untouched failover is allowed.
@@ -339,7 +345,7 @@ async fn rejection_deadline_active_failover_expiry_does_not_reuse_or_change_reco
     assert_retired(&failover_observed, failover_before);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_active_failover_redials_only_fresh_failover() {
     let (client, hub, observed) = GateSocket::pair();
     let (tx, mut dials) = mpsc::unbounded_channel();
@@ -386,7 +392,7 @@ async fn rejection_deadline_active_failover_redials_only_fresh_failover() {
     assert_retired(&first_observed, failover_before);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_already_admitted_public_send_can_finish_but_new_send_cannot() {
     let (client, hub, observed) = GateSocket::pair();
     let mut transport = transport(client);
@@ -413,7 +419,7 @@ async fn rejection_deadline_already_admitted_public_send_can_finish_but_new_send
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_drop_terminates_pending_nak_without_claiming_socket_close() {
     let (client, hub, observed) = GateSocket::pair();
     let mut transport = transport(client);
