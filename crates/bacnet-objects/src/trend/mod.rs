@@ -133,6 +133,13 @@ impl TrendLogObject {
     /// change what their sequence numbers mean, with no BUFFER_PURGED record
     /// to tell them, and the BUFFER_READY reports already sent would name
     /// counts that no longer hold.
+    ///
+    /// A device restoring its saved records after a restart then calls
+    /// [`record_interruption`](Self::record_interruption) with the time it
+    /// came back: Clause 12.25.14 gives a log that status when a power
+    /// failure or reset broke its collection, so readers know samples may
+    /// be missing. That record counts toward Total_Record_Count like any
+    /// other, numbered one past the restored count.
     pub fn restore_log_buffer(
         &mut self,
         total_record_count: u32,
@@ -140,6 +147,23 @@ impl TrendLogObject {
     ) -> Result<(), Error> {
         self.lifecycle()
             .restore(total_record_count, records.into_iter().collect())
+    }
+
+    /// Append a LOG_INTERRUPTED status record stamped `date` and `time`, as
+    /// a log restored after a restart does (#1537); see
+    /// [`restore_log_buffer`](Self::restore_log_buffer).
+    ///
+    /// The record goes in whatever Enable and the window say, counts toward
+    /// Total_Record_Count, and pushes out the oldest record of a full
+    /// buffer. It also carries LOG_DISABLED while collection is off; when it
+    /// fills a Stop_When_Full buffer it does so and turns Enable FALSE, as
+    /// the log's own status records do. Without a clock bound, as before the
+    /// log is added to a database, the time has to come from the caller: a
+    /// `date` and `time` that aren't an actual moment (every field given,
+    /// the weekday matching the date) fail with [`Error::OutOfRange`] and
+    /// change nothing.
+    pub fn record_interruption(&mut self, date: Date, time: Time) -> Result<(), Error> {
+        self.lifecycle().record_interruption((date, time))
     }
 
     /// Clear the buffer.

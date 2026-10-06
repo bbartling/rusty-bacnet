@@ -13,6 +13,8 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::primitives::{Date, Time};
 
+#[path = "read_range_bisect.rs"]
+mod bisect;
 #[path = "read_range_equivalence.rs"]
 mod equivalence;
 #[path = "read_range_log_records.rs"]

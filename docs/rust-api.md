@@ -2544,6 +2544,18 @@ peers are reading would change what their sequence numbers mean with no
 BUFFER_PURGED record to tell them. Durable storage of a log, as the Audit
 Log has, is not built yet.
 
+A device restoring saved records after a restart should then call
+`record_interruption(date, time)` with the time it came back. Clause
+12.25.14 gives a log a LOG_INTERRUPTED status when a power failure or reset
+broke its collection, so readers know samples before it may be missing. The
+status record counts toward Total_Record_Count like any other, numbered one
+past the restored count, and pushes the oldest record out of a full buffer.
+It goes in whatever Enable and the window say, carrying LOG_DISABLED while
+collection is off (and turning Enable FALSE when it fills a Stop_When_Full
+buffer). No clock is bound before the log joins a database, so the caller
+gives the time; one that isn't an actual moment fails with
+`Error::OutOfRange`.
+
 Log_DeviceObjectProperty reads as the context-tagged
 `BACnetDeviceObjectPropertyReference` (#1234): one
 `PropertyValue::ApplicationData` on a Trend Log, and on a Trend Log Multiple a
@@ -2816,20 +2828,29 @@ each item as one record framed as its Clause 21 production:
 Each decoder returns the offset after the record, so a client walks a
 ReadRange ACK's `item_data` record by record.
 
-A ReadRange costs about the same over a full log as over a short one
-(#1536): only the returned window's records are encoded and given
-identities. `LogBufferRecords::record_identity` numbers any record from
+A ReadRange no longer builds every record's identity (#1536): only the
+returned window's records are encoded and given identities.
+`LogBufferRecords::record_identity` numbers any record from
 Total_Record_Count, and `record_position` computes where a sequence number
-sits. By Time bisects the timestamps while `timestamp_order` reports them
-`Ascending`, which the buffer keeps current as records come and go. Once the
-clock has been set back and an earlier stamp follows a later one
-(`Unordered`), each read walks the log until it finds its anchor. A
-timestamp that isn't an actual moment (`Unkeyed`) refuses By Time reads with
-`LIST_ITEM_NOT_TIMESTAMPED` until that record leaves the buffer. An Audit
-Log's numbers run on by one from its oldest record, so ReadRange computes a
-sequence number's place in its ring too, and checks the record there before
-trusting it. A custom `LogBufferRecords` must supply `record_identity`; the
-other two lookups default to walking the records.
+sits, so on a Trend Log, Event Log or Trend Log Multiple By Position and By
+Sequence Number cost the same over a full log as over a short one. By Time
+bisects the timestamps while `timestamp_order` reports them `Ascending`,
+which the buffer keeps current as records come and go. Some reads still walk
+records:
+
+- By Time on a log whose clock has been set back, so that an earlier stamp
+  follows a later one (`Unordered`), walks the log until it finds its anchor.
+- By Time on an Audit Log walks the whole ring, validating every timestamp.
+- By Sequence Number on an Audit Log computes the number's place in the ring,
+  which numbers on by one from its oldest record, and checks the record
+  there. When that record has another number (the number isn't resident, or
+  the store skips numbers), it walks the ring twice: once for a record
+  numbered zero, once to search.
+
+A timestamp that isn't an actual moment (`Unkeyed`) refuses By Time reads
+with `LIST_ITEM_NOT_TIMESTAMPED` until that record leaves the buffer. A
+custom `LogBufferRecords` must supply `record_identity`; the other two
+lookups default to walking the records.
 
 The poller logs a value whose
 datatype has no alternative of its own (a CharacterString, Double, Date,

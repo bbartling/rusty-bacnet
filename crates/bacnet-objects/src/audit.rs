@@ -96,7 +96,11 @@ pub trait AuditLogStorage: Send + Sync {
     /// 2^64 - 1 wrapping to 1, as the built-in log keeps them. ReadRange
     /// relies on that to compute where a sequence number sits: it checks
     /// the record it computes and searches the ring only when that record
-    /// has another number (#1536).
+    /// has another number (#1536). A store that breaks this still gets
+    /// records carrying the number asked for, but not always the ones a
+    /// search from the oldest would find: a number held twice may be served
+    /// from its later record, and a zero elsewhere in the ring goes
+    /// unnoticed when the computed record matches.
     fn retained_records(&self) -> &VecDeque<BACnetAuditLogRecordResult>;
 }
 

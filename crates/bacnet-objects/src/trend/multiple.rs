@@ -183,7 +183,9 @@ impl TrendLogMultipleObject {
     /// before the log is added to an `ObjectDatabase`, under the rules of
     /// [`TrendLogObject::restore_log_buffer`](super::TrendLogObject::restore_log_buffer)
     /// (#1537). Records aren't checked against Log_DeviceObjectProperty,
-    /// which may have changed since they were taken.
+    /// which may have changed since they were taken. After a restart, follow
+    /// it with [`record_interruption`](Self::record_interruption), which
+    /// counts toward Total_Record_Count.
     pub fn restore_log_buffer(
         &mut self,
         total_record_count: u32,
@@ -191,6 +193,13 @@ impl TrendLogMultipleObject {
     ) -> Result<(), Error> {
         self.lifecycle()
             .restore(total_record_count, records.into_iter().collect())
+    }
+
+    /// Append a LOG_INTERRUPTED status record, as
+    /// [`TrendLogObject::record_interruption`](super::TrendLogObject::record_interruption)
+    /// does, after restoring the log on a restart (#1537).
+    pub fn record_interruption(&mut self, date: Date, time: Time) -> Result<(), Error> {
+        self.lifecycle().record_interruption((date, time))
     }
 
     /// Clear the buffer.

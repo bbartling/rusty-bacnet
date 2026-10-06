@@ -101,6 +101,15 @@ impl Family {
         }
     }
 
+    /// The family's `record_interruption` (#1537).
+    fn interrupt(&mut self, date: Date, time: Time) -> Result<(), Error> {
+        match self {
+            Self::Event(object) => object.record_interruption(date, time),
+            Self::Trend(object) => object.record_interruption(date, time),
+            Self::TrendMultiple(object) => object.record_interruption(date, time),
+        }
+    }
+
     /// The newest record as ReadRange serves it.
     fn served_last(&self) -> Vec<u8> {
         let records = self.object().log_buffer_internal().unwrap();

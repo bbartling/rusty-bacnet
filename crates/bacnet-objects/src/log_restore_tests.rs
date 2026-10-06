@@ -120,6 +120,148 @@ fn a_record_that_would_not_encode_is_refused() {
         .unwrap_err();
     assert_eq!(log.records(), &records);
     assert_eq!(log.total_record_count(), 1);
+
+    // The same member value in a Trend Log Multiple record. The Event Log's
+    // case is in its own tests, which can build a notification.
+    let mut multiple_log = TrendLogMultipleObject::new(1, "TLM-1", 5).unwrap();
+    multiple_log.add_record(multiple(ordinary(1, 1))).unwrap();
+    let records = multiple_log.records().clone();
+    let open = BACnetLogMultipleRecord {
+        log_data: LogData::Values(vec![LogValue::AnyValue(vec![0x3E, 0x19, 0x05])]),
+        ..multiple(ordinary(2, 2))
+    };
+    multiple_log
+        .restore_log_buffer(7, [multiple(ordinary(3, 3)), open])
+        .unwrap_err();
+    assert_eq!(multiple_log.records(), &records);
+    assert_eq!(multiple_log.total_record_count(), 1);
+}
+
+#[test]
+fn only_a_record_fills_a_stop_when_full_buffer() {
+    // A zero-capacity buffer holds nothing, so even under Stop_When_Full
+    // with Enable TRUE its count alone restores. The lifecycle can't reach
+    // that pair of settings at capacity 0, so the buffer is asked directly.
+    let mut buffer = crate::log_buffer::LogRecordBuffer::<BACnetLogRecord>::new(0);
+    buffer.restore(5, VecDeque::new(), true).unwrap();
+    assert_eq!(buffer.total_record_count(), 5);
+    let mut one = crate::log_buffer::LogRecordBuffer::<BACnetLogRecord>::new(1);
+    assert!(matches!(
+        one.restore(5, VecDeque::from(samples(1..2)), true),
+        Err(Error::OutOfRange(_))
+    ));
+    one.restore(5, VecDeque::new(), true).unwrap();
+}
+
+/// The record a family's LOG_INTERRUPTED status is stamped with.
+fn at() -> (Date, Time) {
+    (valid_frame().local_date, valid_frame().local_time)
+}
+
+fn status_of(log: &Family) -> LogDatum {
+    log.records().back().unwrap().log_datum.clone()
+}
+
+#[test]
+fn an_interruption_after_a_restore_is_numbered_past_it() {
+    for kind in FamilyKind::ALL {
+        let mut log = kind.object(3);
+        log.restore(u32::MAX, samples(1..3)).unwrap();
+        let (date, time) = at();
+        log.interrupt(date, time).unwrap();
+        assert_eq!(log.identities(), vec![MAX - 1, MAX, 1], "{kind:?}");
+        assert_eq!(log.total(), 1, "{kind:?}");
+        assert_eq!(
+            status_of(&log),
+            LogDatum::LogStatus(LogStatus::LOG_INTERRUPTED),
+            "{kind:?}"
+        );
+        let last = log.records().back().unwrap().clone();
+        assert_eq!((last.date, last.time), at(), "{kind:?}");
+        // A full buffer gives up its oldest record for it.
+        log.interrupt(date, time).unwrap();
+        assert_eq!(log.identities(), vec![MAX, 1, 2], "{kind:?}");
+    }
+}
+
+#[test]
+fn an_interruption_carries_log_disabled_while_collection_is_off() {
+    for kind in FamilyKind::ALL {
+        let (date, time) = at();
+        // Enable FALSE.
+        let mut off = kind.object(5);
+        off.bind_clock(TestClock::valid());
+        off.write(
+            PropertyIdentifier::LOG_ENABLE,
+            PropertyValue::Boolean(false),
+        )
+        .unwrap();
+        off.interrupt(date, time).unwrap();
+        assert_eq!(
+            status_of(&off),
+            LogDatum::LogStatus(LogStatus::LOG_INTERRUPTED | LOG_DISABLED),
+            "{kind:?}"
+        );
+
+        // Filling a Stop_When_Full buffer stops the log, as its own status
+        // records do.
+        let mut filling = kind.object(3);
+        filling
+            .write(
+                PropertyIdentifier::STOP_WHEN_FULL,
+                PropertyValue::Boolean(true),
+            )
+            .unwrap();
+        filling.restore(2, samples(1..3)).unwrap();
+        filling.interrupt(date, time).unwrap();
+        assert_eq!(
+            status_of(&filling),
+            LogDatum::LogStatus(LogStatus::LOG_INTERRUPTED | LOG_DISABLED),
+            "{kind:?}"
+        );
+        assert!(!filling.enabled(), "{kind:?}");
+        assert_eq!(filling.records().len(), 3, "{kind:?}");
+
+        // Room left: collection stays on and the flag stays clear.
+        let mut room = kind.object(3);
+        room.write(
+            PropertyIdentifier::STOP_WHEN_FULL,
+            PropertyValue::Boolean(true),
+        )
+        .unwrap();
+        room.interrupt(date, time).unwrap();
+        assert_eq!(
+            status_of(&room),
+            LogDatum::LogStatus(LogStatus::LOG_INTERRUPTED),
+            "{kind:?}"
+        );
+        assert!(room.enabled(), "{kind:?}");
+    }
+}
+
+#[test]
+fn an_interruption_needs_an_actual_moment() {
+    let (date, time) = at();
+    let wrong_weekday = Date {
+        day_of_week: date.day_of_week % 7 + 1,
+        ..date
+    };
+    let unspecified = Time {
+        second: Time::UNSPECIFIED,
+        ..time
+    };
+    for kind in FamilyKind::ALL {
+        let mut log = kind.object(3);
+        log.restore(9, samples(1..3)).unwrap();
+        let before = state(&log);
+        for (date, time) in [(wrong_weekday, time), (date, unspecified)] {
+            assert!(
+                matches!(log.interrupt(date, time), Err(Error::OutOfRange(_))),
+                "{kind:?}"
+            );
+            assert_eq!(state(&log), before, "{kind:?}");
+        }
+    }
 }
 
 #[test]

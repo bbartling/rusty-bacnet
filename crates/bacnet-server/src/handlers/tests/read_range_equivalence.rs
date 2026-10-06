@@ -591,6 +591,16 @@ fn an_audit_ring_that_skips_numbers_is_searched_instead() {
 fn an_audit_ring_holding_a_zero_still_refuses_what_it_cannot_place() {
     let (db, oid) = odd_ring(&[5, 0, 7]);
     let read = |range| call(&db, oid, PropertyIdentifier::LOG_BUFFER, Some(range));
+    // 7 sits where it is computed to be, two on from 5, so it is served
+    // without a search: the zero is never looked for.
+    let placed = read(RangeSpec::BySequenceNumber {
+        reference_seq: 7,
+        count: 1,
+    })
+    .unwrap();
+    assert_eq!(placed.item_count, 1);
+    assert_eq!(placed.first_sequence_number, Some(7));
+    assert_eq!(placed.result_flags, (false, true, false));
     // Nothing computed holds 8, so the search meets the zero.
     let unnumbered = read(RangeSpec::BySequenceNumber {
         reference_seq: 8,
