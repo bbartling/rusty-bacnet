@@ -19,6 +19,8 @@
 
 use std::time::Duration;
 
+use bacnet_types::constructed::BACnetXyColor;
+
 /// How often, at most, a running transition's value is sampled for COV.
 ///
 /// Samples fall on multiples of this interval on the monotonic clock, so
@@ -46,6 +48,39 @@ impl TransitionLevel for f32 {
 
     fn distance(from: f32, to: f32) -> f64 {
         (f64::from(to) - f64::from(from)).abs()
+    }
+}
+
+/// A CIE 1931 xy colour (a Color object's FADE_TO_COLOR, #1474). Each
+/// coordinate moves on its own straight line, so the colour crosses the
+/// diagram in a straight line too; the addendum leaves the path to the
+/// implementation. The distance is the length of that line, which only
+/// spaces the COV samples, as a colour fade has no rate.
+impl TransitionLevel for BACnetXyColor {
+    fn interpolate(from: Self, to: Self, fraction: f64) -> Self {
+        Self::new(
+            f32::interpolate(from.x, to.x, fraction),
+            f32::interpolate(from.y, to.y, fraction),
+        )
+    }
+
+    fn distance(from: Self, to: Self) -> f64 {
+        f32::distance(from.x, to.x).hypot(f32::distance(from.y, to.y))
+    }
+}
+
+/// A colour temperature in kelvin (a Color Temperature object's fades,
+/// ramps and steps, #1474). Values in between round to the nearest kelvin,
+/// as Present_Value and Tracking_Value are Unsigned; the distance is in
+/// kelvin, the unit a ramp rate is given in per second.
+impl TransitionLevel for u32 {
+    fn interpolate(from: u32, to: u32, fraction: f64) -> u32 {
+        let (from, to) = (f64::from(from), f64::from(to));
+        (from + (to - from) * fraction).round() as u32
+    }
+
+    fn distance(from: u32, to: u32) -> f64 {
+        f64::from(from.abs_diff(to))
     }
 }
 
