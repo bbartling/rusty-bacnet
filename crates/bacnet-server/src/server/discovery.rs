@@ -422,17 +422,11 @@ pub(crate) struct DiscoveryLimiter {
 }
 
 impl DiscoveryLimiter {
-    /// The time every discovery throttle and coalescing window is measured on.
-    ///
-    /// This is tokio's clock: the monotonic clock in production, and a test
-    /// runtime's paused clock in tests, so a test steps the windows exactly
-    /// and a runner stall can't move them (#1548).
-    pub(crate) fn now() -> Instant {
-        tokio::time::Instant::now().into_std()
-    }
-
+    /// Every throttle and coalescing window here is measured on
+    /// [`limiter_clock::now`](super::limiter_clock::now), as its callers'
+    /// instants are.
     pub(crate) fn new(policy: DiscoveryPolicy, device_instance: Option<u32>) -> Self {
-        let now = Self::now();
+        let now = super::limiter_clock::now();
         let state = DiscoveryState {
             global_tokens: policy.global_burst_capacity as f64,
             global_byte_tokens: policy.max_bytes_per_sec_global as f64,
@@ -806,7 +800,7 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
             false,
             &MacAddr::new(),
             None,
-            DiscoveryLimiter::now(),
+            super::limiter_clock::now(),
         );
     }
 

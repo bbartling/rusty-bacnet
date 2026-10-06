@@ -893,6 +893,9 @@ mod reconnect_validation_tests;
 mod rb11_npdu_fairness_tests;
 
 #[cfg(test)]
+mod test_waits;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
