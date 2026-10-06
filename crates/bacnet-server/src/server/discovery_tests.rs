@@ -2,12 +2,13 @@
 //! and directed responses (Issue #534).
 //!
 //! The server tests run on tokio's paused clock, which the discovery limiter
-//! reads ([`DiscoveryLimiter::now`]), and wait for the server's counters
+//! reads ([`limiter_clock::now`]), and wait for the server's counters
 //! instead of sleeping. No time passes unless a test advances the clock, so
 //! windows and token buckets see exact instants, and a stalled runner can't
-//! refill a bucket or close a window under a test (#1548).
+//! refill a bucket or close a window under a test (#1548). The limiter's own
+//! tests use hand-set instants, offsets from one reading of that clock.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
@@ -687,7 +688,7 @@ fn test_exhausted_source_throttled_when_max_tracked_sources_reached() {
     };
     let limiter = DiscoveryLimiter::new(policy, Some(100));
     let req = encode_who_is_req(None, None);
-    let now = Instant::now();
+    let now = limiter_clock::now();
     let src_a = mock_received(&[0x0A, 0x00, 0x00, 0x01], None);
     let src_b = mock_received(&[0x0A, 0x00, 0x00, 0x02], None);
 
@@ -717,7 +718,7 @@ fn test_routed_who_is_byte_accounting_uses_remote_mac() {
     };
     let limiter = DiscoveryLimiter::new(policy, Some(100));
     let req = encode_who_is_req(None, None);
-    let now = Instant::now();
+    let now = limiter_clock::now();
     let routed = mock_received(&[0x0A, 0x00, 0x00, 0xFE], Some((200, &[0x11, 0x22])));
 
     assert_eq!(
@@ -743,7 +744,7 @@ fn test_routed_who_is_byte_accounting_uses_remote_mac() {
 
 #[test]
 fn test_independent_byte_tokens_enforced_when_response_count_unlimited() {
-    let now = Instant::now();
+    let now = limiter_clock::now();
     let src = mock_received(&[0x0A, 0x00, 0x00, 0x01], None);
     let req = encode_who_is_req(None, None);
 
@@ -794,7 +795,7 @@ fn test_negative_who_has_cache_strictly_bounded_to_512() {
         },
         Some(100),
     );
-    let base = Instant::now();
+    let base = limiter_clock::now();
 
     for i in 0..600 {
         let target = WhoHasTarget::Id(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, i).unwrap());

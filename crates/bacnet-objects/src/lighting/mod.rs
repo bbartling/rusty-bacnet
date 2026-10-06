@@ -31,7 +31,17 @@ use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 /// the level for Egress_Time before relinquishing or turning it off.
 /// Present_Value takes the blink-warn values -1.0, -2.0 and -3.0 as the
 /// three warn commands. Tracking_Value equals Present_Value whenever no fade
-/// or ramp is moving it.
+/// or ramp is moving it and no trim holds it.
+///
+/// Color_Reference, Color_Override and Override_Color_Reference are absent
+/// until [`set_color_link`](Self::set_color_link) links the output to its
+/// colour objects (#1527).
+///
+/// High_End_Trim, Low_End_Trim and Trim_Fade_Time are absent until set
+/// (#1528; see [`set_high_end_trim`](Self::set_high_end_trim)). Once set,
+/// Tracking_Value is held between the trims, In_Progress reads TRIM_ACTIVE
+/// while that keeps it from Present_Value, and a trim change takes
+/// Trim_Fade_Time to show.
 ///
 /// Fades, ramps and egress timers run on the monotonic clock the database
 /// binds; the server's monotonic task advances them and fans their COV out.
@@ -60,12 +70,21 @@ pub struct LightingOutputObject {
     default_step_increment: f32,
     /// COV_Increment: the Present_Value change that triggers a notification.
     cov_increment: f32,
+    /// The finest COV increment a Tracking_Value subscriber asks for, as the
+    /// server last passed it (#1510).
+    finest_tracking_increment: Option<f64>,
     out_of_service: bool,
     status_flags: StatusFlags,
     /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
     reliability: Reliability,
     priority_array: [Option<f32>; 16],
     relinquish_default: f32,
+    /// High_End_Trim, Low_End_Trim and Trim_Fade_Time, and a trim change
+    /// under way.
+    trims: trim::Trims,
+    /// Color_Reference, with Color_Override and Override_Color_Reference
+    /// when overridable; absent until set.
+    color_link: Option<ColorLink>,
     monotonic_clock: Option<Arc<MonotonicClock>>,
     deadline_waker: Option<Arc<DeadlineWaker>>,
     /// The time an object with no clock bound has been advanced to.
@@ -91,11 +110,14 @@ impl LightingOutputObject {
             default_ramp_rate: 100.0,
             default_step_increment: 1.0,
             cov_increment: 0.0,
+            finest_tracking_increment: None,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: [None; 16],
             relinquish_default: 0.0,
+            trims: trim::Trims::NONE,
+            color_link: None,
             monotonic_clock: None,
             deadline_waker: None,
             logical_now: Duration::ZERO,
@@ -167,6 +189,27 @@ impl LightingOutputObject {
         self.lighting_command = command;
         let now = self.now();
         self.execute(&command, now);
+    }
+
+    /// Link the output to the colour objects that set its colour, or take
+    /// the link away with `None` (#1527, Addendum 135-2020ca part 4).
+    ///
+    /// A link serves Color_Reference, and with a [`ColorOverride`] also
+    /// Color_Override and Override_Color_Reference; all of them take
+    /// writes. Each reference must name a colour object, Color or Color
+    /// Temperature (instance 4194303 names none); anything else is refused
+    /// with VALUE_OUT_OF_RANGE and changes nothing. The object only stores
+    /// the references:
+    /// [`ObjectDatabase::lighting_color`](crate::database::ObjectDatabase::lighting_color)
+    /// follows them.
+    pub fn set_color_link(&mut self, link: Option<ColorLink>) -> Result<(), Error> {
+        self.color_link = link.map(ColorLink::checked).transpose()?;
+        Ok(())
+    }
+
+    /// The colour link, if one is set.
+    pub fn color_link(&self) -> Option<&ColorLink> {
+        self.color_link.as_ref()
     }
 
     /// Set Default_Fade_Time, the milliseconds a fade request without its own
@@ -313,7 +356,9 @@ impl BACnetObject for LightingOutputObject {
             p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            _ => Err(common::unknown_property_error()),
+            p => color_link::read(self.color_link.as_ref(), p)
+                .or_else(|| self.read_trim(p))
+                .unwrap_or_else(|| Err(common::unknown_property_error())),
         }
     }
 
@@ -411,6 +456,14 @@ impl BACnetObject for LightingOutputObject {
             return Err(common::invalid_data_type_error());
         }
 
+        // HIGH_END_TRIM, LOW_END_TRIM and TRIM_FADE_TIME, and the colour
+        // links, once present.
+        if let Some(result) = self.write_trim(property, &value) {
+            return result;
+        }
+        if let Some(result) = color_link::write(&mut self.color_link, property, &value) {
+            return result;
+        }
         if let Some(result) = common::write_cov_increment(&mut self.cov_increment, property, &value)
         {
             return result;
@@ -467,6 +520,10 @@ impl BACnetObject for LightingOutputObject {
         self.next_deadline()
     }
 
+    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
+        self.finest_tracking_increment = finest;
+    }
+
     /// A copy that reads as the object does now: its clock stops at this
     /// instant, so a fade's Tracking_Value in a COV report is the value at
     /// the moment the report was taken.
@@ -484,10 +541,13 @@ impl BACnetObject for LightingOutputObject {
 }
 
 mod binary;
+mod color_link;
 mod command;
 mod engine;
 mod metadata;
+mod trim;
 pub use binary::BinaryLightingOutputObject;
+pub use color_link::{ColorLink, ColorOverride, LightingColor, OutputColor};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -510,3 +570,9 @@ mod engine_tests;
 
 #[cfg(test)]
 mod warn_tests;
+
+#[cfg(test)]
+mod trim_tests;
+
+#[cfg(test)]
+mod color_link_tests;

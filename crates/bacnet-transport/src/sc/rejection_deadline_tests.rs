@@ -8,6 +8,7 @@
 //! or block a poll with a thread sleep to cross a cutoff, which a paused clock
 //! would not see.
 
+use super::test_waits::until;
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use tokio::time::timeout;
@@ -131,23 +132,6 @@ async fn within<F: std::future::Future>(future: F) -> F::Output {
     timeout(Duration::from_secs(2), future)
         .await
         .expect("bounded test operation timed out")
-}
-
-/// Scheduler rounds [`until`] gives the transport. Yielding never moves a
-/// paused clock, so a time bound such as `within` can't end a spin there; this
-/// counts rounds instead, which a stalled runner can't use up either.
-const ROUNDS: usize = 10_000;
-
-/// Yield until `done` resolves true, failing after [`ROUNDS`] rounds. On a
-/// paused clock only timer-free progress can satisfy it.
-async fn until<F: std::future::Future<Output = bool>>(what: &str, mut done: impl FnMut() -> F) {
-    for _ in 0..ROUNDS {
-        if done().await {
-            return;
-        }
-        tokio::task::yield_now().await;
-    }
-    panic!("{what}: not reached in {ROUNDS} scheduler rounds");
 }
 
 /// Wait until `count` reaches `expected`; see [`until`].

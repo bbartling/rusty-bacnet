@@ -324,6 +324,9 @@ pub const COMMANDS: &[(&str, Command)] = &[
         o.advance_monotonic_time_internal(Duration::from_secs(33))
             .to_string()
     }),
+    ("set_tracking_cov_increment_internal", |o| {
+        format!("{:?}", o.set_tracking_cov_increment_internal(Some(0.25)))
+    }),
     ("take_staging_write_plan_internal", |o| {
         format!("{:?}", o.take_staging_write_plan_internal())
     }),

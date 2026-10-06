@@ -154,7 +154,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         crate::audit::ObjectAuditPolicy::default()
     }
 
-    /// Optional sealed built-in AV/BV policy assignment authority. Custom objects
+    /// Optional sealed built-in policy assignment authority (AV/BV, Color and
+    /// Color Temperature). Custom objects
     /// remain on their ordinary writer path; adapters may forward this capability.
     #[doc(hidden)]
     fn audit_policy_authority_internal(
@@ -316,6 +317,18 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
         None
     }
+
+    /// Take the finest COV increment an active property subscription to
+    /// Tracking_Value asks for, or `None` when no such subscription gives
+    /// one (#1510).
+    ///
+    /// The server's monotonic task passes it before each advance, so an
+    /// object whose fade or ramp samples Tracking_Value for COV samples it
+    /// at least that finely, still no more often than its sample grid
+    /// allows. The value is finite and not negative. Objects without such a
+    /// Tracking_Value ignore it.
+    #[doc(hidden)]
+    fn set_tracking_cov_increment_internal(&mut self, _finest: Option<f64>) {}
 
     /// Freeze COV-readable state while the object's mutation lock is held.
     #[doc(hidden)]

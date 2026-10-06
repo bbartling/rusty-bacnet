@@ -593,9 +593,15 @@ class PropertyIdentifier:
     CERTIFICATE_SIGNING_REQUEST_FILE: PropertyIdentifier
     COMMAND_VALIDATION_RESULT: PropertyIdentifier
     ISSUER_CERTIFICATE_FILES: PropertyIdentifier
+    COLOR_OVERRIDE: PropertyIdentifier
+    COLOR_REFERENCE: PropertyIdentifier
     DEFAULT_COLOR: PropertyIdentifier
     DEFAULT_COLOR_TEMPERATURE: PropertyIdentifier
+    OVERRIDE_COLOR_REFERENCE: PropertyIdentifier
     COLOR_COMMAND: PropertyIdentifier
+    HIGH_END_TRIM: PropertyIdentifier
+    LOW_END_TRIM: PropertyIdentifier
+    TRIM_FADE_TIME: PropertyIdentifier
 
     @staticmethod
     def from_raw(value: int) -> PropertyIdentifier: ...

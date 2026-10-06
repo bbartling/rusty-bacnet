@@ -3405,15 +3405,81 @@ commanded Present_Value is, so a FADE_TO 0.5 puts 1.0 in the slot.
   ramp stops with its slot as it is, and an egress takes effect at once.
 - A proprietary operation is stored and does nothing else.
 
+Lighting Output takes the trims of Addendum 135-2020ca part 5 (#1528).
+`High_End_Trim` and `Low_End_Trim` are absent until `set_high_end_trim` or
+`set_low_end_trim` sets them (`None` takes one away), and either brings
+`Trim_Fade_Time` (0 to 86,400,000 ms, initially 0; `set_trim_fade_time`),
+which the table's footnote then makes required. All three take writes; a
+trim outside 1.0 to 100.0, or a fade time past a day, is refused with
+VALUE_OUT_OF_RANGE.
+
+- Tracking_Value is held between the trims: an on level below the low trim
+  tracks at it, a level above the high trim tracks at that, and off stays
+  off. Present_Value keeps the level as commanded.
+- In_Progress reads TRIM_ACTIVE (5, `LightingInProgress::TRIM_ACTIVE`),
+  ahead of FADE_ACTIVE or RAMP_ACTIVE, while Present_Value lies outside the
+  trims, and while moving trims (below) hold Tracking_Value back; the second
+  case is this implementation's, so that IDLE always means Tracking_Value
+  equals Present_Value.
+- The trims stand aside while Present_Value comes from slot 1 or 2.
+- A trim change moves the trims themselves, in a straight line over
+  Trim_Fade_Time, and Tracking_Value follows them, sampled for COV as a fade
+  is. A fade or ramp under way runs on behind the moving trims.
+- Commands work from Tracking_Value as reported, so a step starts from the
+  held level, STOP leaves the held level in the slot, and a fade to a level
+  past a trim reaches the trim early and stays there. An egress holds the
+  trimmed level. A STEP_UP while Present_Value is above the high trim writes
+  the trim plus the increment, so it lowers Present_Value, as Table 12-67
+  has it.
+- The levels between off and the low trim are outside the operating range,
+  so a fade or ramp doesn't crawl through them: one up from off starts at
+  the low trim and runs to its target over its whole time, and one down to
+  off runs to the low trim over its whole time and goes off as it ends, both
+  reading FADE_ACTIVE or RAMP_ACTIVE. The addendum leaves this to the
+  implementation.
+- STEP_OFF turns the light off from the low trim while one applies, rather
+  than only from 1.0; STEP_DOWN still stops at 1.0, so Present_Value can go
+  below the trim while Tracking_Value stays at it.
+- A high trim below the low one sets Reliability to CONFIGURATION_ERROR (with
+  Status_Flags' FAULT), and the trims hold nothing until it's put right,
+  which gives back the Reliability the error replaced.
+
+Both lighting outputs take the colour links of Addendum 135-2020ca part 4
+(#1527). `set_color_link` takes a `bacnet_objects::lighting::ColorLink`: a
+`reference` (Color_Reference) and, where the output supports colour override,
+a `ColorOverride` with its `active` flag (Color_Override) and `reference`
+(Override_Color_Reference). The rows are absent until a link is set, then
+required while present, as the tables' footnotes say, and all of them take
+writes. A reference must name a colour object, Color or Color Temperature,
+or a write is refused with VALUE_OUT_OF_RANGE. Instance 4194303 names none,
+leaving the colour to the application, and is taken with any object type:
+the clauses give the instance alone that meaning.
+
+The outputs only store the references, and the override never writes a
+colour object: it switches which object the colour comes from, so a fade on
+either colour object runs on, and once the override ends the colour is
+wherever the Color_Reference object has got to. `ObjectDatabase::lighting_color`
+follows the link: it returns the `LightingColor` an output shows now, the
+Tracking_Value of the referenced colour object (Override_Color_Reference's
+while Color_Override is TRUE) as an `OutputColor::Xy` or `OutputColor::Kelvin`,
+with the object it came from. It returns `None` for a reference to an object
+the database doesn't hold: such a reference is stored and served but not
+followed, since the clauses put the companion in the same device and an
+object identifier can't name another one.
+
 Fades, ramps and egress timers run on the server's monotonic task, which a
 write that starts one wakes. Tracking_Value is worked out from the clock when
 read. While it moves, the task samples it for COV each time it has moved by
 `COV_Increment` (1.0 percent while that is 0.0), on a 100 ms grid shared by
 every object, and once more when it arrives; Table 13-1 reports Present_Value
 and Status_Flags, so a SubscribeCOV hears a fade once, when its level goes in,
-and a SubscribeCOVProperty of Tracking_Value hears it move. A Tracking_Value
-subscription whose own increment is finer than that sample step still hears
-only the sample points.
+and a SubscribeCOVProperty of Tracking_Value hears it move. When a live
+Tracking_Value subscription (SubscribeCOVProperty, or a Multiple reference)
+gives its own increment finer than that step, the finest such increment sets
+the step instead (#1510), so that subscriber hears each of its own steps, at
+most one per grid point; a coarser one changes nothing. The task looks the
+increments up in the COV table on each pass, inside its database guard and in
+the server's lock order.
 
 Color and Color Temperature (Addendum 135-2020ca) hold their `Color_Command`
 as a `BACnetColorCommand` (`bacnet_types::constructed`): a `ColorOperation`
@@ -3479,8 +3545,11 @@ Fades and ramps run on the server's monotonic task, as a Lighting Output's
 do, and Tracking_Value is worked out from the clock when read. While it
 moves, the task samples it for COV each time it has moved 0.001 along the xy
 line (a Color object) or 10 K (a Color Temperature object), on the shared
-100 ms grid, and once more when it arrives. Neither object has a COV_Increment
-to change that step.
+100 ms grid, and once more when it arrives. Neither object has a
+COV_Increment to change that step, but a Color Temperature Tracking_Value
+subscriber's finer increment does, as on a Lighting Output (#1510). The server
+compares an xy colour by any change rather than by an increment, so a Color
+object's subscribers already hear every sample.
 
 The rows follow the addendum's property tables. Present_Value and
 `Color_Command` are W; `Default_Color`, `Default_Color_Temperature`,
@@ -3492,8 +3561,20 @@ The rows follow the addendum's property tables. Present_Value and
 Present_Value is, except that 0 is kept: Clause 12.Y.4 gives a zero default a
 meaning of its own at restart. Neither table has `Status_Flags`,
 `Event_State`, `Reliability` or `Out_Of_Service`, so neither object serves
-them, and a whole-object COV report carries Present_Value alone. The optional
-`Value_Source`, audit, `Tags` and profile rows aren't implemented.
+them, and a whole-object COV report carries Present_Value alone.
+
+Of the tables' optional rows, both objects serve `Audit_Level` and
+`Auditable_Operations` once `set_audit_policy` provisions them before
+registration, as on an Analog or Binary Value (#1525; see
+[Object-owned Audit policy](#object-owned-audit-policy)). Neither table has
+`Audit_Priority_Filter`, so a priority filter in the policy is left out. The
+other optional rows stay absent:
+
+- `Value_Source`: this crate tracks a value source only for a commandable
+  Present_Value, through its priority array, and neither object has one; the
+  noncommandable Analog, Binary and Multi-state Values leave it out too.
+- `Tags`, `Profile_Location` and `Profile_Name`: no object in this crate
+  serves them yet.
 
 Two choices here go past the addendum's text. A new object's
 `Default_Fade_Time` is 100 ms, the shortest the range allows, as Lighting
@@ -6714,10 +6795,13 @@ selector semantics, batching/send delay, standalone source ownership and other
 transports remain outside this subset.
 
 
-### Object-owned AV/BV Audit policy
+### Object-owned Audit policy
 
 Analog Value and Binary Value support independently optional, writable
 `Audit_Level`, `Auditable_Operations`, and `Audit_Priority_Filter` properties.
+Color and Color Temperature support the first two the same way (#1525); their
+tables have no `Audit_Priority_Filter`, and neither object has a commandable
+property for one to filter.
 Provision `bacnet_objects::audit::ObjectAuditPolicy` through `set_audit_policy`
 before registration. `None` omits a property; DEFAULT level and
 `AuditPriorityPolicy::Inherit` (a present NULL priority filter) inherit the selected

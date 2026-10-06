@@ -20,8 +20,11 @@ fn assert_error(error: Error, expected: ErrorCode) {
     );
 }
 
+/// Rows with their table codes.
+type Rows = Vec<(P, PropertyConformance)>;
+
 /// Every row with its table code, in table order, Property_List last.
-fn color_rows() -> Vec<(P, PropertyConformance)> {
+fn color_rows() -> Rows {
     vec![
         (P::OBJECT_IDENTIFIER, RequiredRead),
         (P::OBJECT_NAME, RequiredRead),
@@ -241,5 +244,103 @@ fn indexed_property_list_omits_the_identity_rows() {
                 .unwrap_err(),
             ErrorCode::INVALID_ARRAY_INDEX,
         );
+    }
+}
+
+/// A policy with every field set, the priority filter included.
+fn full_policy() -> crate::audit::ObjectAuditPolicy {
+    use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
+    use bacnet_types::enums::{AuditLevel, AuditOperation};
+    let mut operations = AuditOperationFlags::empty();
+    operations.insert(AuditOperation::WRITE);
+    crate::audit::ObjectAuditPolicy {
+        level: Some(AuditLevel::AUDIT_CONFIG),
+        operations: Some(operations),
+        priority_filter: Some(crate::audit::AuditPriorityPolicy::Filter(
+            BACnetPriorityFilter::empty(),
+        )),
+    }
+}
+
+#[test]
+fn a_provisioned_audit_policy_serves_its_two_rows_before_property_list() {
+    use crate::property_metadata::PropertyPresenceCondition::ObjectAuditReporting;
+    let mut color = ColorObject::new(1, "CLR-1").unwrap();
+    color.set_audit_policy(full_policy());
+    let mut temperature = ColorTemperatureObject::new(1, "CT-1").unwrap();
+    temperature.set_audit_policy(full_policy());
+    let cases: [(Box<dyn BACnetObject>, Rows); 2] = [
+        (Box::new(color), color_rows()),
+        (Box::new(temperature), color_temperature_rows()),
+    ];
+    for (mut object, mut rows) in cases {
+        // The tables list both rows after Transition (and Value_Source,
+        // which neither object serves); Audit_Priority_Filter isn't theirs.
+        let property_list = rows.pop().unwrap();
+        rows.extend([
+            (P::AUDIT_LEVEL, Optional),
+            (P::AUDITABLE_OPERATIONS, Optional),
+            property_list,
+        ]);
+        let metadata = object.property_metadata();
+        let found: Vec<_> = metadata
+            .iter()
+            .map(|row| (row.property_identifier, row.conformance))
+            .collect();
+        assert_eq!(found, rows);
+        for row in metadata.iter() {
+            let audit = matches!(
+                row.property_identifier,
+                P::AUDIT_LEVEL | P::AUDITABLE_OPERATIONS
+            );
+            assert_eq!(
+                row.presence_condition,
+                audit.then_some(ObjectAuditReporting)
+            );
+            if audit {
+                assert_eq!(row.write_capability, PropertyWriteCapability::Always);
+            }
+        }
+        drop(metadata);
+        // AUDIT_CONFIG is 2; WRITE is bit 1, the last bit set, so two bits
+        // go out.
+        assert_eq!(
+            object.read_property(P::AUDIT_LEVEL, None).unwrap(),
+            PropertyValue::Enumerated(2)
+        );
+        assert_eq!(
+            object.read_property(P::AUDITABLE_OPERATIONS, None).unwrap(),
+            PropertyValue::BitString {
+                unused_bits: 6,
+                data: vec![0x40],
+            }
+        );
+        assert_error(
+            object
+                .read_property(P::AUDIT_PRIORITY_FILTER, None)
+                .unwrap_err(),
+            ErrorCode::UNKNOWN_PROPERTY,
+        );
+        // Both rows take writes; AUDIT_ALL is 1.
+        object
+            .write_property(P::AUDIT_LEVEL, None, PropertyValue::Enumerated(1), None)
+            .unwrap();
+        assert_eq!(
+            object.audit_object_policy_internal().level,
+            Some(bacnet_types::enums::AuditLevel::AUDIT_ALL)
+        );
+        assert_error(
+            object
+                .write_property(P::AUDIT_LEVEL, None, PropertyValue::Boolean(true), None)
+                .unwrap_err(),
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+        assert_error(
+            object
+                .write_property(P::AUDIT_PRIORITY_FILTER, None, PropertyValue::Null, None)
+                .unwrap_err(),
+            ErrorCode::UNKNOWN_PROPERTY,
+        );
+        assert!(object.audit_policy_authority_internal().is_some());
     }
 }

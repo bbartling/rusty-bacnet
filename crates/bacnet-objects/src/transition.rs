@@ -13,9 +13,9 @@
 //! Everything is pure. Every instant is a `Duration` on the caller's
 //! monotonic clock (the server's, or a hand-set one in a test), passed in, so
 //! the value at any instant is computed from the line rather than stepped by
-//! a timer. A [`Run`] adds the one piece of state an object keeps while a
-//! transition is under way: when the value is next due to be sampled for
-//! COV.
+//! a timer. A [`Run`] adds the state an object keeps while a transition is
+//! under way: when the value was last sampled for COV and when it is next
+//! due, which a finer sample step can bring forward (#1510).
 
 use std::time::Duration;
 
@@ -211,6 +211,9 @@ fn from_nanos(nanos: u128) -> Duration {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Run<V> {
     transition: Transition<V>,
+    /// The instant the next sample is planned from: the start, then each
+    /// sample's planned instant.
+    last_sample: Duration,
     next_sample: Duration,
 }
 
@@ -231,6 +234,7 @@ impl<V: TransitionLevel> Run<V> {
     pub(crate) fn start(transition: Transition<V>, step: f64) -> Self {
         Self {
             next_sample: transition.next_sample(transition.start, step),
+            last_sample: transition.start,
             transition,
         }
     }
@@ -248,6 +252,12 @@ impl<V: TransitionLevel> Run<V> {
 
     /// Advance to `now`, scheduling the next sample when one fell due.
     ///
+    /// `step` may be finer than the one the pending sample was planned with,
+    /// as when a COV subscriber asks for a smaller increment than the
+    /// object's (#1510): the pending sample then comes forward to where the
+    /// finer step puts it, from the last sample, and is taken now if that
+    /// has passed. A coarser step leaves the pending sample where it is.
+    ///
     /// A wake a little late (less than one grid cell, as a real timer
     /// usually is) schedules from the sample it was meant for, so the
     /// cadence holds instead of slipping a cell each time. A wake later than
@@ -255,19 +265,22 @@ impl<V: TransitionLevel> Run<V> {
     /// grid point, so the next one from it is a cell or more on, past `now`.
     pub(crate) fn advance(&mut self, now: Duration, step: f64) -> Progress {
         if self.transition.is_finished(now) {
-            Progress::Finished
-        } else if now >= self.next_sample {
-            let planned = self.next_sample;
-            let from = if now - planned < SAMPLE_GRID {
-                planned
-            } else {
-                now
-            };
-            self.next_sample = self.transition.next_sample(from, step);
-            Progress::Sampled
-        } else {
-            Progress::Pending
+            return Progress::Finished;
         }
+        let replanned = self.transition.next_sample(self.last_sample, step);
+        self.next_sample = self.next_sample.min(replanned);
+        if now < self.next_sample {
+            return Progress::Pending;
+        }
+        let planned = self.next_sample;
+        let from = if now - planned < SAMPLE_GRID {
+            planned
+        } else {
+            now
+        };
+        self.last_sample = from;
+        self.next_sample = self.transition.next_sample(from, step);
+        Progress::Sampled
     }
 }
 

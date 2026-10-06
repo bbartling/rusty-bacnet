@@ -596,6 +596,7 @@ pub(crate) mod event_timestamp;
 mod handles;
 mod learned_router_cache;
 mod lifecycle;
+mod limiter_clock;
 mod local_writes;
 mod network_port;
 #[cfg(test)]

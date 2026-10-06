@@ -40,6 +40,10 @@ bacnet_enum! {
     const RAMP_ACTIVE = 2;
     const NOT_CONTROLLED = 3;
     const OTHER = 4;
+    /// Tracking_Value is held inside a Lighting Output's trims while
+    /// Present_Value lies outside them, or is following a trim change
+    /// (Addendum 135-2020ca part 5).
+    const TRIM_ACTIVE = 5;
 }
 
 bacnet_enum! {

@@ -1,3 +1,16 @@
+//! Redial, failover and primary-restore connectors.
+//!
+//! Every test here runs on tokio's paused clock (#1549). The connect and
+//! connector timeouts (20 to 750 ms), the reconnect backoff and the
+//! primary-restore interval all read tokio's clock, and so do the tests'
+//! deadlines and polls. On real time a runner stall could fire a test's
+//! deadline and the transport's next timer in one turn; the test future is
+//! polled first, so its deadline won before the transport could redial
+//! (#1017, #1547). On the paused clock time moves only when every task is
+//! idle, so the transport always gets to act first, and each window, such
+//! as the 250 ms the hub VMAC has to be published in, is exact.
+
+use super::test_waits::until;
 use super::*;
 use bacnet_types::error::Error;
 use std::future::{pending, Future};
@@ -209,7 +222,7 @@ async fn wait_for_state(
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_reconnect_redials_fresh_websocket_after_socket_teardown() {
     let (primary_client, primary_hub) = LoopbackWebSocket::pair();
     let (redial_hub_tx, mut redial_hub_rx) =
@@ -278,7 +291,7 @@ async fn sc_reconnect_redials_fresh_websocket_after_socket_teardown() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_failover_connector_dials_when_failover_is_needed() {
     let (primary_client, _primary_hub) = LoopbackWebSocket::pair();
     let (failover_hub_tx, mut failover_hub_rx) =
@@ -326,7 +339,7 @@ async fn sc_failover_connector_dials_when_failover_is_needed() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_primary_restore_connector_redials_primary_socket() {
     let (primary_client, _stale_primary_hub) = LoopbackWebSocket::pair();
     let (failover_client, failover_hub) = LoopbackWebSocket::pair();
@@ -402,7 +415,7 @@ async fn sc_primary_restore_connector_redials_primary_socket() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_failover_connector_timeout_does_not_hang_start() {
     let (primary_client, _primary_hub) = LoopbackWebSocket::pair();
     let failover_dial_count = Arc::new(AtomicUsize::new(0));
@@ -420,7 +433,7 @@ async fn sc_failover_connector_timeout_does_not_hang_start() {
     assert_eq!(failover_dial_count.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_reconnect_connector_timeout_counts_as_failed_attempt() {
     let (primary_client, primary_hub) = LoopbackWebSocket::pair();
     let redial_count = Arc::new(AtomicUsize::new(0));
@@ -465,7 +478,7 @@ async fn sc_reconnect_connector_timeout_counts_as_failed_attempt() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_primary_restore_connector_timeout_leaves_failover_send_path_active() {
     let (primary_client, _stale_primary_hub) = LoopbackWebSocket::pair();
     let (failover_client, failover_hub) = LoopbackWebSocket::pair();
@@ -513,7 +526,7 @@ async fn sc_primary_restore_connector_timeout_leaves_failover_send_path_active()
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_failover_reconnect_exhaustion_does_not_redial_failover_again() {
     let (primary_client, primary_hub) = LoopbackWebSocket::pair();
     drop(primary_hub);
@@ -574,7 +587,7 @@ async fn sc_failover_reconnect_exhaustion_does_not_redial_failover_again() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_primary_restore_publishes_before_hung_failover_disconnect_send() {
     let (primary_client, stale_primary_hub) =
         GateSendWebSocket::pair(Arc::new(AtomicBool::new(false)));
@@ -647,7 +660,7 @@ async fn sc_primary_restore_publishes_before_hung_failover_disconnect_send() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn sc_drop_aborts_hung_primary_restore_failover_disconnect() {
     let (primary_client, stale_primary_hub) =
         GateSendWebSocket::pair(Arc::new(AtomicBool::new(false)));
@@ -695,30 +708,40 @@ async fn sc_drop_aborts_hung_primary_restore_failover_disconnect() {
         .await
         .expect("timed out waiting for primary restore handshake")
         .unwrap();
-    wait_for_hub_vmac(&conn, primary_hub_vmac, Duration::from_millis(250)).await;
-
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            if transport.restore_disconnect_task.lock().unwrap().is_some() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+    // The restore's Disconnect send starts its 750 ms timer once the accept
+    // just sent is handled. Every wait from here needs no timer, so no time
+    // may pass before the last check measures its window.
+    let restored = tokio::time::Instant::now();
+    let watched = &conn;
+    until("restored primary published", || async move {
+        watched.lock().await.hub_vmac == Some(primary_hub_vmac)
     })
-    .await
-    .expect("timed out waiting for failover disconnect task");
+    .await;
+
+    let restoring = &transport;
+    until("failover disconnect task", || async move {
+        restoring.restore_disconnect_task.lock().unwrap().is_some()
+    })
+    .await;
 
     let abort_handle = transport.recv_task.as_ref().unwrap().abort_handle();
     drop(transport);
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while !abort_handle.is_finished() {
-            tokio::task::yield_now().await;
-        }
+    let abort_handle = &abort_handle;
+    until("dropping SC transport aborts recv task", || async move {
+        abort_handle.is_finished()
     })
-    .await
-    .expect("dropping SC transport aborts recv task");
+    .await;
 
-    let failover_recv = tokio::time::timeout(Duration::from_secs(1), failover_hub.recv())
+    // Left running, the restore task's hung Disconnect send would give up at
+    // the 750 ms connect timeout and close the socket itself. Waiting less
+    // than that, from the instant its timer started, leaves only the abort to
+    // close it.
+    assert_eq!(
+        tokio::time::Instant::now(),
+        restored,
+        "time passed after the restore"
+    );
+    let failover_recv = tokio::time::timeout(Duration::from_millis(749), failover_hub.recv())
         .await
         .expect("old failover socket stayed open after Drop");
     assert!(

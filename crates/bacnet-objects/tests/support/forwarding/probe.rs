@@ -242,6 +242,9 @@ impl BACnetObject for Probe {
         self.called("next_monotonic_deadline_internal", ());
         Some(Duration::from_secs(99))
     }
+    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
+        self.called("set_tracking_cov_increment_internal", (finest,));
+    }
     fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
         self.called("cov_snapshot_internal", ());
         Some(Box::new(

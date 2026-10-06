@@ -246,3 +246,63 @@ async fn default_fade_time_and_the_dropped_rows_over_the_wire() {
         );
     }
 }
+
+/// Audit_Level (498, `1A 01 F2`) and Auditable_Operations (501, `1A 01 F5`)
+/// once provisioned (#1525). COLOR 2 is `0F C0 00 02` and COLOR_TEMPERATURE 2
+/// `10 00 00 02`.
+#[tokio::test]
+async fn provisioned_audit_rows_over_the_wire() {
+    use bacnet_objects::audit::ObjectAuditPolicy;
+    use bacnet_types::bitstring::AuditOperationFlags;
+    use bacnet_types::enums::{AuditLevel, AuditOperation};
+    let (fixture, _) = fixture().await;
+    let mut operations = AuditOperationFlags::empty();
+    operations.insert(AuditOperation::WRITE);
+    let policy = ObjectAuditPolicy {
+        level: Some(AuditLevel::AUDIT_CONFIG),
+        operations: Some(operations),
+        ..ObjectAuditPolicy::default()
+    };
+    let color2 = ObjectIdentifier::new(ObjectType::COLOR, 2).unwrap();
+    let temperature2 = ObjectIdentifier::new(ObjectType::COLOR_TEMPERATURE, 2).unwrap();
+    {
+        let mut db = fixture.db.write().await;
+        let mut color = ColorObject::new(2, "CLR-2").unwrap();
+        color.set_audit_policy(policy);
+        db.add(Box::new(color)).unwrap();
+        let mut temperature = ColorTemperatureObject::new(2, "CT-2").unwrap();
+        temperature.set_audit_policy(policy);
+        db.add(Box::new(temperature)).unwrap();
+    }
+    const LEVEL: [u8; 3] = [0x1A, 0x01, 0xF2];
+    const OPERATIONS: [u8; 3] = [0x1A, 0x01, 0xF5];
+    let level = PropertyIdentifier::AUDIT_LEVEL;
+    for oid in [color2, temperature2] {
+        // AUDIT_CONFIG (2) as an application ENUMERATED.
+        assert_eq!(
+            read(&fixture, oid, level).await,
+            read_ack(oid, &LEVEL, &[0x91, 0x02])
+        );
+        // WRITE alone: a two-bit BIT STRING, six bits unused, 0x40.
+        assert_eq!(
+            read(&fixture, oid, PropertyIdentifier::AUDITABLE_OPERATIONS).await,
+            read_ack(oid, &OPERATIONS, &[0x82, 0x06, 0x40])
+        );
+        // AUDIT_ALL (1) is taken and reads back.
+        assert_eq!(write(&fixture, oid, level, &[0x91, 0x01]).await, SIMPLE_ACK);
+        assert_eq!(
+            read(&fixture, oid, level).await,
+            read_ack(oid, &LEVEL, &[0x91, 0x01])
+        );
+        // Neither table has Audit_Priority_Filter (500).
+        assert_eq!(
+            read(&fixture, oid, PropertyIdentifier::AUDIT_PRIORITY_FILTER).await,
+            [0x50, 5, 12, 0x91, 0x02, 0x91, 0x20]
+        );
+    }
+    // Unprovisioned, the rows are absent.
+    assert_eq!(
+        read(&fixture, color(), level).await,
+        [0x50, 5, 12, 0x91, 0x02, 0x91, 0x20]
+    );
+}

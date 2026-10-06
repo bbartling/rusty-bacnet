@@ -106,6 +106,29 @@ fn a_run_woken_slightly_late_keeps_its_cadence() {
 }
 
 #[test]
+fn a_finer_step_brings_the_pending_sample_forward() {
+    // 0 to 100 over 10 s moves 10 percent a second.
+    let fade = Transition::fade(0.0f32, 100.0, ms(0), ms(10_000)).unwrap();
+    let mut run = Run::start(fade, 5.0);
+    assert_eq!(run.deadline(), ms(500));
+    // A subscriber's 1 percent step is due 100 ms after the start (#1510).
+    assert_eq!(run.advance(ms(50), 1.0), Progress::Pending);
+    assert_eq!(run.deadline(), ms(100));
+    assert_eq!(run.advance(ms(100), 1.0), Progress::Sampled);
+    assert_eq!(run.deadline(), ms(200));
+    // Back to the coarse step, the pending sample stays where it is, and
+    // the one after it is a coarse step on.
+    assert_eq!(run.advance(ms(150), 5.0), Progress::Pending);
+    assert_eq!(run.deadline(), ms(200));
+    assert_eq!(run.advance(ms(200), 5.0), Progress::Sampled);
+    assert_eq!(run.deadline(), ms(700));
+    // A finer step whose sample would already have fallen due samples at
+    // once, and the next is planned from now.
+    assert_eq!(run.advance(ms(450), 1.0), Progress::Sampled);
+    assert_eq!(run.deadline(), ms(600));
+}
+
+#[test]
 fn an_xy_colour_fades_both_coordinates_along_one_line() {
     let from = BACnetXyColor::new(0.1, 0.2);
     let to = BACnetXyColor::new(0.4, 0.6);

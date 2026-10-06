@@ -11,7 +11,11 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::engine::Engine;
-use super::{command, metadata, milliseconds, written_transition, written_unsigned};
+use super::{
+    command, metadata, milliseconds, noncommandable_audit_policy, written_transition,
+    written_unsigned,
+};
+use crate::audit::{AuditPolicyAuthority, ObjectAuditPolicy};
 use crate::common::{self, read_identity_properties};
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 use crate::transition::Transition;
@@ -69,6 +73,8 @@ pub struct ColorTemperatureObject {
     /// Min_Pres_Value and Max_Pres_Value, within 1000..=30_000.
     min_pres_value: u32,
     max_pres_value: u32,
+    /// Audit_Level and Auditable_Operations, once provisioned.
+    audit_policy: ObjectAuditPolicy,
     engine: Engine<u32>,
 }
 
@@ -95,8 +101,21 @@ impl ColorTemperatureObject {
             transition: ColorTransition::NONE,
             min_pres_value: *command::KELVIN.start(),
             max_pres_value: *command::KELVIN.end(),
+            audit_policy: ObjectAuditPolicy::default(),
             engine: Engine::new(KELVIN_SAMPLE_STEP),
         })
+    }
+
+    /// Provision the optional Audit_Level and Auditable_Operations rows
+    /// before registration, as a Color object's are (#1525). Table 12-Y has
+    /// no Audit_Priority_Filter either, so a priority filter in `policy` is
+    /// left out.
+    pub fn set_audit_policy(&mut self, policy: ObjectAuditPolicy) {
+        self.audit_policy = noncommandable_audit_policy(policy);
+    }
+
+    pub(super) fn audit_policy(&self) -> &ObjectAuditPolicy {
+        &self.audit_policy
     }
 
     /// Set Present_Value in kelvin, as a WriteProperty of it would.
@@ -259,6 +278,9 @@ impl BACnetObject for ColorTemperatureObject {
         if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;
         }
+        if let Some(result) = self.audit_policy.read(property, array_index) {
+            return result;
+        }
         let unsigned = |value: u32| Ok(PropertyValue::Unsigned(u64::from(value)));
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
@@ -294,9 +316,15 @@ impl BACnetObject for ColorTemperatureObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
         value: PropertyValue,
-        _priority: Option<u8>,
+        priority: Option<u8>,
     ) -> Result<(), Error> {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
+        }
+        if let Some(result) = self
+            .audit_policy
+            .write(property, array_index, &value, priority)
+        {
             return result;
         }
         match property {
@@ -356,6 +384,14 @@ impl BACnetObject for ColorTemperatureObject {
         true
     }
 
+    fn audit_object_policy_internal(&self) -> ObjectAuditPolicy {
+        self.audit_policy
+    }
+
+    fn audit_policy_authority_internal(&mut self) -> Option<AuditPolicyAuthority<'_>> {
+        Some(AuditPolicyAuthority::new(&mut self.audit_policy))
+    }
+
     fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
         self.engine.advance_by(elapsed)
     }
@@ -374,6 +410,10 @@ impl BACnetObject for ColorTemperatureObject {
 
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
         self.engine.deadline()
+    }
+
+    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
+        self.engine.set_finest_increment(finest);
     }
 
     /// A copy that reads as the object does now; see the Color object's.

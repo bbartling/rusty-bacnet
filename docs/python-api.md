@@ -2512,7 +2512,7 @@ the property remains unchanged. This is a local admission policy, not a delivery
 guarantee. Equal-value, NULL and ordinary writes retain their existing behavior;
 other failed writes retain ordinary filters.
 AV/BV absent/NULL priority filters inherit the Reporter under the object-specific
-clauses, despite conflicting generic wording. See the [Rust policy contract](rust-api.md#object-owned-avbv-audit-policy)
+clauses, despite conflicting generic wording. See the [Rust policy contract](rust-api.md#object-owned-audit-policy)
 for the interpretation, WPM/local-write behavior, and bounded lifecycle support.
 
 #### Building Control

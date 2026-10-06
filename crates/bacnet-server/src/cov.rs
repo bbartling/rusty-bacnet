@@ -342,6 +342,39 @@ impl CovSubscriptionTable {
             .collect()
     }
 
+    /// The finest COV increment each object's live subscriptions to
+    /// `property` ask for (#1510): SubscribeCOVProperty subscriptions and
+    /// Multiple references that give one. A negative increment reports any
+    /// change, as zero does, so it counts as zero; a NaN or infinite one
+    /// reports nothing finer, so it's left out.
+    pub(crate) fn finest_increments(
+        &self,
+        property: PropertyIdentifier,
+    ) -> HashMap<ObjectIdentifier, f64> {
+        let now = Instant::now();
+        let mut finest = HashMap::new();
+        for sub in self.subs.values() {
+            if sub.monitored_property != Some(property)
+                || sub.expires_at.is_some_and(|expires| expires <= now)
+            {
+                continue;
+            }
+            let Some(increment) = sub
+                .cov_increment
+                .map(f64::from)
+                .filter(|increment| increment.is_finite())
+            else {
+                continue;
+            };
+            let increment = increment.max(0.0);
+            finest
+                .entry(sub.monitored_object_identifier)
+                .and_modify(|finest: &mut f64| *finest = finest.min(increment))
+                .or_insert(increment);
+        }
+        finest
+    }
+
     /// Whether a snapshot still owns a live entry in this table.
     pub fn is_current(&self, snapshot: &CovSubscriptionSnapshot) -> bool {
         self.remaining_lifetime(snapshot, Instant::now())
