@@ -12,18 +12,18 @@ use tokio::task::JoinHandle;
 
 use super::BACnetClient;
 
-pub(super) const CLIENT_MAC: [u8; 1] = [0x01];
-pub(super) const DEVICE_MAC: [u8; 1] = [0x02];
+pub(crate) const CLIENT_MAC: [u8; 1] = [0x01];
+pub(crate) const DEVICE_MAC: [u8; 1] = [0x02];
 
 /// What the device answers one request with: the service-ack octets, or an
 /// Error PDU's class and code.
-pub(super) type Answer = Result<Vec<u8>, (ErrorClass, ErrorCode)>;
+pub(crate) type Answer = Result<Vec<u8>, (ErrorClass, ErrorCode)>;
 
 /// Every confirmed request the device received: its service and parameters.
-pub(super) type RequestLog = Arc<StdMutex<Vec<(ConfirmedServiceChoice, Vec<u8>)>>>;
+pub(crate) type RequestLog = Arc<StdMutex<Vec<(ConfirmedServiceChoice, Vec<u8>)>>>;
 
-pub(super) struct FakeDevice {
-    pub(super) requests: RequestLog,
+pub(crate) struct FakeDevice {
+    pub(crate) requests: RequestLog,
     task: JoinHandle<()>,
 }
 
@@ -35,7 +35,7 @@ impl Drop for FakeDevice {
 
 impl FakeDevice {
     /// How many confirmed requests of `service` arrived.
-    pub(super) fn count(&self, service: ConfirmedServiceChoice) -> usize {
+    pub(crate) fn count(&self, service: ConfirmedServiceChoice) -> usize {
         self.requests
             .lock()
             .unwrap()
@@ -46,7 +46,7 @@ impl FakeDevice {
 }
 
 /// A started client and a device at [`DEVICE_MAC`] answering with `answer`.
-pub(super) async fn client_with_device<F>(
+pub(crate) async fn client_with_device<F>(
     mut answer: F,
 ) -> (BACnetClient<LoopbackTransport>, FakeDevice)
 where

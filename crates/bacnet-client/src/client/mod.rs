@@ -115,6 +115,11 @@ pub struct ClientConfig {
     pub segmented_response_accepted: bool,
     /// Proposed window size for segmented transfers (1-127, default 1).
     pub proposed_window_size: u8,
+    /// Least time, in milliseconds, between the confirmed requests this
+    /// client sends to one destination; 0 (the default) sends at once. A
+    /// slow device then serves its other clients between this client's
+    /// requests, whether paging a log or polling (#1535).
+    pub min_request_interval_ms: u64,
 }
 
 /// Additional client startup options.
@@ -144,6 +149,7 @@ impl Default for ClientConfig {
             max_segments: None,
             segmented_response_accepted: true,
             proposed_window_size: 1,
+            min_request_interval_ms: 0,
         }
     }
 }
@@ -482,6 +488,7 @@ pub struct BACnetClient<T: TransportPort> {
     segmented_cleanup: Arc<SegmentedCleanupHook>,
     local_mac: MacAddr,
     routed_path_limits: Arc<RoutedPathLimits>,
+    pacer: Box<pacing::RequestPacer>,
 }
 
 impl BACnetClient<BipTransport> {
@@ -835,6 +842,7 @@ mod event_notifications;
 mod file_list;
 mod lifecycle;
 mod object_mgmt;
+mod pacing;
 mod property;
 mod read_range;
 mod requests;
@@ -893,11 +901,13 @@ mod device_events_tests;
 #[cfg(test)]
 mod event_notification_tests;
 #[cfg(test)]
-mod fake_device;
+pub(crate) mod fake_device;
 #[cfg(test)]
 mod list_error_tests;
 #[cfg(test)]
 mod list_validation_tests;
+#[cfg(test)]
+mod pacing_tests;
 #[cfg(test)]
 mod peer_max_apdu_tests;
 #[cfg(test)]

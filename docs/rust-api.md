@@ -4668,6 +4668,56 @@ Log_Buffer read. Each decoder requires every octet to belong to a record and
 the count to equal `item_count`; a failure is a `LogRecordsError` naming the
 failing record's index and offset, keeping the records before it.
 
+### Reading a whole log
+
+```rust
+use bacnet_client::log_reader::LogCursor;
+
+let mut cursor = LogCursor::Oldest; // or Sequence(n), Position(n), Time(date, time)
+loop {
+    let page = client.read_log_page(&mac, trend_log, cursor, 100).await?;
+    if let Some(gap) = page.gap { eprintln!("lost records before {}", gap.first); }
+    store(&page.records); // LogRecords::TrendLog(..), EventLog(..), ...
+    cursor = page.next;
+    if page.done { break; }
+}
+save_checkpoint(cursor); // resume from it later for the records logged since
+```
+
+`read_log_page` reads one page with one request outstanding:
+
+- `Oldest` finds the oldest record from Record_Count and Total_Record_Count.
+- Pages go on from the first sequence number plus the records returned,
+  across the wrap from the top of the range to 1.
+- MORE_ITEMS only says the answer was cut to fit, so any page that isn't the
+  last continues; LAST_ITEM or an empty page ends the read, and `next` is the
+  checkpoint.
+- An empty page reads the counts again. A checkpoint the log no longer holds
+  restarts from the oldest record with `page.gap` set, as does a first record
+  past the one asked for.
+- A device that answers with records before the one asked for, as
+  bacnet-stack 1.6.1 does past its wrap, fails with
+  `Error::LogNotAdvancing` rather than repeating pages; so does one whose
+  counts say it holds a record it doesn't return. Read such a log from
+  `LogCursor::Position(1)`.
+- Pages are read leniently: a first sequence number of 0 after a device's
+  wrap is accepted and listed in `page.violations`.
+
+The endpoint client has the same `read_log_page`, and
+`bacnet_client::log_reader::read_log_page` runs over any `LogRequester`.
+
+### Pacing
+
+`min_request_interval_ms` on every client builder (and in `ClientConfig`)
+spaces the confirmed requests to each destination by at least that long,
+default 0. It covers paging and polling alike, so a slow device can serve its
+other clients between them; requests to different destinations don't wait on
+each other.
+
+```rust
+let client = BACnetClient::bip_builder().min_request_interval_ms(50).build().await?;
+```
+
 ### List Manipulation
 
 ```rust

@@ -422,6 +422,93 @@ async fn source_read_range_lenient_keeps_a_zero_first_sequence_page() {
     sink.stop().await.unwrap();
 }
 
+/// The endpoint's paged log read finds the oldest record from the counts
+/// and decodes the page it reads from there (#1530).
+#[tokio::test]
+async fn read_log_page_finds_the_oldest_record_and_decodes_its_page() {
+    use bacnet_client::log_reader::LogCursor;
+    use bacnet_encoding::constructed::encode_log_record;
+    use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+
+    let (mut peer, mut requests) = network().await;
+    let (mut sink, _records) = network().await;
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
+    session.start().await.unwrap();
+    let client = session.cloned_client_handle().unwrap();
+    let mac = peer.local_mac().to_vec();
+    let log = oid(ObjectType::TREND_LOG, 3);
+    let read =
+        tokio::spawn(async move { client.read_log_page(&mac, log, LogCursor::Oldest, 10).await });
+    // Record_Count and Total_Record_Count both read 42: records 1 to 42.
+    for property in [
+        PropertyIdentifier::RECORD_COUNT,
+        PropertyIdentifier::TOTAL_RECORD_COUNT,
+    ] {
+        let envelope = receive(&mut requests).await;
+        let (invoke, request) = read_request(&envelope);
+        assert_eq!(request.property_identifier, property);
+        send(&peer, &envelope.source_mac, ack(invoke, &request)).await;
+    }
+    let envelope = receive(&mut requests).await;
+    let (invoke_id, request) = range_request(&envelope);
+    assert_eq!(
+        request.range,
+        Some(RangeSpec::BySequenceNumber {
+            reference_seq: 1,
+            count: 10
+        })
+    );
+    let mut item_data = BytesMut::new();
+    for value in [7, 9] {
+        let record = BACnetLogRecord {
+            date: Date {
+                year: 126,
+                month: 10,
+                day: 5,
+                day_of_week: 1,
+            },
+            time: Time {
+                hour: 9,
+                minute: 0,
+                second: value,
+                hundredths: 0,
+            },
+            log_datum: LogDatum::UnsignedValue(u64::from(value)),
+            status_flags: None,
+        };
+        encode_log_record(&record, &mut item_data).unwrap();
+    }
+    let mut bytes = BytesMut::new();
+    ReadRangeAck {
+        object_identifier: log,
+        property_identifier: PropertyIdentifier::LOG_BUFFER,
+        property_array_index: None,
+        result_flags: (true, false, true),
+        item_count: 2,
+        item_data: item_data.to_vec(),
+        first_sequence_number: Some(1),
+    }
+    .encode(&mut bytes);
+    let pdu = Apdu::ComplexAck(ComplexAck {
+        segmented: false,
+        more_follows: false,
+        invoke_id,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::READ_RANGE,
+        service_ack: bytes.freeze(),
+    });
+    send(&peer, &envelope.source_mac, pdu).await;
+    let page = timeout(WAIT, read).await.unwrap().unwrap().unwrap();
+    assert_eq!(page.records.len(), 2);
+    assert_eq!(page.first_sequence_number, Some(1));
+    assert_eq!(page.next, LogCursor::Sequence(3));
+    assert!(!page.done);
+    session.stop().await.unwrap();
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn source_read_range_cancelled_caller_keeps_one_retry_record_and_stop_releases() {
     let (mut peer, mut requests) = network().await;

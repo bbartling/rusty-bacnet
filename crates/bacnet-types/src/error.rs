@@ -147,6 +147,34 @@ pub enum Error {
     /// instead. Read again leniently to keep its items.
     #[error("ReadRange acknowledgement refused: {0}")]
     ReadRangeViolation(ReadRangeViolation),
+
+    /// A paged log read asked for the records from one sequence number and
+    /// the device answered with a page starting before it, so reading on
+    /// would repeat records instead of advancing; or answered with none
+    /// although its record counts say it holds that record. Some devices
+    /// clamp a reference past their sequence wrap back to the oldest record,
+    /// or number the record after the wrap 0; read such a log by position
+    /// instead.
+    #[error("log read is not advancing: {}", not_advancing(*.requested, *.returned))]
+    LogNotAdvancing {
+        /// The sequence number the read asked for.
+        requested: u64,
+        /// What the device numbered the first record it sent;
+        /// `None` when it returned no records.
+        returned: Option<u64>,
+    },
+}
+
+fn not_advancing(requested: u64, returned: Option<u64>) -> String {
+    match returned {
+        Some(returned) => {
+            format!("asked for sequence number {requested}, the device answered from {returned}")
+        }
+        None => format!(
+            "asked for sequence number {requested}, which the log's counts say it holds, \
+             the device answered with no records"
+        ),
+    }
 }
 
 /// A rule a ReadRange acknowledgement can break against the request it

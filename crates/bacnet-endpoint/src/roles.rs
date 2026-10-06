@@ -440,6 +440,20 @@ impl ClientRoleHandle {
         .await
     }
 
+    /// Read one page of `log`'s Log_Buffer from `cursor`, as
+    /// [`bacnet_client::log_reader::read_log_page`] does; each request is
+    /// audited like any other read.
+    pub async fn read_log_page(
+        &self,
+        destination_mac: &[u8],
+        log: ObjectIdentifier,
+        cursor: bacnet_client::log_reader::LogCursor,
+        page_size: u16,
+    ) -> Result<bacnet_client::log_reader::LogPage, Error> {
+        bacnet_client::log_reader::read_log_page(self, destination_mac, log, cursor, page_size)
+            .await
+    }
+
     async fn read_range_checked(
         &self,
         destination: EndpointApduDestination,
@@ -492,6 +506,31 @@ impl ClientRoleHandle {
     #[allow(dead_code)]
     pub(crate) fn close_for_owner(&self) {
         self.requester.close();
+    }
+}
+
+impl bacnet_client::log_reader::LogRequester for ClientRoleHandle {
+    async fn read_unsigned(
+        &self,
+        mac: &[u8],
+        log: ObjectIdentifier,
+        property: PropertyIdentifier,
+    ) -> Result<u64, Error> {
+        let ack = self.read_property(mac, log, property, None).await?;
+        bacnet_client::log_reader::unsigned_value(&ack.property_value)
+    }
+
+    async fn read_range_lenient(
+        &self,
+        mac: &[u8],
+        request: &bacnet_services::read_range::ReadRangeRequest,
+    ) -> Result<bacnet_services::read_range::ReadRangeReply, Error> {
+        self.read_range_with(
+            mac,
+            request,
+            bacnet_services::read_range::ReadRangeValidation::Lenient,
+        )
+        .await
     }
 }
 

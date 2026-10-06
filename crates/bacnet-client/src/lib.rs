@@ -3,6 +3,7 @@
 pub mod client;
 pub mod discovery;
 mod endpoint_requester;
+pub mod log_reader;
 pub mod segmentation;
 pub mod tsm;
 

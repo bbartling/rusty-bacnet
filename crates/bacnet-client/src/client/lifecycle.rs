@@ -235,6 +235,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         });
 
+        // Boxed: the client is moved around by value, and most never pace.
+        let pacer = Box::new(pacing::RequestPacer::new(Duration::from_millis(
+            config.min_request_interval_ms,
+        )));
         Ok(Self {
             config,
             network,
@@ -254,6 +258,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             segmented_cleanup,
             local_mac,
             routed_path_limits,
+            pacer,
         })
     }
     /// Get the client's local MAC address.
