@@ -370,6 +370,40 @@ async fn test_duplicate_scans_coalesced_within_window() {
     server.stop().await.unwrap();
 }
 
+/// The window runs from the answered Who-Is and excludes its end: a repeat
+/// 199 ms later is coalesced, one 200 ms later is answered.
+#[tokio::test(start_paused = true)]
+async fn test_coalescing_window_closes_at_its_length() {
+    let policy = DiscoveryPolicy {
+        coalesce_window: Duration::from_millis(200),
+        prefer_directed_responses: true,
+        ..Default::default()
+    };
+    let (mut server, _sent, tx) = spawn_test_server(policy).await;
+    let src = &[0x0A, 0x00, 0x00, 0x02];
+
+    tx.send(build_who_is_npdu(None, None, src, None))
+        .await
+        .unwrap();
+    counters_after(&server, 1).await;
+
+    tokio::time::advance(Duration::from_millis(199)).await;
+    tx.send(build_who_is_npdu(None, None, src, None))
+        .await
+        .unwrap();
+    let c = counters_after(&server, 2).await;
+    assert_eq!((c.i_am_sent, c.requests_coalesced), (1, 1));
+
+    tokio::time::advance(Duration::from_millis(1)).await;
+    tx.send(build_who_is_npdu(None, None, src, None))
+        .await
+        .unwrap();
+    let c = counters_after(&server, 3).await;
+    assert_eq!((c.i_am_sent, c.requests_coalesced), (2, 1));
+
+    server.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
     let policy = DiscoveryPolicy {
@@ -424,7 +458,6 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
     let mut raw_buf = BytesMut::new();
     encode_npdu(&mut raw_buf, &npdu).unwrap();
 
-    let t0 = tokio::time::Instant::now();
     tx.send(ReceivedNpdu {
         direct_response: None,
         npdu: raw_buf.freeze(),
@@ -437,10 +470,11 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
     .await
     .unwrap();
 
-    // Wait up to 250 ms for the response. The flood takes no time on the
-    // paused clock, so this bounds only a delay the server adds itself, such
-    // as a timer or a pacing wait, and not the runner's speed.
-    let found_ack = tokio::time::timeout(Duration::from_millis(250), async {
+    // One bound, on the paused clock, where the flood itself takes no time.
+    // It catches a delay the server adds (a timer or a pacing wait) and a read
+    // dropped under the flood, not the runner's speed: real-time latency under
+    // load is the stress test's `mixed` scenario's job.
+    let answered = tokio::time::timeout(Duration::from_millis(250), async {
         for seen in 1.. {
             sent.wait_for_len(seen).await;
             let frame = sent.frame(seen - 1);
@@ -451,13 +485,10 @@ async fn test_confirmed_traffic_latency_bounded_during_discovery_flood() {
             }
         }
     })
-    .await
-    .is_ok();
-    let elapsed = t0.elapsed();
-    assert!(found_ack, "Confirmed response was not received");
+    .await;
     assert!(
-        elapsed < Duration::from_millis(500),
-        "Confirmed request delayed by discovery flood: took {elapsed:?}"
+        answered.is_ok(),
+        "Confirmed request was delayed or dropped by the discovery flood"
     );
 
     server.stop().await.unwrap();

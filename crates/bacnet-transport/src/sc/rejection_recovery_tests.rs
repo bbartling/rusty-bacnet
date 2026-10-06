@@ -283,10 +283,9 @@ async fn rejection_deadline_fresh_primary_restore_and_outstanding_disconnect_cle
     accept(&failover_hub, [0x20; 6], 1476, 1476).await;
     let (fresh, fresh_observed) = within(dials.recv()).await.unwrap();
     accept(&fresh, [0x11; 6], 32, 40).await;
-    within(async {
-        while transport.connection().unwrap().lock().await.hub_vmac != Some([0x11; 6]) {
-            tokio::task::yield_now().await;
-        }
+    let restoring = &transport;
+    until("restored primary published", || async move {
+        restoring.connection().unwrap().lock().await.hub_vmac == Some([0x11; 6])
     })
     .await;
     wait_count(&failover_observed.disconnect_started, 1).await;
@@ -430,11 +429,11 @@ async fn rejection_deadline_drop_terminates_pending_nak_without_claiming_socket_
     wait_count(&observed.nak_started, 1).await;
     let task = transport.recv_task.as_ref().unwrap().abort_handle();
     drop(transport);
-    within(async {
-        while !task.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
+    let task = &task;
+    until(
+        "receive task finished",
+        || async move { task.is_finished() },
+    )
     .await;
     assert_eq!(observed.nak_dropped.load(Ordering::SeqCst), 1);
     assert!(Arc::strong_count(&retained) >= 1);

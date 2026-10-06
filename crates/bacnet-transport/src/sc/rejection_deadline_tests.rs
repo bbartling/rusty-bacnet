@@ -133,15 +133,30 @@ async fn within<F: std::future::Future>(future: F) -> F::Output {
         .expect("bounded test operation timed out")
 }
 
-/// Spin until `count` reaches `expected`. Yielding never moves a paused clock,
-/// so there only timer-free progress can satisfy this, and nextest's timeout,
-/// not `within`, ends a hang.
-async fn wait_count(count: &AtomicUsize, expected: usize) {
-    within(async {
-        while count.load(Ordering::SeqCst) < expected {
-            tokio::task::yield_now().await;
+/// Scheduler rounds [`until`] gives the transport. Yielding never moves a
+/// paused clock, so a time bound such as `within` can't end a spin there; this
+/// counts rounds instead, which a stalled runner can't use up either.
+const ROUNDS: usize = 10_000;
+
+/// Yield until `done` resolves true, failing after [`ROUNDS`] rounds. On a
+/// paused clock only timer-free progress can satisfy it.
+async fn until<F: std::future::Future<Output = bool>>(what: &str, mut done: impl FnMut() -> F) {
+    for _ in 0..ROUNDS {
+        if done().await {
+            return;
         }
-    })
+        tokio::task::yield_now().await;
+    }
+    panic!("{what}: not reached in {ROUNDS} scheduler rounds");
+}
+
+/// Wait until `count` reaches `expected`; see [`until`].
+async fn wait_count(count: &AtomicUsize, expected: usize) {
+    let what = format!("count reaching {expected}");
+    until(
+        &what,
+        || async move { count.load(Ordering::SeqCst) >= expected },
+    )
     .await;
 }
 
