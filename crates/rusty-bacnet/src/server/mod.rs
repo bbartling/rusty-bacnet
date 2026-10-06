@@ -93,6 +93,8 @@ pub struct BACnetServer {
     interface: String,
     port: u16,
     broadcast_address: String,
+    /// See `BipTransport::set_share_port_by_address` (#1538).
+    share_port_by_address: bool,
     registered_network_port: Option<u32>,
     // SC config
     sc_hub: Option<String>,

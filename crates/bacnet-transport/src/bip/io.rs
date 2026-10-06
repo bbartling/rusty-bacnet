@@ -50,8 +50,9 @@ pub(super) struct RecvContext {
     pub(super) pending_bvlc_response: Arc<Mutex<Option<PendingBvlcResponse>>>,
     pub(super) management_limiter: Arc<std::sync::Mutex<ManagementRateLimiter>>,
     pub(super) fanout: Option<FanoutDispatcher>,
-    /// Refuses a Forwarded-NPDU whose origin is a group address (#1493).
-    pub(super) forwarded_origins: super::groups::ForwardedOrigins,
+    /// Refuses a UDP source (#1504) or a Forwarded-NPDU origin (#1493)
+    /// that is a group address.
+    pub(super) group_sources: super::groups::GroupSources,
     #[cfg(test)]
     pub(super) force_dbtn_forward_failure: bool,
 }
@@ -185,7 +186,7 @@ pub(super) async fn handle_bvll_message(
                 } else {
                     return;
                 };
-            if *source_mac == ctx.local_mac[..] || !ctx.forwarded_origins.admits(&source_mac) {
+            if *source_mac == ctx.local_mac[..] || !ctx.group_sources.admits_origin(&source_mac) {
                 return;
             }
 

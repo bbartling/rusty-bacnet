@@ -30,6 +30,18 @@ bip-broadcast-observers = { max-threads = 1 }
 filter = 'binary(bip_network_numbers) | binary(client_bip_network_numbers)'
 test-group = 'bip-broadcast-observers'
 
+# These B/IP broadcast tests skip themselves on a host without a usable
+# default route or broadcast; show their output when they pass, so a CI log
+# says whether each one ran or skipped (#1538).
+[[profile.default.overrides]]
+filter = '''
+    binary_id(bacnet-transport) & (
+        test(=bip::shared_port_tests::a_subnet_broadcast_reaches_a_transport_sharing_its_port_by_address)
+      | test(=bip::shared_port_tests::a_broadcast_from_another_interface_is_dropped)
+    )
+'''
+success-output = "immediate"
+
 # Start the slowest tests first. nextest otherwise starts tests in binary and
 # name order, so a long test in a binary that sorts late, such as
 # bacnet-transport, starts near the end and keeps the run going alone for most

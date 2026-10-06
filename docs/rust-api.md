@@ -634,16 +634,92 @@ let transport = BipTransport::new(
 );
 ```
 
-The socket binds the wildcard address so directed and limited broadcasts
-arrive. Port zero asks for a private ephemeral port and never sets
-`SO_REUSEADDR`: on Linux such a bind could otherwise be given a port another
-`SO_REUSEADDR` socket already holds, and unicast to that port then reaches only
-one of them. The choice is made at construction, so a restart that rebinds the
-remembered actual port keeps it private. An explicit port still sets
-`SO_REUSEADDR`, as before. On Linux that lets a second application bind the
-same port, with the same single-receiver unicast caveat; macOS and BSD refuse a
-second wildcard bind. B/IPv6 applies the same port-zero and explicit-port rule,
-but binds a fresh ephemeral port on each start instead of remembering one.
+Port zero asks for a private ephemeral port and never sets `SO_REUSEADDR`: on
+Linux such a bind could otherwise be given a port another `SO_REUSEADDR`
+socket already holds, and unicast to that port then reaches only one of them.
+The choice is made at construction, so a restart that rebinds the remembered
+actual port keeps it private. B/IPv6 applies the same port-zero and
+explicit-port rule, but binds a fresh ephemeral port on each start instead of
+remembering one.
+
+By default the transport binds one socket on `0.0.0.0:port`, whatever the
+interface: an explicitly requested port sets `SO_REUSEADDR`, and port zero is
+private. The wildcard socket receives directed and limited broadcasts and
+unicast alike, in the order they arrive, and the receive loop takes unicast
+only to the interface address (or, for `0.0.0.0`, to one of the host's
+addresses, below). Sends leave from it, so the OS picks their source address
+by route. On an explicit port, Linux lets a second application bind the same
+wildcard address, with the same single-receiver unicast caveat, so two
+devices on two addresses of one host can't both rely on the standard port;
+macOS and BSD refuse a second wildcard bind.
+
+#### Sharing a port by address
+
+`BipTransport::set_share_port_by_address(true)` (the B/IP builders'
+`.share_port_by_address(true)`, Python's `share_port_by_address=True` on
+`BACnetServer`, `BACnetClient` and `BipEndpoint`) binds the interface address
+itself instead (#1538). Several devices on one host, each on its own address,
+can then share one port such as 47808, and each receives only the unicast
+sent to its own address. `start()` fails unless the interface is an explicit
+address and the port nonzero.
+
+What changes in this mode:
+
+- **Sends** leave from the interface address and the shared port.
+- **Receipt order:** on Linux, macOS and the BSDs, broadcasts arrive on
+  separate receive-only listeners, read fairly against the address socket in
+  no fixed order. A broadcast and a unicast that arrive together may be
+  handled in either order, so a unicast that depends on a broadcast sent just
+  before it, such as a query after a Network-Number-Is, can be handled first.
+  A listener that fails is closed with a warning, and unicast goes on.
+- **Broadcast address:** it must be the interface's subnet broadcast,
+  judged by the netmask the host reports, or 255.255.255.255; anything else
+  would lose this subnet's broadcasts, so `start()` fails. A loopback
+  interface may also name itself, as loopback tests do; no other interface
+  may. Where the host reports no netmask, the bind decides.
+- **Arrival interface:** a listener on 255.255.255.255 (Linux) or `0.0.0.0`
+  (macOS and the BSDs) hears every interface, so it keeps only broadcasts
+  that arrived on the transport's own, by the index `IP_PKTINFO` (Linux) or
+  `IP_RECVIF` (macOS and the BSDs) reports. On a host with several networks,
+  such as a router with a port on each, one network's Who-Is doesn't reach
+  the transport on another. The index is looked up when the transport
+  starts, so after its interface changes (a re-plugged adapter, a rebuilt
+  VLAN or bridge, a VPN that reconnects) restart the transport; the first
+  broadcast dropped for arriving elsewhere is logged as a warning naming
+  both indexes.
+- **Linux** delivers a broadcast only to sockets bound to the wildcard address
+  or to the broadcast address itself. The listeners bind the configured
+  broadcast address and 255.255.255.255 with `SO_REUSEADDR`, which every
+  device on the subnet shares, and each gets a copy. No listener sees a
+  unicast, and the address socket shares
+  nothing: no other socket can bind the same address and port, nor
+  `0.0.0.0` on that port, so a default-mode transport can't share a port with
+  devices sharing it by address.
+- **macOS and the BSDs** refuse to bind 255.255.255.255, so one listener binds
+  `0.0.0.0:port` with `SO_REUSEADDR` and `SO_REUSEPORT`, which several such
+  listeners need, and each gets a copy of a broadcast. A unicast to a local
+  address no socket on the port is bound to can reach a listener, which drops
+  it. Another socket can't bind the same address and port without
+  `SO_REUSEPORT` on both, which the address socket doesn't set. A default-mode
+  transport's wildcard socket lacks `SO_REUSEPORT`, so it can't share a port
+  with these listeners either.
+- **Windows** delivers a broadcast arriving on an interface to a socket bound
+  to that interface's address, so one socket is enough. Windows'
+  `SO_REUSEADDR` would let another socket bind the same address and take its
+  unicast, so the socket sets `SO_EXCLUSIVEADDRUSE` instead, and no other
+  socket can bind that address and port. Other addresses can still share the
+  port, and a socket already bound to `0.0.0.0` on it without
+  `SO_EXCLUSIVEADDRUSE` doesn't stop the bind (it does stop a default-mode
+  start). Under Windows' strong host model a socket bound to one interface
+  sends only through it, so a multihomed BBMD in this mode reaches only the
+  peers that interface can.
+
+Tests run the shared port on every OS: on Linux on 127.0.0.2 and 127.0.0.3,
+with broadcasts to 127.255.255.255 and 255.255.255.255, and on macOS and
+Windows with 127.0.0.1 beside the default-route address. A subnet broadcast
+on the default-route interface checks broadcast receipt on every OS, and is
+skipped without a broadcast-capable default route; Windows runs it only in
+CI.
 
 With the `0.0.0.0` interface, `start()` lists the host's IPv4 addresses, with
 `getifaddrs` on Linux, macOS and the BSDs and `GetAdaptersAddresses` on
@@ -656,6 +732,14 @@ tentative address, such as a static address on a disconnected adapter, counts.
 The list is read at each start, so an address added later is accepted after
 the next restart. If the addresses cannot be listed, or none is usable,
 `start()` fails and suggests binding an explicit interface address.
+
+A datagram whose UDP source is a group address (the limited broadcast, a
+multicast address, or the configured broadcast IP unless it is one of the
+node's own addresses) is dropped before its BVLC function is handled, and
+counted in `group_source_drops()` (#1504). No node sends from one, and the
+stack would answer it there, register it as a foreign device, or forward
+from it as a BBMD. Linux discards most such datagrams itself; other systems
+may not.
 
 The stack takes a Forwarded-NPDU's originating address as the NPDU's source,
 so an origin that is one of the link's group destinations
@@ -1696,6 +1780,30 @@ itself, to event recipients, Channel and Command targets, audit recipients and
 bound devices, and binds no device to one (#1493); its replies and COV
 notifications go to the source a request came from. `is_broadcast_mac` keeps
 its narrower meaning, this link's own broadcast, which routing relies on.
+
+A reply goes back to the link-layer MAC its request came from, so a
+confirmed request from a group address would get its answer, any segment
+ACK, and the confirmed COV notifications of a subscription it makes, sent to
+every node in the group. The server, the client and the endpoint ignore such
+a request (#1504). The server counts it in
+`BACnetServer::group_source_request_drops()` and the client in
+`BACnetClient::group_source_request_drops()`; the endpoint's ingress hands it
+to policy as `PolicyReason::GroupSource`, which the session counts with its
+other policy outcomes. No built-in transport hands up a group source: B/IP
+and Ethernet drop one themselves, MS/TP refuses a broadcast source station,
+and IPv6 stacks discard a datagram from a multicast address. A nonzero count
+points at a custom transport.
+
+`BACnetRouter` also drops a routed NPDU that it would deliver, on a directly
+connected port, to a DADR that is a group destination there
+(`TransportPort::group_destinations`), unless its APDU is an
+Unconfirmed-Request (#1504). As one unicast it would reach every node in the
+group without the broadcast network addresses #1491 filters. It is delivered
+nowhere, draws no reject, and counts in `group_dadr_drops()`. Network
+messages, and a group DADR on a network behind another router, which that
+router judges, are not affected. A routed request's SADR names a node on
+another network, which the ingress rule above can't judge, so a reply to a
+group SADR is dropped only where the final router is a `BACnetRouter`.
 
 ---
 

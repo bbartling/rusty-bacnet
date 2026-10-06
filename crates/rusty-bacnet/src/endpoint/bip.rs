@@ -38,6 +38,7 @@ struct BipEndpointConfig {
     interface: Ipv4Addr,
     port: u16,
     broadcast: Ipv4Addr,
+    share_port_by_address: bool,
     identity: DeviceIdentity,
     queue_capacity: usize,
     read_work_limit: usize,
@@ -51,26 +52,31 @@ type BipSession = EndpointSession<BipTransport>;
 impl BipEndpointConfig {
     async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<BipSession> {
         let config = self;
-        // Fail fast before building objects: mirror the transport
-        // bind (INADDR_ANY:port) + interface-locality probe, so conflicts
-        // preserve pending for retry. The real bind stays authoritative
-        // (TOCTOU residual: a race loser still restores via the owner).
-        if let Err(e) = std::net::UdpSocket::bind(std::net::SocketAddrV4::new(
-            std::net::Ipv4Addr::UNSPECIFIED,
-            config.port,
-        )) {
-            return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
-        }
-        if !config.interface.is_unspecified() {
-            if let Err(e) =
-                std::net::UdpSocket::bind(std::net::SocketAddrV4::new(config.interface, 0))
-            {
+        // Fail fast before building objects: probe the port and the
+        // interface, so conflicts preserve pending for retry. The real bind
+        // stays authoritative (TOCTOU residual: a race loser still restores
+        // via the owner). A port shared by address checks exactly what the
+        // transport will bind (#1538).
+        if config.share_port_by_address {
+            let mut transport = BipTransport::new(config.interface, config.port, config.broadcast);
+            transport.set_share_port_by_address(true);
+            transport.check_bind().map_err(to_py_err)?;
+        } else {
+            let wildcard = std::net::SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.port);
+            if let Err(e) = std::net::UdpSocket::bind(wildcard) {
                 return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
+            }
+            if !config.interface.is_unspecified() {
+                let probe = std::net::SocketAddrV4::new(config.interface, 0);
+                if let Err(e) = std::net::UdpSocket::bind(probe) {
+                    return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
+                }
             }
         }
         let boxes = build_pending_boxes(&objects)?;
         let db = build_database(&config.identity, boxes)?;
         let mut builder = BipEndpointBuilder::new(config.interface, config.port, config.broadcast)
+            .share_port_by_address(config.share_port_by_address)
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
             .read_work_limit(config.read_work_limit)
@@ -137,7 +143,8 @@ impl PyBipEndpoint {
     ///     device_instance: BACnet Device instance (validated range).
     ///     device_name: Device object name (default "BACnet Device").
     ///     vendor_id: Vendor identifier (default 555).
-    ///     interface: Announced IPv4 (socket binds INADDR_ANY for broadcast).
+    ///     interface: Announced IPv4 (the socket binds INADDR_ANY for broadcast
+    ///         unless share_port_by_address is set).
     ///     port: UDP port; zero selects an ephemeral port reported after startup.
     ///     broadcast_address: Local broadcast address.
     ///     network_number: BACnet network number for the Network-Port entry.
@@ -156,6 +163,11 @@ impl PyBipEndpoint {
     ///         by the server role may expand (must be >0, default 256): its
     ///         own row plus, for a Group's Present_Value, one per member
     ///         property. A read past it is aborted with OUT_OF_RESOURCES.
+    ///     share_port_by_address: Keyword-only (default False). Bind the
+    ///         interface address itself, so endpoints on other addresses of
+    ///         this host can share the port; needs an explicit interface and
+    ///         a nonzero port. Broadcasts and unicast then arrive in no fixed
+    ///         order.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -175,7 +187,8 @@ impl PyBipEndpoint {
         apdu_retries=0,
         registered_network_port=None,
         *,
-        read_work_limit=256
+        read_work_limit=256,
+        share_port_by_address=false
     ))]
     fn new(
         device_instance: u32,
@@ -195,6 +208,7 @@ impl PyBipEndpoint {
         apdu_retries: u8,
         registered_network_port: Option<u32>,
         read_work_limit: usize,
+        share_port_by_address: bool,
     ) -> PyResult<Self> {
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
@@ -240,6 +254,7 @@ impl PyBipEndpoint {
                 interface: interface_ip,
                 port,
                 broadcast,
+                share_port_by_address,
                 identity,
                 queue_capacity,
                 read_work_limit,

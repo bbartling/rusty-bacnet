@@ -56,7 +56,8 @@ impl BACnetServer {
         sc_device_uuid=None,
         registered_network_port=None,
         cov_policy=None,
-        time_sync_policy=None
+        time_sync_policy=None,
+        share_port_by_address=false
     ))]
     fn new(
         device_instance: u32,
@@ -111,7 +112,9 @@ impl BACnetServer {
         registered_network_port: Option<u32>,
         cov_policy: Option<&Bound<'_, pyo3::types::PyDict>>,
         time_sync_policy: Option<&Bound<'_, pyo3::types::PyDict>>,
+        share_port_by_address: bool,
     ) -> PyResult<Self> {
+        crate::bip_options::only_on_bip(share_port_by_address, transport)?;
         super::constructor_budgets::registered_network_port(registered_network_port, transport)?;
         let mutation_policy = super::constructor_budgets::mutation_policy(mutation_policy)?;
         let super::constructor_budgets::DccConfiguration {
@@ -177,6 +180,7 @@ impl BACnetServer {
             interface: interface.to_string(),
             port,
             broadcast_address: broadcast_address.to_string(),
+            share_port_by_address,
             registered_network_port,
             sc_hub,
             sc_vmac,

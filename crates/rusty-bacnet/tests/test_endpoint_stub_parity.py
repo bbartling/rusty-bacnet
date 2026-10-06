@@ -95,7 +95,7 @@ class EndpointStubParityTests(unittest.TestCase):
                            "network_port_instance", "max_apdu", "segmentation",
                            "services", "device_uuid", "queue_capacity",
                            "apdu_timeout_ms", "apdu_retries", "registered_network_port",
-                           "read_work_limit"]),
+                           "read_work_limit", "share_port_by_address"]),
             (ScEndpoint, ["device_instance", "sc_hub", "sc_vmac", "sc_ca_cert",
                           "sc_client_cert", "sc_client_key", "sc_device_uuid",
                           "device_name", "vendor_id", "sc_heartbeat_interval_ms",
