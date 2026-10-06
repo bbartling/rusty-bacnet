@@ -80,7 +80,6 @@ filter = '''
       | test(=sc_hub::graceful_tests::graceful_does_not_block_on_held_sink)
       | test(=sc_hub::retirement_capacity_tests::terminal_relays_and_peer_close_each_recover_beyond_512_connections)
       | test(=sc_hub::retirement_capacity_tests::replacement_and_heartbeat_retirement_each_recover_beyond_512_blocked_relays)
-      | test(=sc::rejection_deadline_tests::rejection_deadline_timely_completion_and_immediate_error_preserve_pending_ack)
     ))
   | (binary_id(bacnet-transport::sc_hub_tls) & test(=typed_hub_honors_each_timeout_and_preserves_established_peers))
 '''
