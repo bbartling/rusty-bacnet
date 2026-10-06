@@ -197,6 +197,8 @@ mod point_authorization_tests;
 #[cfg(test)]
 mod point_out_of_service_tests;
 #[cfg(test)]
+mod point_policy_tests;
+#[cfg(test)]
 mod point_status_tests;
 #[cfg(test)]
 mod tests;

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use bacnet_types::constructed::BACnetAuthenticationPolicy;
 use bacnet_types::enums::AuthorizationMode;
 
 use super::point_authorization::Authorization;
@@ -49,11 +50,24 @@ use crate::clock::ClockReader;
 /// Event_State stays NORMAL), so an edge raises no event notification.
 ///
 /// Active_Authentication_Policy, Number_Of_Authentication_Policies,
+/// Authentication_Policy_List, Authentication_Policy_Names,
 /// Authorization_Mode and Priority_For_Writing hold the settings the
-/// application's authentication and authorization work from (#1307). A
-/// client picks the policy in effect and the authorization mode; the
-/// application sets the policy count, the modes it carries out and the
-/// door command priority. The module `point_authorization` has the rules.
+/// application's authentication and authorization work from (#1307, #1325).
+/// A client picks the policy in effect and the authorization mode; the
+/// application sets the policies, the modes it carries out and the door
+/// command priority. The module `point_authorization` has the rules.
+///
+/// Reliability is CONFIGURATION_ERROR while Active_Authentication_Policy is
+/// zero, which happens when the policies leave none usable in effect
+/// (Clause 12.31.10), and NO_FAULT_DETECTED otherwise. Since it can leave
+/// NO_FAULT_DETECTED, a client may write it while Out_Of_Service is TRUE
+/// to simulate a fault, and only then (Clause 12.31.8): an Enumerated
+/// inside the BACnetReliability production, else INVALID_DATA_TYPE or
+/// VALUE_OUT_OF_RANGE, and WRITE_ACCESS_DENIED in service. Out of service
+/// the value served stays decoupled from the policies: it starts as the
+/// value served at the edge, follows only those writes, and the return to
+/// service serves the derived value again. Status_Flags carries FAULT from
+/// the value served.
 pub struct AccessPointObject {
     oid: ObjectIdentifier,
     name: String,
@@ -71,6 +85,8 @@ pub struct AccessPointObject {
     event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
+    /// Reliability as served: derived from the active policy in service, a
+    /// client's simulation out of service.
     reliability: Reliability,
     clock: Option<Arc<dyn ClockReader>>,
 }
@@ -192,11 +208,70 @@ impl AccessPointObject {
     /// Set Number_Of_Authentication_Policies, how many authentication
     /// policies the application defines (Clause 12.31.11), 1 until set. It
     /// is read-only over the network. Zero is refused with
-    /// VALUE_OUT_OF_RANGE, and so is a count below
-    /// Active_Authentication_Policy: lower the active policy first, with a
-    /// write of that property.
+    /// VALUE_OUT_OF_RANGE.
+    ///
+    /// Once [`Self::set_authentication_policies`] has set the policy arrays,
+    /// they follow the count: a smaller count drops the last policies, and a
+    /// larger one adds empty policies, not enforcing order and with no
+    /// timeout (Clause 12.31.12.2), each with an empty name. An empty policy
+    /// is invalid. A count below Active_Authentication_Policy, or one that
+    /// leaves it naming an invalid policy, drops it to zero and Reliability
+    /// to CONFIGURATION_ERROR (Clause 12.31.10) until a client writes a
+    /// usable policy.
     pub fn set_number_of_authentication_policies(&mut self, count: u32) -> Result<(), Error> {
-        self.authorization.set_policies(count)
+        self.authorization.set_policies(count)?;
+        self.refresh_reliability();
+        Ok(())
+    }
+
+    /// Set Authentication_Policy_List and Authentication_Policy_Names, the
+    /// policies the point defines, as `(name, policy)` pairs in policy
+    /// order (Clauses 12.31.12 and 12.31.13). The point serves both arrays
+    /// from then on, and Number_Of_Authentication_Policies takes the number
+    /// of pairs, since both arrays are that long (Table 12-36 footnote 1).
+    /// All three are read-only over the network. No pairs at all is refused
+    /// with VALUE_OUT_OF_RANGE, and nothing changes.
+    ///
+    /// A policy is stored as given, but only a well-formed one is usable:
+    /// at least one entry, each naming a Credential Data Input object (in a
+    /// Device, when it names a device), with indexes that start at 1 and, in
+    /// list order, either repeat (a second factor that completes the same
+    /// step) or go up by one. A client can't make an invalid policy the
+    /// active one (VALUE_OUT_OF_RANGE). When the new list leaves
+    /// Active_Authentication_Policy beyond the count or on an invalid
+    /// policy, it drops to zero and Reliability reads CONFIGURATION_ERROR
+    /// (Clause 12.31.10) until a client writes a usable policy; the point
+    /// doesn't pick one itself.
+    pub fn set_authentication_policies(
+        &mut self,
+        policies: impl IntoIterator<Item = (impl Into<String>, BACnetAuthenticationPolicy)>,
+    ) -> Result<(), Error> {
+        self.authorization.set_policy_list(
+            policies
+                .into_iter()
+                .map(|(name, policy)| (name.into(), policy))
+                .collect(),
+        )?;
+        self.refresh_reliability();
+        Ok(())
+    }
+
+    /// Derive Reliability from the active policy, in service only: out of
+    /// service a client's simulated value stays served.
+    fn refresh_reliability(&mut self) {
+        if !self.out_of_service {
+            self.reliability = if self.authorization.active_policy() == 0 {
+                Reliability::CONFIGURATION_ERROR
+            } else {
+                Reliability::NO_FAULT_DETECTED
+            };
+        }
+    }
+
+    /// Whether the point serves Authentication_Policy_List and
+    /// Authentication_Policy_Names.
+    pub(super) fn serves_policy_list(&self) -> bool {
+        self.authorization.serves_policy_list()
     }
 
     /// Set the authorization modes the application carries out, the values
@@ -272,8 +347,8 @@ impl BACnetObject for AccessPointObject {
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
-        if let Some(value) = self.authorization.read(property) {
-            return Ok(value);
+        if let Some(result) = self.authorization.read(property, array_index) {
+            return result;
         }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
@@ -319,7 +394,8 @@ impl BACnetObject for AccessPointObject {
             match (was_out_of_service, self.out_of_service) {
                 (false, true) => self.record_out_of_service_event(AccessEvent::OUT_OF_SERVICE),
                 (true, false) => {
-                    self.record_out_of_service_event(AccessEvent::OUT_OF_SERVICE_RELINQUISHED)
+                    self.record_out_of_service_event(AccessEvent::OUT_OF_SERVICE_RELINQUISHED);
+                    self.refresh_reliability();
                 }
                 _ => {}
             }
@@ -328,7 +404,15 @@ impl BACnetObject for AccessPointObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
+        if property == PropertyIdentifier::RELIABILITY {
+            if !self.out_of_service {
+                return Err(common::write_access_denied_error());
+            }
+            self.reliability = simulated_reliability(&value)?;
+            return Ok(());
+        }
         if let Some(result) = self.authorization.write(property, array_index, &value) {
+            self.refresh_reliability();
             return result;
         }
         Err(crate::common::unhandled_write_error(

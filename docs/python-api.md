@@ -370,6 +370,7 @@ its octets.
 | Group | Present_Value | `"read_access_result"` | a `read_property_multiple` result: `{"object_id": ..., "results": [...]}` | none: the members' results |
 | Command | Action | `"action_list"` | a list of `ActionCommand` mappings with every key | `add_command(action=...)`, which ignores `write_successful` |
 | Access Door, Access Point, Staging | Door_Members, Access_Doors, Target_References | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` when the reference names a device | `door_members=`, `access_doors=`; `target_references=` takes the `ObjectIdentifier` form only |
+| Access Point | Authentication_Policy_List | `"authentication_policy"` | `([(credential_data_input, index), ...], order_enforced, timeout)`, each reference an `ObjectIdentifier` or `(device, object)` | `add_access_point(authentication_policies=...)`, paired with the Authentication_Policy_Names element |
 | Credential Data Input | Supported_Formats | `"authentication_factor_format"` | the format type, or `(format_type, vendor_id, vendor_format)` when it has vendor members (a missing one is `None`, which the write also takes) | `add_credential_data_input(supported_formats=...)`, paired with Supported_Format_Classes |
 | Staging | Stages | `"stage_limit_value"` | `(limit, values, deadband)`, `values` a `list[bool]` | `add_staging(stages=...)` |
 | Access Rights | Positive_Access_Rules, Negative_Access_Rules | `"access_rule"` | an `AccessRule` mapping with every key; `None` stands for ALWAYS and ALL | `add_access_rights(positive_access_rules=..., negative_access_rules=...)` |
@@ -2915,6 +2916,21 @@ VALUE_OUT_OF_RANGE. Peers pick the policy in effect by writing
 Active_Authentication_Policy (1 to the policy count) and the mode by writing
 Authorization_Mode (one of the supported modes). Another value is refused
 with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
+
+`authentication_policies` describes the policies as `(name, policy)` pairs
+(#1325), a policy being `([(credential_data_input, index), ...],
+order_enforced, timeout)`, each Credential Data Input in the forms
+`access_doors` takes and the timeout in seconds (0 for none). The point then
+serves Authentication_Policy_List and Authentication_Policy_Names, read-only
+over the network, and the policy count becomes the number of pairs; a
+`number_of_authentication_policies` given too is applied after and resizes
+both arrays. An empty list raises VALUE_OUT_OF_RANGE. A policy with no
+entries, a reference to anything but a Credential Data Input, or indexes that
+don't start at 1 and climb by at most one is kept but can't be in effect:
+peers can't select it, and while it is the one in effect
+Active_Authentication_Policy reads 0 and Reliability CONFIGURATION_ERROR. The
+point's Reliability then takes simulated writes while it is out of
+service.
 
 `add_access_door` also takes `alarm_values`, `fault_values` and
 `masked_alarm_values`, the door's starting Alarm_Values, Fault_Values and

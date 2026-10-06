@@ -724,3 +724,6 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
         assert_cases(&db, oid, cases);
     }
 }
+
+#[path = "access_point_policies.rs"]
+mod policies;

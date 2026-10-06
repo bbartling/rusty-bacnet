@@ -3747,11 +3747,24 @@ TRUE and the reported status again afterwards.
 
 The point also serves Active_Authentication_Policy,
 Number_Of_Authentication_Policies, Authorization_Mode and
-Priority_For_Writing. It serves no policy list, so what each policy holds is
-up to the application. `set_number_of_authentication_policies` sets how many
-there are (1 by default; zero, or a count below the policy in effect, is
-VALUE_OUT_OF_RANGE), and a client picks the policy in effect by writing
-Active_Authentication_Policy, an Unsigned from 1 to that count.
+Priority_For_Writing. `set_number_of_authentication_policies` sets how many
+policies there are (1 by default; zero is VALUE_OUT_OF_RANGE), and a client
+picks the policy in effect by writing Active_Authentication_Policy, an
+Unsigned from 1 to that count. Until the application describes the policies,
+what each holds is up to it. `set_authentication_policies` takes
+`(name, BACnetAuthenticationPolicy)` pairs (#1325): the point then serves
+Authentication_Policy_List and Authentication_Policy_Names, both read-only
+over the network, the count becomes the number of pairs (no pairs is
+VALUE_OUT_OF_RANGE), and a later count resizes both arrays, adding empty
+policies with empty names. A policy is usable when it has at least one
+entry, each entry names a Credential Data Input, and the indexes, in list
+order, start at 1 and repeat or climb by one; a client's write naming any
+other policy is VALUE_OUT_OF_RANGE. When the count drops below the policy in
+effect, or the list makes it unusable, Active_Authentication_Policy becomes 0
+and Reliability CONFIGURATION_ERROR until a client writes a usable policy.
+The point's Reliability takes simulated writes while Out_Of_Service is TRUE
+and refuses them in service; out of service it ignores the policies, and the
+return to service serves the derived value again.
 Authorization_Mode starts at AUTHORIZE and takes a write of any mode in the
 set `set_supported_authorization_modes` gives. The point enforces no mode
 itself, so a new point supports AUTHORIZE alone: an application that acts on

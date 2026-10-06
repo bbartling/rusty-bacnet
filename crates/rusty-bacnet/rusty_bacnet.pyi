@@ -1206,6 +1206,19 @@ class AccessRule(TypedDict):
     ]
 
 
+# One Access Point Authentication_Policy_List element
+# (``BACnetAuthenticationPolicy``): the ``(credential_data_input, index)``
+# entries, each Credential Data Input an ``ObjectIdentifier`` in this device
+# or a ``(device, object)`` pair, then whether the order is enforced and the
+# timeout in seconds (0 for none). A read of the list gives each element in
+# this form.
+AuthenticationPolicy = tuple[
+    list[tuple[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier], int]],
+    bool,
+    int,
+]
+
+
 class AuditReporterConfiguration(TypedDict):
     """Owned pre-start target Reporter settings; no Python callbacks."""
     instance: int
@@ -1426,8 +1439,10 @@ class PropertyValue:
       object reference lists and Accompaniment
       (``"device_object_reference"``: an ``ObjectIdentifier``, or
       ``(device, object)``), Supported_Formats
-      (``"authentication_factor_format"``), Stages (``"stage_limit_value"``:
-      ``(limit, values, deadband)``), Access Rights rules (``"access_rule"``:
+      (``"authentication_factor_format"``), Authentication_Policy_List
+      (``"authentication_policy"``: an ``AuthenticationPolicy``), Stages
+      (``"stage_limit_value"``: ``(limit, values, deadband)``), Access Rights
+      rules (``"access_rule"``:
       an ``AccessRule`` with every key), property reference lists
       (``"device_object_property_reference"``: a
       ``DeviceObjectPropertyReference`` with every key), a Global Group's
@@ -3398,6 +3413,7 @@ class BACnetServer:
             list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
         ] = None,
         number_of_authentication_policies: Optional[int] = None,
+        authentication_policies: Optional[list[tuple[str, AuthenticationPolicy]]] = None,
         supported_authorization_modes: Optional[list[int]] = None,
         priority_for_writing: Optional[int] = None,
     ) -> None:
@@ -3420,6 +3436,20 @@ class BACnetServer:
         BacnetProtocolError with VALUE_OUT_OF_RANGE. Peers write
         Active_Authentication_Policy (1 to the policy count) and
         Authorization_Mode (one of the supported modes).
+
+        ``authentication_policies`` sets Authentication_Policy_List and
+        Authentication_Policy_Names as ``(name, policy)`` pairs, both
+        read-only over the network, and the policy count to their number. A
+        policy's entries name the Credential Data Inputs and the step each
+        serves, from 1. An empty list raises BacnetProtocolError with
+        VALUE_OUT_OF_RANGE; an index or timeout outside 0..=4294967295 raises
+        OverflowError. A policy with no entries, a reference to anything but
+        a Credential Data Input, or indexes that don't start at 1 and climb by
+        at most one is kept but can't be in effect: while it is,
+        Active_Authentication_Policy reads 0 and Reliability
+        CONFIGURATION_ERROR until a peer writes a usable policy. A
+        ``number_of_authentication_policies`` given as well is applied after
+        and resizes both arrays, new policies empty and new names ``""``.
         """
         ...
     def add_access_rights(
