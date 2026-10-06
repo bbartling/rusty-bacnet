@@ -524,11 +524,12 @@ client = BACnetClient(
 ```
 
 `min_request_interval_ms` paces the confirmed requests the client sends to
-each destination (#1535). Requests take turns in call order, and each waits
-until that long after the previous one to the same destination finished, by a
-reply, an error or the caller giving up, or until that long after the
-previous one was sent while it is still outstanding, checked again when its
-turn comes. Paging a log or polling then leaves a slow device room for its
+each destination (#1535). Each waits until that long after the latest one
+sent to the same destination finished, by a reply, an error or the caller
+giving up, or until that long after it was sent while it is still
+outstanding, checking again when it wakes. Requests waiting together go one
+at a time, in no promised order. Paging a log or polling then leaves a slow
+device room for its
 other clients. Requests to different destinations don't wait on each other;
 0, the default, sends at once, and more than 3,600,000 (an hour) raises
 `ValueError`. Behind a router the pause after a reply holds for requests made

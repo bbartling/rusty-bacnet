@@ -115,11 +115,13 @@ pub struct ClientConfig {
     pub segmented_response_accepted: bool,
     /// Proposed window size for segmented transfers (1-127, default 1).
     pub proposed_window_size: u8,
-    /// Least time, in milliseconds, from one confirmed request to a
-    /// destination finishing (reply, error or cancellation) to the next
-    /// being sent; while one is still outstanding, the next waits that long
-    /// after it was sent. Requests take their turns in call order and check
-    /// again when their turn comes. 0 (the default) sends at once. A slow
+    /// Least time, in milliseconds, from the latest confirmed request sent
+    /// to a destination finishing (reply, error or cancellation) to the next
+    /// being sent; while it is still outstanding, the next waits that long
+    /// after it was sent. A waiting request checks again when it wakes;
+    /// requests waiting together go one at a time, in no promised order. A
+    /// request given up before it went leaves no trace. 0 (the default)
+    /// sends at once. A slow
     /// device then serves its other clients between this client's requests,
     /// paging a log or polling alike (#1535). Behind a router, whose path
     /// lease every device on that network shares, the pause after a reply

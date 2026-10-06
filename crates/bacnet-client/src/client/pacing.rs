@@ -1,14 +1,14 @@
 //! A minimum interval between confirmed requests to one destination (#1535).
 //!
 //! A slow device answers its other clients late while one client reads it
-//! back to back, even with one request outstanding. With an interval set,
-//! the confirmed requests to a destination take turns in call order, and
-//! each goes only once the interval has passed since the request before it
-//! finished, by a reply, an error or its caller giving up; while that one is
-//! still outstanding, since it went. The check is made again whenever the
-//! request wakes, so a reply that comes late still gets its full pause.
-//! Destinations don't wait on each other, and an interval of zero changes
-//! nothing.
+//! back to back, even with one request outstanding. With an interval set, a
+//! confirmed request to a destination goes only once the interval has passed
+//! since the latest request sent to it finished, by a reply, an error or its
+//! caller giving up; while that one is still outstanding, since it was sent.
+//! A request that has to wait sleeps until then and checks again, so a reply
+//! that comes late still gets the whole pause. Requests waiting together go
+//! one at a time, the interval apart, in no particular order. Destinations
+//! don't wait on each other, and an interval of zero changes nothing.
 //!
 //! Pacing runs before a routed request takes its path lease. That lease is
 //! shared by every device on the same network behind the same router, so
@@ -25,10 +25,9 @@ use tokio::time::{Duration, Instant};
 
 use super::ConfirmedTarget;
 
-/// Most destinations the pacer remembers at once. Past it, those with
-/// nothing waiting or outstanding whose interval has run out go first, then
-/// the idle one free soonest, and only when every one is busy the one free
-/// soonest of all.
+/// Most destinations the pacer remembers at once. Past it, an idle one goes
+/// first (its latest request finished), the one free soonest of those; only
+/// when every one has a request outstanding does the one free soonest of all.
 const MAX_PACED_DESTINATIONS: usize = 4_096;
 
 /// The longest interval a client takes: an hour.
@@ -71,72 +70,35 @@ impl PaceKey {
     }
 }
 
-/// One request's turn at a destination.
-#[derive(Debug, Clone, Copy)]
-struct Turn {
-    /// When it goes: the time it waits for, moved later while it waits,
-    /// then the time it went.
-    at: Instant,
-    went: bool,
-    /// When it finished; `None` while it waits or is outstanding.
-    finished: Option<Instant>,
-    /// The turn before it, which still binds the turn after it if this one
-    /// is given up before it goes.
-    follows: Option<u64>,
-}
-
-impl Turn {
-    /// When the request after this one may go, as far as this one goes.
-    fn free_at(&self, interval: Duration) -> Instant {
-        self.finished.unwrap_or(self.at) + interval
-    }
-
-    fn abandoned(&self) -> bool {
-        !self.went && self.finished.is_some()
-    }
-}
-
-/// The turns at one destination still needed: the newest, and each one a
-/// request still waiting follows, through any given up in between.
-#[derive(Debug, Default)]
+/// One destination: the latest request sent to it. A lane exists only once
+/// a request has gone; waiting leaves no state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Lane {
-    turns: HashMap<u64, Turn>,
-    newest: Option<u64>,
-    /// Requests waiting or outstanding.
-    active: usize,
+    /// Which lane this is, so a guard from a lane that was forgotten and
+    /// made again touches nothing.
+    generation: u64,
+    /// Which request in this lane went last; counts from 1 in each lane.
+    ticket: u64,
+    sent: Instant,
+    /// When that request finished; `None` while it is outstanding.
+    finished: Option<Instant>,
 }
 
 impl Lane {
-    /// When a request following `ticket` may go: after that turn, and after
-    /// each turn before it that was given up and the turn that one followed.
-    fn due(&self, ticket: Option<u64>, interval: Duration) -> Option<Instant> {
-        let mut due: Option<Instant> = None;
-        let mut next = ticket;
-        while let Some(turn) = next.and_then(|ticket| self.turns.get(&ticket)) {
-            let free = turn.free_at(interval);
-            due = Some(due.map_or(free, |due| due.max(free)));
-            next = if turn.abandoned() { turn.follows } else { None };
-        }
-        due
+    /// When the next request to this destination may go.
+    fn due(&self, interval: Duration) -> Instant {
+        self.finished.unwrap_or(self.sent) + interval
     }
 
-    /// Drop the turns only the request after `ticket` needed.
-    fn release(&mut self, ticket: Option<u64>) {
-        let mut next = ticket;
-        while let Some(turn) = next.and_then(|ticket| self.turns.remove(&ticket)) {
-            next = if turn.abandoned() { turn.follows } else { None };
-        }
-    }
-
-    fn free_at(&self, interval: Duration, now: Instant) -> Instant {
-        self.due(self.newest, interval).unwrap_or(now)
+    fn idle(&self) -> bool {
+        self.finished.is_some()
     }
 }
 
 #[derive(Debug, Default)]
 struct Lanes {
     by_destination: HashMap<PaceKey, Lane>,
-    next_ticket: u64,
+    next_generation: u64,
 }
 
 /// Spaces the confirmed requests to each destination by a fixed interval.
@@ -147,30 +109,28 @@ pub(super) struct RequestPacer {
     lanes: Mutex<Lanes>,
 }
 
-/// One paced request's turn, held for the life of the request; dropping it,
-/// when the request finishes or its caller gives up, starts the interval for
-/// the next.
+/// Held for the life of a request that went; dropping it, when the request
+/// finishes or its caller gives up, starts the interval for the next.
 #[must_use = "the request counts as finished when the guard drops"]
 pub(super) struct PaceGuard<'a> {
     pacer: &'a RequestPacer,
-    turn: Option<(PaceKey, u64)>,
+    /// The destination, the lane's generation and the request's ticket.
+    sent: Option<(PaceKey, u64, u64)>,
 }
 
 impl Drop for PaceGuard<'_> {
     fn drop(&mut self) {
-        let Some((key, ticket)) = self.turn.take() else {
+        let Some((key, generation, ticket)) = self.sent.take() else {
             return;
         };
         let mut lanes = self.pacer.lock();
-        let Some(lane) = lanes.by_destination.get_mut(&key) else {
-            return;
-        };
-        lane.active = lane.active.saturating_sub(1);
-        // A turn given up before it came finishes too, but stays in the
-        // chain: the request after it still waits for the turns before it
-        // (`Lane::due`), so it can't jump the queue.
-        if let Some(turn) = lane.turns.get_mut(&ticket) {
-            turn.finished = Some(Instant::now());
+        if let Some(lane) = lanes.by_destination.get_mut(&key) {
+            // Only the latest request's finish moves the next one; an
+            // earlier request finishing late, or one from a lane forgotten
+            // and made again, changes nothing.
+            if lane.generation == generation && lane.ticket == ticket {
+                lane.finished = Some(Instant::now());
+            }
         }
     }
 }
@@ -197,7 +157,7 @@ impl RequestPacer {
         let interval = self.interval;
         lanes
             .by_destination
-            .retain(|_, lane| lane.active > 0 || lane.free_at(interval, now) > now);
+            .retain(|_, lane| !(lane.idle() && lane.due(interval) <= now));
         if lanes.by_destination.len() < self.capacity {
             return;
         }
@@ -205,8 +165,8 @@ impl RequestPacer {
             lanes
                 .by_destination
                 .iter()
-                .filter(|(_, lane)| !idle_only || lane.active == 0)
-                .min_by_key(|(_, lane)| lane.free_at(interval, now))
+                .filter(|(_, lane)| !idle_only || lane.idle())
+                .min_by_key(|(_, lane)| lane.due(interval))
                 .map(|(key, _)| key.clone())
         };
         if let Some(key) = soonest(true).or_else(|| soonest(false)) {
@@ -214,79 +174,64 @@ impl RequestPacer {
         }
     }
 
-    /// Wait for this request's turn to `key` and return the guard the
-    /// request holds until it finishes.
+    /// Wait until a request to `key` may go, make it the destination's
+    /// latest, and return the guard the request holds until it finishes.
     ///
-    /// The turn is taken under the lock, in call order, and the wait happens
-    /// after it is released, so no other destination waits on it. On waking
-    /// the request checks the turn before it again and waits on if that one
-    /// finished later than planned. The guard exists before the wait, so a
-    /// caller that gives up while waiting finishes its turn then.
+    /// The check and the claim happen under one lock, so two requests that
+    /// wake together can't both go: the second sees the first and sleeps
+    /// again. The lock is never held while sleeping.
     pub(super) async fn wait(&self, key: PaceKey) -> PaceGuard<'_> {
         if self.interval.is_zero() {
             return PaceGuard {
                 pacer: self,
-                turn: None,
+                sent: None,
             };
         }
         let interval = self.interval;
-        let (ticket, previous, mut at) = {
-            let mut lanes = self.lock();
-            let now = Instant::now();
-            if lanes.by_destination.len() >= self.capacity
-                && !lanes.by_destination.contains_key(&key)
-            {
-                self.evict(&mut lanes, now);
-            }
-            lanes.next_ticket += 1;
-            let ticket = lanes.next_ticket;
-            let lane = lanes.by_destination.entry(key.clone()).or_default();
-            let previous = lane.newest;
-            let at = lane.free_at(interval, now).max(now);
-            lane.turns.insert(
-                ticket,
-                Turn {
-                    at,
-                    went: false,
-                    finished: None,
-                    follows: previous,
-                },
-            );
-            lane.newest = Some(ticket);
-            lane.active += 1;
-            (ticket, previous, at)
-        };
-        let guard = PaceGuard {
-            pacer: self,
-            turn: Some((key.clone(), ticket)),
-        };
         loop {
-            tokio::time::sleep_until(at).await;
-            let mut lanes = self.lock();
-            let now = Instant::now();
-            // A destination forgotten at the cap paces nothing.
-            let Some(lane) = lanes.by_destination.get_mut(&key) else {
-                break;
+            let due = {
+                let mut lanes = self.lock();
+                let now = Instant::now();
+                match lanes
+                    .by_destination
+                    .get(&key)
+                    .map(|lane| lane.due(interval))
+                {
+                    Some(due) if due > now => due,
+                    _ => {
+                        let sent = self.claim(&mut lanes, &key, now);
+                        return PaceGuard {
+                            pacer: self,
+                            sent: Some(sent),
+                        };
+                    }
+                }
             };
-            match lane.due(previous, interval) {
-                Some(due) if due > now => {
-                    at = due;
-                    if let Some(turn) = lane.turns.get_mut(&ticket) {
-                        turn.at = due;
-                    }
-                }
-                _ => {
-                    if let Some(turn) = lane.turns.get_mut(&ticket) {
-                        turn.at = now;
-                        turn.went = true;
-                    }
-                    // Only this request followed the turns before it.
-                    lane.release(previous);
-                    break;
-                }
-            }
+            tokio::time::sleep_until(due).await;
         }
-        guard
+    }
+
+    /// Make a request sent `now` the latest to `key`, returning the lane's
+    /// generation and the request's ticket.
+    fn claim(&self, lanes: &mut Lanes, key: &PaceKey, now: Instant) -> (PaceKey, u64, u64) {
+        if let Some(lane) = lanes.by_destination.get_mut(key) {
+            lane.ticket += 1;
+            lane.sent = now;
+            lane.finished = None;
+            return (key.clone(), lane.generation, lane.ticket);
+        }
+        if lanes.by_destination.len() >= self.capacity {
+            self.evict(lanes, now);
+        }
+        lanes.next_generation += 1;
+        let lane = Lane {
+            generation: lanes.next_generation,
+            ticket: 1,
+            sent: now,
+            finished: None,
+        };
+        lanes.by_destination.insert(key.clone(), lane);
+        (key.clone(), lane.generation, lane.ticket)
     }
 
     #[cfg(test)]
@@ -294,9 +239,13 @@ impl RequestPacer {
         self.lock().by_destination.len()
     }
 
+    /// The destination's latest request: when it was sent and finished.
     #[cfg(test)]
-    pub(super) fn remembers(&self, key: &PaceKey) -> bool {
-        self.lock().by_destination.contains_key(key)
+    pub(super) fn latest(&self, key: &PaceKey) -> Option<(Instant, Option<Instant>)> {
+        self.lock()
+            .by_destination
+            .get(key)
+            .map(|lane| (lane.sent, lane.finished))
     }
 }
 

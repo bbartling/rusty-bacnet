@@ -208,9 +208,9 @@ async fn requests_to_two_destinations_do_not_wait_on_each_other() {
     client.stop().await.unwrap();
 }
 
-/// A caller that gives up finishes its request then: the next request
-/// waits the interval from that moment, whether the request it abandoned
-/// was on the wire or still waiting its turn.
+/// A caller that gives up on a request it sent finishes it then: the next
+/// request waits the interval from that moment. Giving up while still
+/// waiting leaves nothing behind.
 #[tokio::test(start_paused = true)]
 async fn a_cancelled_request_counts_as_finished_when_cancelled() {
     let (mut client, sends) = paced_client(50, Duration::ZERO, 1).await;
@@ -222,7 +222,7 @@ async fn a_cancelled_request_counts_as_finished_when_cancelled() {
     )
     .await;
     assert!(abandoned.is_err());
-    // Due at 70; abandoned while waiting, at 30.
+    // Due at 70; given up while waiting, at 30.
     let waiting = tokio::time::timeout(
         Duration::from_millis(10),
         client.confirmed_request(A, ConfirmedServiceChoice::WRITE_PROPERTY, &[0x0C]),
@@ -230,7 +230,7 @@ async fn a_cancelled_request_counts_as_finished_when_cancelled() {
     .await;
     assert!(waiting.is_err());
     request(&client, A).await;
-    assert_eq!(sent_to(&sends, A, start), ms(&[0, 80]));
+    assert_eq!(sent_to(&sends, A, start), ms(&[0, 70]));
     client.stop().await.unwrap();
 }
 
@@ -250,54 +250,150 @@ fn local(mac: &[u8]) -> PaceKey {
     PaceKey::of(ConfirmedTarget::Local { mac })
 }
 
-/// Take a turn to A and stay outstanding for a millisecond, so the others
-/// queue behind it; the time the turn came, from `start`.
-async fn held(pacer: &RequestPacer, start: Instant) -> Duration {
+const I: Duration = Duration::from_millis(50);
+
+/// Wait for a turn to A and record when it came; hold the request open
+/// until `held_for` has passed.
+async fn send_after(
+    pacer: &RequestPacer,
+    sent: &StdMutex<Vec<Duration>>,
+    start: Instant,
+    held_for: Duration,
+) {
     let _guard = pacer.wait(local(A)).await;
-    let at = Instant::now() - start;
-    tokio::time::sleep(Duration::from_millis(1)).await;
-    at
+    sent.lock().unwrap().push(Instant::now() - start);
+    tokio::time::sleep(held_for).await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn concurrent_waits_queue_in_call_order() {
-    let pacer = RequestPacer::new(Duration::from_millis(20));
-    let start = Instant::now();
-    let (first, second, third) = tokio::join!(
-        held(&pacer, start),
-        held(&pacer, start),
-        held(&pacer, start)
-    );
-    // Each holds its turn 1 ms, and the next goes 20 ms after it finished.
-    assert_eq!(
-        [first, second, third],
-        [
-            Duration::ZERO,
-            Duration::from_millis(21),
-            Duration::from_millis(42)
-        ]
-    );
+/// Every pair of sends at least `I` apart.
+fn assert_spaced(sent: &StdMutex<Vec<Duration>>) {
+    let mut sent = sent.lock().unwrap().clone();
+    sent.sort();
+    for pair in sent.windows(2) {
+        assert!(pair[1] - pair[0] >= I, "{sent:?}");
+    }
 }
 
-/// At the cap, the destination whose interval runs out soonest is
-/// forgotten; the others keep pacing.
+/// The review's repro: with one request out and two waiting, a runtime that
+/// falls behind by several intervals must still not let the two go back to
+/// back.
 #[tokio::test(start_paused = true)]
-async fn at_the_cap_the_destination_free_soonest_goes() {
-    let pacer = with_capacity(Duration::from_millis(100), 2);
+async fn waiters_that_wake_late_together_still_go_an_interval_apart() {
+    let pacer = RequestPacer::new(I);
     let start = Instant::now();
-    let a = pacer.wait(local(A)).await; // outstanding: free at 100
-    tokio::time::advance(Duration::from_millis(10)).await;
-    let b = pacer.wait(local(B)).await; // outstanding: free at 110
-    tokio::time::advance(Duration::from_millis(10)).await;
-    let c = pacer.wait(local(C)).await;
-    assert_eq!(pacer.remembered(), 2);
-    assert!(!pacer.remembers(&local(A)));
-    assert!(pacer.remembers(&local(B)) && pacer.remembers(&local(C)));
-    // A's request finishing late changes nothing; B, kept, still paces.
-    drop((a, c));
+    let sent = StdMutex::new(vec![Duration::ZERO]);
+    let _out = pacer.wait(local(A)).await;
+    tokio::join!(
+        send_after(&pacer, &sent, start, Duration::ZERO),
+        send_after(&pacer, &sent, start, Duration::ZERO),
+        tokio::time::advance(3 * I),
+    );
+    assert_eq!(sent.lock().unwrap().len(), 3);
+    assert_spaced(&sent);
+}
+
+/// Waiters released together go one at a time, the interval apart.
+#[tokio::test(start_paused = true)]
+async fn waiters_released_together_go_an_interval_apart() {
+    let pacer = RequestPacer::new(I);
+    let start = Instant::now();
+    let sent = StdMutex::new(Vec::new());
+    let first = pacer.wait(local(A)).await;
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        drop(first);
+    };
+    // Each holds its request open for a millisecond.
+    let held = Duration::from_millis(1);
+    tokio::join!(
+        release,
+        send_after(&pacer, &sent, start, held),
+        send_after(&pacer, &sent, start, held),
+        send_after(&pacer, &sent, start, held),
+        send_after(&pacer, &sent, start, held),
+    );
+    let mut sent = sent.into_inner().unwrap();
+    sent.sort();
+    // The first goes once the request it waited on has been finished an
+    // interval; each after that an interval after the one before finished.
+    assert_eq!(sent, ms(&[60, 111, 162, 213]));
+}
+
+/// A waiter given up leaves the destination as it was.
+#[tokio::test(start_paused = true)]
+async fn a_waiter_given_up_leaves_nothing_behind() {
+    let pacer = RequestPacer::new(I);
+    let _out = pacer.wait(local(A)).await;
+    let before = pacer.latest(&local(A));
+    let given_up = tokio::time::timeout(Duration::from_millis(10), pacer.wait(local(A))).await;
+    assert!(given_up.is_err());
+    assert_eq!(pacer.latest(&local(A)), before);
+    assert_eq!(pacer.remembered(), 1);
+}
+
+/// Only the latest request's finish counts: an earlier one finishing late
+/// doesn't push the next request back.
+#[tokio::test(start_paused = true)]
+async fn an_earlier_finish_is_ignored() {
+    let pacer = RequestPacer::new(I);
+    let start = Instant::now();
+    let a = pacer.wait(local(A)).await; // out from 0
+    let b = pacer.wait(local(A)).await; // goes at 50, stays out
+    assert_eq!(Instant::now() - start, I);
+    let (c, ()) = tokio::join!(
+        async {
+            let _c = pacer.wait(local(A)).await; // due at 100
+            Instant::now() - start
+        },
+        async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            drop(a); // at 70
+        },
+    );
+    assert_eq!(c, Duration::from_millis(100));
     drop(b);
-    let _b = pacer.wait(local(B)).await;
-    assert_eq!(Instant::now() - start, Duration::from_millis(120));
+}
+
+/// The same on the wire: a request made while the one before it is out
+/// goes the whole interval after its reply.
+#[tokio::test(start_paused = true)]
+async fn a_concurrent_request_waits_the_full_pause_after_a_slow_reply() {
+    let (mut client, sends) = paced_client(50, Duration::from_millis(40), 0).await;
+    let start = Instant::now();
+    tokio::join!(request(&client, A), async {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        request(&client, A).await;
+    });
+    assert_eq!(sent_to(&sends, A, start), ms(&[0, 90]));
+    client.stop().await.unwrap();
+}
+
+/// At the cap an idle destination goes before one with a request out, even
+/// one free sooner.
+#[tokio::test(start_paused = true)]
+async fn at_the_cap_an_idle_destination_goes_before_a_busy_one() {
+    let pacer = with_capacity(Duration::from_millis(100), 2);
+    let _a = pacer.wait(local(A)).await; // out: free at 100
+    tokio::time::advance(Duration::from_millis(10)).await;
+    drop(pacer.wait(local(B)).await); // idle: free at 110
+    let _c = pacer.wait(local(C)).await;
+    assert!(pacer.latest(&local(A)).is_some() && pacer.latest(&local(C)).is_some());
+    assert!(pacer.latest(&local(B)).is_none());
+}
+
+/// A guard from a destination forgotten at the cap and made again changes
+/// nothing in the new one.
+#[tokio::test(start_paused = true)]
+async fn a_stale_guard_leaves_a_destination_made_again_alone() {
+    let pacer = with_capacity(I, 1);
+    let stale = pacer.wait(local(A)).await; // out
+    drop(pacer.wait(local(B)).await); // forgets A
+    assert!(pacer.latest(&local(A)).is_none());
+    let _again = pacer.wait(local(A)).await; // forgets B; A made again
+    let before = pacer.latest(&local(A));
+    assert_eq!(before.map(|(_, finished)| finished), Some(None));
+    drop(stale);
+    assert_eq!(pacer.latest(&local(A)), before);
 }
 
 #[tokio::test(start_paused = true)]
@@ -329,98 +425,6 @@ async fn the_pacer_forgets_idle_destinations_and_stays_bounded() {
     tokio::time::advance(Duration::from_millis(10)).await;
     drop(pacer.wait(routed).await);
     assert_eq!(pacer.remembered(), 1);
-}
-
-/// Giving up the last queued turn must not let the next request jump ahead
-/// of the turns before it.
-#[tokio::test(start_paused = true)]
-async fn cancelling_the_last_queued_turn_keeps_the_queue() {
-    let pacer = RequestPacer::new(Duration::from_millis(50));
-    let start = Instant::now();
-    let _a = pacer.wait(local(A)).await; // outstanding throughout
-    let (b, (), d) = tokio::join!(
-        held(&pacer, start),
-        async {
-            // Its turn is at 100; it gives up at 5.
-            let given_up = tokio::time::timeout(Duration::from_millis(5), pacer.wait(local(A)));
-            assert!(given_up.await.is_err());
-        },
-        async {
-            tokio::time::sleep(Duration::from_millis(6)).await;
-            let _d = pacer.wait(local(A)).await;
-            Instant::now() - start
-        },
-    );
-    assert_eq!(b, Duration::from_millis(50));
-    assert!(d >= b + Duration::from_millis(50), "{d:?}");
-    // B held its turn 1 ms: D goes the whole interval after B finished.
-    assert_eq!(d, Duration::from_millis(101));
-}
-
-/// A turn is checked again when it comes: the request before it finishing
-/// late still gets its whole pause.
-#[tokio::test(start_paused = true)]
-async fn a_queued_request_waits_the_full_pause_after_a_late_finish() {
-    let pacer = RequestPacer::new(Duration::from_millis(50));
-    let start = Instant::now();
-    let a = pacer.wait(local(A)).await;
-    let ((), b) = tokio::join!(
-        async {
-            tokio::time::sleep(Duration::from_millis(40)).await;
-            drop(a);
-        },
-        async {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            let _b = pacer.wait(local(A)).await;
-            Instant::now() - start
-        },
-    );
-    assert_eq!(b, Duration::from_millis(90));
-}
-
-/// The same on the wire: a request made while the one before it is out
-/// goes the whole interval after its reply.
-#[tokio::test(start_paused = true)]
-async fn a_concurrent_request_waits_the_full_pause_after_a_slow_reply() {
-    let (mut client, sends) = paced_client(50, Duration::from_millis(40), 0).await;
-    let start = Instant::now();
-    tokio::join!(request(&client, A), async {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        request(&client, A).await;
-    });
-    assert_eq!(sent_to(&sends, A, start), ms(&[0, 90]));
-    client.stop().await.unwrap();
-}
-
-/// An earlier request finishing only ever moves the turn right after it.
-#[tokio::test(start_paused = true)]
-async fn an_earlier_finish_moves_no_later_turn() {
-    let pacer = RequestPacer::new(Duration::from_millis(50));
-    let start = Instant::now();
-    let a = pacer.wait(local(A)).await;
-    let (b, c) = tokio::join!(held(&pacer, start), async {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        drop(a);
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        let _c = pacer.wait(local(A)).await;
-        Instant::now() - start
-    });
-    // B's turn was 50; A finishing at 10 moves it to 60. C follows B.
-    assert_eq!(b, Duration::from_millis(60));
-    assert!(c >= b + Duration::from_millis(50), "{c:?}");
-}
-
-/// At the cap a destination with nothing waiting or outstanding goes
-/// before a busy one, even a busy one free sooner.
-#[tokio::test(start_paused = true)]
-async fn at_the_cap_an_idle_destination_goes_before_a_busy_one() {
-    let pacer = with_capacity(Duration::from_millis(100), 2);
-    let _a = pacer.wait(local(A)).await; // busy: free at 100
-    tokio::time::advance(Duration::from_millis(10)).await;
-    drop(pacer.wait(local(B)).await); // idle: free at 110
-    let _c = pacer.wait(local(C)).await;
-    assert!(pacer.remembers(&local(A)) && pacer.remembers(&local(C)));
-    assert!(!pacer.remembers(&local(B)));
 }
 
 #[tokio::test]

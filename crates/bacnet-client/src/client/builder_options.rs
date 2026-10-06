@@ -13,9 +13,10 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
         self
     }
 
-    /// Set the least time, in milliseconds, from one confirmed request to a
-    /// destination finishing to the next being sent (default 0: no pacing).
-    /// See [`ClientConfig::min_request_interval_ms`].
+    /// Set the least time, in milliseconds, from the latest confirmed
+    /// request to a destination finishing to the next being sent (default
+    /// 0: no pacing; at most an hour). See
+    /// [`ClientConfig::min_request_interval_ms`].
     pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
         self.config.min_request_interval_ms = ms;
         self
@@ -67,9 +68,10 @@ impl BipClientBuilder {
         self
     }
 
-    /// Set the least time, in milliseconds, from one confirmed request to a
-    /// destination finishing to the next being sent (default 0: no pacing).
-    /// See [`ClientConfig::min_request_interval_ms`].
+    /// Set the least time, in milliseconds, from the latest confirmed
+    /// request to a destination finishing to the next being sent (default
+    /// 0: no pacing; at most an hour). See
+    /// [`ClientConfig::min_request_interval_ms`].
     pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
         self.config.min_request_interval_ms = ms;
         self
@@ -122,9 +124,10 @@ impl Bip6ClientBuilder {
         self
     }
 
-    /// Set the least time, in milliseconds, from one confirmed request to a
-    /// destination finishing to the next being sent (default 0: no pacing).
-    /// See [`ClientConfig::min_request_interval_ms`].
+    /// Set the least time, in milliseconds, from the latest confirmed
+    /// request to a destination finishing to the next being sent (default
+    /// 0: no pacing; at most an hour). See
+    /// [`ClientConfig::min_request_interval_ms`].
     pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
         self.config.min_request_interval_ms = ms;
         self
@@ -177,9 +180,10 @@ impl ScClientBuilder {
         self
     }
 
-    /// Set the least time, in milliseconds, from one confirmed request to a
-    /// destination finishing to the next being sent (default 0: no pacing).
-    /// See [`ClientConfig::min_request_interval_ms`].
+    /// Set the least time, in milliseconds, from the latest confirmed
+    /// request to a destination finishing to the next being sent (default
+    /// 0: no pacing; at most an hour). See
+    /// [`ClientConfig::min_request_interval_ms`].
     pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
         self.config.min_request_interval_ms = ms;
         self

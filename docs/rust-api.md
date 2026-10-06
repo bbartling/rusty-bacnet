@@ -4857,11 +4857,13 @@ endpoint client isn't paced: its pages go back to back.
 
 `min_request_interval_ms` on every `BACnetClient` builder (and in
 `ClientConfig`), default 0 and at most 3,600,000 (an hour), paces the
-confirmed requests to each destination. Requests to a destination take turns
-in call order. Each goes once that long has passed since the request before it
-finished, by a reply, an error or its caller giving up, or since that request
-was sent while it is still outstanding; the check is made again when its turn
-comes, so a late reply still gets the whole pause. It covers paging and polling
+confirmed requests to each destination. A request goes once that long has
+passed since the latest request sent to that destination finished, by a reply,
+an error or its caller giving up, or since that request was sent while it is
+still outstanding. A waiting request checks again when it wakes, so a late
+reply still gets the whole pause; requests waiting together go one at a time,
+the interval apart, in no promised order, and one given up before it went
+leaves no trace. It covers paging and polling
 alike, so a slow device can serve its other clients between them; requests to
 different destinations don't wait on each other. Pacing runs before a routed
 request takes its path lease, which every device on that network behind that
