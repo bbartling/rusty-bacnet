@@ -69,6 +69,10 @@ fn property_identifiers_508_to_511_are_network_port_and_color_is_extended() {
         (509, "CERTIFICATE_SIGNING_REQUEST_FILE"),
         (510, "COMMAND_VALIDATION_RESULT"),
         (511, "ISSUER_CERTIFICATE_FILES"),
+        // The lighting outputs' colour links (#1527).
+        (4_194_328, "COLOR_OVERRIDE"),
+        (4_194_329, "COLOR_REFERENCE"),
+        (4_194_332, "OVERRIDE_COLOR_REFERENCE"),
         (4_194_330, "DEFAULT_COLOR"),
         (4_194_331, "DEFAULT_COLOR_TEMPERATURE"),
         (4_194_334, "COLOR_COMMAND"),

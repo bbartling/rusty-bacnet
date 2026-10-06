@@ -25,9 +25,10 @@ use crate::property_metadata::{
 // profile rows; Binary Lighting Output Feedback_Value, Power, Polarity,
 // Elapsed_Active_Time family, Value_Source family, event/intrinsic/audit/
 // tag/profile rows) are all optional and stay absent until dispatch exists.
-// Lighting Output's trims (High_End_Trim, Low_End_Trim and Trim_Fade_Time,
-// Addendum 135-2020ca part 5, #1528) join the rows once set; see
-// `for_lighting_output_object`.
+// The colour links of both objects (Color_Reference, Color_Override and
+// Override_Color_Reference, Addendum 135-2020ca part 4, #1527) and Lighting
+// Output's trims (High_End_Trim, Low_End_Trim and Trim_Fade_Time, part 5,
+// #1528) join the rows once set; see `for_lighting_output_object`.
 // Object_Identifier, Object_Name, and Object_Type carry the table R code and
 // have no network write route, so RequiredRead/ReadOnly. Object_Name
 // explicitly documents the denial: a rename falls through to
@@ -113,11 +114,12 @@ const BINARY_LIGHTING_OUTPUT_BASE: &[PropertyMetadata] = &[
 pub(super) fn for_lighting_output_object(
     object: &LightingOutputObject,
 ) -> Cow<'_, [PropertyMetadata]> {
-    // The trims (#1528) are Optional rows that take writes, each present once
-    // set. Trim_Fade_Time comes with either, and the footnote to Table 12-64
-    // makes it required then. They go in before Property_List.
+    // The colour links (#1527) come first, in the table's order. The trims
+    // (#1528) are Optional rows that take writes, each present once set;
+    // Trim_Fade_Time comes with either, and the footnote to Table 12-64 makes
+    // it required then.
     let trims = &object.trims;
-    let rows = [
+    let trim_rows = [
         (P::HIGH_END_TRIM, trims.high_end().is_some(), None),
         (P::LOW_END_TRIM, trims.low_end().is_some(), None),
         (
@@ -125,25 +127,36 @@ pub(super) fn for_lighting_output_object(
             trims.has_fade_time(),
             Some(PropertyPresenceCondition::LightingTrims),
         ),
-    ];
-    if !rows.iter().any(|&(_, present, _)| present) {
-        return Cow::Borrowed(LIGHTING_OUTPUT_BASE);
-    }
-    let (property_list, base) = LIGHTING_OUTPUT_BASE
-        .split_last()
-        .expect("a Property_List row");
-    let mut metadata = base.to_vec();
-    metadata.extend(rows.into_iter().filter(|&(_, present, _)| present).map(
-        |(property, _, condition)| PropertyMetadata::new(property, Optional, condition, Always),
-    ));
-    metadata.push(*property_list);
-    Cow::Owned(metadata)
+    ]
+    .into_iter()
+    .filter(|&(_, present, _)| present)
+    .map(|(property, _, condition)| PropertyMetadata::new(property, Optional, condition, Always));
+    let rows = super::color_link::metadata(object.color_link.as_ref()).chain(trim_rows);
+    with_rows(LIGHTING_OUTPUT_BASE, rows)
 }
 
 pub(super) fn for_binary_lighting_output_object(
-    _object: &BinaryLightingOutputObject,
+    object: &BinaryLightingOutputObject,
 ) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(BINARY_LIGHTING_OUTPUT_BASE)
+    let rows = super::color_link::metadata(object.color_link());
+    with_rows(BINARY_LIGHTING_OUTPUT_BASE, rows)
+}
+
+/// `base` with `rows` put in before its Property_List row, or `base` itself
+/// when there are none.
+fn with_rows(
+    base: &'static [PropertyMetadata],
+    rows: impl Iterator<Item = PropertyMetadata>,
+) -> Cow<'static, [PropertyMetadata]> {
+    let mut rows = rows.peekable();
+    if rows.peek().is_none() {
+        return Cow::Borrowed(base);
+    }
+    let (property_list, base) = base.split_last().expect("a Property_List row");
+    let mut metadata = base.to_vec();
+    metadata.extend(rows);
+    metadata.push(*property_list);
+    Cow::Owned(metadata)
 }
 
 #[cfg(test)]

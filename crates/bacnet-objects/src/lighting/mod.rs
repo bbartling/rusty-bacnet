@@ -33,6 +33,10 @@ use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 /// three warn commands. Tracking_Value equals Present_Value whenever no fade
 /// or ramp is moving it and no trim holds it.
 ///
+/// Color_Reference, Color_Override and Override_Color_Reference are absent
+/// until [`set_color_link`](Self::set_color_link) links the output to its
+/// colour objects (#1527).
+///
 /// High_End_Trim, Low_End_Trim and Trim_Fade_Time are absent until set
 /// (#1528; see [`set_high_end_trim`](Self::set_high_end_trim)). Once set,
 /// Tracking_Value is held between the trims, In_Progress reads TRIM_ACTIVE
@@ -78,6 +82,9 @@ pub struct LightingOutputObject {
     /// High_End_Trim, Low_End_Trim and Trim_Fade_Time, and a trim change
     /// under way.
     trims: trim::Trims,
+    /// Color_Reference, with Color_Override and Override_Color_Reference
+    /// when overridable; absent until set.
+    color_link: Option<ColorLink>,
     monotonic_clock: Option<Arc<MonotonicClock>>,
     deadline_waker: Option<Arc<DeadlineWaker>>,
     /// The time an object with no clock bound has been advanced to.
@@ -110,6 +117,7 @@ impl LightingOutputObject {
             priority_array: [None; 16],
             relinquish_default: 0.0,
             trims: trim::Trims::NONE,
+            color_link: None,
             monotonic_clock: None,
             deadline_waker: None,
             logical_now: Duration::ZERO,
@@ -181,6 +189,27 @@ impl LightingOutputObject {
         self.lighting_command = command;
         let now = self.now();
         self.execute(&command, now);
+    }
+
+    /// Link the output to the colour objects that set its colour, or take
+    /// the link away with `None` (#1527, Addendum 135-2020ca part 4).
+    ///
+    /// A link serves Color_Reference, and with a [`ColorOverride`] also
+    /// Color_Override and Override_Color_Reference; all of them take
+    /// writes. Each reference must name a colour object, Color or Color
+    /// Temperature (instance 4194303 names none); anything else is refused
+    /// with VALUE_OUT_OF_RANGE and changes nothing. The object only stores
+    /// the references:
+    /// [`ObjectDatabase::lighting_color`](crate::database::ObjectDatabase::lighting_color)
+    /// follows them.
+    pub fn set_color_link(&mut self, link: Option<ColorLink>) -> Result<(), Error> {
+        self.color_link = link.map(ColorLink::checked).transpose()?;
+        Ok(())
+    }
+
+    /// The colour link, if one is set.
+    pub fn color_link(&self) -> Option<&ColorLink> {
+        self.color_link.as_ref()
     }
 
     /// Set Default_Fade_Time, the milliseconds a fade request without its own
@@ -327,8 +356,8 @@ impl BACnetObject for LightingOutputObject {
             p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            p => self
-                .read_trim(p)
+            p => color_link::read(self.color_link.as_ref(), p)
+                .or_else(|| self.read_trim(p))
                 .unwrap_or_else(|| Err(common::unknown_property_error())),
         }
     }
@@ -427,8 +456,12 @@ impl BACnetObject for LightingOutputObject {
             return Err(common::invalid_data_type_error());
         }
 
-        // HIGH_END_TRIM, LOW_END_TRIM and TRIM_FADE_TIME, once present.
+        // HIGH_END_TRIM, LOW_END_TRIM and TRIM_FADE_TIME, and the colour
+        // links, once present.
         if let Some(result) = self.write_trim(property, &value) {
+            return result;
+        }
+        if let Some(result) = color_link::write(&mut self.color_link, property, &value) {
             return result;
         }
         if let Some(result) = common::write_cov_increment(&mut self.cov_increment, property, &value)
@@ -508,11 +541,13 @@ impl BACnetObject for LightingOutputObject {
 }
 
 mod binary;
+mod color_link;
 mod command;
 mod engine;
 mod metadata;
 mod trim;
 pub use binary::BinaryLightingOutputObject;
+pub use color_link::{ColorLink, ColorOverride, LightingColor, OutputColor};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -538,3 +573,6 @@ mod warn_tests;
 
 #[cfg(test)]
 mod trim_tests;
+
+#[cfg(test)]
+mod color_link_tests;

@@ -548,11 +548,20 @@ bacnet_enum! {
     const ISSUER_CERTIFICATE_FILES = 511;
 
     // 4194304 and up (the second ASHRAE range)
+    /// Whether a lighting output's colour comes from its override reference
+    /// (Addendum 135-2020ca part 4).
+    const COLOR_OVERRIDE = 4194328;
+    /// The colour object (Color or Color Temperature) that sets a lighting output's
+    /// colour (Addendum 135-2020ca part 4).
+    const COLOR_REFERENCE = 4194329;
     /// A Color object's start-up colour (Addendum 135-2020ca).
     const DEFAULT_COLOR = 4194330;
     /// A Color Temperature object's start-up colour temperature (Addendum
     /// 135-2020ca).
     const DEFAULT_COLOR_TEMPERATURE = 4194331;
+    /// The colour object (Color or Color Temperature) that sets a lighting output's
+    /// colour while Color_Override is TRUE (Addendum 135-2020ca part 4).
+    const OVERRIDE_COLOR_REFERENCE = 4194332;
     /// The BACnetColorCommand of a Color or Color Temperature object
     /// (Addendum 135-2020ca). The addendum itself left this property out of
     /// its Clause 21 list; its errata of 2023-01-05 (item 1) number it, and

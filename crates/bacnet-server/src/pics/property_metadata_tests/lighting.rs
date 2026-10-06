@@ -170,3 +170,44 @@ fn pics_lighting_output_lists_its_trims_once_set() {
     assert_eq!(rows, sorted_rows(&expected));
     assert_eq!(required_of(&rows), required);
 }
+
+#[test]
+fn pics_lighting_outputs_list_their_colour_links_as_required_and_writable() {
+    use bacnet_objects::lighting::{ColorLink, ColorOverride};
+    // Each row is required while present (the tables' footnotes, #1527).
+    let colour = ObjectIdentifier::new(ObjectType::COLOR, 1).unwrap();
+    let rows_for = |overridable: bool| {
+        let mut rows = vec![(P::COLOR_REFERENCE, false, true)];
+        if overridable {
+            rows.extend([
+                (P::COLOR_OVERRIDE, false, true),
+                (P::OVERRIDE_COLOR_REFERENCE, false, true),
+            ]);
+        }
+        rows
+    };
+    for overridable in [false, true] {
+        let link = ColorLink {
+            color_override: overridable.then_some(ColorOverride {
+                active: false,
+                reference: colour,
+            }),
+            ..ColorLink::new(colour)
+        };
+        let mut lo = LightingOutputObject::new(7, "LO-7").unwrap();
+        lo.set_color_link(Some(link)).unwrap();
+        let mut blo = BinaryLightingOutputObject::new(7, "BLO-7").unwrap();
+        blo.set_color_link(Some(link)).unwrap();
+        let objects: [(Box<dyn bacnet_objects::traits::BACnetObject>, ObjectType); 2] = [
+            (Box::new(lo), ObjectType::LIGHTING_OUTPUT),
+            (Box::new(blo), ObjectType::BINARY_LIGHTING_OUTPUT),
+        ];
+        for (object, kind) in objects {
+            let mut expected = expected_rows(kind);
+            expected.extend(rows_for(overridable));
+            let (rows, required) = pics_rows(object);
+            assert_eq!(rows, sorted_rows(&expected), "{kind:?}");
+            assert_eq!(required_of(&rows), required);
+        }
+    }
+}

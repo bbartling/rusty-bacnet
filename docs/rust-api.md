@@ -3420,6 +3420,28 @@ VALUE_OUT_OF_RANGE.
 - A high trim below the low one sets Reliability to CONFIGURATION_ERROR (with
   Status_Flags' FAULT), and the trims hold nothing until it's put right.
 
+Both lighting outputs take the colour links of Addendum 135-2020ca part 4
+(#1527). `set_color_link` takes a `bacnet_objects::lighting::ColorLink`: a
+`reference` (Color_Reference) and, where the output supports colour override,
+a `ColorOverride` with its `active` flag (Color_Override) and `reference`
+(Override_Color_Reference). The rows are absent until a link is set, then
+required while present, as the tables' footnotes say, and all of them take
+writes. A reference must name a colour object, Color or Color Temperature, or a write
+is refused with VALUE_OUT_OF_RANGE; instance 4194303 names none, leaving the
+colour to the application.
+
+The outputs only store the references, and the override never writes a
+colour object: it switches which object the colour comes from, so a fade on
+either colour object runs on, and once the override ends the colour is
+wherever the Color_Reference object has got to. `ObjectDatabase::lighting_color`
+follows the link: it returns the `LightingColor` an output shows now, the
+Tracking_Value of the referenced colour object (Override_Color_Reference's
+while Color_Override is TRUE) as an `OutputColor::Xy` or `OutputColor::Kelvin`,
+with the object it came from. It returns `None` for a reference to an object
+the database doesn't hold: such a reference is stored and served but not
+followed, since the clauses put the companion in the same device and an
+object identifier can't name another one.
+
 Fades, ramps and egress timers run on the server's monotonic task, which a
 write that starts one wakes. Tracking_Value is worked out from the clock when
 read. While it moves, the task samples it for COV each time it has moved by

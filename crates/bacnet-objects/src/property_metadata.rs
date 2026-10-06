@@ -60,6 +60,11 @@ pub enum PropertyPresenceCondition {
     /// A Lighting Output has a trim, which makes its Trim_Fade_Time required
     /// (Addendum 135-2020ca part 5, #1528).
     LightingTrims,
+    /// A lighting output takes its colour from a colour object, which makes
+    /// Color_Reference required, and Color_Override and
+    /// Override_Color_Reference too where it supports colour override
+    /// (Addendum 135-2020ca part 4, #1527).
+    LightingColor,
 }
 
 /// The write capability implemented by an object's property-write routes.
@@ -137,6 +142,7 @@ impl PropertyMetadata {
                         | PropertyPresenceCondition::ValueSourceTracking
                         | PropertyPresenceCondition::CommandableValueSourceTracking
                         | PropertyPresenceCondition::LightingTrims
+                        | PropertyPresenceCondition::LightingColor
                 )
             )
     }

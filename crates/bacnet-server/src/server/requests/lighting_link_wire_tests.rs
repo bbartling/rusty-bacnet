@@ -1,6 +1,6 @@
 //! The Addendum 135-2020ca properties of the lighting objects over the wire:
-//! Lighting Output's trims (#1528). The replies are exactly as the server
-//! encodes them.
+//! Lighting Output's trims (#1528) and both outputs' colour links (#1527).
+//! The replies are exactly as the server encodes them.
 //!
 //! LIGHTING_OUTPUT 1 is `0D 80 00 01`. The trims are High_End_Trim 4194335
 //! (`1B 40 00 1F` as context tag 1), Low_End_Trim 4194336 (`1B 40 00 20`)
@@ -150,5 +150,114 @@ async fn trims_over_the_wire() {
     assert_eq!(
         read(&fixture, lo1(), PropertyIdentifier::IN_PROGRESS).await,
         read_ack(lo1(), &IN_PROGRESS, &[0x91, 0x00])
+    );
+}
+
+/// Color_Reference 4194329, Color_Override 4194328 and
+/// Override_Color_Reference 4194332 as context tag 1.
+const COLOR_REFERENCE: [u8; 4] = [0x1B, 0x40, 0x00, 0x19];
+const COLOR_OVERRIDE: [u8; 4] = [0x1B, 0x40, 0x00, 0x18];
+const OVERRIDE_COLOR_REFERENCE: [u8; 4] = [0x1B, 0x40, 0x00, 0x1C];
+/// COLOR 1 and COLOR_TEMPERATURE 2 as application object identifiers: type
+/// 63 and 64 in the top ten bits.
+const COLOR_1: [u8; 5] = [0xC4, 0x0F, 0xC0, 0x00, 0x01];
+const COLOR_TEMPERATURE_2: [u8; 5] = [0xC4, 0x10, 0x00, 0x00, 0x02];
+
+/// Both lighting outputs' colour links over the wire (#1527), and the
+/// override, once written, reaching the colour object it names.
+/// BINARY_LIGHTING_OUTPUT 1 is `0D C0 00 01`.
+#[tokio::test]
+async fn colour_links_over_the_wire() {
+    use bacnet_objects::color::{ColorObject, ColorTemperatureObject};
+    use bacnet_objects::lighting::{
+        BinaryLightingOutputObject, ColorLink, ColorOverride, LightingColor, OutputColor,
+    };
+    let link = ColorLink {
+        reference: ObjectIdentifier::new(ObjectType::COLOR, 1).unwrap(),
+        color_override: Some(ColorOverride {
+            active: false,
+            reference: ObjectIdentifier::new(ObjectType::COLOR_TEMPERATURE, 2).unwrap(),
+        }),
+    };
+    let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
+    lo.set_color_link(Some(link)).unwrap();
+    let mut blo = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
+    blo.set_color_link(Some(link)).unwrap();
+    let mut ct = ColorTemperatureObject::new(2, "CT-2").unwrap();
+    ct.set_present_value(2_700).unwrap();
+    let fixture = fixture(vec![
+        Box::new(lo),
+        Box::new(blo),
+        Box::new(LightingOutputObject::new(2, "LO-2").unwrap()),
+        Box::new(ColorObject::new(1, "CLR-1").unwrap()),
+        Box::new(ct),
+    ])
+    .await;
+    let blo1 = ObjectIdentifier::new(ObjectType::BINARY_LIGHTING_OUTPUT, 1).unwrap();
+    let (reference, color_override, override_reference) = (
+        PropertyIdentifier::COLOR_REFERENCE,
+        PropertyIdentifier::COLOR_OVERRIDE,
+        PropertyIdentifier::OVERRIDE_COLOR_REFERENCE,
+    );
+    for output in [lo1(), blo1] {
+        assert_eq!(
+            read(&fixture, output, reference).await,
+            read_ack(output, &COLOR_REFERENCE, &COLOR_1)
+        );
+        // FALSE is application tag 1 with value 0.
+        assert_eq!(
+            read(&fixture, output, color_override).await,
+            read_ack(output, &COLOR_OVERRIDE, &[0x10])
+        );
+        assert_eq!(
+            read(&fixture, output, override_reference).await,
+            read_ack(output, &OVERRIDE_COLOR_REFERENCE, &COLOR_TEMPERATURE_2)
+        );
+        // An ANALOG_VALUE 1 reference (`C4 00 80 00 01`) is out of range,
+        // and an Unsigned override is the wrong datatype (9).
+        let analog_value = [0xC4, 0x00, 0x80, 0x00, 0x01];
+        assert_eq!(
+            write(&fixture, output, reference, &analog_value, None).await,
+            OUT_OF_RANGE
+        );
+        assert_eq!(
+            write(&fixture, output, color_override, &[0x21, 0x01], None).await,
+            [0x50, 5, 15, 0x91, 0x02, 0x91, 0x09]
+        );
+        // TRUE turns the override on, and the output's colour now comes
+        // from COLOR_TEMPERATURE 2.
+        assert_eq!(
+            write(&fixture, output, color_override, &[0x11], None).await,
+            SIMPLE_ACK
+        );
+        assert_eq!(
+            read(&fixture, output, color_override).await,
+            read_ack(output, &COLOR_OVERRIDE, &[0x11])
+        );
+        assert_eq!(
+            fixture.db.read().await.lighting_color(&output),
+            Some(LightingColor {
+                source: ObjectIdentifier::new(ObjectType::COLOR_TEMPERATURE, 2).unwrap(),
+                color: OutputColor::Kelvin(2_700),
+            })
+        );
+        // A Color_Reference of COLOR 4194303 (`C4 0F FF FF FF`) names no
+        // companion; it's taken and read back.
+        let none = [0xC4, 0x0F, 0xFF, 0xFF, 0xFF];
+        assert_eq!(
+            write(&fixture, output, reference, &none, None).await,
+            SIMPLE_ACK
+        );
+        assert_eq!(
+            read(&fixture, output, reference).await,
+            read_ack(output, &COLOR_REFERENCE, &none)
+        );
+    }
+    // An output with no link has none of the rows: ReadProperty (12) answers
+    // UNKNOWN_PROPERTY.
+    let lo2 = ObjectIdentifier::new(ObjectType::LIGHTING_OUTPUT, 2).unwrap();
+    assert_eq!(
+        read(&fixture, lo2, reference).await,
+        [0x50, 5, 12, 0x91, 0x02, 0x91, 0x20]
     );
 }
