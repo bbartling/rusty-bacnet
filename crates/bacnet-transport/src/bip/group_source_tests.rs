@@ -246,6 +246,7 @@ async fn receive_from(
         local_ip: LOCAL,
         unicast_ips: vec![LOCAL],
         wildcard_bind: false,
+        listener_interface: None,
     };
     handle_datagram(frame, &received, Arrival::Primary, &local, ctx).await;
 }

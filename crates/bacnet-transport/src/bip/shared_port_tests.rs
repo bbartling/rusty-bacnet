@@ -239,11 +239,21 @@ async fn a_broadcast_reaches_every_transport_on_the_port() {
     }
 
     // Unicast to an address on the port that no transport is bound to
-    // reaches no listener: the next NPDU each one hands up is the unicast
+    // reaches no socket at all, not even a listener: the kernel answers it
+    // with port unreachable. The next NPDU each one hands up is the unicast
     // sent to it afterwards.
     let stray = frame(BvlcFunction::ORIGINAL_UNICAST_NPDU, &npdu(3));
     let unbound = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 4), port);
-    peer.send_to(&stray, unbound).await.unwrap();
+    let probe = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    probe.connect(unbound).await.unwrap();
+    probe.send(&stray).await.unwrap();
+    let refused = timeout(Duration::from_secs(2), probe.recv(&mut [0u8; 64]))
+        .await
+        .expect("port unreachable arrives")
+        .expect_err("nothing answers");
+    assert_eq!(refused.kind(), std::io::ErrorKind::ConnectionRefused);
     for node in &mut nodes {
         let own = frame(BvlcFunction::ORIGINAL_UNICAST_NPDU, &npdu(4));
         peer.send_to(&own, node.address()).await.unwrap();
@@ -324,5 +334,42 @@ async fn a_subnet_broadcast_reaches_a_transport_sharing_its_port_by_address() {
     let received = node.next().await;
     assert_eq!(received.npdu.as_ref(), npdu(7));
     assert!(received.link_layer_group);
+    eprintln!("ran: a broadcast to {to} reached the transport on {route}");
+    node.transport.stop().await.unwrap();
+}
+
+/// A limited broadcast sent on another interface reaches a loopback
+/// transport's listener (on Linux the 255.255.255.255 listener, on macOS
+/// the wildcard one), which drops it: only broadcasts that arrived on the
+/// transport's own interface count (#1538). Skipped without a default route,
+/// or where the host can't send a limited broadcast.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_broadcast_from_another_interface_is_dropped() {
+    let Some(route) = crate::local_addresses::route_ipv4().filter(|ip| !ip.is_loopback()) else {
+        return eprintln!("skipped: no default-route IPv4 address");
+    };
+    let loopback = if cfg!(target_os = "linux") {
+        Ipv4Addr::new(127, 0, 0, 2)
+    } else {
+        Ipv4Addr::LOCALHOST
+    };
+    let [mut node] = start_on_one_port([loopback], [Ipv4Addr::BROADCAST], |_, _, _| {}).await;
+    let to = SocketAddrV4::new(Ipv4Addr::BROADCAST, node.address().port());
+    let peer = UdpSocket::bind(SocketAddrV4::new(route, 0)).await.unwrap();
+    peer.set_broadcast(true).unwrap();
+    let broadcast = frame(BvlcFunction::ORIGINAL_BROADCAST_NPDU, &npdu(8));
+    if let Err(e) = peer.send_to(&broadcast, to).await {
+        node.transport.stop().await.unwrap();
+        return eprintln!("skipped: this host can't send to {to} from {route}: {e}");
+    }
+    // The unicast after it is the first NPDU handed up.
+    let fence = UdpSocket::bind(SocketAddrV4::new(loopback, 0))
+        .await
+        .unwrap();
+    let unicast = frame(BvlcFunction::ORIGINAL_UNICAST_NPDU, &npdu(9));
+    fence.send_to(&unicast, node.address()).await.unwrap();
+    assert_eq!(node.next().await.npdu.as_ref(), npdu(9));
+    eprintln!("ran: a broadcast from {route} did not reach the transport on {loopback}");
     node.transport.stop().await.unwrap();
 }

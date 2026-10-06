@@ -536,9 +536,12 @@ transport raises `ValueError`.
 In this mode every send leaves from the interface address, and broadcasts
 and unicast are received in **no fixed order**: on Linux and macOS
 broadcasts arrive on separate receive-only sockets, so a unicast that depends
-on a broadcast sent just before it can be handled first. On Linux the
+on a broadcast sent just before it can be handled first. Those sockets keep
+only broadcasts that arrived on the interface's own link. The
 `broadcast_address` must be the interface's subnet broadcast or
-`255.255.255.255`. On Windows the address is claimed exclusively. See
+`255.255.255.255`, or `start()` fails. On Windows the address is claimed
+exclusively, though the bind still succeeds beside another program's socket
+on `0.0.0.0` at that port. See
 [Sharing a port by address](rust-api.md#sharing-a-port-by-address) for each
 OS.
 

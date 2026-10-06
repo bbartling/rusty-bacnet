@@ -189,8 +189,9 @@ impl BipTransport {
     /// macOS and the BSDs, broadcasts arrive on separate receive-only
     /// listeners, read in no fixed order against the address socket: a
     /// unicast that depends on a broadcast sent just before it can be handled
-    /// first. On Linux a listener binds the configured broadcast address, which
-    /// must then be the interface's subnet broadcast or 255.255.255.255. On
+    /// first. The listeners keep only broadcasts that arrived on the
+    /// interface's own link. The configured broadcast address must be the
+    /// interface's subnet broadcast or 255.255.255.255, or `start()` fails. On
     /// Windows one socket claims the address with `SO_EXCLUSIVEADDRUSE`; a
     /// socket already bound to the wildcard address on that port doesn't stop
     /// it, and under Windows' strong host model a multihomed BBMD reaches a
@@ -605,7 +606,9 @@ impl TransportPort for BipTransport {
         socket::probe_interface(self.interface)?;
         // A wildcard socket, or in per-address mode one bound to the interface
         // address plus, on Unix, broadcast listeners: see socket.rs (#1538).
-        let bound = socket::bind(self.bind_plan()).map_err(Error::Transport)?;
+        let plan = self.bind_plan_for_start().await;
+        let listener_interface = plan.local.and_then(|local| local.index);
+        let bound = socket::bind(plan).map_err(Error::Transport)?;
         let listeners =
             Listeners::open(bound, self.network_port_lease.clone()).map_err(Error::Transport)?;
         let socket = Arc::clone(listeners.primary());
@@ -709,6 +712,7 @@ impl TransportPort for BipTransport {
             local_ip,
             unicast_ips: local_unicast_ips,
             wildcard_bind,
+            listener_interface,
         };
         self.recv_task = Some(tokio::spawn(receive_loop(listeners, ingress, recv_ctx)));
 

@@ -3,6 +3,7 @@
 //! handler takes the NPDU's `link_layer_group` from how the datagram arrived.
 //! Datagrams are fed in-process with the destination the OS would report.
 
+use super::ingress::arrived_elsewhere;
 use super::*;
 use crate::udp_metadata::ReceivedDatagram;
 use bytes::Bytes;
@@ -97,6 +98,7 @@ fn bound_to(local_ip: Ipv4Addr) -> IngressAddresses {
         local_ip,
         unicast_ips: vec![local_ip],
         wildcard_bind: false,
+        listener_interface: None,
     }
 }
 
@@ -219,4 +221,44 @@ async fn the_broadcast_listener_keeps_only_broadcasts() {
         .expect("the listener hands up a broadcast");
         assert!(npdu.link_layer_group, "{destination}");
     }
+}
+
+/// In per-address mode a broadcast listener keeps only what arrived on the
+/// transport's own interface (#1538); with either index unknown, it keeps
+/// it. The primary socket is not filtered.
+#[tokio::test]
+async fn a_listener_keeps_only_broadcasts_from_its_own_interface() {
+    assert!(arrived_elsewhere(Some(2), Some(3)));
+    for (own, arrival) in [
+        (Some(2), Some(2)),
+        (Some(2), None),
+        (Some(2), Some(0)),
+        (None, Some(3)),
+        (None, None),
+    ] {
+        assert!(!arrived_elsewhere(own, arrival), "{own:?} {arrival:?}");
+    }
+
+    let (ctx, mut rx) = context(SUBNET_BROADCAST).await;
+    let mut local = bound_to(LOCAL);
+    local.listener_interface = Some(2);
+    let data = frame(BvlcFunction::ORIGINAL_BROADCAST_NPDU);
+    let mut handed_up = Vec::new();
+    for (arrival, index) in [
+        (Arrival::BroadcastListener, Some(3)),
+        (Arrival::BroadcastListener, Some(2)),
+        (Arrival::BroadcastListener, None),
+        (Arrival::Primary, Some(3)),
+    ] {
+        let received = ReceivedDatagram {
+            len: data.len(),
+            peer: SocketAddr::V4(SENDER),
+            destination: IpAddr::V4(SUBNET_BROADCAST),
+            arrival_index: index,
+            os_group_delivery: None,
+        };
+        handle_datagram(&data, &received, arrival, &local, &ctx).await;
+        handed_up.push(rx.try_recv().is_ok());
+    }
+    assert_eq!(handed_up, [false, true, true, true]);
 }

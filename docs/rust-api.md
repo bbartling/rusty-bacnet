@@ -672,12 +672,22 @@ What changes in this mode:
   handled in either order, so a unicast that depends on a broadcast sent just
   before it, such as a query after a Network-Number-Is, can be handled first.
   A listener that fails is closed with a warning, and unicast goes on.
+- **Broadcast address:** it must be the interface's subnet broadcast,
+  judged by the netmask the host reports, or 255.255.255.255; anything else
+  would lose this subnet's broadcasts, so `start()` fails. Where the host
+  reports no netmask, the bind decides. If the interface is down, a Linux
+  listener can't bind its subnet broadcast, and the error says so.
+- **Arrival interface:** a listener on 255.255.255.255 (Linux) or `0.0.0.0`
+  (macOS and the BSDs) hears every interface, so it keeps only broadcasts
+  that arrived on the transport's own, by the index `IP_PKTINFO` (Linux) or
+  `IP_RECVIF` (macOS and the BSDs) reports. On a host with several networks,
+  such as a router with a port on each, one network's Who-Is doesn't reach
+  the transport on another.
 - **Linux** delivers a broadcast only to sockets bound to the wildcard address
   or to the broadcast address itself. The listeners bind the configured
   broadcast address and 255.255.255.255 with `SO_REUSEADDR`, which every
-  device on the subnet shares, and each gets a copy. The broadcast address
-  must therefore be the interface's subnet broadcast (or 255.255.255.255), or
-  `start()` fails. No listener sees a unicast, and the address socket shares
+  device on the subnet shares, and each gets a copy. No listener sees a
+  unicast, and the address socket shares
   nothing: no other socket can bind the same address and port, nor
   `0.0.0.0` on that port, so a default-mode transport can't share a port with
   devices sharing it by address.

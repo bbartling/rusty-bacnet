@@ -27,27 +27,24 @@ use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
     target_os = "fuchsia",
 ))]
 mod getifaddrs;
-#[cfg(all(
-    test,
-    any(
-        target_os = "linux",
-        target_os = "l4re",
-        target_os = "android",
-        target_os = "emscripten",
-        target_vendor = "apple",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "solaris",
-        target_os = "illumos",
-        target_os = "haiku",
-        target_os = "nto",
-        target_os = "hurd",
-        target_os = "fuchsia",
-    )
+#[cfg(any(
+    target_os = "linux",
+    target_os = "l4re",
+    target_os = "android",
+    target_os = "emscripten",
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "solaris",
+    target_os = "illumos",
+    target_os = "haiku",
+    target_os = "nto",
+    target_os = "hurd",
+    target_os = "fuchsia",
 ))]
-use getifaddrs::broadcast_netmask;
+pub(crate) use getifaddrs::interface_of;
 #[cfg(any(
     target_os = "linux",
     target_os = "l4re",
@@ -152,30 +149,79 @@ fn reported_ipv4() -> io::Result<Vec<ReportedAddress>> {
     ))
 }
 
-/// No interface list on this OS, so no netmask either.
-#[cfg(all(
-    test,
-    not(any(
-        target_os = "linux",
-        target_os = "l4re",
-        target_os = "android",
-        target_os = "emscripten",
-        target_vendor = "apple",
-        target_os = "freebsd",
-        target_os = "dragonfly",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "solaris",
-        target_os = "illumos",
-        target_os = "haiku",
-        target_os = "nto",
-        target_os = "hurd",
-        target_os = "fuchsia",
-        windows,
-    ))
-))]
-fn broadcast_netmask(_ip: Ipv4Addr) -> Option<Ipv4Addr> {
-    None
+/// No interface list on this OS.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "l4re",
+    target_os = "android",
+    target_os = "emscripten",
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "solaris",
+    target_os = "illumos",
+    target_os = "haiku",
+    target_os = "nto",
+    target_os = "hurd",
+    target_os = "fuchsia",
+    windows,
+)))]
+pub(crate) fn interface_of(_ip: Ipv4Addr) -> io::Result<Option<LocalInterface>> {
+    Ok(None)
+}
+
+/// The adapter address that is `ip`, or whose subnet holds it.
+#[cfg(windows)]
+pub(crate) fn interface_of(ip: Ipv4Addr) -> io::Result<Option<LocalInterface>> {
+    use std::net::IpAddr;
+    use windows_sys::Win32::Networking::WinSock::AF_INET;
+
+    let addresses: Vec<_> = crate::windows_adapters::unicast_addresses(AF_INET)?
+        .into_iter()
+        .filter_map(|address| match address.ip {
+            IpAddr::V4(own) => Some((own, address)),
+            IpAddr::V6(_) => None,
+        })
+        .collect();
+    let netmask = |length: u8| {
+        let host_bits = 32u32.checked_sub(u32::from(length))?;
+        Some(Ipv4Addr::from(u32::MAX.checked_shl(host_bits).unwrap_or(0)))
+    };
+    let on_subnet = |(own, address): &&(Ipv4Addr, crate::windows_adapters::UnicastAddress)| {
+        netmask(address.prefix_length).is_some_and(|mask| *own & mask == ip & mask)
+    };
+    let found = addresses
+        .iter()
+        .find(|(own, _)| *own == ip)
+        .or_else(|| addresses.iter().find(on_subnet));
+    Ok(found.map(|(_, address)| LocalInterface {
+        // Nothing on Windows filters by it.
+        index: None,
+        netmask: netmask(address.prefix_length),
+        up: address.up,
+    }))
+}
+
+/// What the host reports about the interface an IPv4 address is on.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LocalInterface {
+    /// The interface's index, where the OS has one for it.
+    pub(crate) index: Option<u32>,
+    /// The address's netmask, when reported.
+    pub(crate) netmask: Option<Ipv4Addr>,
+    /// The interface is up.
+    pub(crate) up: bool,
+}
+
+impl LocalInterface {
+    /// The broadcast address of the subnet `ip` is on. A /31 or /32 has
+    /// none.
+    pub(crate) fn subnet_broadcast(&self, ip: Ipv4Addr) -> Option<Ipv4Addr> {
+        let mask = self.netmask?;
+        (u32::from(mask).leading_ones() <= 30).then(|| ip | !mask)
+    }
 }
 
 /// The host's local unicast IPv4 addresses (see [`host_ipv4`]).
@@ -195,25 +241,11 @@ pub(crate) fn route_ipv4() -> Option<Ipv4Addr> {
     }
 }
 
-/// The broadcast address of the subnet that `ip` is on, when its interface
-/// can broadcast and the subnet has one: for tests that send a subnet
-/// broadcast.
+/// The broadcast address of the subnet that `ip` is on, when the host
+/// reports one: for tests that send a subnet broadcast.
 #[cfg(test)]
 pub(crate) fn subnet_broadcast(ip: Ipv4Addr) -> Option<Ipv4Addr> {
-    #[cfg(windows)]
-    let netmask = {
-        use windows_sys::Win32::Networking::WinSock::AF_INET;
-        let address = crate::windows_adapters::unicast_addresses(AF_INET)
-            .ok()?
-            .into_iter()
-            .find(|address| address.ip == std::net::IpAddr::V4(ip) && !address.loopback)?;
-        let length = u32::from(address.prefix_length);
-        Ipv4Addr::from(u32::MAX.checked_shl(32 - length).unwrap_or(0))
-    };
-    #[cfg(not(windows))]
-    let netmask = broadcast_netmask(ip)?;
-    // A /31 or /32 has no broadcast address.
-    (u32::from(netmask).leading_ones() <= 30).then(|| ip | !netmask)
+    interface_of(ip).ok()??.subnet_broadcast(ip)
 }
 
 #[cfg(test)]

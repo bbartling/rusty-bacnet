@@ -1,6 +1,7 @@
 //! Socket options the B/IP transport sets at start.
 
 use super::*;
+use crate::local_addresses::LocalInterface;
 use crate::port_ownership::{restart, ATTEMPTS};
 use socket::{udp_socket, BindPlan, BoundSockets, SocketRole};
 
@@ -94,6 +95,7 @@ fn plan(interface: Ipv4Addr, port: u16, by_address: bool) -> BindPlan {
         share_port: port != 0,
         by_address,
         broadcast: Ipv4Addr::new(127, 255, 255, 255),
+        local: None,
     }
 }
 
@@ -244,4 +246,93 @@ async fn start_refuses_sharing_by_address_without_an_address() {
         panic!("start must refuse");
     };
     assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+/// The broadcast-address rule for sharing a port by address, against a /24.
+#[test]
+fn sharing_by_address_takes_only_the_subnet_or_limited_broadcast() {
+    let interface = Ipv4Addr::new(192, 0, 2, 10);
+    let on = |netmask: Option<Ipv4Addr>, broadcast| {
+        let mut plan = plan(interface, 0xBAC0, true);
+        plan.broadcast = broadcast;
+        plan.local = Some(LocalInterface {
+            index: Some(2),
+            netmask,
+            up: true,
+        });
+        socket::check_broadcast(&plan)
+    };
+    let slash_24 = Some(Ipv4Addr::new(255, 255, 255, 0));
+    for broadcast in [
+        Ipv4Addr::new(192, 0, 2, 255),
+        Ipv4Addr::BROADCAST,
+        interface,
+    ] {
+        on(slash_24, broadcast).unwrap();
+    }
+    // Another subnet's broadcast, a host on this one, and any address on a
+    // /32 lose this subnet's broadcasts.
+    for (netmask, broadcast) in [
+        (slash_24, Ipv4Addr::new(198, 51, 100, 255)),
+        (slash_24, Ipv4Addr::new(192, 0, 2, 254)),
+        (Some(Ipv4Addr::BROADCAST), Ipv4Addr::new(192, 0, 2, 255)),
+    ] {
+        let refused = on(netmask, broadcast).expect_err("refused");
+        assert_eq!(
+            refused.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "{broadcast}"
+        );
+    }
+    // Without a netmask to judge by, the bind decides.
+    on(None, Ipv4Addr::new(198, 51, 100, 255)).unwrap();
+}
+
+/// On this host: loopback's subnet broadcast is taken, another subnet's is
+/// refused before anything binds.
+#[test]
+fn check_bind_refuses_another_subnets_broadcast() {
+    let mut addresses = vec![Ipv4Addr::LOCALHOST];
+    // Linux finds 127.0.0.2 on loopback's subnet.
+    if cfg!(target_os = "linux") {
+        addresses.push(Ipv4Addr::new(127, 0, 0, 2));
+    }
+    for interface in addresses {
+        let Some(_) = crate::local_addresses::interface_of(interface).unwrap() else {
+            return eprintln!("skipped: the host reports no interface for {interface}");
+        };
+        let mut wrong = vec![Ipv4Addr::new(192, 0, 2, 255)];
+        if interface != Ipv4Addr::LOCALHOST {
+            // A local address binds fine on Linux, and would hear nothing.
+            wrong.push(Ipv4Addr::LOCALHOST);
+        }
+        for broadcast in wrong {
+            let mut transport = BipTransport::new(interface, 0xBAC0, broadcast);
+            transport.set_share_port_by_address(true);
+            let Err(Error::Transport(refused)) = transport.check_bind() else {
+                panic!("{interface} with {broadcast} must be refused");
+            };
+            assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(
+                refused.to_string().contains("subnet broadcast"),
+                "{refused}"
+            );
+        }
+    }
+    // Loopback's own subnet broadcast, 127.255.255.255, is taken.
+    let local = crate::local_addresses::interface_of(Ipv4Addr::LOCALHOST).unwrap();
+    for attempt in 1..=ATTEMPTS {
+        let port = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut plan = plan(Ipv4Addr::LOCALHOST, port, true);
+        plan.local = local;
+        match socket::bind(plan) {
+            Ok(_) => return,
+            Err(e) if crate::port_ownership::lost_port(attempt, &e) => continue,
+            Err(e) => panic!("loopback's subnet broadcast: {e}"),
+        }
+    }
 }

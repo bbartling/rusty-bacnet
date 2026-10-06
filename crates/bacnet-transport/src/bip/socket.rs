@@ -12,8 +12,11 @@
 //!   and needing an explicit interface and a nonzero port: the socket binds
 //!   `interface:port`, so transports on different addresses of one host can
 //!   share one port, each getting only its own unicast (#1538). Every send
-//!   leaves from that socket, so its source is the interface address. How
-//!   broadcasts arrive differs by OS:
+//!   leaves from that socket, so its source is the interface address. The
+//!   configured broadcast address must be the interface's subnet broadcast
+//!   or 255.255.255.255 (or the interface itself, as loopback tests set it),
+//!   judged by the netmask the host reports. How broadcasts arrive differs by
+//!   OS:
 //!   - Linux delivers a broadcast only to sockets bound to the wildcard
 //!     address or to the broadcast address itself. Receive-only listeners
 //!     bind the configured broadcast address and 255.255.255.255 with
@@ -40,8 +43,11 @@
 //!   The receive loop reads the address socket and the listeners fairly, in
 //!   no fixed order, so a broadcast and a unicast that arrive together may be
 //!   handled in either order; a unicast that depends on a broadcast sent just
-//!   before it can be handled first. A listener that fails is closed, and
-//!   unicast goes on.
+//!   before it can be handled first. A listener on 255.255.255.255 or
+//!   `0.0.0.0` hears every interface, so it keeps only what arrived on the
+//!   transport's own (the index from `IP_PKTINFO` on Linux, `IP_RECVIF` on
+//!   macOS and the BSDs). A listener that fails is closed, and unicast goes
+//!   on.
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -49,6 +55,8 @@ use std::{ops::Deref, sync::Arc};
 
 use bacnet_types::error::Error;
 use tokio::net::UdpSocket;
+
+use crate::local_addresses::LocalInterface;
 
 /// What a socket is for, which decides how it shares its port.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +122,9 @@ pub(super) struct BindPlan {
     pub(super) by_address: bool,
     /// The configured broadcast address.
     pub(super) broadcast: Ipv4Addr,
+    /// What the host reports about the interface, looked up for
+    /// per-address mode only.
+    pub(super) local: Option<LocalInterface>,
 }
 
 /// The sockets one start binds: the one every send leaves from, and in
@@ -128,20 +139,70 @@ impl super::BipTransport {
     /// [`start`](crate::port::TransportPort::start) would, with the same
     /// options, and release them. Another socket can still take the port
     /// before the real start, which stays authoritative.
+    /// With per-address mode it lists the host's interfaces, which can take
+    /// a moment on a host with many adapters.
     pub fn check_bind(&self) -> Result<(), Error> {
         probe_interface(self.interface)?;
-        bind(self.bind_plan()).map(drop).map_err(Error::Transport)
+        let mut plan = self.bind_plan();
+        if plan.by_address {
+            plan.local = crate::local_addresses::interface_of(plan.interface)
+                .ok()
+                .flatten();
+        }
+        bind(plan).map(drop).map_err(Error::Transport)
     }
 
-    pub(super) fn bind_plan(&self) -> BindPlan {
+    /// What `start()` binds. In per-address mode it looks the interface up
+    /// on a blocking thread.
+    pub(super) async fn bind_plan_for_start(&self) -> BindPlan {
+        let mut plan = self.bind_plan();
+        if plan.by_address {
+            let ip = plan.interface;
+            let lookup =
+                tokio::task::spawn_blocking(move || crate::local_addresses::interface_of(ip));
+            plan.local = lookup.await.ok().and_then(Result::ok).flatten();
+        }
+        plan
+    }
+
+    fn bind_plan(&self) -> BindPlan {
         BindPlan {
             interface: self.interface,
             port: self.port,
             share_port: self.share_port,
             by_address: self.share_port_by_address,
             broadcast: self.broadcast_address,
+            local: None,
         }
     }
+}
+
+/// In per-address mode the configured broadcast address must be the
+/// interface's subnet broadcast, 255.255.255.255, or the interface itself
+/// (as a loopback test sets it up, with no listener for it). Another address
+/// would lose this subnet's directed broadcasts: on Linux a listener binds
+/// it, and any local address binds without complaint. Where the host
+/// reports no netmask for the interface, the bind decides.
+pub(super) fn check_broadcast(plan: &BindPlan) -> io::Result<()> {
+    let (interface, broadcast) = (plan.interface, plan.broadcast);
+    let Some(local) = plan.local.filter(|local| local.netmask.is_some()) else {
+        return Ok(());
+    };
+    let expected = local.subnet_broadcast(interface);
+    if broadcast.is_broadcast() || broadcast == interface || expected == Some(broadcast) {
+        return Ok(());
+    }
+    let subnet = match expected {
+        Some(expected) => format!("the subnet broadcast of {interface} ({expected})"),
+        None => format!("a subnet broadcast: {interface} has none"),
+    };
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "the B/IP broadcast address {broadcast} is neither {subnet} nor 255.255.255.255, \
+             so a transport sharing its port by address would lose this subnet's broadcasts"
+        ),
+    ))
 }
 
 /// Fail on an interface address this host doesn't have. A wildcard bind
@@ -180,19 +241,21 @@ pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
              address and a nonzero port",
         ));
     }
+    check_broadcast(&plan)?;
     let primary = bound(SocketRole::Address, plan.interface)?;
     let mut listeners = Vec::new();
+    let down = plan.local.is_some_and(|local| !local.up);
     for ip in listener_addresses(plan.interface, plan.broadcast) {
         let listener = bound(SocketRole::BroadcastListener, ip).map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "could not bind the B/IP broadcast listener to {ip}:{} ({e}); on Linux the \
-                     broadcast address must be the interface's subnet broadcast or \
-                     255.255.255.255",
-                    plan.port
-                ),
-            )
+            let reason = if down {
+                format!("the interface of {} is down: {e}", plan.interface)
+            } else {
+                e.to_string()
+            };
+            let port = plan.port;
+            let message =
+                format!("could not bind the B/IP broadcast listener to {ip}:{port} ({reason})");
+            io::Error::new(e.kind(), message)
         })?;
         listeners.push(listener);
     }

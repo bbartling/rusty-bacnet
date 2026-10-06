@@ -252,6 +252,20 @@ pub(super) struct IngressAddresses {
     pub(super) unicast_ips: Vec<Ipv4Addr>,
     /// Whether the socket is bound to 0.0.0.0 rather than an interface.
     pub(super) wildcard_bind: bool,
+    /// In per-address mode, the index of the interface the transport is
+    /// bound to, when the host reports it. The broadcast listeners keep only
+    /// what arrived on it.
+    pub(super) listener_interface: Option<u32>,
+}
+
+/// Whether a datagram a broadcast listener read came in on another
+/// interface than the transport's (#1538). A listener bound to the limited
+/// broadcast (Linux) or the wildcard address (macOS and the BSDs) gets the
+/// broadcasts of every interface on the port, and one sent on another
+/// network is not this network's. With either index unknown (or zero, which
+/// names no interface), it stays.
+pub(super) fn arrived_elsewhere(listener_interface: Option<u32>, arrival: Option<u32>) -> bool {
+    matches!((listener_interface, arrival), (Some(own), Some(arrival)) if arrival != 0 && own != arrival)
 }
 
 /// Decode one received datagram and hand it to the BVLL handler, unless its
@@ -302,6 +316,15 @@ pub(super) async fn handle_datagram(
         debug!(
             destination = %received.destination,
             "Dropping unicast on the B/IP broadcast listener"
+        );
+        return;
+    }
+    if arrival == Arrival::BroadcastListener
+        && arrived_elsewhere(local.listener_interface, received.arrival_index)
+    {
+        debug!(
+            arrival = ?received.arrival_index,
+            "Dropping a broadcast that arrived on another interface"
         );
         return;
     }
