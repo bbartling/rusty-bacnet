@@ -7,6 +7,9 @@ use bacnet_types::constructed::BACnetRecipient;
 
 #[path = "local_write_finish.rs"]
 mod finish;
+
+#[path = "local_access_inputs.rs"]
+mod access_inputs;
 use finish::local_runtime;
 pub(super) use finish::Committed;
 
@@ -30,7 +33,7 @@ mod local_index_staged_release_tests;
 ///
 /// Inputs and noncommandable Values distinguish application updates from
 /// network-equivalent writes, including their Out_Of_Service ownership checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum LocalWrite<'s> {
     /// A trusted local program performing a network-equivalent property write.
     Property {
@@ -49,6 +52,9 @@ pub(super) enum LocalWrite<'s> {
     ApplicationAveragingMiss,
     /// The application supplying a Life Safety object's `Tracking_Value`.
     ApplicationTrackingValue,
+    /// The application reporting an access-control object's input: an
+    /// access event, a credential read or a door's hardware state (#1132).
+    ApplicationAccessInput(&'s bacnet_objects::access_control::AccessControlInput),
     /// One value of an inbound WriteGroup for a Channel's `Present_Value`, at
     /// the priority the request gave it (Clause 15.11). Under the write guard
     /// the Channel takes it only while its Control_Groups still holds `group`
@@ -758,7 +764,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationControlledVariableValue
                 | LocalWrite::ApplicationAveragingSample
                 | LocalWrite::ApplicationAveragingMiss
-                | LocalWrite::ApplicationTrackingValue => None,
+                | LocalWrite::ApplicationTrackingValue
+                | LocalWrite::ApplicationAccessInput(_) => None,
             };
             let value = match write {
                 LocalWrite::Property { property, .. } => {
@@ -793,6 +800,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationAveragingSample
                 | LocalWrite::ApplicationAveragingMiss
                 | LocalWrite::ApplicationTrackingValue
+                | LocalWrite::ApplicationAccessInput(_)
                 | LocalWrite::WriteGroup { .. } => None,
             };
             let command_origin =
@@ -827,6 +835,9 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     }
                     LocalWrite::ApplicationTrackingValue => {
                         object.set_tracking_value_internal(value)
+                    }
+                    LocalWrite::ApplicationAccessInput(input) => {
+                        object.report_access_input_internal(input.clone())
                     }
                     LocalWrite::WriteGroup { priority, .. } => object.write_property(
                         PropertyIdentifier::PRESENT_VALUE,

@@ -281,6 +281,8 @@ fn property_metadata_access_point_exact_sets_readable_rows_and_indexed_list() {
         P::NUMBER_OF_AUTHENTICATION_POLICIES,
         P::AUTHORIZATION_MODE,
         P::PRIORITY_FOR_WRITING,
+        // The optional factor of each event (#1132).
+        P::ACCESS_EVENT_AUTHENTICATION_FACTOR,
     ];
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -343,6 +345,14 @@ fn property_metadata_access_point_exact_sets_readable_rows_and_indexed_list() {
             .read_property(P::ACCESS_EVENT_CREDENTIAL, None)
             .unwrap(),
         PropertyValue::ApplicationData(vec![0x1C, 0x08, 0x3F, 0xFF, 0xFF])
+    );
+    // And the UNDEFINED factor: format type [0] 0, class [1] 0, no value
+    // [2] (Clause 12.31.31).
+    assert_eq!(
+        object
+            .read_property(P::ACCESS_EVENT_AUTHENTICATION_FACTOR, None)
+            .unwrap(),
+        PropertyValue::ApplicationData(vec![0x09, 0x00, 0x19, 0x00, 0x28])
     );
     // Access_Event_Time is one BACnetTimeStamp, so an index is rejected;
     // Access_Doors is a BACnetARRAY and takes one (#1169).
@@ -699,12 +709,11 @@ fn property_metadata_access_trio_unserved_rows_stay_unknown() {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
     assert_unserved(&mut door, P::DOOR_UNLOCK_DELAY_TIME);
     assert_unserved(&mut door, P::MAINTENANCE_REQUIRED);
-    // Access_Event_Authentication_Factor is a Table 12-36 O row with no read
-    // arm; Present_Value is no Table 12-36 row (#1064). Authentication_Status
-    // is served (#1284). The two policy arrays are served only once the
-    // application sets them (#1325).
+    // Present_Value is no Table 12-36 row (#1064). Authentication_Status
+    // (#1284) and Access_Event_Authentication_Factor (#1132) are served. The
+    // two policy arrays are served only once the application sets them
+    // (#1325).
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
-    assert_unserved(&mut point, P::ACCESS_EVENT_AUTHENTICATION_FACTOR);
     assert_unserved(&mut point, P::PRESENT_VALUE);
     assert_unserved(&mut point, P::AUTHENTICATION_POLICY_LIST);
     assert_unserved(&mut point, P::AUTHENTICATION_POLICY_NAMES);

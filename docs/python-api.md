@@ -3076,8 +3076,8 @@ an Accompaniment the object refuses raises `BacnetProtocolError`.
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:
 Door_Alarm_State on a door; Access_Event (in place of Present_Value),
-Access_Event_Tag, Access_Event_Time and Access_Event_Credential on an Access
-Point; Update_Time on a
+Access_Event_Tag, Access_Event_Time, Access_Event_Credential and
+Access_Event_Authentication_Factor on an Access Point; Update_Time on a
 Credential Data Input; and Requested_Shed_Level, Start_Time and Shed_Duration
 on a Load Control. While a door's Out_Of_Service is TRUE, clients can write
 its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30
@@ -3096,6 +3096,21 @@ each sends the point's COV report. Supported_Formats,
 Supported_Format_Classes, Door_Members and Access_Doors read as arrays (index
 0 is the size), each reference and format in the form its keyword argument
 takes (see [typed constructed values](#typed-constructed-values)).
+
+A running server takes these objects' inputs from the application (#1132):
+`await server.report_access_event_local(point, event, tag, time=...,
+credential=..., authentication_factor=...)` records an access event,
+`await server.report_credential_read_local(reader, (format_type,
+format_class, value), update_time=...)` a reader's read, and
+`await server.report_door_state_local(door, door_status=...,
+lock_status=..., door_alarm_state=...)` the door's hardware state. A time
+left out is the Device clock's, a credential left out the no-credential
+reference and a factor left out the UNDEFINED one. Each changes its values
+together, sends the object's COV report when its trigger moves and runs the
+door's event algorithm at once. A value the object refuses raises
+VALUE_OUT_OF_RANGE with nothing changed; while its Out_Of_Service is TRUE
+every input is refused with WRITE_ACCESS_DENIED; another object raises
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 
 #### Transportation
 

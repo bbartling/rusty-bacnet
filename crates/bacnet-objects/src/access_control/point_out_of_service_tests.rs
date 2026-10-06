@@ -35,7 +35,11 @@ fn point() -> AccessPointObject {
 /// Record GRANTED to Access Credential 3 in transaction `tag` at 09:30.
 fn granted_at(point: &mut AccessPointObject, tag: u64) {
     point
-        .set_access_event(AccessEvent::GRANTED, tag, stamp(9), Some(credential()))
+        .set_access_event(AccessEventReport {
+            time: Some(stamp(9)),
+            credential: Some(credential()),
+            ..AccessEventReport::new(AccessEvent::GRANTED, tag)
+        })
         .unwrap();
 }
 

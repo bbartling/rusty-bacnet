@@ -3839,6 +3839,82 @@ class BACnetServer:
         """
         ...
 
+    def report_access_event_local(
+        self,
+        object_id: ObjectIdentifier,
+        event: int,
+        tag: int,
+        *,
+        time: Optional[BACnetTimeStamp] = None,
+        credential: Optional[
+            ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]
+        ] = None,
+        authentication_factor: Optional[tuple[int, int, bytes]] = None,
+    ) -> Awaitable[None]:
+        """Report an access event at an Access Point the server holds.
+
+        Access_Event (``event``, a BACnetAccessEvent number),
+        Access_Event_Tag (``tag``, the access transaction), Access_Event_Time
+        (``time``, the Device clock's when omitted), Access_Event_Credential
+        (``credential``, the no-credential reference when omitted) and
+        Access_Event_Authentication_Factor (``authentication_factor`` as
+        ``(format_type, format_class, value)``, the UNDEFINED factor when
+        omitted) change together. A credential that isn't an Access
+        Credential, or a factor format outside the closed production, raises
+        VALUE_OUT_OF_RANGE. While the point is out of service the event is
+        refused with WRITE_ACCESS_DENIED and nothing changes. An unknown
+        object raises UNKNOWN_OBJECT and any object other than an Access
+        Point OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new time sends the
+        point's COV report.
+        """
+        ...
+
+    def report_credential_read_local(
+        self,
+        object_id: ObjectIdentifier,
+        factor: tuple[int, int, bytes],
+        *,
+        update_time: Optional[BACnetTimeStamp] = None,
+    ) -> Awaitable[None]:
+        """Report a factor a Credential Data Input's reader has read.
+
+        Present_Value takes ``factor``, ``(format_type, format_class,
+        value)``, and Update_Time ``update_time``, the Device clock's when
+        omitted, together. The factor must name one of the reader's
+        ``supported_formats`` with its class, or be the UNDEFINED (0) or
+        ERROR (1) factor with class 0, else VALUE_OUT_OF_RANGE. While the
+        reader is out of service the read is refused with
+        WRITE_ACCESS_DENIED and nothing changes. An unknown object raises
+        UNKNOWN_OBJECT and any object other than a Credential Data Input
+        OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new Update_Time sends the
+        reader's COV report.
+        """
+        ...
+
+    def report_door_state_local(
+        self,
+        object_id: ObjectIdentifier,
+        *,
+        door_status: Optional[int] = None,
+        lock_status: Optional[int] = None,
+        door_alarm_state: Optional[int] = None,
+    ) -> Awaitable[None]:
+        """Report an Access Door's hardware state.
+
+        Whichever of Door_Status, Lock_Status and Door_Alarm_State is given,
+        as BACnetDoorStatus, BACnetLockStatus and BACnetDoorAlarmState
+        numbers, changes together; the others keep their values. A number
+        outside its production, or an alarm state the door's Alarm_Values,
+        Fault_Values and Masked_Alarm_Values don't admit, raises
+        VALUE_OUT_OF_RANGE and nothing changes. While the door is out of
+        service the report is refused with WRITE_ACCESS_DENIED. An unknown
+        object raises UNKNOWN_OBJECT and any object other than an Access
+        Door OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new Door_Alarm_State
+        sends the door's COV report, and the door's event algorithm sees it
+        at once.
+        """
+        ...
+
     def set_tracking_value_local(
         self,
         object_id: ObjectIdentifier,

@@ -3,6 +3,7 @@
 
 use super::fixtures::{address, clock, day, monotonic, noon, oid, schedule_write, waker};
 use super::probe::{CUSTOM, CUSTOM_LIST};
+use bacnet_objects::access_control::{AccessControlInput, DoorStateReport};
 use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
@@ -18,7 +19,8 @@ use bacnet_types::constructed::{
     EventLogDatum, LogData, LogDatum, LogValue,
 };
 use bacnet_types::enums::{
-    AuditLevel, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P, Reliability,
+    AuditLevel, DoorStatus, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P,
+    Reliability,
 };
 use bacnet_types::primitives::{BACnetTimeStamp, Date, PropertyValue};
 use std::time::Duration;
@@ -448,6 +450,16 @@ pub const COMMANDS: &[(&str, Command)] = &[
         format!(
             "{:?}",
             o.set_tracking_value_internal(PropertyValue::Unsigned(4))
+        )
+    }),
+    ("report_access_input_internal", |o| {
+        let report = DoorStateReport {
+            door_status: Some(DoorStatus::OPENED),
+            ..DoorStateReport::default()
+        };
+        format!(
+            "{:?}",
+            o.report_access_input_internal(AccessControlInput::DoorState(report))
         )
     }),
     ("set_controlled_variable_value_internal", |o| {

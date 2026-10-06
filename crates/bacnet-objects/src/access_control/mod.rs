@@ -156,6 +156,7 @@ mod credential_rules;
 mod door;
 mod door_alarm;
 mod door_out_of_service;
+mod input;
 mod metadata_identity;
 mod metadata_topology;
 mod point;
@@ -169,6 +170,7 @@ mod zone_out_of_service;
 pub use credential::*;
 pub use credential_data_input::*;
 pub use door::*;
+pub use input::*;
 pub use point::*;
 pub use rights::*;
 pub use user::*;
@@ -192,6 +194,8 @@ mod door_alarm_tests;
 mod door_out_of_service_tests;
 #[cfg(test)]
 mod door_pulse_tests;
+#[cfg(test)]
+mod input_tests;
 #[cfg(test)]
 mod point_authorization_tests;
 #[cfg(test)]

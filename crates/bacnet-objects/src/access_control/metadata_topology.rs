@@ -73,7 +73,9 @@ use crate::property_metadata::{
 // present once the application sets the policies, before Property_List.
 // The point's Reliability can read CONFIGURATION_ERROR since #1325, so
 // Clause 12.31.8 opens it to writes while out of service:
-// RequiredRead/WhenOutOfService.
+// RequiredRead/WhenOutOfService. Access_Event_Authentication_Factor (#1132)
+// carries the table O code with no write arm, so Optional/ReadOnly, after
+// Priority_For_Writing.
 // Zone Global_Identifier carries the table W code with the routed Unsigned
 // arm, so RequiredWrite/Always. Table 12-37 has neither Present_Value nor
 // Access_Doors, so the zone serves neither (#1064 removed the
@@ -232,6 +234,12 @@ const ACCESS_POINT_BASE: &[PropertyMetadata] = &[
     ),
     PropertyMetadata::new(P::AUTHORIZATION_MODE, RequiredRead, None, Always),
     PropertyMetadata::new(P::PRIORITY_FOR_WRITING, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(
+        P::ACCESS_EVENT_AUTHENTICATION_FACTOR,
+        Optional,
+        None,
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 

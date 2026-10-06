@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
-use bacnet_types::constructed::BACnetAuthenticationPolicy;
+use bacnet_encoding::constructed::encode_authentication_factor;
+use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthenticationPolicy};
 use bacnet_types::enums::AuthorizationMode;
 
+use super::credential_data_input_formats::{is_factor_type, undefined_factor};
 use super::point_authorization::Authorization;
 use super::*;
 use crate::clock::ClockReader;
@@ -26,9 +28,16 @@ use crate::clock::ClockReader;
 /// Out_Of_Service starts a new one: the tag moves on by one (wrapping at the
 /// top of the Unsigned range), and the time comes from the Device clock. A
 /// write that leaves Out_Of_Service as it was, NULL included, records
-/// nothing. No credential belongs to an edge, so each one stores the
-/// no-credential reference in Access_Event_Credential (Clause 12.31.30).
-/// The point doesn't serve Access_Event_Authentication_Factor.
+/// nothing. No credential or factor belongs to an edge, so each one stores
+/// the no-credential reference in Access_Event_Credential (Clause 12.31.30)
+/// and the UNDEFINED factor in Access_Event_Authentication_Factor (Clause
+/// 12.31.31).
+///
+/// The application's own access events reach a point the server holds
+/// through `BACnetServer::report_access_event_local` (#1132), which refuses
+/// them while Out_Of_Service is TRUE: the point then performs no
+/// authentication or authorization (Clause 12.31.8), so it has no events of
+/// its own to report.
 ///
 /// Authentication_Status is the status the application reports for its
 /// authentication process (Clause 12.31.9; #1284), READY until it reports
@@ -76,6 +85,9 @@ pub struct AccessPointObject {
     access_event_tag: u64,
     access_event_time: BACnetTimeStamp,
     access_event_credential: BACnetDeviceObjectReference,
+    /// Access_Event_Authentication_Factor, the UNDEFINED factor until an
+    /// event carries one.
+    access_event_authentication_factor: BACnetAuthenticationFactor,
     /// The status the application reports; DISABLED is served instead while
     /// Out_Of_Service is TRUE.
     authentication_status: AuthenticationStatus,
@@ -103,6 +115,7 @@ impl AccessPointObject {
             access_event_tag: 0,
             access_event_time: never_updated(),
             access_event_credential: no_credential(),
+            access_event_authentication_factor: undefined_factor(),
             authentication_status: AuthenticationStatus::READY,
             access_doors: Vec::new(),
             authorization: Authorization::new(),
@@ -115,39 +128,39 @@ impl AccessPointObject {
     }
 
     /// Record the most recent access event: Access_Event, Access_Event_Tag,
-    /// Access_Event_Time and Access_Event_Credential, which the
-    /// application's access logic produces. They change together, as
-    /// Clause 12.31.27.1 has them stored for each event.
+    /// Access_Event_Time, Access_Event_Credential and
+    /// Access_Event_Authentication_Factor, which the application's access
+    /// logic produces. They change together, as Clause 12.31.27.1 has them
+    /// stored for each event; [`AccessEventReport`] documents each field.
     ///
     /// Access_Event_Time is a `BACnetTimeStamp` (Clause 12.31.29) and goes
-    /// out in its Clause 21 CHOICE form. A change of it triggers a SubscribeCOV
-    /// notification; the other three only ride along (Table 13-1). Over the
-    /// network all four stay read-only.
+    /// out in its Clause 21 CHOICE form. A report without one is stamped
+    /// from the Device clock, or, with no usable clock, with the tag folded
+    /// into a sequence number, as an Out_Of_Service edge is. A change of the
+    /// time triggers a SubscribeCOV notification; the other four only ride
+    /// along (Table 13-1). Over the network all five stay read-only.
     ///
-    /// `credential` names the Access Credential object behind the event.
-    /// `None` stores the no-credential reference, instance 4194303, for an
-    /// event no credential belongs to or one whose credential is unknown or
-    /// kept back (Clause 12.31.30). Given explicitly, that reference carries
-    /// 4194303 as the object instance and, when it names a device, as the
-    /// device instance too. Refused with VALUE_OUT_OF_RANGE, with none of the
-    /// four changing: a reference to another object type, one whose device
-    /// identifier isn't a Device (#1285), and one with 4194303 in only one of
+    /// The credential, when given, names the Access Credential object
+    /// behind the event; without one the point stores the no-credential
+    /// reference, instance 4194303, for an event no credential belongs to or
+    /// one whose credential is unknown or kept back (Clause 12.31.30). Given
+    /// explicitly, that reference carries 4194303 as the object instance
+    /// and, when it names a device, as the device instance too. The factor
+    /// is stored as given, or the UNDEFINED factor without one (Clause
+    /// 12.31.31). Refused with VALUE_OUT_OF_RANGE, with none of the five
+    /// changing: a reference to another object type, one whose device
+    /// identifier isn't a Device (#1285), one with 4194303 in only one of
     /// the two instances, which is neither a credential nor the
-    /// no-credential reference. Access_Event_Credential has no network write
-    /// route, so this setter is the only check.
+    /// no-credential reference, and a factor whose format type isn't a
+    /// named BACnetAuthenticationFactorType. These rows have no network
+    /// write route, so this setter is the only check.
     ///
-    /// While Out_Of_Service is TRUE the point performs no authentication or
-    /// authorization (Clause 12.31.8), so its access logic has nothing to
-    /// report until the return to service; the point leaves that to the
-    /// application rather than refusing the call.
-    pub fn set_access_event(
-        &mut self,
-        event: AccessEvent,
-        tag: u64,
-        time: BACnetTimeStamp,
-        credential: Option<BACnetDeviceObjectReference>,
-    ) -> Result<(), Error> {
-        let credential = credential.unwrap_or_else(no_credential);
+    /// This setter takes an event in or out of service, to set a point up
+    /// before the server holds it. A running server's route,
+    /// `BACnetServer::report_access_event_local`, refuses one while
+    /// Out_Of_Service is TRUE (#1132).
+    pub fn set_access_event(&mut self, report: AccessEventReport) -> Result<(), Error> {
+        let credential = report.credential.unwrap_or_else(no_credential);
         crate::device_reference::check_device_member(credential.device_identifier)?;
         if credential.object_identifier.object_type() != ObjectType::ACCESS_CREDENTIAL {
             return Err(common::value_out_of_range_error());
@@ -158,10 +171,20 @@ impl AccessPointObject {
         }) {
             return Err(common::value_out_of_range_error());
         }
-        self.access_event = event;
+        let factor = report
+            .authentication_factor
+            .unwrap_or_else(undefined_factor);
+        if !is_factor_type(factor.format_type) {
+            return Err(common::value_out_of_range_error());
+        }
+        let tag = report.tag;
+        self.access_event = report.event;
         self.access_event_tag = tag;
-        self.access_event_time = time;
+        self.access_event_time = report
+            .time
+            .unwrap_or_else(|| update_stamp(self.clock.as_deref(), || tag_sequence(tag)));
         self.access_event_credential = credential;
+        self.access_event_authentication_factor = factor;
         Ok(())
     }
 
@@ -306,6 +329,7 @@ impl AccessPointObject {
         self.access_event_tag = tag;
         self.access_event_time = update_stamp(self.clock.as_deref(), || tag_sequence(tag));
         self.access_event_credential = no_credential();
+        self.access_event_authentication_factor = undefined_factor();
     }
 }
 
@@ -366,6 +390,11 @@ impl BACnetObject for AccessPointObject {
             p if p == PropertyIdentifier::ACCESS_EVENT_CREDENTIAL => Ok(
                 crate::device_reference::reference_value(&self.access_event_credential),
             ),
+            p if p == PropertyIdentifier::ACCESS_EVENT_AUTHENTICATION_FACTOR => {
+                let mut buf = BytesMut::new();
+                encode_authentication_factor(&mut buf, &self.access_event_authentication_factor);
+                Ok(PropertyValue::ApplicationData(buf.to_vec()))
+            }
             p if p == PropertyIdentifier::AUTHENTICATION_STATUS => Ok(PropertyValue::Enumerated(
                 self.authentication_status().to_raw(),
             )),
@@ -438,6 +467,20 @@ impl BACnetObject for AccessPointObject {
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
+    }
+
+    /// Take an access event the application reports (#1132), through
+    /// [`Self::set_access_event`]; refused with WRITE_ACCESS_DENIED while
+    /// Out_Of_Service is TRUE, and any other record with
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
+        let AccessControlInput::AccessEvent(report) = input else {
+            return Err(common::optional_functionality_not_supported_error());
+        };
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        self.set_access_event(report)
     }
 }
 

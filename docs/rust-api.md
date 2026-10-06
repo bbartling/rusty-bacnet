@@ -3727,18 +3727,35 @@ Access Door, Access Point and Credential Data Input support COV (Table 13-1).
 A door's SubscribeCOV report carries Present_Value, Status_Flags and
 Door_Alarm_State; a Door_Alarm_State change sends one. An Access Point has no
 Present_Value, so its report starts with Access_Event, then Status_Flags,
-Access_Event_Tag, Access_Event_Time and Access_Event_Credential, and only an
-Access_Event_Time or Status_Flags change sends one. A Credential Data Input
-report carries Update_Time, whose change sends one. The application sets
-these values before adding the object with
-`AccessDoorObject::set_door_alarm_state`,
-`AccessPointObject::set_access_event(event, tag, time, credential)` (its time
-a `BACnetTimeStamp`, its credential an Access Credential reference or `None`
-for the no-credential reference, instance 4194303; another object type, or
-4194303 in only one of the object and device instances, is
+Access_Event_Tag, Access_Event_Time, Access_Event_Credential and
+Access_Event_Authentication_Factor, and only an Access_Event_Time or
+Status_Flags change sends one. A Credential Data Input report carries
+Update_Time, whose change sends one. The application sets these values
+before adding the object with `AccessDoorObject::set_door_alarm_state`,
+`AccessPointObject::set_access_event` (an `AccessEventReport`: the event,
+its tag, a `BACnetTimeStamp` or `None` for the Device clock's time, an
+Access Credential reference or `None` for the no-credential reference,
+instance 4194303, and a `BACnetAuthenticationFactor` or `None` for the
+UNDEFINED one; another object type, 4194303 in only one of the object and
+device instances, or a factor format outside the closed production is
 VALUE_OUT_OF_RANGE) and `CredentialDataInputObject::set_present_value` (the
 factor read and its Update_Time), and a door's Door_Status and Lock_Status
 with `set_door_status` and `set_lock_status`.
+
+Once the server holds them, the application reports these inputs through
+`BACnetServer::report_access_event_local`,
+`report_credential_read_local` (a `CredentialReadReport`: the factor and an
+optional time, stamped from the Device clock when absent) and
+`report_door_state_local` (a `DoorStateReport`: any of Door_Status,
+Lock_Status and Door_Alarm_State) (#1132). Each record changes its values
+together as one local write, so the COV report and the event pass follow it
+as they follow `write_local`, and the call must run inside a Tokio runtime.
+Each checks its values as the setters do, all or nothing, and a door's
+values against their productions too. While its Out_Of_Service is TRUE
+the route refuses the input with WRITE_ACCESS_DENIED and changes nothing:
+the point performs no authentication then, and a client may be simulating
+the reader or the door. Any other object fails with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 
 An Access Point's Authentication_Status is READY until the application
 reports another status with `set_authentication_status` (a value past

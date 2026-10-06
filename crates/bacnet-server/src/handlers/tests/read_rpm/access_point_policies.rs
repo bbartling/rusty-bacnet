@@ -77,9 +77,9 @@ fn rpm_access_point_policy_arrays_follow_the_application() {
                 ),
                 // The two rows (258 and 259) close the list, before
                 // Property_List.
-                (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 17])),
-                (P::PROPERTY_LIST, Some(16), Ok(&[0x92, 0x01, 0x02])),
-                (P::PROPERTY_LIST, Some(17), Ok(&[0x92, 0x01, 0x03])),
+                (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 18])),
+                (P::PROPERTY_LIST, Some(17), Ok(&[0x92, 0x01, 0x02])),
+                (P::PROPERTY_LIST, Some(18), Ok(&[0x92, 0x01, 0x03])),
             ]
         } else {
             &[
@@ -99,7 +99,7 @@ fn rpm_access_point_policy_arrays_follow_the_application() {
                     None,
                     Err(ErrorCode::UNKNOWN_PROPERTY),
                 ),
-                (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 15])),
+                (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 16])),
             ]
         };
         assert_cases(&db, oid, cases);

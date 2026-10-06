@@ -78,6 +78,8 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::NUMBER_OF_AUTHENTICATION_POLICIES, false, false),
             (P::AUTHORIZATION_MODE, false, true),
             (P::PRIORITY_FOR_WRITING, false, false),
+            // Optional and read-only over the network (#1132).
+            (P::ACCESS_EVENT_AUTHENTICATION_FACTOR, true, false),
             (P::PROPERTY_LIST, false, false),
         ],
         _ => vec![
