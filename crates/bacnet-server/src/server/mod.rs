@@ -570,7 +570,6 @@ pub use dcc_timer::DccState;
 mod binding_probes;
 mod device_bindings;
 mod discovery;
-mod limiter_clock;
 #[doc(hidden)]
 pub use discovery::iam_request_for as discovery_iam_for_test;
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
@@ -597,6 +596,7 @@ pub(crate) mod event_timestamp;
 mod handles;
 mod learned_router_cache;
 mod lifecycle;
+mod limiter_clock;
 mod local_writes;
 mod network_port;
 #[cfg(test)]

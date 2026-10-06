@@ -708,7 +708,15 @@ async fn sc_drop_aborts_hung_primary_restore_failover_disconnect() {
         .await
         .expect("timed out waiting for primary restore handshake")
         .unwrap();
-    wait_for_hub_vmac(&conn, primary_hub_vmac, Duration::from_millis(250)).await;
+    // The restore's Disconnect send starts its 750 ms timer once the accept
+    // just sent is handled. Every wait from here needs no timer, so no time
+    // may pass before the last check measures its window.
+    let restored = tokio::time::Instant::now();
+    let watched = &conn;
+    until("restored primary published", || async move {
+        watched.lock().await.hub_vmac == Some(primary_hub_vmac)
+    })
+    .await;
 
     let restoring = &transport;
     until("failover disconnect task", || async move {
@@ -726,7 +734,13 @@ async fn sc_drop_aborts_hung_primary_restore_failover_disconnect() {
 
     // Left running, the restore task's hung Disconnect send would give up at
     // the 750 ms connect timeout and close the socket itself. Waiting less
-    // than that, exact on the paused clock, leaves only the abort to close it.
+    // than that, from the instant its timer started, leaves only the abort to
+    // close it.
+    assert_eq!(
+        tokio::time::Instant::now(),
+        restored,
+        "time passed after the restore"
+    );
     let failover_recv = tokio::time::timeout(Duration::from_millis(749), failover_hub.recv())
         .await
         .expect("old failover socket stayed open after Drop");

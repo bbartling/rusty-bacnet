@@ -71,7 +71,7 @@ impl Bucket {
         let now = limiter_clock::now();
         state.credit = state
             .credit
-            .saturating_add(now.duration_since(state.last).as_nanos())
+            .saturating_add(now.saturating_duration_since(state.last).as_nanos())
             .min(self.maximum);
         state.last = now;
         if state.credit < self.interval_ns {

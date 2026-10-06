@@ -171,10 +171,6 @@ async fn a_flood_from_one_source_is_held_to_its_allowance() {
     h.server.stop().await.unwrap();
 }
 
-/// With Notification_Threshold 2, the device's own alarm and return to
-/// normal make one BUFFER_READY report to `PEER`, carrying both counts. The
-/// report goes in no log and doesn't count toward the next one, which comes
-/// after two more records.
 /// The receive path reads the allowance's window on tokio's clock (#1550),
 /// so it closes exactly one second after it opened: a notification 1 ms
 /// before then is still over the allowance, and one at the second is logged.
@@ -211,6 +207,10 @@ async fn a_source_allowance_reopens_exactly_one_window_later() {
     h.server.stop().await.unwrap();
 }
 
+/// With Notification_Threshold 2, the device's own alarm and return to
+/// normal make one BUFFER_READY report to `PEER`, carrying both counts. The
+/// report goes in no log and doesn't count toward the next one, which comes
+/// after two more records.
 #[tokio::test(start_paused = true)]
 async fn every_two_records_make_one_report_that_adds_no_record() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| collecting(db, 2)).await;
