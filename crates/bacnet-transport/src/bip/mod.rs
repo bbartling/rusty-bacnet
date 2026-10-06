@@ -190,8 +190,10 @@ impl BipTransport {
     /// listeners, read in no fixed order against the address socket: a
     /// unicast that depends on a broadcast sent just before it can be handled
     /// first. The listeners keep only broadcasts that arrived on the
-    /// interface's own link. The configured broadcast address must be the
-    /// interface's subnet broadcast or 255.255.255.255, or `start()` fails. On
+    /// interface's own link, as looked up at start: restart the transport
+    /// after its interface changes. The configured broadcast address must be
+    /// the interface's subnet broadcast or 255.255.255.255 (a loopback
+    /// interface may also name itself), or `start()` fails. On
     /// Windows one socket claims the address with `SO_EXCLUSIVEADDRUSE`; a
     /// socket already bound to the wildcard address on that port doesn't stop
     /// it, and under Windows' strong host model a multihomed BBMD reaches a
@@ -713,6 +715,7 @@ impl TransportPort for BipTransport {
             unicast_ips: local_unicast_ips,
             wildcard_bind,
             listener_interface,
+            interface_mismatch_seen: Default::default(),
         };
         self.recv_task = Some(tokio::spawn(receive_loop(listeners, ingress, recv_ctx)));
 

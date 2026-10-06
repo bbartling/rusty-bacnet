@@ -99,6 +99,7 @@ fn bound_to(local_ip: Ipv4Addr) -> IngressAddresses {
         unicast_ips: vec![local_ip],
         wildcard_bind: false,
         listener_interface: None,
+        interface_mismatch_seen: Default::default(),
     }
 }
 

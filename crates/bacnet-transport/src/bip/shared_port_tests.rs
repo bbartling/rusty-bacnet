@@ -161,9 +161,11 @@ async fn a_bbmd_and_a_foreign_device_share_a_port_on_two_addresses() {
         Err(why) => return eprintln!("skipped: {why}"),
     };
     let [bbmd_ip, device_ip] = addresses;
-    // Each sets its own address as the broadcast address, so the BBMD's
-    // local broadcast returns to itself; only the forwarding is under test.
-    let [mut bbmd, mut device] = start_on_one_port(addresses, addresses, |i, port, t| {
+    // The BBMD, on loopback, sets its own address as the broadcast address,
+    // so its local broadcast returns to itself; only the forwarding is under
+    // test. A foreign device broadcasts through its BBMD.
+    let broadcasts = [bbmd_ip, Ipv4Addr::BROADCAST];
+    let [mut bbmd, mut device] = start_on_one_port(addresses, broadcasts, |i, port, t| {
         if i == 0 {
             t.enable_bbmd(vec![]);
             t.enable_foreign_device_registration(ForeignDevicePolicy::default());
@@ -341,8 +343,10 @@ async fn a_subnet_broadcast_reaches_a_transport_sharing_its_port_by_address() {
 /// A limited broadcast sent on another interface reaches a loopback
 /// transport's listener (on Linux the 255.255.255.255 listener, on macOS
 /// the wildcard one), which drops it: only broadcasts that arrived on the
-/// transport's own interface count (#1538). Skipped without a default route,
-/// or where the host can't send a limited broadcast.
+/// transport's own interface count (#1538). A control socket bound where
+/// the listener is shows the broadcast did come back to this host. Skipped
+/// without a default route, or where the host can't send a limited
+/// broadcast or doesn't loop it back.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_broadcast_from_another_interface_is_dropped() {
@@ -355,13 +359,31 @@ async fn a_broadcast_from_another_interface_is_dropped() {
         Ipv4Addr::LOCALHOST
     };
     let [mut node] = start_on_one_port([loopback], [Ipv4Addr::BROADCAST], |_, _, _| {}).await;
-    let to = SocketAddrV4::new(Ipv4Addr::BROADCAST, node.address().port());
+    let port = node.address().port();
+    // Shares the port with the listener on the same address and options.
+    let listening = if cfg!(target_os = "linux") {
+        Ipv4Addr::BROADCAST
+    } else {
+        Ipv4Addr::UNSPECIFIED
+    };
+    let control = udp_socket(socket::SocketRole::BroadcastListener).unwrap();
+    control
+        .bind(&SocketAddrV4::new(listening, port).into())
+        .unwrap();
+    let control = UdpSocket::from_std(control.into()).unwrap();
+    let to = SocketAddrV4::new(Ipv4Addr::BROADCAST, port);
     let peer = UdpSocket::bind(SocketAddrV4::new(route, 0)).await.unwrap();
     peer.set_broadcast(true).unwrap();
     let broadcast = frame(BvlcFunction::ORIGINAL_BROADCAST_NPDU, &npdu(8));
     if let Err(e) = peer.send_to(&broadcast, to).await {
         node.transport.stop().await.unwrap();
         return eprintln!("skipped: this host can't send to {to} from {route}: {e}");
+    }
+    let mut seen = [0u8; 64];
+    let looped = timeout(Duration::from_secs(2), control.recv_from(&mut seen)).await;
+    if !matches!(looped, Ok(Ok((len, _))) if seen[..len] == broadcast[..]) {
+        node.transport.stop().await.unwrap();
+        return eprintln!("skipped: this host didn't loop the broadcast to {to} back");
     }
     // The unicast after it is the first NPDU handed up.
     let fence = UdpSocket::bind(SocketAddrV4::new(loopback, 0))

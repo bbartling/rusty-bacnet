@@ -36,7 +36,8 @@ const ATTEMPTS: usize = 3;
 
 /// One unicast address and what its adapter reports about itself.
 #[derive(Clone, Copy, Debug)]
-// The IPv4 listing reads only `ip` and `dad_state`; B/IPv6 reads the rest.
+// The IPv4 listing and interface lookup read `ip`, `dad_state`, `loopback`
+// and `prefix_length`; B/IPv6 reads the rest.
 #[cfg_attr(not(feature = "ipv6"), allow(dead_code))]
 pub(crate) struct UnicastAddress {
     pub(crate) ip: IpAddr,

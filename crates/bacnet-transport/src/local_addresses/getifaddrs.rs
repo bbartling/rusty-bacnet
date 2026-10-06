@@ -159,6 +159,6 @@ pub(crate) fn interface_of(ip: Ipv4Addr) -> io::Result<Option<LocalInterface>> {
     Ok(found.map(|entry| LocalInterface {
         index: (entry.index != 0).then_some(entry.index),
         netmask: entry.netmask,
-        up: entry.flags & libc::IFF_UP as libc::c_uint != 0,
+        broadcast: entry.flags & libc::IFF_BROADCAST as libc::c_uint != 0,
     }))
 }

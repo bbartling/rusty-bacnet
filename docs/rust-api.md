@@ -674,15 +674,19 @@ What changes in this mode:
   A listener that fails is closed with a warning, and unicast goes on.
 - **Broadcast address:** it must be the interface's subnet broadcast,
   judged by the netmask the host reports, or 255.255.255.255; anything else
-  would lose this subnet's broadcasts, so `start()` fails. Where the host
-  reports no netmask, the bind decides. If the interface is down, a Linux
-  listener can't bind its subnet broadcast, and the error says so.
+  would lose this subnet's broadcasts, so `start()` fails. A loopback
+  interface may also name itself, as loopback tests do; no other interface
+  may. Where the host reports no netmask, the bind decides.
 - **Arrival interface:** a listener on 255.255.255.255 (Linux) or `0.0.0.0`
   (macOS and the BSDs) hears every interface, so it keeps only broadcasts
   that arrived on the transport's own, by the index `IP_PKTINFO` (Linux) or
   `IP_RECVIF` (macOS and the BSDs) reports. On a host with several networks,
   such as a router with a port on each, one network's Who-Is doesn't reach
-  the transport on another.
+  the transport on another. The index is looked up when the transport
+  starts, so after its interface changes (a re-plugged adapter, a rebuilt
+  VLAN or bridge, a VPN that reconnects) restart the transport; the first
+  broadcast dropped for arriving elsewhere is logged as a warning naming
+  both indexes.
 - **Linux** delivers a broadcast only to sockets bound to the wildcard address
   or to the broadcast address itself. The listeners bind the configured
   broadcast address and 255.255.255.255 with `SO_REUSEADDR`, which every

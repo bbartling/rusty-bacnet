@@ -190,7 +190,8 @@ pub(crate) fn interface_of(ip: Ipv4Addr) -> io::Result<Option<LocalInterface>> {
         Some(Ipv4Addr::from(u32::MAX.checked_shl(host_bits).unwrap_or(0)))
     };
     let on_subnet = |(own, address): &&(Ipv4Addr, crate::windows_adapters::UnicastAddress)| {
-        netmask(address.prefix_length).is_some_and(|mask| *own & mask == ip & mask)
+        netmask(address.prefix_length)
+            .is_some_and(|mask| !mask.is_unspecified() && *own & mask == ip & mask)
     };
     let found = addresses
         .iter()
@@ -200,7 +201,8 @@ pub(crate) fn interface_of(ip: Ipv4Addr) -> io::Result<Option<LocalInterface>> {
         // Nothing on Windows filters by it.
         index: None,
         netmask: netmask(address.prefix_length),
-        up: address.up,
+        // Windows reports no broadcast flag; its loopback has none.
+        broadcast: !address.loopback,
     }))
 }
 
@@ -211,13 +213,18 @@ pub(crate) struct LocalInterface {
     pub(crate) index: Option<u32>,
     /// The address's netmask, when reported.
     pub(crate) netmask: Option<Ipv4Addr>,
-    /// The interface is up.
-    pub(crate) up: bool,
+    /// The interface is broadcast-capable (`IFF_BROADCAST`): not a
+    /// point-to-point link, a tunnel or loopback. Only tests that send a
+    /// subnet broadcast read it; the broadcast-address check goes by the
+    /// netmask, which Linux loopback's broadcast needs.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) broadcast: bool,
 }
 
 impl LocalInterface {
-    /// The broadcast address of the subnet `ip` is on. A /31 or /32 has
-    /// none.
+    /// The broadcast address of the subnet `ip` is on, from the netmask
+    /// alone. A /31 or /32 has none. Linux loopback has no broadcast flag but
+    /// still routes its subnet broadcast, so the flag is not consulted.
     pub(crate) fn subnet_broadcast(&self, ip: Ipv4Addr) -> Option<Ipv4Addr> {
         let mask = self.netmask?;
         (u32::from(mask).leading_ones() <= 30).then(|| ip | !mask)
@@ -241,11 +248,13 @@ pub(crate) fn route_ipv4() -> Option<Ipv4Addr> {
     }
 }
 
-/// The broadcast address of the subnet that `ip` is on, when the host
-/// reports one: for tests that send a subnet broadcast.
+/// The broadcast address of the subnet that `ip` is on, when its interface
+/// is broadcast-capable and the subnet has one: for tests that send a
+/// subnet broadcast, which a point-to-point link such as a VPN can't carry.
 #[cfg(test)]
 pub(crate) fn subnet_broadcast(ip: Ipv4Addr) -> Option<Ipv4Addr> {
-    interface_of(ip).ok()??.subnet_broadcast(ip)
+    let local = interface_of(ip).ok()??;
+    local.broadcast.then(|| local.subnet_broadcast(ip))?
 }
 
 #[cfg(test)]

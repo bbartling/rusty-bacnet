@@ -252,23 +252,29 @@ async fn start_refuses_sharing_by_address_without_an_address() {
 #[test]
 fn sharing_by_address_takes_only_the_subnet_or_limited_broadcast() {
     let interface = Ipv4Addr::new(192, 0, 2, 10);
-    let on = |netmask: Option<Ipv4Addr>, broadcast| {
+    let check = |interface, netmask: Option<Ipv4Addr>, broadcast| {
         let mut plan = plan(interface, 0xBAC0, true);
         plan.broadcast = broadcast;
         plan.local = Some(LocalInterface {
             index: Some(2),
             netmask,
-            up: true,
+            broadcast: true,
         });
         socket::check_broadcast(&plan)
     };
+    let on = |netmask, broadcast| check(interface, netmask, broadcast);
     let slash_24 = Some(Ipv4Addr::new(255, 255, 255, 0));
-    for broadcast in [
-        Ipv4Addr::new(192, 0, 2, 255),
-        Ipv4Addr::BROADCAST,
-        interface,
-    ] {
+    for broadcast in [Ipv4Addr::new(192, 0, 2, 255), Ipv4Addr::BROADCAST] {
         on(slash_24, broadcast).unwrap();
+    }
+    // A loopback interface may name itself, as loopback tests do, whatever
+    // its netmask; any other interface may not, with or without one.
+    let loopback = Ipv4Addr::LOCALHOST;
+    check(loopback, Some(Ipv4Addr::new(255, 0, 0, 0)), loopback).unwrap();
+    check(loopback, None, loopback).unwrap();
+    for netmask in [slash_24, None] {
+        let refused = on(netmask, interface).expect_err("its own address");
+        assert!(refused.to_string().contains("own address"), "{refused}");
     }
     // Another subnet's broadcast, a host on this one, and any address on a
     // /32 lose this subnet's broadcasts.

@@ -247,6 +247,7 @@ async fn receive_from(
         unicast_ips: vec![LOCAL],
         wildcard_bind: false,
         listener_interface: None,
+        interface_mismatch_seen: Default::default(),
     };
     handle_datagram(frame, &received, Arrival::Primary, &local, ctx).await;
 }

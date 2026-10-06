@@ -14,9 +14,9 @@
 //!   share one port, each getting only its own unicast (#1538). Every send
 //!   leaves from that socket, so its source is the interface address. The
 //!   configured broadcast address must be the interface's subnet broadcast
-//!   or 255.255.255.255 (or the interface itself, as loopback tests set it),
-//!   judged by the netmask the host reports. How broadcasts arrive differs by
-//!   OS:
+//!   or 255.255.255.255 (or, on a loopback interface, the interface itself,
+//!   as loopback tests set it), judged by the netmask the host reports. How
+//!   broadcasts arrive differs by OS:
 //!   - Linux delivers a broadcast only to sockets bound to the wildcard
 //!     address or to the broadcast address itself. Receive-only listeners
 //!     bind the configured broadcast address and 255.255.255.255 with
@@ -145,9 +145,10 @@ impl super::BipTransport {
         probe_interface(self.interface)?;
         let mut plan = self.bind_plan();
         if plan.by_address {
-            plan.local = crate::local_addresses::interface_of(plan.interface)
-                .ok()
-                .flatten();
+            plan.local = looked_up(
+                plan.interface,
+                crate::local_addresses::interface_of(plan.interface),
+            );
         }
         bind(plan).map(drop).map_err(Error::Transport)
     }
@@ -160,7 +161,8 @@ impl super::BipTransport {
             let ip = plan.interface;
             let lookup =
                 tokio::task::spawn_blocking(move || crate::local_addresses::interface_of(ip));
-            plan.local = lookup.await.ok().and_then(Result::ok).flatten();
+            let found = lookup.await.unwrap_or_else(|e| Err(io::Error::other(e)));
+            plan.local = looked_up(ip, found);
         }
         plan
     }
@@ -177,32 +179,53 @@ impl super::BipTransport {
     }
 }
 
+/// The interface lookup's answer. A failed lookup turns off the
+/// broadcast-address check and the arrival-interface filter, so it is
+/// logged.
+fn looked_up(ip: Ipv4Addr, found: io::Result<Option<LocalInterface>>) -> Option<LocalInterface> {
+    found.unwrap_or_else(|error| {
+        tracing::debug!(%ip, %error, "Could not look up the B/IP interface");
+        None
+    })
+}
+
 /// In per-address mode the configured broadcast address must be the
-/// interface's subnet broadcast, 255.255.255.255, or the interface itself
-/// (as a loopback test sets it up, with no listener for it). Another address
-/// would lose this subnet's directed broadcasts: on Linux a listener binds
-/// it, and any local address binds without complaint. Where the host
-/// reports no netmask for the interface, the bind decides.
+/// interface's subnet broadcast or 255.255.255.255, or, on a loopback
+/// interface only, the interface itself (as a loopback test sets it up, with
+/// no listener for it). Another address would lose this subnet's directed
+/// broadcasts: on Linux a listener binds it, and any local address binds
+/// without complaint. Where the host reports no netmask for the interface,
+/// the bind decides.
 pub(super) fn check_broadcast(plan: &BindPlan) -> io::Result<()> {
     let (interface, broadcast) = (plan.interface, plan.broadcast);
+    if broadcast.is_broadcast() || (broadcast == interface && interface.is_loopback()) {
+        return Ok(());
+    }
+    const LOST: &str = "so a transport sharing its port by address would lose this subnet's \
+                        broadcasts";
+    let refused = |reason: String| {
+        let message = format!("the B/IP broadcast address {broadcast} {reason}, {LOST}");
+        Err(io::Error::new(io::ErrorKind::InvalidInput, message))
+    };
+    if broadcast == interface {
+        return refused(
+            "is the interface's own address, which only a loopback interface may use; set the \
+             subnet broadcast or 255.255.255.255"
+                .to_string(),
+        );
+    }
     let Some(local) = plan.local.filter(|local| local.netmask.is_some()) else {
         return Ok(());
     };
-    let expected = local.subnet_broadcast(interface);
-    if broadcast.is_broadcast() || broadcast == interface || expected == Some(broadcast) {
-        return Ok(());
+    match local.subnet_broadcast(interface) {
+        Some(expected) if expected == broadcast => Ok(()),
+        Some(expected) => refused(format!(
+            "is neither the subnet broadcast of {interface} ({expected}) nor 255.255.255.255"
+        )),
+        None => refused(format!(
+            "is not 255.255.255.255, and the subnet of {interface} has no broadcast address"
+        )),
     }
-    let subnet = match expected {
-        Some(expected) => format!("the subnet broadcast of {interface} ({expected})"),
-        None => format!("a subnet broadcast: {interface} has none"),
-    };
-    Err(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!(
-            "the B/IP broadcast address {broadcast} is neither {subnet} nor 255.255.255.255, \
-             so a transport sharing its port by address would lose this subnet's broadcasts"
-        ),
-    ))
 }
 
 /// Fail on an interface address this host doesn't have. A wildcard bind
@@ -244,17 +267,11 @@ pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
     check_broadcast(&plan)?;
     let primary = bound(SocketRole::Address, plan.interface)?;
     let mut listeners = Vec::new();
-    let down = plan.local.is_some_and(|local| !local.up);
     for ip in listener_addresses(plan.interface, plan.broadcast) {
         let listener = bound(SocketRole::BroadcastListener, ip).map_err(|e| {
-            let reason = if down {
-                format!("the interface of {} is down: {e}", plan.interface)
-            } else {
-                e.to_string()
-            };
             let port = plan.port;
             let message =
-                format!("could not bind the B/IP broadcast listener to {ip}:{port} ({reason})");
+                format!("could not bind the B/IP broadcast listener to {ip}:{port} ({e})");
             io::Error::new(e.kind(), message)
         })?;
         listeners.push(listener);

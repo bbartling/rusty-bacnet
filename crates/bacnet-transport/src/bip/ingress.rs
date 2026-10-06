@@ -4,6 +4,7 @@
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use bacnet_types::enums::BvlcFunction;
@@ -256,6 +257,9 @@ pub(super) struct IngressAddresses {
     /// bound to, when the host reports it. The broadcast listeners keep only
     /// what arrived on it.
     pub(super) listener_interface: Option<u32>,
+    /// Set by the first broadcast dropped for arriving on another interface,
+    /// which is logged as a warning; the rest are logged at debug.
+    pub(super) interface_mismatch_seen: AtomicBool,
 }
 
 /// Whether a datagram a broadcast listener read came in on another
@@ -322,10 +326,23 @@ pub(super) async fn handle_datagram(
     if arrival == Arrival::BroadcastListener
         && arrived_elsewhere(local.listener_interface, received.arrival_index)
     {
-        debug!(
-            arrival = ?received.arrival_index,
-            "Dropping a broadcast that arrived on another interface"
-        );
+        let (own, arrival) = (local.listener_interface, received.arrival_index);
+        if local.interface_mismatch_seen.swap(true, Ordering::Relaxed) {
+            debug!(
+                ?own,
+                ?arrival,
+                "Dropping a broadcast that arrived on another interface"
+            );
+        } else {
+            // The index was resolved at start; an interface that came back
+            // with a new one needs a restart.
+            warn!(
+                ?own,
+                ?arrival,
+                "Dropping a broadcast that arrived on another interface than the B/IP \
+                 transport's; if its interface changed since start, restart the transport"
+            );
+        }
         return;
     }
     handle_bvll_message(&msg, (peer.ip().octets(), peer.port()), delivery, ctx).await;

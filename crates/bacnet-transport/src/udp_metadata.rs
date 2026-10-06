@@ -49,6 +49,14 @@ macro_rules! unsupported_udp_metadata_item {
     };
 }
 
+supported_unix_item! {
+/// Room for the control messages one IPv4 or IPv6 datagram carries: packet
+/// info on Linux, or a destination address and a whole link-layer address
+/// (`IP_RECVIF`) on the BSDs, whose padding can take 84 octets on a 32-bit
+/// BSD. `u64` keeps it aligned for any `cmsghdr`.
+type ControlBuffer = [u64; 32];
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum IpVersion {
     V4,
@@ -109,14 +117,14 @@ impl DestinationReceiver {
             iov_base: buf.as_mut_ptr().cast(),
             iov_len: buf.len(),
         };
-        let mut control = [0usize; 16];
+        let mut control: ControlBuffer = [0; 32];
         let mut message: libc::msghdr = unsafe { zeroed() };
         message.msg_name = (&mut peer_storage as *mut libc::sockaddr_storage).cast();
         message.msg_namelen = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
         message.msg_iov = &mut iov;
         message.msg_iovlen = 1;
         message.msg_control = control.as_mut_ptr().cast();
-        message.msg_controllen = size_of::<[usize; 16]>() as _;
+        message.msg_controllen = size_of::<ControlBuffer>() as _;
 
         let received = unsafe { libc::recvmsg(udp_socket.as_raw_fd(), &mut message, 0) };
         if received < 0 {
@@ -261,7 +269,9 @@ fn configure_packet_info(udp_socket: &Socket, version: IpVersion) -> io::Result<
     if result != 0 {
         return Err(io::Error::last_os_error());
     }
-    // IP_RECVDSTADDR carries no interface; IP_RECVIF adds it.
+    // IP_RECVDSTADDR carries no interface; IP_RECVIF adds it. Only a B/IP
+    // transport sharing its port by address reads it, so without it the
+    // socket still works.
     #[cfg(any(
         target_vendor = "apple",
         target_os = "freebsd",
@@ -280,7 +290,8 @@ fn configure_packet_info(udp_socket: &Socket, version: IpVersion) -> io::Result<
             )
         };
         if result != 0 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            tracing::debug!(%error, "IP_RECVIF unavailable; arrival interfaces unknown");
         }
     }
     Ok(())
@@ -642,6 +653,19 @@ unsafe fn windows_destination(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    supported_unix_item! {
+    /// Both control messages a BSD hands an IPv4 datagram fit the buffer, and
+    /// Linux's packet info for either family.
+    #[test]
+    fn the_control_buffer_holds_every_message_a_datagram_carries() {
+        let space = |length: usize| unsafe { libc::CMSG_SPACE(length as _) } as usize;
+        // The BSDs' link-layer socket address is 20 to 56 octets long.
+        let bsd = space(std::mem::size_of::<libc::in_addr>()) + space(56);
+        let linux = space(std::mem::size_of::<libc::in6_pktinfo>()) + space(12);
+        assert!(bsd.max(linux) <= std::mem::size_of::<ControlBuffer>());
+    }
+    }
 
     #[tokio::test]
     async fn ipv4_loopback_destination_is_reported() {
