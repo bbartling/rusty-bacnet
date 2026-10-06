@@ -121,7 +121,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let mut buf = BytesMut::new();
                     encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
-                    let now = Instant::now();
+                    let now = DiscoveryLimiter::now();
                     let is_unicast = !received.is_group && !received.link_layer_group;
                     let (res, directed) = if let Some(ref source_net) = received.source_network {
                         (
@@ -185,7 +185,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 WhoHasObject::Name(name) => WhoHasTarget::Name(name.clone()),
             };
 
-            let now = Instant::now();
+            let now = DiscoveryLimiter::now();
             if discovery_limiter.is_negative_who_has(&target, now) {
                 return;
             }

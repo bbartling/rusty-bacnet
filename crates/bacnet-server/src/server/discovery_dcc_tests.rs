@@ -130,15 +130,18 @@ async fn disable_initiation_holds_back_i_have_and_still_answers_who_is() {
 
 #[tokio::test(start_paused = true)]
 async fn a_who_has_held_back_by_dcc_is_answered_once_the_timer_enables_initiation() {
-    let h = under_disable_initiation().await;
+    // The limiter measures its window on the paused clock (#1548), so the
+    // window must outlast the timer's minute: had the limiter recorded the
+    // held-back answer, the repeat below would then be coalesced away.
+    let h = under_disable_initiation_with(DiscoveryPolicy {
+        coalesce_window: Duration::from_secs(3600),
+        ..DiscoveryPolicy::default()
+    })
+    .await;
     who_has_av1(&h).await;
     assert!(sent_to_peer(&h).is_empty(), "no I-Have under DCC");
 
-    // The same request again, from the same peer. The limiter keeps its
-    // coalescing window on `std::time::Instant`, which the paused clock does
-    // not move, so a check placed after the limiter recorded the held-back
-    // answer would still coalesce this one away; the ENABLE test below pins
-    // that without relying on the clock split.
+    // The same request again, from the same peer.
     timer_expires(&h).await;
     who_has_av1(&h).await;
     let [answer]: [UnconfirmedRequestPdu; 1] = sent_to_peer(&h).try_into().unwrap();
