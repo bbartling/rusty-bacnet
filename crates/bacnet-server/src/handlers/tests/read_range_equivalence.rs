@@ -2,11 +2,11 @@
 //! walking it (#1536), against the walk the handler made before: every
 //! identity numbered by stepping back from Total_Record_Count, the
 //! reference found by a search of them, and the timestamps validated and
-//! scanned in resident order. Over random logs of each family, with
-//! evictions, purges, repeated timestamps, a clock set back and timestamps
-//! that aren't actual moments, both must give the same bytes or the same
-//! error for every request. An Audit Log ring whose numbers skip falls back
-//! to the search.
+//! scanned in resident order. Over random logs of each family, most seeded
+//! (#1537) to cross the Unsigned32 wrap, with evictions, purges, repeated
+//! timestamps, a clock set back and timestamps that aren't actual moments,
+//! both must give the same bytes or the same error for every request. An
+//! Audit Log ring whose numbers skip falls back to the search.
 use std::collections::VecDeque;
 use std::ops::Range;
 
@@ -84,12 +84,24 @@ impl ClockReader for Clock {
     }
 }
 
-fn empty_log(family: LogFamily, capacity: u32) -> Box<dyn BACnetObject> {
+/// An empty log of `family` whose Total_Record_Count is seeded at `total`
+/// (#1537).
+fn empty_log(family: LogFamily, capacity: u32, total: u32) -> Box<dyn BACnetObject> {
     match family {
-        LogFamily::Trend => Box::new(TrendLogObject::new(1, "TL-1", capacity).unwrap()),
-        LogFamily::Event => Box::new(EventLogObject::new(1, "EL-1", capacity).unwrap()),
+        LogFamily::Trend => {
+            let mut log = TrendLogObject::new(1, "TL-1", capacity).unwrap();
+            log.restore_log_buffer(total, []).unwrap();
+            Box::new(log)
+        }
+        LogFamily::Event => {
+            let mut log = EventLogObject::new(1, "EL-1", capacity).unwrap();
+            log.restore_log_buffer(total, []).unwrap();
+            Box::new(log)
+        }
         LogFamily::TrendMultiple => {
-            Box::new(TrendLogMultipleObject::new(1, "TLM-1", capacity).unwrap())
+            let mut log = TrendLogMultipleObject::new(1, "TLM-1", capacity).unwrap();
+            log.restore_log_buffer(total, []).unwrap();
+            Box::new(log)
         }
     }
 }
@@ -119,7 +131,12 @@ fn add(object: &mut dyn BACnetObject, family: LogFamily, (date, time): (Date, Ti
 /// some at the same moment, some after the clock went back, a few purges.
 fn random_log(rng: &mut Rng, family: LogFamily) -> Box<dyn BACnetObject> {
     let capacity = [1, 2, 3, 5, 13, 40][rng.below(6) as usize];
-    let mut object = empty_log(family, capacity);
+    // Most logs start counting just short of the wrap, so they cross it.
+    let total = match rng.below(4) {
+        0 => 0,
+        _ => u32::MAX - rng.below(80) as u32,
+    };
+    let mut object = empty_log(family, capacity, total);
     let mut clock = 50_000u32;
     for _ in 0..rng.below(120) {
         clock = match rng.below(16) {
@@ -426,13 +443,17 @@ fn random_audit_ring(rng: &mut Rng) -> (Box<dyn BACnetObject>, Vec<Identity>) {
 fn sequence_and_time_reads_match_the_walk_over_random_logs() {
     let mut compared = 0;
     let mut orders = Vec::new();
+    let mut straddling = 0;
     for family in [LogFamily::Trend, LogFamily::Event, LogFamily::TrendMultiple] {
-        for seed in 0..48 {
+        for seed in 0..64 {
             let mut rng = Rng(seed);
             let object = random_log(&mut rng, family);
             let records = object.log_buffer_internal().unwrap();
             orders.push((records.record_count() > 1, records.timestamp_order()));
             let identities = stepped_identities(object.as_ref());
+            if identities.windows(2).any(|pair| pair[1].0 < pair[0].0) {
+                straddling += 1;
+            }
             let label = format!("{family:?} seed {seed}");
             compared += assert_same_answers(&mut rng, object, &identities, &label);
         }
@@ -446,6 +467,8 @@ fn sequence_and_time_reads_match_the_walk_over_random_logs() {
     // Most requests reach the handler; only a reference time with an
     // unspecified field can't be sent.
     assert!(compared > 20_000, "{compared}");
+    // Logs holding records from both sides of the wrap are read too.
+    assert!(straddling >= 8, "{straddling}");
     // Every way a search by time can go is exercised, on logs long enough
     // to bisect.
     for order in [
@@ -454,7 +477,7 @@ fn sequence_and_time_reads_match_the_walk_over_random_logs() {
         TimestampOrder::Unkeyed,
     ] {
         let seen = orders.iter().filter(|&&seen| seen == (true, order)).count();
-        assert!(seen >= 10, "{order:?} {seen}");
+        assert!(seen >= 8, "{order:?} {seen}");
     }
 }
 

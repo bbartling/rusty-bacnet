@@ -369,6 +369,55 @@ impl<R: ResidentLogRecord> LogRecordBuffer<R> {
             .collect()
     }
 
+    /// Replace the resident records with `records`, oldest first, the newest
+    /// numbered `total_record_count` and each one before it one less, below
+    /// 1 wrapping to 2^32 - 1 (#1537). A count below the number of records
+    /// is therefore a count that has wrapped: Clause 12.25.16 lets the count
+    /// start again at 1, after which it no longer says how many records
+    /// were collected.
+    ///
+    /// Refused, leaving the buffer as it was: more records than Buffer_Size;
+    /// records with a count of zero, which only a log that never collected
+    /// one has; records that fill the buffer of a log that `stops_when_full`
+    /// (Stop_When_Full and Enable both TRUE), since such a log stops before
+    /// its last slot is taken; and a record that would not encode.
+    pub(crate) fn restore(
+        &mut self,
+        total_record_count: u32,
+        records: VecDeque<R>,
+        stops_when_full: bool,
+    ) -> Result<(), Error> {
+        let held = records.len();
+        if held > self.capacity as usize {
+            return Err(Error::OutOfRange(format!(
+                "{held} log records exceed Buffer_Size {}",
+                self.capacity
+            )));
+        }
+        if total_record_count == 0 && held > 0 {
+            return Err(Error::OutOfRange(format!(
+                "{held} log records restored with a Total_Record_Count of 0"
+            )));
+        }
+        if stops_when_full && held > 0 && held >= self.capacity as usize {
+            return Err(Error::OutOfRange(
+                "a log with Stop_When_Full and Enable TRUE can't hold a full buffer".into(),
+            ));
+        }
+        let mut scratch = BytesMut::new();
+        for record in &records {
+            record.encode(&mut scratch)?;
+            scratch.clear();
+        }
+
+        self.clear();
+        for record in records {
+            self.push_back(record);
+        }
+        self.total_record_count = total_record_count;
+        Ok(())
+    }
+
     fn next_record_would_fill(&self) -> bool {
         self.capacity == 0 || self.records.len().saturating_add(1) >= self.capacity as usize
     }
@@ -416,12 +465,6 @@ impl<R: ResidentLogRecord> LogRecordBuffer<R> {
         {
             self.descents -= 1;
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_total_record_count_for_test(&mut self, total_record_count: u32) {
-        debug_assert!(self.records.is_empty());
-        self.total_record_count = total_record_count;
     }
 }
 
@@ -553,7 +596,7 @@ mod tests {
         assert_eq!(buffer.identities()[0].sequence_number(), 1);
 
         buffer.clear();
-        buffer.set_total_record_count_for_test(u32::MAX);
+        buffer.restore(u32::MAX, VecDeque::new(), false).unwrap();
         assert_eq!(
             buffer.admit_ordinary(record(2), true, false),
             OrdinaryAdmission::Inserted
@@ -638,7 +681,9 @@ mod tests {
     #[test]
     fn log_buffer_wrap_and_eviction_keep_modular_fifo_alignment() {
         let mut buffer = LogRecordBuffer::new(3);
-        buffer.set_total_record_count_for_test(u32::MAX - 1);
+        buffer
+            .restore(u32::MAX - 1, VecDeque::new(), false)
+            .unwrap();
         assert_eq!(
             buffer.admit_ordinary(record(1), true, false),
             OrdinaryAdmission::Inserted

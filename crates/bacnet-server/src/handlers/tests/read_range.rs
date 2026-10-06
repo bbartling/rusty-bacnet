@@ -21,6 +21,8 @@ mod log_records;
 mod multiple;
 #[path = "read_range_pages.rs"]
 mod pages;
+#[path = "read_range_restore.rs"]
+mod restore;
 #[path = "read_range_targets.rs"]
 mod targets;
 #[path = "read_range_wire.rs"]

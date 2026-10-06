@@ -2908,13 +2908,26 @@ class BACnetServer:
         Recipient_List a client wrote, once saved, wins over the seed. ``port_filter`` serves Port_Filter as
         ``(port_id, enabled)`` pairs; the server receives through Port_ID 0.
         Without it Port_Filter is absent."""
-    def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None:
+    def add_trend_log(
+        self,
+        instance: int,
+        name: str,
+        buffer_size: int = 100,
+        *,
+        total_record_count: int = 0,
+    ) -> None:
         """Add a Trend Log (Clause 12.25) to the server (before starting).
 
         Log_DeviceObjectProperty reads as ``application_data`` holding the
         context-tagged reference; while unset it reads as Analog Input
         4194303's Present_Value, and writing a reference to instance 4194303
         unsets it. A null written to it succeeds and changes nothing.
+
+        ``total_record_count`` seeds Total_Record_Count, an Unsigned32, so
+        the log's first record is numbered one past it: seeded at
+        4294967294, records number 4294967295, then 1, 2 and on, which lets
+        a reader's handling of the wrap be tested. Out of range raises
+        OverflowError.
         """
         ...
     def add_trend_log_multiple(
@@ -2936,6 +2949,7 @@ class BACnetServer:
         stop_time: tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None = None,
         align_intervals: bool | None = None,
         interval_offset: int | None = None,
+        total_record_count: int = 0,
     ) -> None:
         """Add a Trend Log Multiple (Clause 12.30) that the server polls or
         triggers, logging one value per member in each record.
@@ -2969,6 +2983,9 @@ class BACnetServer:
         record, write Trigger TRUE, from a peer or with
         ``write_property_local``; it reads TRUE until the poller acquires
         the record. Read the records with ``read_range``.
+
+        ``total_record_count`` seeds Total_Record_Count as on
+        ``add_trend_log``.
         """
         ...
     def add_event_log(
@@ -2977,6 +2994,8 @@ class BACnetServer:
         name: str,
         buffer_size: int = 100,
         log_received_notifications: bool = False,
+        *,
+        total_record_count: int = 0,
     ) -> None:
         """Register an Event Log of ``buffer_size`` records before start().
 
@@ -2991,6 +3010,9 @@ class BACnetServer:
         Notification_Threshold is set (zero, the default, reports nothing);
         write it and Notification_Class with ``write_property_local`` or
         from a peer.
+
+        ``total_record_count`` seeds Total_Record_Count as on
+        ``add_trend_log``; BUFFER_READY counts from the seeded value.
         """
         ...
     def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...

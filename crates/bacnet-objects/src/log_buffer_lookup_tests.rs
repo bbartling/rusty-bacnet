@@ -3,7 +3,7 @@
 //! stepping back from Total_Record_Count, each sequence lookup against a
 //! search of those identities, and the kept timestamp order against one
 //! worked out afresh, over random histories of insertions, evictions,
-//! clears, wraps and clock changes.
+//! clears, restores (#1537), wraps and clock changes.
 use super::*;
 
 /// A small deterministic generator (SplitMix64), so every failure repeats.
@@ -163,7 +163,9 @@ fn computed_lookups_match_the_walks_over_random_histories() {
         // Most histories start near the wrap, so they cross it.
         if rng.below(4) != 0 {
             let before_wrap = rng.below(60) as u32;
-            buffer.set_total_record_count_for_test(u32::MAX - before_wrap);
+            buffer
+                .restore(u32::MAX - before_wrap, VecDeque::new(), false)
+                .unwrap();
         }
         let mut clock = 10_000u32;
         for step in 0..300 {
@@ -172,6 +174,18 @@ fn computed_lookups_match_the_walks_over_random_histories() {
                 0 => buffer.clear(),
                 1 => {
                     buffer.insert_forced(sample(&mut rng, clock));
+                }
+                2 => {
+                    // A restore (#1537), its count often below its records:
+                    // they then number back across the wrap.
+                    let held = rng.below(u64::from(capacity) + 1) as u32;
+                    let records = (0..held)
+                        .map(|offset| sample(&mut rng, clock + 7 * offset))
+                        .collect();
+                    let total =
+                        [1 + rng.below(8) as u32, rng.next() as u32 | 1][rng.below(2) as usize];
+                    buffer.restore(total, records, false).unwrap();
+                    clock += 7 * held;
                 }
                 _ => {
                     // Mostly forward, sometimes a repeat, sometimes the clock

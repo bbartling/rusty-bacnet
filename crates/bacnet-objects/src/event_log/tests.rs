@@ -486,7 +486,7 @@ fn event_log_disabled_ordinary_rejection_does_not_consume_identity() {
 #[test]
 fn event_log_total_record_count_is_u32_and_wraps_max_to_one() {
     let mut el = EventLogObject::new(1, "EL-1", 1).unwrap();
-    el.log_buffer.set_total_record_count_for_test(u32::MAX);
+    el.restore_log_buffer(u32::MAX, []).unwrap();
     assert_eq!(
         el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
             .unwrap(),

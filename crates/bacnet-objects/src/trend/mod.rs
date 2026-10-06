@@ -100,6 +100,48 @@ impl TrendLogObject {
         self.log_buffer.records()
     }
 
+    /// Total_Record_Count: the records collected since the log was created
+    /// or restored, going from 2^32 - 1 on to 1. The newest record in
+    /// [`records`](Self::records) carries this number. Save the two to
+    /// [restore](Self::restore_log_buffer) the log later.
+    pub fn total_record_count(&self) -> u32 {
+        self.log_buffer.total_record_count()
+    }
+
+    /// Restore the log buffer, as a device restarting with saved records
+    /// does, or seed Total_Record_Count with no records, as a test that
+    /// needs the count near its wrap does (#1537).
+    ///
+    /// `records` become the resident records, oldest first. The newest is
+    /// numbered `total_record_count` and each one before it one less, going
+    /// from 1 back to 2^32 - 1, so a count below the number of records is a
+    /// count that has wrapped. The records are kept as given, whatever
+    /// Enable and the Start_Time / Stop_Time window say, and nothing is
+    /// recorded for the restore. BUFFER_READY counts from the restored
+    /// count, as when detection starts.
+    ///
+    /// Fails with [`Error::OutOfRange`], or a record's encoding error,
+    /// leaving the log unchanged, when there are more records than
+    /// Buffer_Size, when records come with a count of zero, when Stop_When_Full
+    /// and Enable are both TRUE and the records fill the buffer (such a log
+    /// stops before its last slot is taken), or when a record would not
+    /// encode.
+    ///
+    /// Restore a log before adding it to an `ObjectDatabase`. A running
+    /// server reaches its objects only through `BACnetObject`, which offers
+    /// no restore on purpose: renumbering a log that peers are reading would
+    /// change what their sequence numbers mean, with no BUFFER_PURGED record
+    /// to tell them, and the BUFFER_READY reports already sent would name
+    /// counts that no longer hold.
+    pub fn restore_log_buffer(
+        &mut self,
+        total_record_count: u32,
+        records: impl IntoIterator<Item = BACnetLogRecord>,
+    ) -> Result<(), Error> {
+        self.lifecycle()
+            .restore(total_record_count, records.into_iter().collect())
+    }
+
     /// Clear the buffer.
     pub fn clear(&mut self) {
         self.log_buffer.clear();

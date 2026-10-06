@@ -2519,6 +2519,25 @@ A Trend Log Multiple record is a `BACnetLogMultipleRecord`: a timestamp and a
 status, or a time change. `TrendLogMultipleObject::add_record` takes one and
 `records()` returns them.
 
+Each of the three logs restores its buffer with
+`restore_log_buffer(total_record_count, records)` (#1537), and
+`total_record_count()` and `records()` give what to save for it. The records,
+oldest first, become the buffer; the newest is numbered `total_record_count`
+and each earlier one one less, from 1 back to 2^32 - 1, so a count below the
+number of records is a count that has wrapped (Clause 12.25.16). With no
+records it seeds the count, which lets a test start a log just short of the
+wrap. The restore records no status and keeps the records whatever Enable
+and the window say; BUFFER_READY counts from the restored count, as when
+detection starts. It fails with `Error::OutOfRange`, or a record's encoding
+error, and changes nothing when there are more records than Buffer_Size,
+records with a count of zero, a full buffer while Stop_When_Full and Enable
+are both TRUE, or a record that would not encode. It is for start-up, before
+the log goes into an `ObjectDatabase`: a running server reaches its objects
+only through `BACnetObject`, which has no restore, because renumbering a log
+peers are reading would change what their sequence numbers mean with no
+BUFFER_PURGED record to tell them. Durable storage of a log, as the Audit
+Log has, is not built yet.
+
 Log_DeviceObjectProperty reads as the context-tagged
 `BACnetDeviceObjectPropertyReference` (#1234): one
 `PropertyValue::ApplicationData` on a Trend Log, and on a Trend Log Multiple a

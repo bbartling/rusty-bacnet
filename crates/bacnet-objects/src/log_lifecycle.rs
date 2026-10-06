@@ -1,5 +1,6 @@
 //! Shared non-recursive state transitions for BACnet log objects.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use bacnet_types::bitstring::LogStatus;
@@ -247,6 +248,22 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         let mut status = LogStatus::BUFFER_PURGED;
         status.set(LogStatus::LOG_DISABLED, disabled);
         self.insert_status(timestamp, status);
+        Ok(())
+    }
+
+    /// Restore the buffer: `records`, oldest first, the newest numbered
+    /// `total_record_count` (see `LogRecordBuffer::restore` for what is
+    /// refused). BUFFER_READY then counts from the restored count. Nothing
+    /// is recorded for the restore itself.
+    pub(crate) fn restore(
+        &mut self,
+        total_record_count: u32,
+        records: VecDeque<R>,
+    ) -> Result<(), Error> {
+        let stops_when_full = *self.enabled && *self.stop_when_full;
+        self.buffer
+            .restore(total_record_count, records, stops_when_full)?;
+        self.reporting.restart_from(total_record_count);
         Ok(())
     }
 
