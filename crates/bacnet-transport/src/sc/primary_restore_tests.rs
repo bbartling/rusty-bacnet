@@ -1,3 +1,13 @@
+//! Primary restore after a duplicate-VMAC refusal.
+//!
+//! Both tests run on tokio's paused clock (#1549). The restore interval, the
+//! 100 ms connect timeout and the tests' deadlines all read tokio's clock. On
+//! real time a runner stall could fire the test's 2 s deadline and the next
+//! restore tick in one turn, and the test future, polled first, saw its
+//! deadline win before the transport dialled. The 200 ms the second test
+//! listens for a stale retry is exact on the paused clock, with a restore
+//! tick every 25 ms inside it.
+
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 
@@ -81,7 +91,7 @@ async fn wait_for_hub_vmac(conn: &Arc<Mutex<ScConnection>>, expected: Vmac, time
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn primary_restore_duplicate_vmac_reseed_is_reused_by_next_probe() {
     let (primary_client, primary_hub) = LoopbackWebSocket::pair();
     let (failover_client, failover_hub) = LoopbackWebSocket::pair();
@@ -154,7 +164,7 @@ async fn primary_restore_duplicate_vmac_reseed_is_reused_by_next_probe() {
     transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn primary_restore_reseed_failure_blocks_stale_restore_retry() {
     let _random48_guard = set_test_random48_vmac_generator(fail_random48_vmac);
     let (primary_client, primary_hub) = LoopbackWebSocket::pair();
