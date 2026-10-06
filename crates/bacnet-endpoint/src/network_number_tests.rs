@@ -79,6 +79,10 @@ impl TransportPort for ObservedBip {
         Ok(())
     }
 }
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one fixture per test; the two owners differ in size"
+)]
 enum Owner {
     Server(bacnet_server::server::BACnetServer<ObservedBip>),
     Endpoint(EndpointSession<ObservedBip>),

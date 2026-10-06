@@ -144,7 +144,7 @@ async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapsho
 async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() {
     for kind in [CovNotificationKind::Single, CovNotificationKind::Multiple] {
         let mut fixture = Fixture::new(false);
-        fixture.config.cov_retry_timeout_ms = 200;
+        Arc::make_mut(&mut fixture.config).cov_retry_timeout_ms = 200;
         let mut sub = proposal(kind, true, PropertyIdentifier::PRESENT_VALUE);
         let expiry = Instant::now() + Duration::from_millis(100);
         sub.expires_at = Some(expiry);
