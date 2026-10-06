@@ -12,8 +12,10 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::engine::Engine;
 use super::{
-    command, metadata, milliseconds, written_transition, written_unsigned, written_xy, xy_value,
+    command, metadata, milliseconds, noncommandable_audit_policy, written_transition,
+    written_unsigned, written_xy, xy_value,
 };
+use crate::audit::{AuditPolicyAuthority, ObjectAuditPolicy};
 use crate::common::{self, read_identity_properties};
 use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 use crate::transition::Transition;
@@ -61,6 +63,8 @@ pub struct ColorObject {
     default_fade_time: u32,
     /// Transition: NONE or FADE.
     transition: ColorTransition,
+    /// Audit_Level and Auditable_Operations, once provisioned.
+    audit_policy: ObjectAuditPolicy,
     engine: Engine<BACnetXyColor>,
 }
 
@@ -81,8 +85,26 @@ impl ColorObject {
             default_color: D65,
             default_fade_time: *command::FADE_TIME_MS.start(),
             transition: ColorTransition::NONE,
+            audit_policy: ObjectAuditPolicy::default(),
             engine: Engine::new(XY_SAMPLE_STEP),
         })
+    }
+
+    /// Provision the optional Audit_Level and Auditable_Operations rows
+    /// before registration, as an Analog or Binary Value's are (#1525).
+    ///
+    /// A field left `None` keeps its row out of the object; a present row is
+    /// writable, and a DEFAULT level inherits the selected Audit Reporter's.
+    /// The object has no commandable property for Audit_Priority_Filter to
+    /// filter, and Table 12-X doesn't list it, so a priority filter in
+    /// `policy` is left out. Provisioning doesn't install or enable a
+    /// Reporter.
+    pub fn set_audit_policy(&mut self, policy: ObjectAuditPolicy) {
+        self.audit_policy = noncommandable_audit_policy(policy);
+    }
+
+    pub(super) fn audit_policy(&self) -> &ObjectAuditPolicy {
+        &self.audit_policy
     }
 
     /// Set Present_Value, as a WriteProperty of the colour would.
@@ -178,6 +200,9 @@ impl BACnetObject for ColorObject {
         if let Some(result) = read_identity_properties!(self, property, array_index) {
             return result;
         }
+        if let Some(result) = self.audit_policy.read(property, array_index) {
+            return result;
+        }
         // Each read takes its own instant, so one ReadPropertyMultiple that
         // straddles a fade's end may pair a Tracking_Value just short of the
         // target with In_Progress IDLE.
@@ -209,9 +234,15 @@ impl BACnetObject for ColorObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
         value: PropertyValue,
-        _priority: Option<u8>,
+        priority: Option<u8>,
     ) -> Result<(), Error> {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
+        }
+        if let Some(result) = self
+            .audit_policy
+            .write(property, array_index, &value, priority)
+        {
             return result;
         }
         match property {
@@ -254,6 +285,14 @@ impl BACnetObject for ColorObject {
 
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn audit_object_policy_internal(&self) -> ObjectAuditPolicy {
+        self.audit_policy
+    }
+
+    fn audit_policy_authority_internal(&mut self) -> Option<AuditPolicyAuthority<'_>> {
+        Some(AuditPolicyAuthority::new(&mut self.audit_policy))
     }
 
     fn advance_time_internal(&mut self, elapsed: Duration) -> bool {

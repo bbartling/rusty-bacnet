@@ -22,6 +22,7 @@ use bacnet_types::enums::ColorTransition;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
+use crate::audit::ObjectAuditPolicy;
 use crate::common;
 
 mod command;
@@ -95,6 +96,15 @@ fn written_transition(
         return Err(common::value_out_of_range_error());
     }
     Ok(ColorTransition::from_raw(raw))
+}
+
+/// An audit policy for an object with no commandable property: its
+/// Audit_Priority_Filter left out (#1525).
+fn noncommandable_audit_policy(policy: ObjectAuditPolicy) -> ObjectAuditPolicy {
+    ObjectAuditPolicy {
+        priority_filter: None,
+        ..policy
+    }
 }
 
 /// A fade time in milliseconds as a `Duration`.

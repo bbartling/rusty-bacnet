@@ -3482,8 +3482,20 @@ The rows follow the addendum's property tables. Present_Value and
 Present_Value is, except that 0 is kept: Clause 12.Y.4 gives a zero default a
 meaning of its own at restart. Neither table has `Status_Flags`,
 `Event_State`, `Reliability` or `Out_Of_Service`, so neither object serves
-them, and a whole-object COV report carries Present_Value alone. The optional
-`Value_Source`, audit, `Tags` and profile rows aren't implemented.
+them, and a whole-object COV report carries Present_Value alone.
+
+Of the tables' optional rows, both objects serve `Audit_Level` and
+`Auditable_Operations` once `set_audit_policy` provisions them before
+registration, as on an Analog or Binary Value (#1525; see
+[Object-owned Audit policy](#object-owned-audit-policy)). Neither table has
+`Audit_Priority_Filter`, so a priority filter in the policy is left out. The
+other optional rows stay absent:
+
+- `Value_Source`: this crate tracks a value source only for a commandable
+  Present_Value, through its priority array, and neither object has one; the
+  noncommandable Analog, Binary and Multi-state Values leave it out too.
+- `Tags`, `Profile_Location` and `Profile_Name`: no object in this crate
+  serves them yet.
 
 Two choices here go past the addendum's text. A new object's
 `Default_Fade_Time` is 100 ms, the shortest the range allows, as Lighting
@@ -6660,10 +6672,13 @@ selector semantics, batching/send delay, standalone source ownership and other
 transports remain outside this subset.
 
 
-### Object-owned AV/BV Audit policy
+### Object-owned Audit policy
 
 Analog Value and Binary Value support independently optional, writable
 `Audit_Level`, `Auditable_Operations`, and `Audit_Priority_Filter` properties.
+Color and Color Temperature support the first two the same way (#1525); their
+tables have no `Audit_Priority_Filter`, and neither object has a commandable
+property for one to filter.
 Provision `bacnet_objects::audit::ObjectAuditPolicy` through `set_audit_policy`
 before registration. `None` omits a property; DEFAULT level and
 `AuditPriorityPolicy::Inherit` (a present NULL priority filter) inherit the selected
