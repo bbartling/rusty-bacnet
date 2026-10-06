@@ -163,8 +163,9 @@ impl ReadRangeAck {
     ///
     /// Every octet must belong to a record, and the number of records must
     /// equal [`item_count`](Self::item_count). It doesn't check that the
-    /// acknowledgement is for a log of `R`'s type; [`log_records`]
-    /// (Self::log_records) picks the kind from the object identifier.
+    /// acknowledgement is for a log of `R`'s type;
+    /// [`log_records`](Self::log_records) picks the kind from the object
+    /// identifier.
     pub fn records<R: LogBufferRecord>(&self) -> Result<Vec<R>, LogRecordsError<Vec<R>>> {
         let data = self.item_data.as_slice();
         let expected = usize::try_from(self.item_count).unwrap_or(usize::MAX);
