@@ -249,17 +249,14 @@ impl LightingOutputObject {
                 self.set_slot(priority, then.slot());
                 true
             }
-            Some(Operation::Moving { priority, mut run }) => match run.advance(now, step) {
-                Progress::Finished => {
-                    self.operation = None;
-                    true
-                }
-                Progress::Sampled => {
-                    self.operation = Some(Operation::Moving { priority, run });
-                    true
-                }
-                Progress::Pending => false,
-            },
+            Some(Operation::Moving { priority, mut run }) => {
+                let progress = run.advance(now, step);
+                // Even with nothing due, a finer step may have brought the
+                // next sample forward, so the run goes back either way.
+                self.operation =
+                    (progress != Progress::Finished).then_some(Operation::Moving { priority, run });
+                progress != Progress::Pending
+            }
             _ => false,
         };
         trims || operation
@@ -438,13 +435,16 @@ impl LightingOutputObject {
     }
 
     /// How far Tracking_Value moves between COV samples: COV_Increment, or
-    /// one percent while that is 0.0.
+    /// one percent while that is 0.0, or a Tracking_Value subscriber's own
+    /// increment where that is finer (#1510).
     pub(super) fn sample_step(&self) -> f64 {
-        if self.cov_increment > 0.0 {
+        let own = if self.cov_increment > 0.0 {
             f64::from(self.cov_increment)
         } else {
             DEFAULT_SAMPLE_STEP
-        }
+        };
+        self.finest_tracking_increment
+            .map_or(own, |finest| own.min(finest))
     }
 
     /// Tell the server's monotonic task a deadline was armed.

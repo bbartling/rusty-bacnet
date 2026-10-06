@@ -412,6 +412,10 @@ impl BACnetObject for ColorTemperatureObject {
         self.engine.deadline()
     }
 
+    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
+        self.engine.set_finest_increment(finest);
+    }
+
     /// A copy that reads as the object does now; see the Color object's.
     fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
         Some(Box::new(Self {

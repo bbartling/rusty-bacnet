@@ -66,6 +66,9 @@ pub struct LightingOutputObject {
     default_step_increment: f32,
     /// COV_Increment: the Present_Value change that triggers a notification.
     cov_increment: f32,
+    /// The finest COV increment a Tracking_Value subscriber asks for, as the
+    /// server last passed it (#1510).
+    finest_tracking_increment: Option<f64>,
     out_of_service: bool,
     status_flags: StatusFlags,
     /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
@@ -100,6 +103,7 @@ impl LightingOutputObject {
             default_ramp_rate: 100.0,
             default_step_increment: 1.0,
             cov_increment: 0.0,
+            finest_tracking_increment: None,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
@@ -481,6 +485,10 @@ impl BACnetObject for LightingOutputObject {
 
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
         self.next_deadline()
+    }
+
+    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
+        self.finest_tracking_increment = finest;
     }
 
     /// A copy that reads as the object does now: its clock stops at this

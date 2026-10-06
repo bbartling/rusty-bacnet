@@ -3426,9 +3426,13 @@ read. While it moves, the task samples it for COV each time it has moved by
 `COV_Increment` (1.0 percent while that is 0.0), on a 100 ms grid shared by
 every object, and once more when it arrives; Table 13-1 reports Present_Value
 and Status_Flags, so a SubscribeCOV hears a fade once, when its level goes in,
-and a SubscribeCOVProperty of Tracking_Value hears it move. A Tracking_Value
-subscription whose own increment is finer than that sample step still hears
-only the sample points.
+and a SubscribeCOVProperty of Tracking_Value hears it move. When a live
+Tracking_Value subscription (SubscribeCOVProperty, or a Multiple reference)
+gives its own increment finer than that step, the finest such increment sets
+the step instead (#1510), so that subscriber hears each of its own steps, at
+most one per grid point; a coarser one changes nothing. The task looks the
+increments up in the COV table on each pass, inside its database guard and in
+the server's lock order.
 
 Color and Color Temperature (Addendum 135-2020ca) hold their `Color_Command`
 as a `BACnetColorCommand` (`bacnet_types::constructed`): a `ColorOperation`
@@ -3494,8 +3498,11 @@ Fades and ramps run on the server's monotonic task, as a Lighting Output's
 do, and Tracking_Value is worked out from the clock when read. While it
 moves, the task samples it for COV each time it has moved 0.001 along the xy
 line (a Color object) or 10 K (a Color Temperature object), on the shared
-100 ms grid, and once more when it arrives. Neither object has a COV_Increment
-to change that step.
+100 ms grid, and once more when it arrives. Neither object has a
+COV_Increment to change that step, but a Color Temperature Tracking_Value
+subscriber's finer increment does, as on a Lighting Output (#1510). The server
+compares an xy colour by any change rather than by an increment, so a Color
+object's subscribers already hear every sample.
 
 The rows follow the addendum's property tables. Present_Value and
 `Color_Command` are W; `Default_Color`, `Default_Color_Temperature`,

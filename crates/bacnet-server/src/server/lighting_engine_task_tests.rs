@@ -342,3 +342,75 @@ async fn a_trim_change_fades_in_on_the_task_and_reports_trim_active() {
     assert_eq!(deadline, None);
     server.stop().await.unwrap();
 }
+
+/// Subscribe `process` to Tracking_Value alone, with `increment`.
+async fn subscribe_tracking(
+    server: &BACnetServer<TestTransport>,
+    oid: ObjectIdentifier,
+    process: u32,
+    increment: f32,
+) {
+    server
+        .cov_table
+        .write()
+        .await
+        .subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, process as u8]),
+            subscriber_network: None,
+            subscriber_process_identifier: process,
+            monitored_object_identifier: oid,
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_observation: None,
+            monitored_property: Some(TV),
+            monitored_property_array_index: None,
+            cov_increment: Some(increment),
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        })
+        .unwrap();
+}
+
+/// Tracking_Value subscribers finer than COV_Increment get denser samples
+/// (#1510): the finest one sets the step, at most one sample per 100 ms grid
+/// point, and each subscriber still hears only its own steps.
+#[tokio::test(start_paused = true)]
+async fn the_finest_tracking_value_subscriber_sets_the_sample_step() {
+    let (mut server, oid, sent) = start(|object| {
+        object
+            .write_property(
+                PropertyIdentifier::COV_INCREMENT,
+                None,
+                PropertyValue::Real(25.0),
+                None,
+            )
+            .unwrap();
+    })
+    .await;
+    // Increments of 1, 10 and 50 percent on processes 3, 4 and 5.
+    for (process, increment) in [(3, 1.0), (4, 10.0), (5, 50.0)] {
+        subscribe_tracking(&server, oid, process, increment).await;
+    }
+    // RAMP_TO 100.0 % at 50.0 %/s, 5 percent each 100 ms, over 2 s.
+    let ramp = [
+        0x09, 0x02, 0x1C, 0x42, 0xC8, 0x00, 0x00, 0x2C, 0x42, 0x48, 0x00, 0x00,
+    ];
+    write(&server, oid, LC, command(&ramp), None).await;
+    let first: Vec<_> = [3, 4, 5].map(|p| (p, TV, real(0.0))).into();
+    assert_eq!(reports(&sent), first);
+    // A 1 percent step is 20 ms, so the grid bounds it: a sample every
+    // 100 ms, not every quarter as COV_Increment 25 alone would give.
+    for tenth in 1..=20u8 {
+        advance(100).await;
+        let level = f32::from(tenth) * 5.0;
+        let mut expected = vec![(3, TV, real(level))];
+        if tenth % 2 == 0 {
+            expected.push((4, TV, real(level)));
+        }
+        if tenth % 10 == 0 {
+            expected.push((5, TV, real(level)));
+        }
+        assert_eq!(reports(&sent), expected, "at {} ms", u32::from(tenth) * 100);
+    }
+    server.stop().await.unwrap();
+}
