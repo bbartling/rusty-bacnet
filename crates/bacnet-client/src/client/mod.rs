@@ -482,6 +482,8 @@ pub struct BACnetClient<T: TransportPort> {
     segmented_cleanup: Arc<SegmentedCleanupHook>,
     local_mac: MacAddr,
     routed_path_limits: Arc<RoutedPathLimits>,
+    /// See [`Self::group_source_request_drops`].
+    group_source_request_drops: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl BACnetClient<BipTransport> {
@@ -891,6 +893,8 @@ mod cov_tests;
 mod device_events_tests;
 #[cfg(test)]
 mod event_notification_tests;
+#[cfg(test)]
+mod group_source_request_tests;
 #[cfg(test)]
 mod list_error_tests;
 #[cfg(test)]

@@ -477,7 +477,6 @@ pub struct BACnetServer<T: TransportPort> {
     /// Invoke-ID ownership and terminal admission for confirmed notifications.
     notification_transactions: Arc<NotificationTransactions>,
     /// Server-lifetime exact inbound ConfirmedRequest duplicate state.
-    #[allow(dead_code)]
     confirmed_request_tracker: Arc<ConfirmedRequestTracker>,
     /// Shared configured and passively observed Device recipient authority.
     device_bindings: Arc<RwLock<DeviceBindingTable>>,

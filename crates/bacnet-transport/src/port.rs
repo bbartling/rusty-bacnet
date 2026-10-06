@@ -466,7 +466,11 @@ pub trait TransportPort: Send + Sync {
     /// no device to one, and the confirmed requests it starts itself, to
     /// event recipients, Channel and Command targets, audit recipients and
     /// bound devices, never go to one (#1493). Its replies and COV
-    /// notifications go to the source a request came from.
+    /// notifications go to the source a request came from, and the server,
+    /// the client and the endpoint ignore a confirmed request whose source
+    /// MAC is one (#1504), so those never go to one either. A routed NPDU
+    /// whose DADR is one on the router's delivery port carries only an
+    /// Unconfirmed-Request there.
     ///
     /// [`Self::is_broadcast_mac`] keeps its narrower meaning, this link's own
     /// broadcast, which routing and recipient checks rely on. The default is

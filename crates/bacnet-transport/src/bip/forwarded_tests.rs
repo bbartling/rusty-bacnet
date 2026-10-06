@@ -68,7 +68,7 @@ async fn forwarded_npdu_from_bdt_peer_uses_originating_source_mac() {
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     };
     let msg = BvllMessage {
         function: BvlcFunction::FORWARDED_NPDU,
@@ -158,7 +158,7 @@ async fn forwarded_npdu_from_non_bdt_sender_is_rejected_without_delivery() {
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     };
     let msg = BvllMessage {
         function: BvlcFunction::FORWARDED_NPDU,
@@ -237,7 +237,7 @@ async fn forwarded_npdu_from_directed_broadcast_peer_skips_local_rebroadcast() {
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     };
     let msg = BvllMessage {
         function: BvlcFunction::FORWARDED_NPDU,
@@ -337,7 +337,7 @@ async fn forwarded_npdu_fdt_fanout_respects_budget_and_increments_counter() {
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     };
     let msg = BvllMessage {
         function: BvlcFunction::FORWARDED_NPDU,
@@ -417,7 +417,7 @@ async fn forwarded_npdu_bbmd_self_sender_is_ignored_before_delivery_and_fanout()
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     };
     let mut msg = BvllMessage {
         function: BvlcFunction::FORWARDED_NPDU,
@@ -523,7 +523,7 @@ async fn forwarded_npdu_arriving_by_broadcast_is_not_rebroadcast_locally() {
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     };
     let msg = BvllMessage {
         function: BvlcFunction::FORWARDED_NPDU,

@@ -36,7 +36,7 @@ async fn context(broadcast_addr: Ipv4Addr) -> (RecvContext, mpsc::Receiver<Recei
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     };
     (ctx, npdu_rx)
 }

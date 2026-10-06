@@ -368,8 +368,10 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// requester, which take caller-chosen MACs, refuse anything else to it
     /// (#1479). The server refuses one for the confirmed requests it starts
     /// itself, to event recipients, Channel and Command targets, audit
-    /// recipients and bound devices (#1493); its replies and COV
-    /// notifications go to the source a request came from.
+    /// recipients and bound devices (#1493). Its replies and COV
+    /// notifications go to the source a request came from, and the server,
+    /// the client and the endpoint ignore a confirmed request from a group
+    /// source (#1504), so none of those goes to one either.
     pub async fn send_apdu(
         &self,
         apdu: &[u8],

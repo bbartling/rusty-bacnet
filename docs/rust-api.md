@@ -692,6 +692,14 @@ The list is read at each start, so an address added later is accepted after
 the next restart. If the addresses cannot be listed, or none is usable,
 `start()` fails and suggests binding an explicit interface address.
 
+A datagram whose UDP source is a group address (the limited broadcast, a
+multicast address, or the configured broadcast IP unless it is one of the
+node's own addresses) is dropped before its BVLC function is handled, and
+counted in `group_source_drops()` (#1504). No node sends from one, and the
+stack would answer it there, register it as a foreign device, or forward
+from it as a BBMD. Linux discards most such datagrams itself; other systems
+may not.
+
 The stack takes a Forwarded-NPDU's originating address as the NPDU's source,
 so an origin that is one of the link's group destinations
 (`is_group_destination`: the limited broadcast, the configured broadcast IP
@@ -1731,6 +1739,28 @@ itself, to event recipients, Channel and Command targets, audit recipients and
 bound devices, and binds no device to one (#1493); its replies and COV
 notifications go to the source a request came from. `is_broadcast_mac` keeps
 its narrower meaning, this link's own broadcast, which routing relies on.
+
+A reply goes back to the link-layer MAC its request came from, so a
+confirmed request from a group address would get its answer, any segment
+ACK, and the confirmed COV notifications of a subscription it makes, sent to
+every node in the group. The server, the client and the endpoint ignore such
+a request (#1504). The server counts it in
+`BACnetServer::group_source_request_drops()` and the client in
+`BACnetClient::group_source_request_drops()`; the endpoint's ingress hands it
+to policy as `PolicyReason::GroupSource`, which the session counts with its
+other policy outcomes. No built-in transport hands up a group source: B/IP
+and Ethernet drop one themselves, MS/TP refuses a broadcast source station,
+and IPv6 stacks discard a datagram from a multicast address. A nonzero count
+points at a custom transport.
+
+`BACnetRouter` also drops a routed NPDU that it would deliver, on a directly
+connected port, to a DADR that is a group destination there
+(`TransportPort::group_destinations`), unless its APDU is an
+Unconfirmed-Request (#1504). As one unicast it would reach every node in the
+group without the broadcast network addresses #1491 filters. It is delivered
+nowhere, draws no reject, and counts in `group_dadr_drops()`. Network
+messages, and a group DADR on a network behind another router, which that
+router judges, are not affected.
 
 ---
 

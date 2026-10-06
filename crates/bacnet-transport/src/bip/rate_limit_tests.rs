@@ -65,7 +65,7 @@ fn test_ctx(
         management_limiter,
         fanout: None,
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     }
 }
 

@@ -228,8 +228,8 @@ pub(super) struct IngressAddresses {
 }
 
 /// Decode one received datagram and hand it to the BVLL handler, unless its
-/// BVLC function does not fit its destination, or it is not a broadcast and
-/// came to the broadcast listener.
+/// UDP source is a group address, its BVLC function does not fit its
+/// destination, or it is not a broadcast and came to the broadcast listener.
 pub(super) async fn handle_datagram(
     data: &[u8],
     received: &ReceivedDatagram,
@@ -237,6 +237,13 @@ pub(super) async fn handle_datagram(
     local: &IngressAddresses,
     ctx: &RecvContext,
 ) {
+    // A group source goes before anything in the frame is read (#1504).
+    let SocketAddr::V4(peer) = received.peer else {
+        return;
+    };
+    if !ctx.group_sources.admits_sender(peer) {
+        return;
+    }
     let msg = match decode_bvll(data) {
         Ok(msg) => msg,
         Err(e) => {
@@ -271,8 +278,5 @@ pub(super) async fn handle_datagram(
         );
         return;
     }
-    let SocketAddr::V4(peer) = received.peer else {
-        return;
-    };
     handle_bvll_message(&msg, (peer.ip().octets(), peer.port()), delivery, ctx).await;
 }

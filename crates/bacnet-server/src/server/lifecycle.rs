@@ -213,6 +213,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             debug!("Ignoring a ConfirmedRequest addressed to a group");
                             continue;
                         }
+                        // Nor one sent from a group address, where its
+                        // answer would go (#1504).
+                        if matches!(decoded, Apdu::ConfirmedRequest(_))
+                            && dispatch_context
+                                .confirmed_request_tracker
+                                .refuse_group_source(&received.source_mac, |mac| {
+                                    network_dispatch.transport().is_group_destination(mac)
+                                })
+                        {
+                            continue;
+                        }
                         let source_mac = received.source_mac.clone();
                         let source_network = received.source_network.clone();
 
