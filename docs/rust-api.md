@@ -2461,7 +2461,9 @@ forwarder's operation task applies the same bound. Neither check runs once
 the server has stopped, so `stop()`, after joining its requests, drops a
 staged write still held and waits until storage holds the served list again,
 and a class dropped with one still held saves the served list as it goes,
-unless the staged save failed (#1363). `wait_for_saves()` blocks until queued
+unless the staged save failed (#1363). A request already running when
+`stop()` begins can still make its write, unanswered; the class then serves
+that list and storage holds it (#1457). `wait_for_saves()` blocks until queued
 saves have run, and dropping the class waits for them too.
 
 A written list wins over `add_destination`, as on the forwarder:
@@ -5505,21 +5507,31 @@ Async BACnet server that hosts objects and dispatches incoming requests.
 `BACnetServer::stop()` seals new local broadcasts and mutations, joins admitted
 server work, then stops the owned network and transport before returning success.
 Once its requests are joined, it drops any write a Notification Forwarder,
-Notification Class or Audit Log still holds staged for one of them and waits
-until every save those objects have queued has run, so storage holds what they
-serve (#1363). That wait has no limit: storage that stalls holds `stop()` up,
-and a warning naming the objects still saving is logged after 5 s and every
-30 s after that. `stop()` doesn't wait while the application holds the
-database; the objects then settle once it lets go, and put storage back when
-they are dropped.
+Notification Class, Access Rights object or Audit Log still holds staged for
+one of them and waits until every save those objects have queued has run, so
+storage holds what they serve (#1363). That wait has no limit: storage that
+stalls holds `stop()` up, and a warning naming the objects still saving is
+logged after 5 s and every 30 s after that. `stop()` doesn't wait while the
+application holds the database; the objects then settle once it lets go, and
+put storage back when they are dropped. An abort lands when a request's task
+next yields, so a request already running when `stop()` begins can still make
+its write; its answer is sealed, but the object serves that write and storage
+holds it (#1457).
 Call `stop()` before dropping the server. A server dropped without it in async
 code aborts its tasks and hands its object database to a task that drops it on
 Tokio's blocking pool once those tasks have let go (#1409), so the drop doesn't
 block a runtime worker while the objects' last saves run; nothing waits for
 those saves, though. Storage may still change after the drop returns, as they
 and the put-back of a staged write land, so `stop().await` before building
-another server on the same storage. An application still holding
-`server.database()` drops the last handle itself, best off the runtime as well.
+another server on the same storage. That task first cancels a DCC timer the
+drop couldn't take (#1560), and the tasks `stop()` leaves to settle staged
+writes and end runs once the application lets go also drop a last handle on
+the blocking pool (#1513). An
+application that keeps a clone of `server.database()` releases it with
+`bacnet_server::server::drop_database_off_runtime`, which drops the database
+on the blocking pool should that clone be the last handle; it usually isn't,
+and the call just lets go. It is `stop().await`, not this, that waits for
+storage.
 The target-Audit drain retains the ingress needed for acknowledgments until its
 existing completion/deadline boundary. Cancelling a stop waiter retains cleanup:
 call `stop()` again to join it. Transport cleanup errors retain the owner for retry;

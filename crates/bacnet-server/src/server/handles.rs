@@ -16,6 +16,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// replacement cannot change the served execution profile.
     /// Install Device objects before startup: changing their membership through
     /// this handle does not rebind the discovery limiter's startup identity.
+    ///
+    /// A clone the application keeps can outlive the server's own handle, and
+    /// whichever goes last drops every object, waiting for the saves durable
+    /// objects have queued. In async code, let go of such a clone with
+    /// [`drop_database_off_runtime`], so that wait runs on Tokio's blocking
+    /// pool instead of a runtime worker (#1513).
     pub fn database(&self) -> &Arc<RwLock<ObjectDatabase>> {
         &self.db
     }

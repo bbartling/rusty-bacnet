@@ -662,6 +662,7 @@ mod request_services;
 mod request_tasks;
 pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
 mod shutdown;
+pub use shutdown::drop_database_off_runtime;
 
 #[cfg(test)]
 mod access_door_event_tests;
