@@ -57,6 +57,29 @@ async fn receive(
     destination: Ipv4Addr,
     os_group_delivery: Option<bool>,
 ) -> Option<ReceivedNpdu> {
+    let arrival = Arrival::Primary;
+    receive_on(
+        ctx,
+        rx,
+        local,
+        arrival,
+        function,
+        destination,
+        os_group_delivery,
+    )
+    .await
+}
+
+/// [`receive`] on the socket `arrival` names.
+async fn receive_on(
+    ctx: &RecvContext,
+    rx: &mut mpsc::Receiver<ReceivedNpdu>,
+    local: &IngressAddresses,
+    arrival: Arrival,
+    function: BvlcFunction,
+    destination: Ipv4Addr,
+    os_group_delivery: Option<bool>,
+) -> Option<ReceivedNpdu> {
     let data = frame(function);
     let received = ReceivedDatagram {
         len: data.len(),
@@ -65,7 +88,7 @@ async fn receive(
         arrival_index: None,
         os_group_delivery,
     };
-    handle_datagram(&data, &received, local, ctx).await;
+    handle_datagram(&data, &received, arrival, local, ctx).await;
     rx.try_recv().ok()
 }
 
@@ -162,5 +185,38 @@ fn a_broadcast_address_that_is_a_host_address_is_flagged_unless_loopback() {
             flagged,
             "{broadcast} {own:?}"
         );
+    }
+}
+
+/// A transport bound to its interface address on Unix also reads a wildcard
+/// listener on the port (#1538). Unicast reaches the listener only when no
+/// socket is bound to its destination, so the listener keeps broadcasts
+/// only, even one whose destination reads as this node's own address.
+#[tokio::test]
+async fn the_broadcast_listener_keeps_only_broadcasts() {
+    let (ctx, mut rx) = context(SUBNET_BROADCAST).await;
+    let local = bound_to(LOCAL);
+    let unicast = BvlcFunction::ORIGINAL_UNICAST_NPDU;
+    let listener = Arrival::BroadcastListener;
+    let on_listener = receive_on(&ctx, &mut rx, &local, listener, unicast, LOCAL, None);
+    assert!(on_listener.await.is_none());
+    assert!(receive(&ctx, &mut rx, &local, unicast, LOCAL, None)
+        .await
+        .is_some());
+
+    let broadcast = BvlcFunction::ORIGINAL_BROADCAST_NPDU;
+    for destination in [SUBNET_BROADCAST, Ipv4Addr::BROADCAST] {
+        let npdu = receive_on(
+            &ctx,
+            &mut rx,
+            &local,
+            listener,
+            broadcast,
+            destination,
+            None,
+        )
+        .await
+        .expect("the listener hands up a broadcast");
+        assert!(npdu.link_layer_group, "{destination}");
     }
 }

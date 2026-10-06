@@ -68,7 +68,10 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
     peer.send_to(&frame(11, &[1, 0x80, 0x13, 0, 77, 1]), group)
         .await
         .unwrap();
-    peer.send_to(&frame(10, &[1, 0x80, 0x12]), local)
+    // By broadcast, behind the announcement: the client takes broadcasts on a
+    // second socket, read in no fixed order against its unicast socket
+    // (#1538), so a unicast query could pass the announcement.
+    peer.send_to(&frame(11, &[1, 0x80, 0x12]), group)
         .await
         .unwrap();
     expect(&observer, local, 77).await;

@@ -21,8 +21,11 @@ async fn endpoint_number_bbmd_both_roles_progress_stop_and_drop() {
             let client = endpoint.cloned_client_handle().unwrap();
             let server = endpoint.cloned_server_handle().unwrap();
             let group = SocketAddrV4::new(BROADCAST, local.port());
+            // Both by broadcast: the endpoint takes broadcasts on a second
+            // socket, read in no fixed order against its unicast socket
+            // (#1538), so a unicast query could pass the announcement.
             send(&query_peer, group, &frame(0x0b, &number(77, 1))).await;
-            send(&query_peer, local, &frame(0x0a, QUERY)).await;
+            send(&query_peer, group, &frame(0x0b, QUERY)).await;
             expect_number(&observer, local, 0x0b, 77).await;
             let mut peer_mac = address(&responder_peer).ip().octets().to_vec();
             peer_mac.extend_from_slice(&address(&responder_peer).port().to_be_bytes());

@@ -51,23 +51,12 @@ type BipSession = EndpointSession<BipTransport>;
 impl BipEndpointConfig {
     async fn prepare(self, objects: Vec<PendingObject>) -> PyResult<BipSession> {
         let config = self;
-        // Fail fast before building objects: mirror the transport
-        // bind (INADDR_ANY:port) + interface-locality probe, so conflicts
-        // preserve pending for retry. The real bind stays authoritative
-        // (TOCTOU residual: a race loser still restores via the owner).
-        if let Err(e) = std::net::UdpSocket::bind(std::net::SocketAddrV4::new(
-            std::net::Ipv4Addr::UNSPECIFIED,
-            config.port,
-        )) {
-            return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
-        }
-        if !config.interface.is_unspecified() {
-            if let Err(e) =
-                std::net::UdpSocket::bind(std::net::SocketAddrV4::new(config.interface, 0))
-            {
-                return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
-            }
-        }
+        // Fail fast before building objects: bind what the transport will
+        // (#1538) and probe the interface, so conflicts preserve pending for
+        // retry. The real bind stays authoritative (TOCTOU residual: a race
+        // loser still restores via the owner).
+        bacnet_transport::bip::BipTransport::check_bind(config.interface, config.port)
+            .map_err(to_py_err)?;
         let boxes = build_pending_boxes(&objects)?;
         let db = build_database(&config.identity, boxes)?;
         let mut builder = BipEndpointBuilder::new(config.interface, config.port, config.broadcast)
@@ -137,7 +126,8 @@ impl PyBipEndpoint {
     ///     device_instance: BACnet Device instance (validated range).
     ///     device_name: Device object name (default "BACnet Device").
     ///     vendor_id: Vendor identifier (default 555).
-    ///     interface: Announced IPv4 (socket binds INADDR_ANY for broadcast).
+    ///     interface: Announced IPv4; with a nonzero port the socket binds it,
+    ///         so endpoints on different addresses can share the port.
     ///     port: UDP port; zero selects an ephemeral port reported after startup.
     ///     broadcast_address: Local broadcast address.
     ///     network_number: BACnet network number for the Network-Port entry.

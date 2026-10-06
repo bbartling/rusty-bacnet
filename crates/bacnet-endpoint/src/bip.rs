@@ -80,8 +80,10 @@ impl BipEndpointBuilder {
     /// Creates a B/IP endpoint builder with interface/port/broadcast.
     ///
     /// `port = 0` selects an ephemeral port (tests); production uses 47808.
-    /// `interface` is the announced MAC IP; the socket binds `INADDR_ANY` so
-    /// subnet/limited broadcast reaches it.
+    /// `interface` is the announced MAC IP. With a nonzero port and an
+    /// explicit interface, the transport binds that address and, on Unix, a
+    /// wildcard broadcast listener, so endpoints on different addresses can
+    /// share the port (#1538); otherwise it binds `INADDR_ANY`.
     pub fn new(interface: Ipv4Addr, port: u16, broadcast_address: Ipv4Addr) -> Self {
         Self {
             interface,

@@ -77,8 +77,13 @@ async fn client_number_bbmd_wire_admission_and_release() {
     // UNKNOWN and a unicast NNI cannot create an own response before the fence.
     send(&peer, local, &frame(10, &number(999, 1))).await;
     send(&peer, local, &frame(10, QUERY)).await;
+    // The client takes broadcasts on a second socket, read in no fixed order
+    // against its unicast socket (#1538). The fence finishes the unicast
+    // above first, and a query that must follow a broadcast goes by
+    // broadcast too.
+    fence(&peer, local).await;
     send(&peer, group, &frame(11, &number(77, 0))).await;
-    send(&peer, local, &frame(10, QUERY)).await;
+    send(&peer, group, &frame(11, QUERY)).await;
     own_number(&captured, local, 11, 77).await;
 
     forward(&denied, local, &number(200, 1)).await;
@@ -107,13 +112,13 @@ async fn client_number_bbmd_wire_admission_and_release() {
         vec![1, 0x88, 0, 4, 1, 9, 0x13, 0, 200, 1],
     ] {
         send(&peer, group, &frame(11, &invalid)).await;
-        send(&peer, local, &frame(10, QUERY)).await;
+        send(&peer, group, &frame(11, QUERY)).await;
         own_number(&captured, local, 11, 79).await;
     }
     // An incorrectly accepted malformed query would emit old 79 before new 81.
     send(&peer, group, &frame(11, &[1, 0x80, 0x12, 0])).await;
     send(&peer, group, &frame(11, &number(81, 1))).await;
-    send(&peer, local, &frame(10, QUERY)).await;
+    send(&peer, group, &frame(11, QUERY)).await;
     own_number(&captured, local, 11, 81).await;
     drop(captured);
     stop(client, local).await;

@@ -628,16 +628,57 @@ let transport = BipTransport::new(
 );
 ```
 
-The socket binds the wildcard address so directed and limited broadcasts
-arrive. Port zero asks for a private ephemeral port and never sets
-`SO_REUSEADDR`: on Linux such a bind could otherwise be given a port another
-`SO_REUSEADDR` socket already holds, and unicast to that port then reaches only
-one of them. The choice is made at construction, so a restart that rebinds the
-remembered actual port keeps it private. An explicit port still sets
-`SO_REUSEADDR`, as before. On Linux that lets a second application bind the
-same port, with the same single-receiver unicast caveat; macOS and BSD refuse a
-second wildcard bind. B/IPv6 applies the same port-zero and explicit-port rule,
-but binds a fresh ephemeral port on each start instead of remembering one.
+Port zero asks for a private ephemeral port and never sets `SO_REUSEADDR`: on
+Linux such a bind could otherwise be given a port another `SO_REUSEADDR`
+socket already holds, and unicast to that port then reaches only one of them.
+The choice is made at construction, so a restart that rebinds the remembered
+actual port keeps it private. B/IPv6 applies the same port-zero and
+explicit-port rule, but binds a fresh ephemeral port on each start instead of
+remembering one.
+
+How the transport binds depends on the interface and the port (#1538):
+
+| Interface | Port | Sockets |
+|-----------|------|---------|
+| `0.0.0.0` | explicit | one on `0.0.0.0:port`, with `SO_REUSEADDR` |
+| any | zero | one on `0.0.0.0:port`, private |
+| an address | explicit | one on `address:port`, plus a broadcast listener on Unix |
+
+The wildcard socket receives directed and limited broadcasts, and the receive
+loop takes unicast only to the interface address (or, for `0.0.0.0`, to one
+of the host's addresses, below). On an explicit port, Linux lets a second
+application bind the same wildcard address, with the same single-receiver
+unicast caveat; macOS and BSD refuse a second wildcard bind.
+
+An explicit interface on an explicit port binds `address:port`, so several
+transports on one host, each with its own address, can share one port, such as
+47808, and each receives only the unicast sent to its own address. Every send
+leaves from that socket, so its source is the interface address. How
+broadcasts arrive differs by OS:
+
+- **Linux, macOS and the BSDs** don't deliver a broadcast to a socket bound to
+  a unicast address. A second, receive-only socket binds `0.0.0.0:port` with
+  `SO_REUSEADDR` (and, on macOS and the BSDs, `SO_REUSEPORT`, which several
+  such sockets need), and the transport keeps only the configured broadcast
+  address and 255.255.255.255 from it. Each OS hands a broadcast to every one
+  of these sockets on the port, and a unicast to the socket bound to its
+  destination. Unicast to a local address that no socket on the port is bound
+  to may land on any wildcard socket there, so a `0.0.0.0` transport sharing
+  the port with others can lose unicast to them. The transport reads its two
+  sockets in no fixed order, so a broadcast and a unicast that arrive
+  together may be handled in either order.
+- **Windows** delivers a broadcast arriving on an interface to a socket bound
+  to that interface's address, so the one socket is enough. Windows'
+  `SO_REUSEADDR` would let another socket bind the same address and take its
+  unicast, so the socket sets `SO_EXCLUSIVEADDRUSE` instead, and no other
+  socket can bind that address and port. Other addresses can still share the
+  port.
+
+Tests run the shared port on Linux (127.0.0.2 and 127.0.0.3, broadcasts on
+127.255.255.255 and 255.255.255.255), and on macOS and Windows with 127.0.0.1
+beside the default-route address, unicast only: macOS loopback has no
+broadcast address, and Windows broadcast reception on a shared port is not
+covered by a test.
 
 With the `0.0.0.0` interface, `start()` lists the host's IPv4 addresses, with
 `getifaddrs` on Linux, macOS and the BSDs and `GetAdaptersAddresses` on

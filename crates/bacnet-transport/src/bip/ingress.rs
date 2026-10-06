@@ -1,16 +1,124 @@
-//! What the B/IP receive loop does with one datagram before the BVLL handler
-//! sees it: check that the BVLC function fits the address the datagram was
-//! sent to, and say how it arrived.
+//! The B/IP receive loop, and what it does with one datagram before the BVLL
+//! handler sees it: check that the BVLC function fits the address the
+//! datagram was sent to, and say how it arrived.
 
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 
 use bacnet_types::enums::BvlcFunction;
 use tracing::{debug, warn};
 
 use crate::bvll::decode_bvll;
-use crate::udp_metadata::ReceivedDatagram;
+use crate::udp_metadata::{DestinationReceiver, IpVersion, ReceivedDatagram};
 
 use super::io::{handle_bvll_message, RecvContext};
+use super::socket::{BipSocket, BoundSockets};
+
+/// Which of a transport's sockets a datagram arrived on (socket.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Arrival {
+    /// The socket every send leaves from.
+    Primary,
+    /// The receive-only wildcard socket beside a socket bound to the
+    /// interface address, which keeps only broadcasts (#1538).
+    BroadcastListener,
+}
+
+/// One socket the receive loop reads, with its own buffer.
+pub(super) struct Listener {
+    socket: Arc<BipSocket>,
+    receiver: DestinationReceiver,
+    buf: Vec<u8>,
+}
+
+impl Listener {
+    /// Hand a bound socket to tokio, reading the destination of each
+    /// datagram. Must run inside a tokio runtime.
+    fn open(socket: socket2::Socket, lease: Option<Arc<()>>) -> io::Result<Self> {
+        let receiver = DestinationReceiver::configure(&socket, IpVersion::V4)?;
+        let socket = tokio::net::UdpSocket::from_std(socket.into())?;
+        Ok(Self {
+            socket: Arc::new(BipSocket::new(socket, lease)),
+            receiver,
+            buf: vec![0; 2048],
+        })
+    }
+
+    async fn recv(&mut self) -> io::Result<ReceivedDatagram> {
+        self.receiver.recv_from(&self.socket, &mut self.buf).await
+    }
+}
+
+/// The sockets one receive loop reads.
+pub(super) struct Listeners {
+    primary: Listener,
+    broadcast: Option<Listener>,
+}
+
+impl Listeners {
+    /// Hand the sockets one start bound to tokio. Each keeps `lease` until
+    /// it closes.
+    pub(super) fn open(bound: BoundSockets, lease: Option<Arc<()>>) -> io::Result<Self> {
+        Ok(Self {
+            broadcast: bound
+                .broadcast
+                .map(|socket| Listener::open(socket, lease.clone()))
+                .transpose()?,
+            primary: Listener::open(bound.primary, lease)?,
+        })
+    }
+
+    /// The socket every send leaves from.
+    pub(super) fn primary(&self) -> &Arc<BipSocket> {
+        &self.primary.socket
+    }
+
+    /// The next datagram on either socket. Each read is cancel-safe: the
+    /// datagram leaves the socket only inside the read that returns it.
+    async fn recv(&mut self) -> (Arrival, io::Result<ReceivedDatagram>) {
+        let Self { primary, broadcast } = self;
+        match broadcast {
+            None => (Arrival::Primary, primary.recv().await),
+            Some(listener) => tokio::select! {
+                received = primary.recv() => (Arrival::Primary, received),
+                received = listener.recv() => (Arrival::BroadcastListener, received),
+            },
+        }
+    }
+
+    fn data(&self, arrival: Arrival, len: usize) -> &[u8] {
+        let listener = match (arrival, &self.broadcast) {
+            (Arrival::BroadcastListener, Some(listener)) => listener,
+            _ => &self.primary,
+        };
+        &listener.buf[..len]
+    }
+}
+
+/// Read every datagram the transport's sockets receive, until one fails.
+pub(super) async fn receive_loop(
+    mut listeners: Listeners,
+    local: IngressAddresses,
+    ctx: RecvContext,
+) {
+    loop {
+        let (arrival, received) = listeners.recv().await;
+        match received {
+            Ok(received) => {
+                let data = listeners.data(arrival, received.len);
+                handle_datagram(data, &received, arrival, &local, &ctx).await;
+            }
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                debug!(error = %e, "Dropping UDP datagram with invalid destination metadata");
+            }
+            Err(e) => {
+                warn!(error = %e, "UDP recv error");
+                break;
+            }
+        }
+    }
+}
 
 /// How a datagram reached the B/IP socket, from its destination address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,10 +228,12 @@ pub(super) struct IngressAddresses {
 }
 
 /// Decode one received datagram and hand it to the BVLL handler, unless its
-/// BVLC function does not fit its destination.
+/// BVLC function does not fit its destination, or it is not a broadcast and
+/// came to the broadcast listener.
 pub(super) async fn handle_datagram(
     data: &[u8],
     received: &ReceivedDatagram,
+    arrival: Arrival,
     local: &IngressAddresses,
     ctx: &RecvContext,
 ) {
@@ -150,6 +260,17 @@ pub(super) async fn handle_datagram(
         );
         return;
     };
+    // Unicast to an address no other socket on the port is bound to also
+    // reaches a wildcard socket. It is not this node's (a socket bound to its
+    // own address takes that), and another node on this port may share the
+    // listener, so the listener keeps broadcasts only.
+    if arrival == Arrival::BroadcastListener && delivery != Delivery::Broadcast {
+        debug!(
+            destination = %received.destination,
+            "Dropping unicast on the B/IP broadcast listener"
+        );
+        return;
+    }
     let SocketAddr::V4(peer) = received.peer else {
         return;
     };
