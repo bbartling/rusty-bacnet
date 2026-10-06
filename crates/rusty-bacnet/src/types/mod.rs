@@ -48,9 +48,9 @@ pub(crate) use action_list::action_lists_from_py;
 pub use address::parse_address;
 pub(crate) use audit::recipient as audit_recipient_from_py;
 pub(crate) use audit::{audit_log_query_request_from_py, audit_notification_request_from_py};
-pub(crate) use audit_projection::audit_log_query_ack_to_py;
+pub(crate) use audit_projection::{audit_log_query_ack_to_py, audit_log_record_to_py};
 pub use cov::{PyCovNotification, PyCovNotificationIterator};
-pub(crate) use date::specific_date_time;
+pub(crate) use date::{date_from_value, date_value, specific_date_time};
 pub(crate) use destination::destinations;
 pub use device::PyDiscoveredDevice;
 pub use enums::*;
@@ -65,8 +65,8 @@ pub(crate) use rpm_wpm::{
     py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyDeviceWrite, PyPropertyWrite,
     PyReadAccessSpec, PyWriteAccessSpec,
 };
-pub(crate) use timestamp::date_time_tuple;
 pub use timestamp::PyBACnetTimeStamp;
+pub(crate) use timestamp::{date_time_tuple, time_value};
 
 /// What `__reduce__` raises for a class with no constructor that doesn't
 /// copy or pickle, because it holds live or receive-time state (#1500).

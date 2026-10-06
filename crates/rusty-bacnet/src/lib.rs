@@ -13,6 +13,7 @@ mod errors;
 mod group_members;
 mod hub;
 mod hub_bindings;
+mod log_records;
 mod mstp_py;
 mod object_audit_policy;
 mod py_async;
@@ -51,6 +52,7 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<hub_bindings::PyScHubCertificateBinding>()?;
     endpoint::register(m)?;
     m.add_function(wrap_pyfunction!(mstp_py::list_serial_ports, m)?)?;
+    m.add_function(wrap_pyfunction!(log_records::decode_log_records, m)?)?;
 
     Ok(())
 }

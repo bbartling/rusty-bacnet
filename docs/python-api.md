@@ -519,8 +519,21 @@ client = BACnetClient(
     sc_client_key=None,          # Matching private key PEM path (required for SC)
     sc_heartbeat_interval_ms=None,  # 3000..=300000 ms when configured
     sc_heartbeat_timeout_ms=None,   # must be greater than interval
+    min_request_interval_ms=0,   # Keyword-only; least ms between confirmed requests to one destination
 )
 ```
+
+`min_request_interval_ms` paces the confirmed requests the client sends to
+each destination (#1535). Each waits until that long after the latest one
+sent to the same destination finished, by a reply, an error or the caller
+giving up, or until that long after it was sent while it is still
+outstanding, checking again when it wakes. Requests waiting together go one
+at a time, in no promised order. Paging a log or polling then leaves a slow
+device room for its
+other clients. Requests to different destinations don't wait on each other;
+0, the default, sends at once, and more than 3,600,000 (an hour) raises
+`ValueError`. Behind a router the pause after a reply holds for requests made
+one after another only. `EndpointClient` has no pacing.
 
 ### MS/TP serial ports
 
@@ -1068,11 +1081,11 @@ raw = await client.get_event_information("192.168.1.100:47808")
 
 ### ReadRange
 
-#### `read_range(address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None) -> dict`
+#### `read_range(address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None, *, reference_time=None, validation="strict") -> dict`
 
 Read a range of items from a list or log object. This method is shared by
 `BACnetClient` and `EndpointClient`. Python supports all-items (`range_type=None`),
-position and sequence forms; ByTime remains Rust-only. Invalid selectors,
+position, sequence and time forms. Invalid selectors,
 array index zero and omitted or zero counts for a selected range raise
 `ValueError` before address parsing or I/O. A count outside INTEGER16
 (-32768 to 32767) raises `OverflowError` before address parsing or I/O (#1360). Omitted reference values default
@@ -1080,6 +1093,24 @@ to zero; zero position/sequence references are valid and may return no matches.
 The typed `ReadRangeResult` dictionary preserves raw item bytes, the three-boolean
 flags tuple and optional first sequence number. Endpoint responses must be
 unsegmented; the standalone client's existing segmentation support is unchanged.
+
+`range_type="time"` (#1533) reads the `count` items logged after
+`reference_time`, or before it for a negative count. `reference_time` is a
+`datetime.datetime` or a `((year, month, day, day_of_week), (hour, minute,
+second, hundredths))` pair, and must name a specific instant. A device
+timestamps its records in its own local time and the request carries no zone,
+so a `datetime` must be naive and in the device's local time; an aware one
+raises `ValueError` (convert it first with
+`dt.astimezone(device_zone).replace(tzinfo=None)`). Hundredths come from the
+microseconds, rounded down.
+
+`validation="strict"` (the default) refuses an answer that breaks a ReadRange
+rule with `BacnetReadRangeViolationError`, whose `rule` names it: an echo
+mismatch, a first sequence number missing, zero or unexpected, MORE_ITEMS
+with the flag for the end a ranged read moves toward (with no range, with
+both FIRST_ITEM and LAST_ITEM), or more items than `count`. `validation="lenient"` (#1531)
+keeps such an answer and lists the rules in `"violations"`, so a device that
+numbers the record after its sequence wrap 0 doesn't cost the page.
 
 ```python
 # Read by position
@@ -1094,8 +1125,9 @@ result = await client.read_range(
 print(result["item_count"])     # number of items returned
 print(result["result_flags"])   # (first_item, last_item, more_items)
 print(result["item_data"])      # raw bytes
+print(rusty_bacnet.decode_log_records(result))  # typed records
 
-# Read by sequence number
+# Read by sequence number, keeping a page that breaks a rule
 result = await client.read_range(
     "192.168.1.100:47808",
     ObjectIdentifier(ObjectType.TREND_LOG, 1),
@@ -1103,6 +1135,18 @@ result = await client.read_range(
     range_type="sequence",
     reference_seq=100,
     count=10,
+    validation="lenient",
+)
+print(result["violations"])     # e.g. ["zero_first_sequence_number"]
+
+# Read the records logged since a time, in the device's local time
+result = await client.read_range(
+    "192.168.1.100:47808",
+    ObjectIdentifier(ObjectType.TREND_LOG, 1),
+    PropertyIdentifier.LOG_BUFFER,
+    range_type="time",
+    reference_time=datetime.datetime(2026, 10, 5, 9, 0),
+    count=50,
 )
 
 # Read all (no range)
@@ -1113,7 +1157,57 @@ result = await client.read_range(
 )
 ```
 
-Return dict keys: `"object_id"`, `"property_id"`, `"array_index"`, `"result_flags"` (tuple of 3 bools), `"item_count"` (int), `"item_data"` (bytes), and `"first_sequence_number"` (int or `None`).
+Return dict keys: `"object_id"`, `"property_id"`, `"array_index"`, `"result_flags"` (tuple of 3 bools), `"item_count"` (int), `"item_data"` (bytes), `"first_sequence_number"` (int or `None`), and `"violations"` (list of rule names; empty unless lenient).
+
+#### `decode_log_records(result) -> list[dict]`
+
+Decodes the records of a `read_range` result of a Trend Log, Event Log, Trend
+Log Multiple or Audit Log's Log_Buffer (#1534). Each record is a dict with
+`"timestamp"` (a `(date, time)` pair) and `"datum"`, whose `"kind"` names the
+choice and whose key of the same name holds the value, for example
+`{"kind": "real", "real": 72.5}`; a Trend Log record adds `"status_flags"`.
+It raises `ValueError` for any other result, or when the item data doesn't
+decode as `item_count` records, naming the first record that fails by index
+and offset.
+
+#### `read_log_page(address, object_id, cursor=None, page_size=100) -> dict`
+
+Reads one page of a log's Log_Buffer (#1530), on `BACnetClient` and
+`EndpointClient`. `cursor` is `None` or `"oldest"` (the oldest record, from
+Record_Count and Total_Record_Count), `("sequence", n)`, `("position", n)` or
+`("time", reference_time)`. The page is a dict: `"records"` (as
+`decode_log_records` gives them), `"first_sequence_number"`, `"result_flags"`,
+`"gap"` (`None`, or `{"expected", "first", "skipped"}` when the log no longer
+holds the records asked for), `"violations"`, `"next"` (the cursor to read
+from next), `"done"` and `"wrapped"` (the page reached the top of the
+sequence range, so `next` wrapped to 1). Loop until `done`, then keep `next`
+as the checkpoint; lists in place of the tuples work, so it survives
+`json.dumps` and `json.loads`, a time cursor included. One request is
+outstanding at a time, and sequence numbers wrap from the top of their range
+to 1. A page whose records don't decode raises `BacnetError` naming the
+first that fails, and the records before it are dropped; read that range with
+`read_range` and `decode_log_records` to see them. An answer that breaks a rule
+the reader can't tolerate, such as an echo that doesn't match the request,
+raises `BacnetReadRangeViolationError`.
+
+```python
+cursor = None
+while True:
+    page = await client.read_log_page(address, trend_log, cursor, page_size=100)
+    store(page["records"])
+    cursor = page["next"]
+    if page["done"]:
+        break
+save_checkpoint(cursor)
+```
+
+A device that answers with records from before the one asked for (bacnet-stack
+1.6.1 does past its sequence wrap), or with none where its counts say it holds
+records, raises `BacnetLogNotAdvancingError` instead of looping. Its sequence
+numbers are inconsistent: read it from `("position", 1)`. A log that is merely
+full doesn't need that; the reader starts over from the oldest record when
+the log drops the one it asked for. A non-log object or a `page_size` outside
+1..=32767 raises `ValueError` before I/O.
 
 ---
 
@@ -3475,6 +3569,8 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetTimeoutError` | Request timed out (APDU retries exhausted) |
 | `BacnetRejectError` | Remote device rejected the request |
 | `BacnetAbortError` | Remote device aborted the request |
+| `BacnetReadRangeViolationError` | A strict `read_range` refused an answer that breaks a ReadRange rule; `rule` names it (for example `"zero_first_sequence_number"`) |
+| `BacnetLogNotAdvancingError` | A paged log read can't advance: the device answered from before the record asked for, or with none its counts say it holds. `requested` and `returned` (`None` when it sent none) name the sequence numbers |
 | `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |
 
 ```python

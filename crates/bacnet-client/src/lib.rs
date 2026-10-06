@@ -3,6 +3,7 @@
 pub mod client;
 pub mod discovery;
 mod endpoint_requester;
+pub mod log_reader;
 pub mod segmentation;
 pub mod tsm;
 
@@ -12,6 +13,5 @@ pub use endpoint_requester::{
     EndpointReadRequest, EndpointRequester, PreparedEndpointOperation,
 };
 mod read_property;
-mod read_range;
 
 mod endpoint_rpm;

@@ -310,6 +310,7 @@ async fn execute_command<T: TransportPort + 'static>(
             target,
             object,
             property,
+            range,
         } => {
             let mac = resolve_target_mac(client, target).await?;
             let (object_type, instance) = parse::parse_object_specifier(object)?;
@@ -321,6 +322,7 @@ async fn execute_command<T: TransportPort + 'static>(
                 instance,
                 prop,
                 index,
+                range,
                 format,
             )
             .await?;

@@ -14,6 +14,7 @@ pub struct TransportArgs {
     pub port: u16,
     pub broadcast: Ipv4Addr,
     pub timeout_ms: u64,
+    pub min_interval_ms: u64,
     pub sc: bool,
     pub sc_url: Option<String>,
     pub sc_ca: Option<PathBuf>,
@@ -47,6 +48,7 @@ impl TransportArgs {
             port: cli.port,
             broadcast,
             timeout_ms: cli.timeout,
+            min_interval_ms: cli.min_interval_ms,
             sc: cli.sc,
             sc_url: cli.sc_url.clone(),
             sc_ca: cli.sc_ca.clone(),
@@ -118,6 +120,7 @@ pub async fn build_bip_client(args: &TransportArgs) -> Result<BACnetClient<BipTr
         .port(args.port)
         .broadcast_address(args.broadcast)
         .apdu_timeout_ms(args.timeout_ms)
+        .min_request_interval_ms(args.min_interval_ms)
         .build()
         .await
 }
@@ -201,6 +204,7 @@ pub async fn build_sc_client(
         .vmac(sc_vmac)
         .device_uuid(sc_device_uuid)
         .apdu_timeout_ms(args.timeout_ms)
+        .min_request_interval_ms(args.min_interval_ms)
         .build()
         .await
 }
@@ -212,7 +216,8 @@ pub async fn build_bip6_client(args: &TransportArgs) -> Result<BACnetClient<Bip6
     let mut builder = BACnetClient::bip6_builder()
         .interface(ipv6_addr)
         .port(args.port)
-        .apdu_timeout_ms(args.timeout_ms);
+        .apdu_timeout_ms(args.timeout_ms)
+        .min_request_interval_ms(args.min_interval_ms);
 
     if let Some(instance) = args.device_instance {
         builder = builder.device_instance(instance);
@@ -232,6 +237,7 @@ mod tests {
             port: 0xBAC0,
             broadcast: Ipv4Addr::BROADCAST,
             timeout_ms: 6000,
+            min_interval_ms: 0,
             sc: true,
             sc_url: Some("wss://hub.example.com/bacnet".into()),
             sc_ca: Some(PathBuf::from("site-ca.pem")),
