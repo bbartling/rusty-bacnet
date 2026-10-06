@@ -3108,9 +3108,12 @@ left out is the Device clock's, a credential left out the no-credential
 reference and a factor left out the UNDEFINED one. Each changes its values
 together, sends the object's COV report when its trigger moves and runs the
 door's event algorithm at once. A value the object refuses raises
-VALUE_OUT_OF_RANGE with nothing changed; while its Out_Of_Service is TRUE
-every input is refused with WRITE_ACCESS_DENIED; another object raises
-OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+VALUE_OUT_OF_RANGE with nothing changed, and another object raises
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. While an object's Out_Of_Service is
+TRUE, the point refuses an event with WRITE_ACCESS_DENIED, and the door and
+the reader keep the reported values aside in place of the device's earlier
+ones: a client's simulated values stay served, with no COV report, and the
+return to service serves the latest values reported.
 
 #### Transportation
 

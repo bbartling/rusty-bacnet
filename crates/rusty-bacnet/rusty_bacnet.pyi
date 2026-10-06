@@ -3860,8 +3860,9 @@ class BACnetServer:
         Access_Event_Authentication_Factor (``authentication_factor`` as
         ``(format_type, format_class, value)``, the UNDEFINED factor when
         omitted) change together. A credential that isn't an Access
-        Credential, or a factor format outside the closed production, raises
-        VALUE_OUT_OF_RANGE. While the point is out of service the event is
+        Credential, a factor format outside the closed production, or an
+        event that is neither a named BACnetAccessEvent nor a proprietary one
+        from 512 to 65535, raises VALUE_OUT_OF_RANGE. While the point is out of service the event is
         refused with WRITE_ACCESS_DENIED and nothing changes. An unknown
         object raises UNKNOWN_OBJECT and any object other than an Access
         Point OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new time sends the
@@ -3883,11 +3884,12 @@ class BACnetServer:
         omitted, together. The factor must name one of the reader's
         ``supported_formats`` with its class, or be the UNDEFINED (0) or
         ERROR (1) factor with class 0, else VALUE_OUT_OF_RANGE. While the
-        reader is out of service the read is refused with
-        WRITE_ACCESS_DENIED and nothing changes. An unknown object raises
-        UNKNOWN_OBJECT and any object other than a Credential Data Input
-        OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new Update_Time sends the
-        reader's COV report.
+        reader is out of service the read is kept aside, in place of the
+        reader's earlier one: a client's simulated values stay served, no
+        COV report goes out, and the return to service serves the latest
+        read. An unknown object raises UNKNOWN_OBJECT and any object other
+        than a Credential Data Input OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A
+        new Update_Time sends the reader's COV report.
         """
         ...
 
@@ -3907,11 +3909,13 @@ class BACnetServer:
         outside its production, or an alarm state the door's Alarm_Values,
         Fault_Values and Masked_Alarm_Values don't admit, raises
         VALUE_OUT_OF_RANGE and nothing changes. While the door is out of
-        service the report is refused with WRITE_ACCESS_DENIED. An unknown
-        object raises UNKNOWN_OBJECT and any object other than an Access
-        Door OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new Door_Alarm_State
-        sends the door's COV report, and the door's event algorithm sees it
-        at once.
+        service the values are kept aside, in place of the device's earlier
+        ones: a client's simulated values stay served, no COV report or event
+        follows, and the return to service serves the latest values
+        reported. An unknown object raises UNKNOWN_OBJECT and any object
+        other than an Access Door OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. In
+        service a new Door_Alarm_State sends the door's COV report, and the
+        door's event algorithm sees it at once.
         """
         ...
 

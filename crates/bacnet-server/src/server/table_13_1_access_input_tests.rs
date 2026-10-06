@@ -1,9 +1,10 @@
 //! The application's routes to the access-control inputs (#1132):
 //! `report_access_event_local`, `report_credential_read_local` and
 //! `report_door_state_local`. Each takes its record as one local write, so
-//! the Table 13-1 report and the event pass follow it, stamps a missing time
-//! from the Device clock, and refuses an input while the object's
-//! Out_Of_Service is TRUE, changing nothing and reporting nothing.
+//! the Table 13-1 report and the event pass follow it, and stamps a missing
+//! time from the Device clock. While Out_Of_Service is TRUE the point refuses
+//! an event, and the reader and the door keep a report aside, serving and
+//! reporting nothing new until the return to service.
 
 use super::*;
 use bacnet_types::enums::{DoorStatus, EventState, LockStatus};
@@ -139,7 +140,7 @@ async fn access_event_route_stamps_the_clock_and_refuses_out_of_service() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn credential_read_route_stamps_the_clock_and_refuses_out_of_service() {
+async fn credential_read_route_stamps_the_clock_and_sets_aside_out_of_service() {
     let oid = cdi();
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         db.add(reader(7)).unwrap();
@@ -182,8 +183,9 @@ async fn credential_read_route_stamps_the_clock_and_refuses_out_of_service() {
     );
     h.no_notification().await;
 
-    // Out of service a client may be simulating the reader, so a read is
-    // refused; the return to service serves the reader's last read again.
+    // Out of service a client may be simulating the reader, so a read
+    // replaces the reader's values put aside (#1168): the served ones stay
+    // and nothing reports. The return to service serves the latest read.
     write(
         &mut h,
         oid,
@@ -192,15 +194,19 @@ async fn credential_read_route_stamps_the_clock_and_refuses_out_of_service() {
     )
     .await;
     h.cov_notification().await;
-    h.set_clock(30);
-    assert_refused(
+    let other_card = BACnetAuthenticationFactor {
+        value: vec![0x65, 0x43, 0x21],
+        ..card()
+    };
+    for second in [30, 35] {
+        h.set_clock(second);
         h.server
-            .report_credential_read_local(&oid, CredentialReadReport::new(card()))
-            .await,
-        ErrorClass::PROPERTY,
-        ErrorCode::WRITE_ACCESS_DENIED,
-    );
-    h.no_notification().await;
+            .report_credential_read_local(&oid, CredentialReadReport::new(other_card.clone()))
+            .await
+            .unwrap();
+        h.no_notification().await;
+        assert_eq!(served(&h, oid, PV).await, card_bytes());
+    }
     write(
         &mut h,
         oid,
@@ -208,15 +214,17 @@ async fn credential_read_route_stamps_the_clock_and_refuses_out_of_service() {
         encode(PropertyValue::Boolean(false)),
     )
     .await;
+    let other_card_bytes = vec![0x09, 0x08, 0x19, 0x00, 0x2B, 0x65, 0x43, 0x21];
     assert_eq!(
         values(&h.cov_notification().await, oid),
-        report(card_bytes(), 0x00, 25)
+        report(other_card_bytes, 0x00, 35)
     );
+    h.no_notification().await;
     h.server.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn door_state_route_runs_the_event_pass_and_refuses_out_of_service() {
+async fn door_state_route_runs_the_event_pass_and_sets_aside_out_of_service() {
     const ALARM: PropertyIdentifier = PropertyIdentifier::DOOR_ALARM_STATE;
     let oid = door_oid();
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
@@ -290,8 +298,10 @@ async fn door_state_route_runs_the_event_pass_and_refuses_out_of_service() {
         enumerated(DoorStatus::OPENED.to_raw())
     );
 
-    // Out of service a client may be simulating the door, so a report is
-    // refused and the door keeps what it served.
+    // Out of service a client may be simulating the door, so a report
+    // replaces the device values put aside (#1131): the served values stay,
+    // with no report and no event. The return to service serves the latest
+    // values reported.
     write(
         &mut h,
         oid,
@@ -300,21 +310,53 @@ async fn door_state_route_runs_the_event_pass_and_refuses_out_of_service() {
     )
     .await;
     h.cov_notification().await;
-    let closed = DoorStateReport {
-        door_status: Some(DoorStatus::CLOSED),
-        door_alarm_state: Some(DoorAlarmState::NORMAL),
-        ..DoorStateReport::default()
-    };
-    assert_refused(
-        h.server.report_door_state_local(&oid, closed).await,
-        ErrorClass::PROPERTY,
-        ErrorCode::WRITE_ACCESS_DENIED,
-    );
-    h.no_notification().await;
+    for later in [
+        DoorStateReport {
+            lock_status: Some(LockStatus::UNLOCKED),
+            ..DoorStateReport::default()
+        },
+        DoorStateReport {
+            door_status: Some(DoorStatus::CLOSED),
+            door_alarm_state: Some(DoorAlarmState::NORMAL),
+            ..DoorStateReport::default()
+        },
+    ] {
+        h.server.report_door_state_local(&oid, later).await.unwrap();
+        h.no_notification().await;
+        assert_eq!(
+            served(&h, oid, ALARM).await,
+            enumerated(DoorAlarmState::FORCED_OPEN.to_raw())
+        );
+        assert_eq!(
+            served(&h, oid, PropertyIdentifier::DOOR_STATUS).await,
+            enumerated(DoorStatus::OPENED.to_raw())
+        );
+        assert_eq!(
+            served(&h, oid, PropertyIdentifier::EVENT_STATE).await,
+            enumerated(EventState::OFFNORMAL.to_raw())
+        );
+    }
+    write(
+        &mut h,
+        oid,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        encode(PropertyValue::Boolean(false)),
+    )
+    .await;
+    let back = values(&h.cov_notification().await, oid);
     assert_eq!(
-        served(&h, oid, ALARM).await,
-        enumerated(DoorAlarmState::FORCED_OPEN.to_raw())
+        back.last(),
+        Some(&(ALARM, enumerated(DoorAlarmState::NORMAL.to_raw())))
     );
+    for (property, value) in [
+        (PropertyIdentifier::DOOR_STATUS, DoorStatus::CLOSED.to_raw()),
+        (
+            PropertyIdentifier::LOCK_STATUS,
+            LockStatus::UNLOCKED.to_raw(),
+        ),
+    ] {
+        assert_eq!(served(&h, oid, property).await, enumerated(value));
+    }
     h.server.stop().await.unwrap();
 }
 

@@ -87,7 +87,7 @@ impl CredentialDataInputObject {
     /// (Table 13-1). While Out_Of_Service is TRUE a client's simulated values
     /// keep being served, and these take over on the return to service. A
     /// running server's route, `BACnetServer::report_credential_read_local`,
-    /// refuses a read while Out_Of_Service is TRUE instead (#1132).
+    /// stores a read the same way (#1132).
     pub fn set_present_value(
         &mut self,
         factor: BACnetAuthenticationFactor,
@@ -262,18 +262,15 @@ impl BACnetObject for CredentialDataInputObject {
 
     /// Take a read the application reports (#1132): Present_Value and
     /// Update_Time together, the time stamped from the Device clock, or the
-    /// object's next sequence number, when the report has none. Checked as
-    /// [`Self::set_present_value`] checks a factor, and refused with
-    /// WRITE_ACCESS_DENIED while Out_Of_Service is TRUE, since a client may
-    /// be simulating the reader then; any other record is
+    /// object's next sequence number, when the report has none. Checked and
+    /// stored as [`Self::set_present_value`] stores a read: while
+    /// Out_Of_Service is TRUE it replaces the reader's values put aside, and
+    /// a client's simulated ones stay served. Any other record is
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
         let AccessControlInput::CredentialRead(report) = input else {
             return Err(common::optional_functionality_not_supported_error());
         };
-        if self.out_of_service {
-            return Err(common::write_access_denied_error());
-        }
         if !is_declared(&report.factor, &self.supported_formats) {
             return Err(common::value_out_of_range_error());
         }

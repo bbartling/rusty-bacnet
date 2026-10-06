@@ -1133,11 +1133,12 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// [`AccessControlInput`](crate::access_control::AccessControlInput).
     ///
     /// Only the built-in Access Point, Credential Data Input and Access Door
-    /// opt in, each for its own kind of record. They refuse an input while
-    /// Out_Of_Service is TRUE with PROPERTY / WRITE_ACCESS_DENIED and change
-    /// nothing, since the object then stands apart from what it represents.
-    /// The default, and an object offered another kind of record, fails
-    /// closed with the same error as
+    /// opt in, each for its own kind of record. While Out_Of_Service is TRUE
+    /// the point refuses an event with PROPERTY / WRITE_ACCESS_DENIED, since
+    /// it performs no authentication then, and the door and the reader store
+    /// the input with their device values put aside, leaving a client's
+    /// simulated values served. The default, and an object offered another
+    /// kind of record, fails closed with the same error as
     /// [`set_present_value_internal`](Self::set_present_value_internal).
     fn report_access_input_internal(
         &mut self,

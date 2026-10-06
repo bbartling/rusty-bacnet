@@ -11,13 +11,19 @@
 //! record over as one local write, so the COV report and the event pass
 //! follow it as they follow any other.
 //!
-//! While Out_Of_Service is TRUE an object stands apart from what it
-//! represents (Clauses 12.26.9, 12.31.8 and 12.36.8): the point performs no
-//! authentication, and a client may be simulating the door's or the
-//! reader's values. So the route refuses an input then, with
-//! WRITE_ACCESS_DENIED, and changes nothing; the application reports the
-//! state again after the return to service. The objects' own setters keep
-//! their rules, for setting an object up before the server holds it.
+//! While Out_Of_Service is TRUE each object stands apart from what it
+//! represents (Clauses 12.26.9, 12.31.8 and 12.36.8), and the route follows
+//! the object's own rule for that time:
+//!
+//! - The Access Point performs no authentication or authorization, so an
+//!   access event then has no meaning: the route refuses it with
+//!   WRITE_ACCESS_DENIED and changes nothing.
+//! - An Access Door or Credential Data Input keeps the device's values to one
+//!   side while a client may simulate the served ones (#1131, #1168). A
+//!   report replaces the values put aside, not the ones served, so it sends
+//!   no COV report and moves no event algorithm; the return to service
+//!   serves the latest values reported. The objects' setters follow the
+//!   same rule.
 //!
 //! [`BACnetObject::report_access_input_internal`]: crate::traits::BACnetObject::report_access_input_internal
 

@@ -3750,12 +3750,16 @@ optional time, stamped from the Device clock when absent) and
 Lock_Status and Door_Alarm_State) (#1132). Each record changes its values
 together as one local write, so the COV report and the event pass follow it
 as they follow `write_local`, and the call must run inside a Tokio runtime.
-Each checks its values as the setters do, all or nothing, and a door's
-values against their productions too. While its Out_Of_Service is TRUE
-the route refuses the input with WRITE_ACCESS_DENIED and changes nothing:
-the point performs no authentication then, and a client may be simulating
-the reader or the door. Any other object fails with
-OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+Each checks its values as the setters do, all or nothing, a door's values
+against their productions and a point's event against the BACnetAccessEvent
+production (named, or proprietary from 512 to 65535) too. While its
+Out_Of_Service is TRUE each object keeps its own rule: the point refuses an
+event with WRITE_ACCESS_DENIED and changes nothing, since it performs no
+authentication then, while the door and the reader keep the reported values
+aside in place of the device's earlier ones, as their setters do, so a
+client's simulated values stay served with no COV report or event, and the
+return to service serves the latest values reported. Any other object fails
+with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 
 An Access Point's Authentication_Status is READY until the application
 reports another status with `set_authentication_status` (a value past

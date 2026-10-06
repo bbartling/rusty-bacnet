@@ -1,7 +1,8 @@
 //! The access-control objects' runtime route (#1132):
 //! `report_access_input_internal` takes each object's own record whole,
-//! refuses it while Out_Of_Service is TRUE, and fails closed on any other
-//! object or record.
+//! follows each object's out-of-service rule (the point refuses, the reader
+//! and the door set the input aside), and fails closed on any other object
+//! or record.
 
 use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat};
 use bacnet_types::enums::{
@@ -113,6 +114,42 @@ fn access_point_takes_an_event_record_whole() {
 }
 
 #[test]
+fn access_point_takes_only_events_in_the_production() {
+    let mut point = AccessPointObject::new(1, "AP-1").unwrap();
+    // Named events, and the proprietary range 512..=65535 (Clause 21).
+    for raw in [0, 16, 128, 164, 512, 65_535] {
+        let event = AccessEvent::from_raw(raw);
+        point
+            .report_access_input_internal(AccessControlInput::AccessEvent(AccessEventReport::new(
+                event,
+                u64::from(raw),
+            )))
+            .unwrap();
+        assert_eq!(
+            read(&point, P::ACCESS_EVENT),
+            PropertyValue::Enumerated(raw)
+        );
+    }
+    // Reserved values and values past the Unsigned16 range change nothing,
+    // through the route or the setter.
+    let before = event_rows(&point);
+    for raw in [17, 127, 165, 511, 65_536] {
+        let report = AccessEventReport::new(AccessEvent::from_raw(raw), 1);
+        assert_error(
+            point.report_access_input_internal(AccessControlInput::AccessEvent(report.clone())),
+            ErrorClass::PROPERTY,
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_error(
+            point.set_access_event(report),
+            ErrorClass::PROPERTY,
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_eq!(event_rows(&point), before);
+    }
+}
+
+#[test]
 fn access_point_refuses_events_out_of_service_and_other_records() {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
     set_out_of_service(&mut point, true);
@@ -197,18 +234,39 @@ fn credential_data_input_takes_a_read_and_stamps_a_missing_time() {
         PropertyValue::ApplicationData(vec![0x19, 3])
     );
 
-    // Out of service the read is refused: neither the values served nor
-    // the reader's own ones put aside change.
+    // Out of service a read replaces the reader's values put aside (#1168):
+    // the served ones stay, and the return to service serves the latest
+    // read. Each read still has to name a declared format.
     set_out_of_service(&mut reader, true);
+    let served = [P::PRESENT_VALUE, P::UPDATE_TIME].map(|p| read(&reader, p));
+    let error_read = CredentialReadReport {
+        update_time: Some(BACnetTimeStamp::SequenceNumber(60)),
+        ..CredentialReadReport::new(card(AuthenticationFactorType::ERROR))
+    };
+    for later in [
+        error_read.clone(),
+        CredentialReadReport::new(card(AuthenticationFactorType::WIEGAND26)),
+    ] {
+        reader
+            .report_access_input_internal(AccessControlInput::CredentialRead(later))
+            .unwrap();
+        assert_eq!(
+            [P::PRESENT_VALUE, P::UPDATE_TIME].map(|p| read(&reader, p)),
+            served
+        );
+    }
     assert_error(
-        read_card(&mut reader, AuthenticationFactorType::WIEGAND26),
+        read_card(&mut reader, AuthenticationFactorType::WIEGAND37),
         ErrorClass::PROPERTY,
-        ErrorCode::WRITE_ACCESS_DENIED,
+        ErrorCode::VALUE_OUT_OF_RANGE,
     );
     set_out_of_service(&mut reader, false);
+    // The last read set aside: the card, stamped with the next sequence
+    // number.
+    assert_eq!(read(&reader, P::PRESENT_VALUE), card_value());
     assert_eq!(
         read(&reader, P::UPDATE_TIME),
-        PropertyValue::ApplicationData(vec![0x19, 3])
+        PropertyValue::ApplicationData(vec![0x19, 4])
     );
     assert_error(
         reader.report_access_input_internal(AccessControlInput::AccessEvent(
@@ -298,20 +356,56 @@ fn access_door_takes_the_values_a_report_gives() {
         assert_eq!(state(&door), held);
     }
 
-    // Out of service the report is refused; the return to service serves
-    // the values held before.
+    // Out of service a report replaces the device values put aside
+    // (#1131): a client's simulated Door_Status stays served, the lists
+    // still judge the alarm state, and the return to service serves the
+    // latest values reported.
     set_out_of_service(&mut door, true);
-    let closed = DoorStateReport {
-        door_status: Some(DoorStatus::CLOSED),
+    door.write_property(
+        P::DOOR_STATUS,
+        None,
+        PropertyValue::Enumerated(DoorStatus::DOOR_FAULT.to_raw()),
+        None,
+    )
+    .unwrap();
+    let simulated = raw(
+        DoorStatus::DOOR_FAULT,
+        LockStatus::UNLOCKED,
+        DoorAlarmState::FORCED_OPEN,
+    );
+    assert_eq!(state(&door), simulated);
+    for later in [
+        DoorStateReport {
+            door_status: Some(DoorStatus::OPENED),
+            ..DoorStateReport::default()
+        },
+        DoorStateReport {
+            door_status: Some(DoorStatus::CLOSED),
+            lock_status: Some(LockStatus::LOCKED),
+            door_alarm_state: Some(DoorAlarmState::NORMAL),
+        },
+    ] {
+        report(&mut door, later).unwrap();
+        assert_eq!(state(&door), simulated);
+    }
+    let tamper = DoorStateReport {
+        door_alarm_state: Some(DoorAlarmState::TAMPER),
         ..DoorStateReport::default()
     };
     assert_error(
-        report(&mut door, closed),
+        report(&mut door, tamper),
         ErrorClass::PROPERTY,
-        ErrorCode::WRITE_ACCESS_DENIED,
+        ErrorCode::VALUE_OUT_OF_RANGE,
     );
     set_out_of_service(&mut door, false);
-    assert_eq!(state(&door), held);
+    assert_eq!(
+        state(&door),
+        raw(
+            DoorStatus::CLOSED,
+            LockStatus::LOCKED,
+            DoorAlarmState::NORMAL
+        )
+    );
 }
 
 #[test]

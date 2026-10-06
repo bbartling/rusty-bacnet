@@ -3,8 +3,9 @@
 report_access_event_local, report_credential_read_local and
 report_door_state_local hand an Access Point's access event, a Credential
 Data Input's read and an Access Door's hardware state to a running server
-as one local write each, so COV reports follow; each is refused while the
-object's Out_Of_Service is TRUE.
+as one local write each, so COV reports follow. While Out_Of_Service is
+TRUE the point refuses an event, and the reader and the door keep a report
+aside for the return to service.
 """
 
 from __future__ import annotations
@@ -100,7 +101,11 @@ class RuntimeInputStubContractTests(unittest.TestCase):
                 self.assertEqual(ast.unparse(method.returns), "Awaitable[None]")
                 docs = ast.get_docstring(method)
                 assert docs is not None
-                for phrase in ("WRITE_ACCESS_DENIED", "OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED"):
+                docs = " ".join(docs.split())
+                phrases = ["out of service", "OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED"]
+                if name == "report_access_event_local":
+                    phrases.append("WRITE_ACCESS_DENIED")
+                for phrase in phrases:
                     self.assertIn(phrase, docs)
 
 
@@ -146,6 +151,8 @@ class RuntimeInputLiveServerTests(unittest.TestCase):
             # Values the objects refuse.
             for route in (
                 lambda: server.report_access_event_local(POINT, GRANTED, 8, credential=DOOR),
+                # Reserved: neither named nor in the proprietary 512..65535.
+                lambda: server.report_access_event_local(POINT, 200, 8),
                 lambda: server.report_credential_read_local(READER, (9, 0, b"\x01")),
                 lambda: server.report_door_state_local(DOOR, door_alarm_state=TAMPER),
             ):
@@ -167,20 +174,37 @@ class RuntimeInputLiveServerTests(unittest.TestCase):
                     await route()
                 self.assert_error(raised.exception, ErrorClass.OBJECT, code)
 
-            # Out of service every route is refused and nothing changes.
-            for oid in (POINT, READER, DOOR):
+            # Out of service the point refuses an event, and nothing changes.
+            async def out_of_service(oid: ObjectIdentifier, value: bool) -> None:
                 await server.write_property_local(
-                    oid, P.OUT_OF_SERVICE, PropertyValue.boolean(True), source_object=None)
-            for route in (
-                lambda: server.report_access_event_local(POINT, GRANTED, 9),
-                lambda: server.report_credential_read_local(READER, CARD),
-                lambda: server.report_door_state_local(DOOR, door_status=0),
-            ):
-                with self.assertRaises(BacnetProtocolError) as raised:
-                    await route()
-                self.assert_error(raised.exception, ErrorClass.PROPERTY,
-                                  ErrorCode.WRITE_ACCESS_DENIED)
+                    oid, P.OUT_OF_SERVICE, PropertyValue.boolean(value), source_object=None)
+
+            for oid in (POINT, READER, DOOR):
+                await out_of_service(oid, True)
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await server.report_access_event_local(POINT, GRANTED, 9)
+            self.assert_error(raised.exception, ErrorClass.PROPERTY,
+                              ErrorCode.WRITE_ACCESS_DENIED)
+            # The entry edge's own OUT_OF_SERVICE (10) event stays served.
+            self.assertEqual((await read(POINT, P.ACCESS_EVENT)).value, 10)
+
+            # The reader and the door keep a report aside: the served values
+            # stay until the return to service, which serves the latest ones.
+            other_card = (WIEGAND26, 0, b"\x65\x43\x21")
+            other_octets = CARD_OCTETS[:5] + b"\x65\x43\x21"
+            await server.report_credential_read_local(READER, other_card)
+            await server.report_door_state_local(DOOR, door_status=0)
+            await server.report_door_state_local(DOOR, door_alarm_state=0)
+            self.assertEqual(await read(READER, P.PRESENT_VALUE),
+                             PropertyValue.application_data(CARD_OCTETS))
             self.assertEqual((await read(DOOR, P.DOOR_STATUS)).value, OPENED)
+            self.assertEqual((await read(DOOR, P.DOOR_ALARM_STATE)).value, FORCED_OPEN)
+            for oid in (READER, DOOR):
+                await out_of_service(oid, False)
+            self.assertEqual(await read(READER, P.PRESENT_VALUE),
+                             PropertyValue.application_data(other_octets))
+            self.assertEqual((await read(DOOR, P.DOOR_STATUS)).value, 0)
+            self.assertEqual((await read(DOOR, P.DOOR_ALARM_STATE)).value, 0)
         finally:
             await server.stop()
 

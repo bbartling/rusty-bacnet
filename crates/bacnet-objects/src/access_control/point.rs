@@ -151,9 +151,11 @@ impl AccessPointObject {
     /// changing: a reference to another object type, one whose device
     /// identifier isn't a Device (#1285), one with 4194303 in only one of
     /// the two instances, which is neither a credential nor the
-    /// no-credential reference, and a factor whose format type isn't a
-    /// named BACnetAuthenticationFactorType. These rows have no network
-    /// write route, so this setter is the only check.
+    /// no-credential reference, a factor whose format type isn't a named
+    /// BACnetAuthenticationFactorType, and an event that is neither a named
+    /// BACnetAccessEvent nor a proprietary one from 512 to 65535 (Clause
+    /// 21). These rows have no network write route, so this setter is the
+    /// only check.
     ///
     /// This setter takes an event in or out of service, to set a point up
     /// before the server holds it. A running server's route,
@@ -174,7 +176,7 @@ impl AccessPointObject {
         let factor = report
             .authentication_factor
             .unwrap_or_else(undefined_factor);
-        if !is_factor_type(factor.format_type) {
+        if !is_factor_type(factor.format_type) || !access_event_in_range(report.event) {
             return Err(common::value_out_of_range_error());
         }
         let tag = report.tag;
@@ -343,6 +345,15 @@ fn no_credential() -> BACnetDeviceObjectReference {
     )
     .expect("4194303 is within the instance range")
     .into()
+}
+
+/// Whether `event` is a named BACnetAccessEvent or a proprietary one
+/// (512..=65535, Clause 21).
+fn access_event_in_range(event: AccessEvent) -> bool {
+    AccessEvent::ALL_NAMED
+        .iter()
+        .any(|&(_, named)| named == event)
+        || (512..=65_535).contains(&event.to_raw())
 }
 
 /// `tag` as a sequence number in 1..=65535: the tag itself up to 65535, and

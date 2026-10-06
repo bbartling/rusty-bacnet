@@ -18,8 +18,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Access_Event_Tag, Access_Event_Time, Access_Event_Credential and
     /// Access_Event_Authentication_Factor change together (Clause
     /// 12.31.27.1), checked as `AccessPointObject::set_access_event` checks
-    /// them (VALUE_OUT_OF_RANGE for a credential reference or factor it
-    /// refuses). A report without a time is stamped from the Device clock.
+    /// them (VALUE_OUT_OF_RANGE for a credential reference, factor or event
+    /// it refuses; an event is a named BACnetAccessEvent or a proprietary
+    /// one from 512 to 65535). A report without a time is stamped from the
+    /// Device clock.
     ///
     /// Access_Event_Time is the point's Table 13-1 trigger, so each event
     /// with a new time sends the SubscribeCOV report, carrying all five
@@ -53,10 +55,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// Update_Time is the reader's Table 13-1 trigger, so each read with a
     /// new time sends the SubscribeCOV report. While Out_Of_Service is TRUE
-    /// a client may be simulating the reader, so a read is refused with
-    /// PROPERTY / WRITE_ACCESS_DENIED and nothing changes. The other errors
-    /// are those of [`Self::report_access_event_local`], for a Credential
-    /// Data Input. The Python binding exposes this as
+    /// a client may be simulating the reader, so the read replaces the
+    /// reader's values put aside, as `set_present_value` does (#1168): the
+    /// served values, and with them the COV report, stay as they are, and
+    /// the return to service serves the latest read. The other errors are
+    /// those of [`Self::report_access_event_local`], for a Credential Data
+    /// Input. The Python binding exposes this as
     /// `BACnetServer.report_credential_read_local`.
     ///
     /// The Tokio-runtime rule of [`write_local`](Self::write_local) applies.
@@ -79,10 +83,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// sends the SubscribeCOV report, and the event pass after the write
     /// runs the door's CHANGE_OF_STATE and FAULT_STATE algorithms on it at
     /// once. Secured_Status follows the new values on its next read. While
-    /// Out_Of_Service is TRUE a client may be simulating the door, so a
-    /// report is refused with PROPERTY / WRITE_ACCESS_DENIED and nothing
-    /// changes; report the hardware's state again after the return to
-    /// service. The other errors are those of
+    /// Out_Of_Service is TRUE a client may be simulating the door, so the
+    /// report replaces the device values put aside, as the door's setters do
+    /// (#1131): the served values stay, so no COV report or event follows,
+    /// and the return to service serves the latest values reported. The
+    /// other errors are those of
     /// [`Self::report_access_event_local`], for an Access Door. The Python
     /// binding exposes this as `BACnetServer.report_door_state_local`.
     ///

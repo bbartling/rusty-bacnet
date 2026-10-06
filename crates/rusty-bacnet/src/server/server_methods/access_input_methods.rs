@@ -1,8 +1,9 @@
 //! The application's route to the inputs of a running server's access-control
 //! objects (#1132): an Access Point's access events, a Credential Data
 //! Input's reads and an Access Door's hardware state. Each is one local
-//! write, so COV reports and the event pass follow it; each is refused while
-//! Out_Of_Service is TRUE.
+//! write, so COV reports and the event pass follow it. While Out_Of_Service
+//! is TRUE the point refuses an event, and the door and the reader keep a
+//! report aside for the return to service.
 use super::super::*;
 use crate::types::PyBACnetTimeStamp;
 use bacnet_objects::access_control::{
@@ -74,8 +75,10 @@ impl BACnetServer {
     /// reference when omitted. `authentication_factor` is `(format_type,
     /// format_class, value)`, the UNDEFINED factor when omitted. A
     /// credential that isn't an Access Credential, or a factor format
-    /// outside the closed production, raises VALUE_OUT_OF_RANGE. While the
-    /// point is out of service the event is refused with
+    /// outside the closed production, or an event that is neither a named
+    /// BACnetAccessEvent nor a proprietary one from 512 to 65535, raises
+    /// VALUE_OUT_OF_RANGE. While the point is out of service the event is
+    /// refused with
     /// WRITE_ACCESS_DENIED and nothing changes. Any object other than an
     /// Access Point raises OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new time
     /// sends the point's COV report.
@@ -118,10 +121,12 @@ impl BACnetServer {
     /// the reader's `supported_formats` with its class, or be the UNDEFINED
     /// (0) or ERROR (1) factor with class 0, else VALUE_OUT_OF_RANGE.
     /// `update_time` is a `BACnetTimeStamp`, the Device clock's when
-    /// omitted. While the reader is out of service the read is refused with
-    /// WRITE_ACCESS_DENIED and nothing changes. Any object other than a
-    /// Credential Data Input raises OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A
-    /// new Update_Time sends the reader's COV report.
+    /// omitted. While the reader is out of service the read is kept aside,
+    /// in place of the reader's earlier one: a client's simulated values
+    /// stay served, no COV report goes out, and the return to service
+    /// serves the latest read. Any object other than a Credential Data Input
+    /// raises OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new Update_Time sends
+    /// the reader's COV report.
     #[pyo3(signature = (object_id, factor, *, update_time=None))]
     fn report_credential_read_local<'py>(
         &self,
@@ -146,10 +151,13 @@ impl BACnetServer {
     /// A number outside its production, or an alarm state the door's
     /// Alarm_Values, Fault_Values and Masked_Alarm_Values don't admit,
     /// raises VALUE_OUT_OF_RANGE and nothing changes. While the door is out
-    /// of service the report is refused with WRITE_ACCESS_DENIED. Any object
-    /// other than an Access Door raises OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
-    /// A new Door_Alarm_State sends the door's COV report, and the door's
-    /// event algorithm sees it at once.
+    /// of service the values are kept aside, in place of the device's
+    /// earlier ones: a client's simulated values stay served, no COV report
+    /// or event follows, and the return to service serves the latest values
+    /// reported. Any object other than an Access Door raises
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. In service a new
+    /// Door_Alarm_State sends the door's COV report, and the door's event
+    /// algorithm sees it at once.
     #[pyo3(signature = (object_id, *, door_status=None, lock_status=None, door_alarm_state=None))]
     fn report_door_state_local<'py>(
         &self,
