@@ -1970,8 +1970,16 @@ await server.write_property_local(
 Peers can write each of these properties; writing Trigger TRUE to a polled
 log raises NOT_CONFIGURED_FOR_TRIGGERED_LOGGING.
 
-`add_trend_log` and `add_event_log` take no such keyword arguments, but their
-objects serve the same rows over the network and through
+All three logs take a keyword-only `total_record_count` (default 0) that
+seeds Total_Record_Count, an Unsigned32 (#1537). The first record is numbered
+one past it, so a log seeded at `2**32 - 2` numbers its records `2**32 - 1`,
+then 1, 2 and on: a reader's handling of the wrap can be tested without
+logging four billion records first. A value outside Unsigned32 raises
+`OverflowError`. Restoring saved records is Rust-only, through
+`restore_log_buffer`.
+
+`add_trend_log` and `add_event_log` take none of the other keyword arguments,
+but their objects serve the same rows over the network and through
 `write_property_local`: a Trend Log has Logging_Type (POLLED or TRIGGERED),
 Log_Interval, Start_Time, Stop_Time, Align_Intervals, Interval_Offset and
 Trigger, and an Event Log has Start_Time and Stop_Time. The server can't log

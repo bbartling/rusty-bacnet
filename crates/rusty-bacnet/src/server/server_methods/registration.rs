@@ -365,9 +365,19 @@ impl BACnetServer {
     }
 
     /// Add a Trend Log object to the server (before starting).
-    #[pyo3(signature = (instance, name, buffer_size=100))]
-    fn add_trend_log(&self, instance: u32, name: &str, buffer_size: u32) -> PyResult<()> {
-        let tl = TrendLogObject::new(instance, name, buffer_size).map_err(to_py_err)?;
+    /// `total_record_count` seeds Total_Record_Count: the first record is
+    /// numbered one past it, going from 2^32 - 1 on to 1 (#1537).
+    #[pyo3(signature = (instance, name, buffer_size=100, *, total_record_count=0))]
+    fn add_trend_log(
+        &self,
+        instance: u32,
+        name: &str,
+        buffer_size: u32,
+        total_record_count: u32,
+    ) -> PyResult<()> {
+        let mut tl = TrendLogObject::new(instance, name, buffer_size).map_err(to_py_err)?;
+        tl.restore_log_buffer(total_record_count, [])
+            .map_err(to_py_err)?;
         self.push_pending(Box::new(tl))
     }
 
@@ -765,16 +775,27 @@ impl BACnetServer {
     /// Add an Event Log object to the server (before starting). With
     /// `log_received_notifications` it also records the event notifications
     /// the server receives, a few per source each second.
-    #[pyo3(signature = (instance, name, buffer_size=100, log_received_notifications=false))]
+    /// `total_record_count` seeds Total_Record_Count, as on `add_trend_log`.
+    #[pyo3(signature = (
+        instance,
+        name,
+        buffer_size=100,
+        log_received_notifications=false,
+        *,
+        total_record_count=0
+    ))]
     fn add_event_log(
         &self,
         instance: u32,
         name: &str,
         buffer_size: u32,
         log_received_notifications: bool,
+        total_record_count: u32,
     ) -> PyResult<()> {
         let mut obj = EventLogObject::new(instance, name, buffer_size).map_err(to_py_err)?;
         obj.set_log_received_notifications(log_received_notifications);
+        obj.restore_log_buffer(total_record_count, [])
+            .map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 }
