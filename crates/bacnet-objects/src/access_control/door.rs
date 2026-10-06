@@ -59,12 +59,14 @@ pub const DEFAULT_DOOR_OPEN_TOO_LONG_TIME: u32 = 300;
 ///
 /// The application decides when the door is in alarm and reports it with
 /// [`Self::set_door_alarm_state`]; Clause 12.26.20 leaves that to the
-/// device. While the server holds the door, the application reports its
-/// Door_Status, Lock_Status and Door_Alarm_State through
-/// `BACnetServer::report_door_state_local` (#1132), which stores them as the
-/// setters do, out of service included. That includes DOOR_OPEN_TOO_LONG: the door serves
+/// device. That includes DOOR_OPEN_TOO_LONG: the door serves
 /// Door_Open_Too_Long_Time for the application's logic to read but runs no
 /// timer of its own.
+///
+/// While the server holds the door, the application reports its
+/// Door_Status, Lock_Status and Door_Alarm_State through
+/// `BACnetServer::report_door_state_local` (#1132), which stores them as the
+/// setters do, out of service included.
 #[derive(Clone)]
 pub struct AccessDoorObject {
     oid: ObjectIdentifier,

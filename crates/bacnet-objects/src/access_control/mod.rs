@@ -161,6 +161,7 @@ mod metadata_identity;
 mod metadata_topology;
 mod point;
 mod point_authorization;
+mod point_event_time;
 mod rights;
 mod rights_writes;
 mod user;

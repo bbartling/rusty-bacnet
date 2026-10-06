@@ -17,7 +17,8 @@
 //!
 //! - The Access Point performs no authentication or authorization, so an
 //!   access event then has no meaning: the route refuses it with
-//!   WRITE_ACCESS_DENIED and changes nothing.
+//!   WRITE_ACCESS_DENIED and changes nothing. It does the same while its
+//!   Reliability isn't NO_FAULT_DETECTED (Clause 12.31.7).
 //! - An Access Door or Credential Data Input keeps the device's values to one
 //!   side while a client may simulate the served ones (#1131, #1168). A
 //!   report replaces the values put aside, not the ones served, so it sends
@@ -54,9 +55,10 @@ pub struct AccessEventReport {
     /// it on for each new transaction and repeats it for further events of
     /// the same one (Clause 12.31.28).
     pub tag: u64,
-    /// When the event happened; `None` stamps it from the Device clock, or,
-    /// without a usable clock, with the tag folded into a sequence number,
-    /// as the point's Out_Of_Service edges are stamped.
+    /// When the event happened; `None` stamps it strictly after the time
+    /// the point serves, from the Device clock or, without a usable clock,
+    /// the next sequence number, as the point's Out_Of_Service edges are
+    /// stamped, so each event moves Access_Event_Time.
     pub time: Option<BACnetTimeStamp>,
     /// The Access Credential behind the event; `None` stores the
     /// no-credential reference (Clause 12.31.30).

@@ -230,14 +230,19 @@ fn access_point_invalid_policy_in_effect_drops_to_zero_and_faults() {
         );
         assert_eq!(reliability(&point), Reliability::CONFIGURATION_ERROR);
         assert!(fault(&point));
-        // Naming the invalid policy is refused; naming the valid one clears
-        // both (Clause 12.31.10).
+        // Naming the invalid policy is refused; naming the valid one puts
+        // it in effect (Clause 12.31.10), but the invalid policy in the list
+        // keeps the configuration error (Clause 12.31.12).
         assert_error(
             write(&mut point, POLICY, PropertyValue::Unsigned(1)),
             ErrorCode::VALUE_OUT_OF_RANGE,
         );
         assert_eq!(read(&point, POLICY), PropertyValue::Unsigned(0));
         write(&mut point, POLICY, PropertyValue::Unsigned(2)).unwrap();
+        assert_eq!(read(&point, POLICY), PropertyValue::Unsigned(2));
+        assert_eq!(reliability(&point), Reliability::CONFIGURATION_ERROR);
+        // A list with every policy valid clears it.
+        point.set_authentication_policies(card_and_pin()).unwrap();
         assert_eq!(read(&point, POLICY), PropertyValue::Unsigned(2));
         assert_eq!(reliability(&point), Reliability::NO_FAULT_DETECTED);
         assert!(!fault(&point));
@@ -282,8 +287,10 @@ fn access_point_policy_arrays_follow_the_count() {
     write(&mut point, POLICY, PropertyValue::Unsigned(2)).unwrap();
     // Growing adds an empty policy, unordered with no timeout (Clause
     // 12.31.12.2), and an empty name. An empty policy can't be put in
-    // effect.
+    // effect, and while the list holds one the point reports the
+    // configuration error (Clause 12.31.12).
     point.set_number_of_authentication_policies(3).unwrap();
+    assert_eq!(reliability(&point), Reliability::CONFIGURATION_ERROR);
     assert_eq!(
         point.read_property(LIST, Some(3)).unwrap(),
         encoded(&BACnetAuthenticationPolicy::default())
@@ -367,4 +374,39 @@ fn access_point_reliability_takes_simulated_writes_only_out_of_service() {
     // Entering out of service again starts the simulation from it.
     write(&mut point, P::OUT_OF_SERVICE, PropertyValue::Boolean(true)).unwrap();
     assert_eq!(reliability(&point), Reliability::CONFIGURATION_ERROR);
+}
+
+#[test]
+fn access_point_caps_the_policy_count_while_it_serves_the_arrays() {
+    let names = |count: u32| (0..count).map(|n| (format!("p{n}"), policy(vec![entry(1, 1)])));
+    let mut point = AccessPointObject::new(1, "AP-1").unwrap();
+    // Without the arrays nothing is allocated, so any nonzero count goes.
+    point
+        .set_number_of_authentication_policies(u32::MAX)
+        .unwrap();
+    // A list past the cap is refused, and the point keeps what it had.
+    assert_error(
+        point.set_authentication_policies(names(MAX_AUTHENTICATION_POLICIES + 1)),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    assert!(!point.property_list().contains(&LIST));
+    point
+        .set_authentication_policies(names(MAX_AUTHENTICATION_POLICIES))
+        .unwrap();
+    assert_eq!(
+        read(&point, POLICIES),
+        PropertyValue::Unsigned(MAX_AUTHENTICATION_POLICIES.into())
+    );
+    // Neither can a count grow the arrays past it.
+    for count in [MAX_AUTHENTICATION_POLICIES + 1, u32::MAX] {
+        assert_error(
+            point.set_number_of_authentication_policies(count),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+    }
+    assert_eq!(
+        point.read_property(NAMES, Some(0)).unwrap(),
+        PropertyValue::Unsigned(MAX_AUTHENTICATION_POLICIES.into())
+    );
+    point.set_number_of_authentication_policies(2).unwrap();
 }

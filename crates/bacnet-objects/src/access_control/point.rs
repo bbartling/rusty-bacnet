@@ -6,11 +6,17 @@ use bacnet_types::enums::AuthorizationMode;
 
 use super::credential_data_input_formats::{is_factor_type, undefined_factor};
 use super::point_authorization::Authorization;
+use super::point_event_time::next_event_time;
 use super::*;
 use crate::clock::ClockReader;
 
 // AccessPointObject (type 33)
 // ---------------------------------------------------------------------------
+
+/// The most authentication policies an Access Point holds while it serves
+/// Authentication_Policy_List and Authentication_Policy_Names, a resource
+/// cap: a count or list past it is VALUE_OUT_OF_RANGE.
+pub const MAX_AUTHENTICATION_POLICIES: u32 = 256;
 
 /// BACnet Access Point object (type 33).
 ///
@@ -45,11 +51,13 @@ use crate::clock::ClockReader;
 /// property reads DISABLED; the reported status is kept and served again on
 /// the return to service.
 ///
-/// With no usable Device clock the time takes the BACnetTimeStamp
-/// sequence-number form (Clauses 12.31.29 and 21.6) and holds the new tag:
-/// the tag itself while it fits the form's 1 to 65535, and past that the tag
-/// folded back into that range, so successive edges still differ and none
-/// reads 0, the value of an update time with no update yet.
+/// Each event the point stamps itself, an edge or a reported event with no
+/// time, gets an Access_Event_Time strictly after the one served before it,
+/// so every event moves the time (Clause 12.31.29), several events of one
+/// transaction included: the clock's time, or one hundredth past the time
+/// served when the clock isn't later, and with no usable clock the next
+/// sequence number (Clause 21.6). The module `point_event_time` has the
+/// rule.
 ///
 /// Access_Event_Time is the Table 13-1 trigger, and each edge moves it, so
 /// each edge sends the SubscribeCOV report, which also carries the changed
@@ -68,7 +76,11 @@ use crate::clock::ClockReader;
 ///
 /// Reliability is CONFIGURATION_ERROR while Active_Authentication_Policy is
 /// zero, which happens when the policies leave none usable in effect
-/// (Clause 12.31.10), and NO_FAULT_DETECTED otherwise. Since it can leave
+/// (Clause 12.31.10), or while Authentication_Policy_List holds any invalid
+/// policy (Clause 12.31.12), and NO_FAULT_DETECTED otherwise. While it isn't
+/// NO_FAULT_DETECTED the point performs no authentication and generates no
+/// access events (Clause 12.31.7), so `report_access_event_local` refuses
+/// them. Since it can leave
 /// NO_FAULT_DETECTED, a client may write it while Out_Of_Service is TRUE
 /// to simulate a fault, and only then (Clause 12.31.8): an Enumerated
 /// inside the BACnetReliability production, else INVALID_DATA_TYPE or
@@ -135,8 +147,8 @@ impl AccessPointObject {
     ///
     /// Access_Event_Time is a `BACnetTimeStamp` (Clause 12.31.29) and goes
     /// out in its Clause 21 CHOICE form. A report without one is stamped
-    /// from the Device clock, or, with no usable clock, with the tag folded
-    /// into a sequence number, as an Out_Of_Service edge is. A change of the
+    /// strictly after the time served, from the Device clock or a sequence
+    /// number, as an Out_Of_Service edge is (`point_event_time`). A change of the
     /// time triggers a SubscribeCOV notification; the other four only ride
     /// along (Table 13-1). Over the network all five stay read-only.
     ///
@@ -179,12 +191,11 @@ impl AccessPointObject {
         if !is_factor_type(factor.format_type) || !access_event_in_range(report.event) {
             return Err(common::value_out_of_range_error());
         }
-        let tag = report.tag;
-        self.access_event = report.event;
-        self.access_event_tag = tag;
         self.access_event_time = report
             .time
-            .unwrap_or_else(|| update_stamp(self.clock.as_deref(), || tag_sequence(tag)));
+            .unwrap_or_else(|| next_event_time(self.clock.as_deref(), &self.access_event_time));
+        self.access_event = report.event;
+        self.access_event_tag = report.tag;
         self.access_event_credential = credential;
         self.access_event_authentication_factor = factor;
         Ok(())
@@ -236,13 +247,15 @@ impl AccessPointObject {
     /// VALUE_OUT_OF_RANGE.
     ///
     /// Once [`Self::set_authentication_policies`] has set the policy arrays,
-    /// they follow the count: a smaller count drops the last policies, and a
-    /// larger one adds empty policies, not enforcing order and with no
-    /// timeout (Clause 12.31.12.2), each with an empty name. An empty policy
-    /// is invalid. A count below Active_Authentication_Policy, or one that
-    /// leaves it naming an invalid policy, drops it to zero and Reliability
-    /// to CONFIGURATION_ERROR (Clause 12.31.10) until a client writes a
-    /// usable policy.
+    /// they follow the count, which can then be at most
+    /// [`MAX_AUTHENTICATION_POLICIES`] (VALUE_OUT_OF_RANGE above it): a
+    /// smaller count drops the last policies, and a larger one adds empty
+    /// policies, not enforcing order and with no timeout (Clause 12.31.12.2),
+    /// each with an empty name. An empty policy is invalid, so a grown point
+    /// reads Reliability CONFIGURATION_ERROR until the application fills the
+    /// new policies in. A count below Active_Authentication_Policy, or one
+    /// that leaves it naming an invalid policy, drops it to zero (Clause
+    /// 12.31.10) until a client writes a usable policy.
     pub fn set_number_of_authentication_policies(&mut self, count: u32) -> Result<(), Error> {
         self.authorization.set_policies(count)?;
         self.refresh_reliability();
@@ -254,19 +267,20 @@ impl AccessPointObject {
     /// order (Clauses 12.31.12 and 12.31.13). The point serves both arrays
     /// from then on, and Number_Of_Authentication_Policies takes the number
     /// of pairs, since both arrays are that long (Table 12-36 footnote 1).
-    /// All three are read-only over the network. No pairs at all is refused
-    /// with VALUE_OUT_OF_RANGE, and nothing changes.
+    /// All three are read-only over the network. No pairs at all, or more
+    /// than [`MAX_AUTHENTICATION_POLICIES`], is refused with
+    /// VALUE_OUT_OF_RANGE, and nothing changes.
     ///
     /// A policy is stored as given, but only a well-formed one is usable:
     /// at least one entry, each naming a Credential Data Input object (in a
     /// Device, when it names a device), with indexes that start at 1 and, in
     /// list order, either repeat (a second factor that completes the same
     /// step) or go up by one. A client can't make an invalid policy the
-    /// active one (VALUE_OUT_OF_RANGE). When the new list leaves
-    /// Active_Authentication_Policy beyond the count or on an invalid
-    /// policy, it drops to zero and Reliability reads CONFIGURATION_ERROR
-    /// (Clause 12.31.10) until a client writes a usable policy; the point
-    /// doesn't pick one itself.
+    /// active one (VALUE_OUT_OF_RANGE), and while the list holds any invalid
+    /// policy Reliability reads CONFIGURATION_ERROR (Clause 12.31.12). When
+    /// the new list leaves Active_Authentication_Policy beyond the count or
+    /// on an invalid policy, it drops to zero (Clause 12.31.10) until a
+    /// client writes a usable policy; the point doesn't pick one itself.
     pub fn set_authentication_policies(
         &mut self,
         policies: impl IntoIterator<Item = (impl Into<String>, BACnetAuthenticationPolicy)>,
@@ -281,11 +295,13 @@ impl AccessPointObject {
         Ok(())
     }
 
-    /// Derive Reliability from the active policy, in service only: out of
+    /// Derive Reliability from the policies, in service only: out of
     /// service a client's simulated value stays served.
     fn refresh_reliability(&mut self) {
         if !self.out_of_service {
-            self.reliability = if self.authorization.active_policy() == 0 {
+            self.reliability = if self.authorization.active_policy() == 0
+                || self.authorization.holds_invalid_policy()
+            {
                 Reliability::CONFIGURATION_ERROR
             } else {
                 Reliability::NO_FAULT_DETECTED
@@ -323,13 +339,12 @@ impl AccessPointObject {
     }
 
     /// Record the access event an Out_Of_Service edge raises: a new
-    /// transaction, stamped from the Device clock, or with the new tag as a
-    /// sequence number when there is no usable clock, and with no credential.
+    /// transaction, stamped after the time served (`point_event_time`), with
+    /// no credential and no factor.
     fn record_out_of_service_event(&mut self, event: AccessEvent) {
-        let tag = self.access_event_tag.wrapping_add(1);
         self.access_event = event;
-        self.access_event_tag = tag;
-        self.access_event_time = update_stamp(self.clock.as_deref(), || tag_sequence(tag));
+        self.access_event_tag = self.access_event_tag.wrapping_add(1);
+        self.access_event_time = next_event_time(self.clock.as_deref(), &self.access_event_time);
         self.access_event_credential = no_credential();
         self.access_event_authentication_factor = undefined_factor();
     }
@@ -354,15 +369,6 @@ fn access_event_in_range(event: AccessEvent) -> bool {
         .iter()
         .any(|&(_, named)| named == event)
         || (512..=65_535).contains(&event.to_raw())
-}
-
-/// `tag` as a sequence number in 1..=65535: the tag itself up to 65535, and
-/// past that folded back into the range, so consecutive tags, the wrap from
-/// the top of the Unsigned range to 0 included, give different numbers.
-fn tag_sequence(tag: u64) -> u16 {
-    const RANGE: u64 = u16::MAX as u64;
-    // In 0..RANGE, so the cast keeps every bit and the sum stays in range.
-    (tag.wrapping_sub(1) % RANGE) as u16 + 1
 }
 
 impl BACnetObject for AccessPointObject {
@@ -481,14 +487,16 @@ impl BACnetObject for AccessPointObject {
     }
 
     /// Take an access event the application reports (#1132), through
-    /// [`Self::set_access_event`]; refused with WRITE_ACCESS_DENIED while
-    /// Out_Of_Service is TRUE, and any other record with
+    /// [`Self::set_access_event`]. Refused with WRITE_ACCESS_DENIED while
+    /// Out_Of_Service is TRUE (Clause 12.31.8) or Reliability isn't
+    /// NO_FAULT_DETECTED (Clause 12.31.7), since the point performs no
+    /// authentication then, and any other record with
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn report_access_input_internal(&mut self, input: AccessControlInput) -> Result<(), Error> {
         let AccessControlInput::AccessEvent(report) = input else {
             return Err(common::optional_functionality_not_supported_error());
         };
-        if self.out_of_service {
+        if self.out_of_service || self.reliability != Reliability::NO_FAULT_DETECTED {
             return Err(common::write_access_denied_error());
         }
         self.set_access_event(report)

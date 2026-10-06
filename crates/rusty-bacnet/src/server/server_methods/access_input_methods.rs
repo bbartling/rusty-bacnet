@@ -74,14 +74,14 @@ impl BACnetServer {
     /// `ObjectIdentifier` or a `(device, object)` pair, the no-credential
     /// reference when omitted. `authentication_factor` is `(format_type,
     /// format_class, value)`, the UNDEFINED factor when omitted. A
-    /// credential that isn't an Access Credential, or a factor format
-    /// outside the closed production, or an event that is neither a named
+    /// credential that isn't an Access Credential, a factor format outside
+    /// the closed production, or an event that is neither a named
     /// BACnetAccessEvent nor a proprietary one from 512 to 65535, raises
-    /// VALUE_OUT_OF_RANGE. While the point is out of service the event is
-    /// refused with
+    /// VALUE_OUT_OF_RANGE. While the point is out of service, or its
+    /// Reliability isn't NO_FAULT_DETECTED, the event is refused with
     /// WRITE_ACCESS_DENIED and nothing changes. Any object other than an
-    /// Access Point raises OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new time
-    /// sends the point's COV report.
+    /// Access Point raises OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Each event
+    /// moves Access_Event_Time, so each sends the point's COV report.
     #[pyo3(signature = (
         object_id,
         event,

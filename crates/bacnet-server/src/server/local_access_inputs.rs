@@ -25,9 +25,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// Access_Event_Time is the point's Table 13-1 trigger, so each event
     /// with a new time sends the SubscribeCOV report, carrying all five
-    /// values. While Out_Of_Service is TRUE the point performs no
-    /// authentication (Clause 12.31.8), so an event is refused with PROPERTY
-    /// / WRITE_ACCESS_DENIED and nothing changes. An unknown object fails
+    /// values. A time the point stamps itself is strictly after the one it
+    /// served, so several events of one transaction each move the time and
+    /// each report. While Out_Of_Service is TRUE (Clause 12.31.8), or
+    /// Reliability isn't NO_FAULT_DETECTED (Clause 12.31.7), the point
+    /// performs no authentication, so an event is refused with PROPERTY /
+    /// WRITE_ACCESS_DENIED and nothing changes. An unknown object fails
     /// with OBJECT / UNKNOWN_OBJECT and any object other than an Access
     /// Point with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. The Python
     /// binding exposes this as `BACnetServer.report_access_event_local`.

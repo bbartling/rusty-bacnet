@@ -2924,13 +2924,14 @@ order_enforced, timeout)`, each Credential Data Input in the forms
 serves Authentication_Policy_List and Authentication_Policy_Names, read-only
 over the network, and the policy count becomes the number of pairs; a
 `number_of_authentication_policies` given too is applied after and resizes
-both arrays. An empty list raises VALUE_OUT_OF_RANGE. A policy with no
-entries, a reference to anything but a Credential Data Input, or indexes that
-don't start at 1 and climb by at most one is kept but can't be in effect:
-peers can't select it, and while it is the one in effect
-Active_Authentication_Policy reads 0 and Reliability CONFIGURATION_ERROR. The
-point's Reliability then takes simulated writes while it is out of
-service.
+both arrays. An empty list, more than 256 pairs, or a count above 256 with
+the pairs raises VALUE_OUT_OF_RANGE. A policy with no entries, a reference to
+anything but a Credential Data Input, or indexes that don't start at 1 and
+climb by at most one is kept but can't be in effect: peers can't select it,
+and while it is the one in effect Active_Authentication_Policy reads 0.
+While any such policy is listed, or the active policy is 0, Reliability reads
+CONFIGURATION_ERROR and the point takes no access events. The point's
+Reliability then takes simulated writes while it is out of service.
 
 `add_access_door` also takes `alarm_values`, `fault_values` and
 `masked_alarm_values`, the door's starting Alarm_Values, Fault_Values and

@@ -168,13 +168,16 @@ impl BACnetServer {
     /// timeout)`, the form a read of a list element gives: `entries` lists
     /// `(reference, index)` pairs naming the Credential Data Inputs and the
     /// step each serves, from 1, and `timeout` is in seconds, 0 for no limit.
-    /// A reference takes the element forms of `door_members`. An empty list
-    /// raises VALUE_OUT_OF_RANGE. A policy with no entries, a reference to
-    /// anything but a Credential Data Input, or indexes that don't start at 1
-    /// and climb by at most one is kept but can't be in effect: while it is,
-    /// Active_Authentication_Policy reads 0 and Reliability
-    /// CONFIGURATION_ERROR. A `number_of_authentication_policies` given too
-    /// is applied afterwards and resizes both arrays.
+    /// A reference takes the element forms of `door_members`. An empty list,
+    /// or more than 256 pairs, raises VALUE_OUT_OF_RANGE. A policy with no
+    /// entries, a reference to anything but a Credential Data Input, or
+    /// indexes that don't start at 1 and climb by at most one is kept but
+    /// can't be in effect: while it is, Active_Authentication_Policy reads 0.
+    /// While any such policy is listed, or the active policy is 0,
+    /// Reliability reads CONFIGURATION_ERROR. A
+    /// `number_of_authentication_policies` given too is applied afterwards,
+    /// resizes both arrays and can be at most 256 (VALUE_OUT_OF_RANGE
+    /// above).
     #[pyo3(signature = (
         instance,
         name,

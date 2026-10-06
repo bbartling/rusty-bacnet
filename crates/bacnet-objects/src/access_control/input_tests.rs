@@ -84,8 +84,8 @@ fn access_point_takes_an_event_record_whole() {
         ]
     );
 
-    // With no time and no usable clock the tag, folded into 1..=65535, is
-    // the sequence number; with no factor the UNDEFINED one is stored.
+    // With no time and no usable clock the time served counts on by one;
+    // with no factor the UNDEFINED one is stored.
     point
         .report_access_input_internal(AccessControlInput::AccessEvent(AccessEventReport::new(
             AccessEvent::DENIED_OTHER,
@@ -93,7 +93,7 @@ fn access_point_takes_an_event_record_whole() {
         )))
         .unwrap();
     let rows = event_rows(&point);
-    assert_eq!(rows[2], PropertyValue::ApplicationData(vec![0x19, 1]));
+    assert_eq!(rows[2], PropertyValue::ApplicationData(vec![0x19, 10]));
     assert_eq!(
         rows[4],
         PropertyValue::ApplicationData(vec![0x09, 0x00, 0x19, 0x00, 0x28])
@@ -147,6 +147,58 @@ fn access_point_takes_only_events_in_the_production() {
         );
         assert_eq!(event_rows(&point), before);
     }
+}
+
+#[test]
+fn access_point_refuses_events_while_unreliable() {
+    use bacnet_types::constructed::BACnetAuthenticationPolicy;
+    let mut point = AccessPointObject::new(1, "AP-1").unwrap();
+    // An empty policy is a configuration error (Clause 12.31.12), and an
+    // unreliable point generates no access events (Clause 12.31.7).
+    point
+        .set_authentication_policies([("empty", BACnetAuthenticationPolicy::default())])
+        .unwrap();
+    assert_eq!(
+        read(&point, P::RELIABILITY),
+        PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+    );
+    let before = event_rows(&point);
+    let granted =
+        || AccessControlInput::AccessEvent(AccessEventReport::new(AccessEvent::GRANTED, 1));
+    assert_error(
+        point.report_access_input_internal(granted()),
+        ErrorClass::PROPERTY,
+        ErrorCode::WRITE_ACCESS_DENIED,
+    );
+    assert_eq!(event_rows(&point), before);
+    // Fixed, the point takes events again.
+    let card_reader = ObjectIdentifier::new(ObjectType::CREDENTIAL_DATA_INPUT, 1).unwrap();
+    point
+        .set_authentication_policies([(
+            "card",
+            BACnetAuthenticationPolicy {
+                policy: vec![bacnet_types::constructed::BACnetAuthenticationPolicyEntry {
+                    credential_data_input: card_reader.into(),
+                    index: 1,
+                }],
+                order_enforced: false,
+                timeout: 0,
+            },
+        )])
+        .unwrap();
+    point
+        .write_property(
+            P::ACTIVE_AUTHENTICATION_POLICY,
+            None,
+            PropertyValue::Unsigned(1),
+            None,
+        )
+        .unwrap();
+    point.report_access_input_internal(granted()).unwrap();
+    assert_eq!(
+        read(&point, P::ACCESS_EVENT),
+        PropertyValue::Enumerated(AccessEvent::GRANTED.to_raw())
+    );
 }
 
 #[test]

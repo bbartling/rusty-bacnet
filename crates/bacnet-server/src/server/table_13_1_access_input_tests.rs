@@ -361,6 +361,62 @@ async fn door_state_route_runs_the_event_pass_and_sets_aside_out_of_service() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn events_of_one_transaction_each_send_a_report() {
+    let oid = ap(1);
+    // One transaction, two events (Clause 12.31.27.1): the factor read, then
+    // the grant, each stamped by the point.
+    let read_then_grant = [
+        AccessEventReport::new(AccessEvent::AUTHENTICATION_FACTOR_READ, 2),
+        AccessEventReport::new(AccessEvent::GRANTED, 2),
+    ];
+    let time_of = |report: &Values| {
+        report
+            .iter()
+            .find(|(property, _)| *property == PropertyIdentifier::ACCESS_EVENT_TIME)
+            .map(|(_, value)| value.clone())
+            .unwrap()
+    };
+    for clockless in [true, false] {
+        let mut h = Harness::start_with(ServerConfig::default(), |db| {
+            db.add(point(AccessEvent::GRANTED, 1, 7)).unwrap();
+        })
+        .await;
+        if clockless {
+            h.server.database().write().await.set_clock_reader(None);
+        } else {
+            h.set_clock(20);
+        }
+        subscribed(&mut h, oid).await;
+        let mut times = Vec::new();
+        for report in read_then_grant.clone() {
+            let event = report.event;
+            h.server
+                .report_access_event_local(&oid, report)
+                .await
+                .unwrap();
+            let values = values(&h.cov_notification().await, oid);
+            assert_eq!(
+                values[0],
+                (PropertyIdentifier::ACCESS_EVENT, enumerated(event.to_raw()))
+            );
+            times.push(time_of(&values));
+        }
+        h.no_notification().await;
+        // Without a clock the sequence numbers count from 1; with one, the
+        // second event in the same hundredth is stamped one hundredth on.
+        let expected = if clockless {
+            vec![vec![0x19, 1], vec![0x19, 2]]
+        } else {
+            let mut next = stamp_bytes(20);
+            next[10] = 1;
+            vec![stamp_bytes(20), next]
+        };
+        assert_eq!(times, expected, "clockless: {clockless}");
+        h.server.stop().await.unwrap();
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn routes_refuse_other_objects() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         db.add(point(AccessEvent::GRANTED, 1, 7)).unwrap();

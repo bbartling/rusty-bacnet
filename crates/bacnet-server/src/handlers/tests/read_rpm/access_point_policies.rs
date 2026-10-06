@@ -45,7 +45,9 @@ fn rpm_access_point_policy_arrays_follow_the_application() {
             &[
                 (P::NUMBER_OF_AUTHENTICATION_POLICIES, None, Ok(&[0x21, 2])),
                 (P::ACTIVE_AUTHENTICATION_POLICY, None, Ok(&[0x21, 1])),
-                (P::RELIABILITY, None, Ok(&[0x91, 0])),
+                // The empty policy the count added is a configuration
+                // error (Clause 12.31.12).
+                (P::RELIABILITY, None, Ok(&[0x91, 10])),
                 (
                     P::AUTHENTICATION_POLICY_LIST,
                     None,

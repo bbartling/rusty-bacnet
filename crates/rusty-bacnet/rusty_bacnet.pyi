@@ -3441,15 +3441,18 @@ class BACnetServer:
         Authentication_Policy_Names as ``(name, policy)`` pairs, both
         read-only over the network, and the policy count to their number. A
         policy's entries name the Credential Data Inputs and the step each
-        serves, from 1. An empty list raises BacnetProtocolError with
-        VALUE_OUT_OF_RANGE; an index or timeout outside 0..=4294967295 raises
-        OverflowError. A policy with no entries, a reference to anything but
-        a Credential Data Input, or indexes that don't start at 1 and climb by
-        at most one is kept but can't be in effect: while it is,
-        Active_Authentication_Policy reads 0 and Reliability
-        CONFIGURATION_ERROR until a peer writes a usable policy. A
+        serves, from 1. An empty list, or more than 256 pairs, raises
+        BacnetProtocolError with VALUE_OUT_OF_RANGE; an index or timeout
+        outside 0..=4294967295 raises OverflowError. A policy with no
+        entries, a reference to anything but a Credential Data Input, or
+        indexes that don't start at 1 and climb by at most one is kept but
+        can't be in effect: while it is, Active_Authentication_Policy reads 0
+        until a peer writes a usable policy. While any such policy is listed,
+        or the active policy is 0, Reliability reads CONFIGURATION_ERROR and
+        the point takes no access events. A
         ``number_of_authentication_policies`` given as well is applied after
-        and resizes both arrays, new policies empty and new names ``""``.
+        and resizes both arrays, new policies empty and new names ``""``; it
+        can be at most 256 with the pairs (VALUE_OUT_OF_RANGE above).
         """
         ...
     def add_access_rights(
@@ -3862,11 +3865,13 @@ class BACnetServer:
         omitted) change together. A credential that isn't an Access
         Credential, a factor format outside the closed production, or an
         event that is neither a named BACnetAccessEvent nor a proprietary one
-        from 512 to 65535, raises VALUE_OUT_OF_RANGE. While the point is out of service the event is
+        from 512 to 65535, raises VALUE_OUT_OF_RANGE. While the point is out
+        of service, or its Reliability isn't NO_FAULT_DETECTED, the event is
         refused with WRITE_ACCESS_DENIED and nothing changes. An unknown
         object raises UNKNOWN_OBJECT and any object other than an Access
         Point OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new time sends the
-        point's COV report.
+        point's COV report, and a time the point stamps itself always moves,
+        so events of one transaction each send one.
         """
         ...
 

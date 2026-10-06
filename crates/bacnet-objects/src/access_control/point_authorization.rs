@@ -12,8 +12,10 @@
 //!   them, together, one name per policy. Their size is the policy count
 //!   (footnote 1): setting them sets the count, and a new count resizes
 //!   them, a new element taking the empty policy with the order not enforced
-//!   and no timeout (12.31.12.2) and an empty name. Neither array, nor the
-//!   count, takes a network write: Table 12-36 marks none of them W.
+//!   and no timeout (12.31.12.2) and an empty name. While they are served
+//!   the count is at most `MAX_AUTHENTICATION_POLICIES`, so a count can't
+//!   make the point allocate without bound. Neither array, nor the count,
+//!   takes a network write: Table 12-36 marks none of them W.
 //! - Without the list the content of each policy is the application's
 //!   (12.31.12), so every policy from 1 to the count counts as usable. With
 //!   it, a policy is usable only when its entries are well formed (below);
@@ -24,8 +26,9 @@
 //!   too.
 //! - The active policy drops to zero when the count falls below it or the
 //!   list makes it invalid (12.31.10), and stays there until a client writes
-//!   a usable one. While it is zero the point's Reliability is
-//!   CONFIGURATION_ERROR (`AccessPointObject` derives that).
+//!   a usable one. While it is zero, or the list holds any invalid policy
+//!   (12.31.12), the point's Reliability is CONFIGURATION_ERROR
+//!   (`AccessPointObject` derives that).
 //!
 //! A policy's entries are well formed when there is at least one, each names
 //! a Credential Data Input object (in a Device, when it names one), and the
@@ -60,6 +63,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 
+use super::MAX_AUTHENTICATION_POLICIES;
 use crate::common;
 
 /// The first proprietary BACnetAuthorizationMode value; 6 to 63 are kept
@@ -115,6 +119,16 @@ impl Authorization {
     /// Whether the point serves the two policy arrays.
     pub(super) fn serves_policy_list(&self) -> bool {
         self.definitions.is_some()
+    }
+
+    /// Whether Authentication_Policy_List holds an invalid policy, which
+    /// is a configuration error (Clause 12.31.12).
+    pub(super) fn holds_invalid_policy(&self) -> bool {
+        self.definitions.as_ref().is_some_and(|definitions| {
+            definitions
+                .iter()
+                .any(|definition| !is_well_formed(&definition.policy))
+        })
     }
 
     /// What one of the settings rows reads, or `None` for another property
@@ -229,11 +243,12 @@ impl Authorization {
         Ok(())
     }
 
-    /// Replace the policy count: VALUE_OUT_OF_RANGE for zero. A served list
-    /// and its names follow it, and a count below the active policy drops
-    /// the active policy to zero.
+    /// Replace the policy count: VALUE_OUT_OF_RANGE for zero, or past
+    /// [`MAX_AUTHENTICATION_POLICIES`] while the arrays are served. A served
+    /// list and its names follow it, and a count below the active policy
+    /// drops the active policy to zero.
     pub(super) fn set_policies(&mut self, count: u32) -> Result<(), Error> {
-        if count == 0 {
+        if count == 0 || (self.definitions.is_some() && count > MAX_AUTHENTICATION_POLICIES) {
             return Err(common::value_out_of_range_error());
         }
         self.policies = count;
@@ -245,16 +260,16 @@ impl Authorization {
     }
 
     /// Replace both policy arrays, and with them the count:
-    /// VALUE_OUT_OF_RANGE for no policies, or more than an Unsigned32 count
-    /// holds. The active policy drops to zero when the new list leaves it
-    /// unusable.
+    /// VALUE_OUT_OF_RANGE for no policies, or more than
+    /// [`MAX_AUTHENTICATION_POLICIES`]. The active policy drops to zero when
+    /// the new list leaves it unusable.
     pub(super) fn set_policy_list(
         &mut self,
         policies: Vec<(String, BACnetAuthenticationPolicy)>,
     ) -> Result<(), Error> {
         let count = u32::try_from(policies.len())
             .ok()
-            .filter(|&count| count > 0)
+            .filter(|count| (1..=MAX_AUTHENTICATION_POLICIES).contains(count))
             .ok_or_else(common::value_out_of_range_error)?;
         self.policies = count;
         self.definitions = Some(

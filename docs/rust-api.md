@@ -2196,6 +2196,16 @@ framing, through the shared `bacnet-encoding` codecs.
   declaring Present_Value's format and class puts Present_Value back to
   UNDEFINED, with Update_Time stamped from the Device clock; out of service
   that covers the simulated factor and the reader's factor put aside.
+- **Access Point `Authentication_Policy_List` and
+  `Authentication_Policy_Names`** (#1325) are BACnetARRAYs of
+  `bacnet_types::constructed::BACnetAuthenticationPolicy` (codec
+  `bacnet_encoding::constructed::{encode_authentication_policy,
+  decode_authentication_policy}`) and of CharacterString, served once
+  `AccessPointObject::set_authentication_policies` sets them and read-only on
+  the network. Their size is Number_Of_Authentication_Policies, capped at
+  `MAX_AUTHENTICATION_POLICIES` (256) while they are served: a longer list, or
+  a larger count, is VALUE_OUT_OF_RANGE. The rules for valid policies are
+  under the Access Point below.
 - **Access Zone `Entry_Points` and `Exit_Points`** (Clauses 12.32.23 and
   12.32.24) are BACnetLISTs of `BACnetDeviceObjectReference`, read-only on the
   network. `AccessZoneObject::set_entry_points` and `set_exit_points` set
@@ -3777,14 +3787,20 @@ what each holds is up to it. `set_authentication_policies` takes
 Authentication_Policy_List and Authentication_Policy_Names, both read-only
 over the network, the count becomes the number of pairs (no pairs is
 VALUE_OUT_OF_RANGE), and a later count resizes both arrays, adding empty
-policies with empty names. A policy is usable when it has at least one
-entry, each entry names a Credential Data Input, and the indexes, in list
-order, start at 1 and repeat or climb by one; a client's write naming any
-other policy is VALUE_OUT_OF_RANGE. When the count drops below the policy in
-effect, or the list makes it unusable, Active_Authentication_Policy becomes 0
-and Reliability CONFIGURATION_ERROR until a client writes a usable policy.
-The point's Reliability takes simulated writes while Out_Of_Service is TRUE
-and refuses them in service; out of service it ignores the policies, and the
+policies with empty names. While the arrays are served the count is capped
+at `MAX_AUTHENTICATION_POLICIES` (256): a longer list, or a larger count, is
+VALUE_OUT_OF_RANGE. A policy is usable when it has at least one entry, each
+entry names a Credential Data Input, and the indexes, in list order, start
+at 1 and repeat or climb by one; a client's write naming any other policy
+is VALUE_OUT_OF_RANGE. When the count drops below the policy in effect, or
+the list makes it unusable, Active_Authentication_Policy becomes 0 until a
+client writes a usable policy. Reliability is CONFIGURATION_ERROR while the
+active policy is 0 or the list holds any invalid policy, a grown count's
+empty ones included, and NO_FAULT_DETECTED otherwise. While it isn't
+NO_FAULT_DETECTED the point generates no access events, so
+`report_access_event_local` refuses them with WRITE_ACCESS_DENIED. The
+point's Reliability takes simulated writes while Out_Of_Service is TRUE and
+refuses them in service; out of service it ignores the policies, and the
 return to service serves the derived value again.
 Authorization_Mode starts at AUTHORIZE and takes a write of any mode in the
 set `set_supported_authorization_modes` gives. The point enforces no mode
@@ -3888,9 +3904,13 @@ one every time, so Access_Event_Time and Update_Time, the Table 13-1
 triggers of these two objects, would never move. Both are BACnetTimeStamp
 values (Clause 21.6), and Clauses 12.31.29 and 12.36.11 allow an update time
 in the sequence-number form, so with no usable clock the objects stamp that
-form instead. An Access Point's Out_Of_Service edge stamps its new
-Access_Event_Tag: the tag itself up to 65535, and past that the tag folded
-back into 1 to 65535. A Credential Data Input's simulated Present_Value and
+form instead. An Access Point stamps each event it records without a
+given time, an Out_Of_Service edge or a reported event, strictly after the
+time it served before, since several events of one transaction share a tag
+and each has to move the time: the next sequence number without a clock
+(from 1 when the time served is in another form, wrapping from 65535 to 1),
+and with one the clock's time, or one hundredth past the time served when
+the clock isn't later. A Credential Data Input's simulated Present_Value and
 format reset take the object's own next number, from 1 to 65535 and then 1
 again. Neither stamps 0, the value of an update time with no update yet. A
 time the application passes to `set_access_event` or `set_present_value` is
