@@ -7,8 +7,13 @@
 //! is shown as its timestamp, datum and, for a Trend Log, status flags. Any
 //! other property or object type decodes as application values. Whatever
 //! doesn't decode is shown as hex.
+//!
+//! The heading carries the result flags and the first sequence number, so a
+//! page that left items out says so; `--all` pages through a whole log and
+//! ends with the checkpoint to resume from (#1532).
 
 use bacnet_client::client::BACnetClient;
+use bacnet_client::log_reader::{LogCursor, LogGap};
 use bacnet_services::read_range::{LogRecords, ReadRangeAck};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::bitstring::LogStatus;
@@ -22,9 +27,12 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlag
 use serde::Serialize;
 
 use super::read::{decode_and_format, format_application_values, hex};
+pub use super::read_range_options::RangeOptions;
 use crate::output::{self, OutputFormat};
 
-/// Read a range of items from a list or log-buffer property.
+/// Read a range of items from a list or log-buffer property: one read over
+/// the range `range` names, or with `--all` every page of a log.
+#[allow(clippy::too_many_arguments)]
 pub async fn read_range_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],
@@ -32,16 +40,29 @@ pub async fn read_range_cmd<T: TransportPort + 'static>(
     instance: u32,
     property: PropertyIdentifier,
     index: Option<u32>,
+    range: &RangeOptions,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let oid = ObjectIdentifier::new(object_type, instance)?;
-    let ack = client.read_range(mac, oid, property, index, None).await?;
-
-    let heading = Heading {
+    let mut heading = Heading {
         object: format!("{object_type}:{instance}"),
         property: format!("{property}"),
-        item_count: ack.item_count,
+        ..Heading::default()
     };
+    if range.all {
+        if property != PropertyIdentifier::LOG_BUFFER || index.is_some() {
+            return Err("--all pages through a log's Log_Buffer".into());
+        }
+        let rows = read_all(client, mac, oid, range, &mut heading).await?;
+        print_records(&heading, &rows, format);
+        return Ok(());
+    }
+    let ack = client
+        .read_range(mac, oid, property, index, range.spec()?)
+        .await?;
+    heading.item_count = u64::from(ack.item_count);
+    heading.result_flags = ack.result_flags;
+    heading.first_sequence_number = ack.first_sequence_number;
     match log_rows(&ack) {
         Some(rows) => print_records(&heading, &rows, format),
         None => print_items(&heading, &ack.item_data, format),
@@ -49,11 +70,160 @@ pub async fn read_range_cmd<T: TransportPort + 'static>(
     Ok(())
 }
 
+/// Read every page of `log` from the start `range` names, filling in the
+/// heading: the records, the last page's flags, the first sequence number,
+/// the pages read, any gaps and the checkpoint.
+async fn read_all<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    mac: &[u8],
+    log: ObjectIdentifier,
+    range: &RangeOptions,
+    heading: &mut Heading,
+) -> Result<LogRows, Box<dyn std::error::Error>> {
+    let (mut cursor, page_size) = range.pages()?;
+    let mut rows = LogRows::default();
+    let mut paged = Paged::default();
+    loop {
+        let page = client.read_log_page(mac, log, cursor, page_size).await?;
+        paged.pages += 1;
+        if paged.pages == 1 {
+            heading.first_sequence_number = page.first_sequence_number;
+        }
+        heading.item_count += page.records.len() as u64;
+        heading.result_flags = page.result_flags;
+        paged.gaps.extend(page.gap);
+        rows.rows.extend(record_rows(&page.records));
+        cursor = page.next;
+        if page.done {
+            break;
+        }
+    }
+    paged.next = cursor_flags(cursor);
+    heading.paged = Some(paged);
+    Ok(rows)
+}
+
+/// The `read-range` flags that resume from `cursor`.
+fn cursor_flags(cursor: LogCursor) -> String {
+    match cursor {
+        LogCursor::Oldest => "--all".into(),
+        LogCursor::Sequence(sequence) => format!("--sequence {sequence}"),
+        LogCursor::Position(position) => format!("--position {position}"),
+        LogCursor::Time(date, time) => format!(
+            "--time {:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:02}",
+            date.actual_year().unwrap_or_default(),
+            date.month,
+            date.day,
+            time.hour,
+            time.minute,
+            time.second,
+            time.hundredths
+        ),
+    }
+}
+
 /// What every ReadRange output starts with.
+#[derive(Default)]
 struct Heading {
     object: String,
     property: String,
-    item_count: u32,
+    /// Items returned; with `--all`, records over every page.
+    item_count: u64,
+    /// FIRST_ITEM, LAST_ITEM and MORE_ITEMS; with `--all`, the last page's.
+    result_flags: (bool, bool, bool),
+    /// The first item's sequence number; with `--all`, the first page's.
+    first_sequence_number: Option<u64>,
+    paged: Option<Paged>,
+}
+
+/// What an `--all` read adds to the heading.
+#[derive(Default)]
+struct Paged {
+    pages: usize,
+    gaps: Vec<LogGap>,
+    /// The flags that resume the read later.
+    next: String,
+}
+
+impl Heading {
+    /// The first line of the table output.
+    fn line(&self) -> String {
+        let (first, last, more) = self.result_flags;
+        let flags: Vec<&str> = [
+            (first, "FIRST_ITEM"),
+            (last, "LAST_ITEM"),
+            (more, "MORE_ITEMS"),
+        ]
+        .into_iter()
+        .filter_map(|(set, name)| set.then_some(name))
+        .collect();
+        let flags = if flags.is_empty() {
+            "none".to_string()
+        } else {
+            flags.join(",")
+        };
+        let mut line = format!(
+            "ReadRange {}  {}  count={}  flags={flags}",
+            self.object, self.property, self.item_count
+        );
+        if let Some(first) = self.first_sequence_number {
+            line.push_str(&format!("  first-seq={first}"));
+        }
+        if let Some(paged) = &self.paged {
+            line.push_str(&format!("  pages={}  next: {}", paged.pages, paged.next));
+        }
+        line
+    }
+
+    /// Lines after the table output, one for each gap.
+    fn notes(&self) -> Vec<String> {
+        self.paged
+            .iter()
+            .flat_map(|paged| &paged.gaps)
+            .map(|gap| match gap.skipped {
+                Some(skipped) => format!(
+                    "  [gap] {skipped} records before sequence {} are gone (asked for {})",
+                    gap.first, gap.expected
+                ),
+                None => format!(
+                    "  [gap] the log's numbering restarted: asked for {}, read from {}",
+                    gap.expected, gap.first
+                ),
+            })
+            .collect()
+    }
+
+    /// The JSON object every output starts from.
+    fn json(&self) -> serde_json::Value {
+        let (first_item, last_item, more_items) = self.result_flags;
+        let mut json = serde_json::json!({
+            "object": self.object,
+            "property": self.property,
+            "item_count": self.item_count,
+            "result_flags": {
+                "first_item": first_item,
+                "last_item": last_item,
+                "more_items": more_items,
+            },
+            "first_sequence_number": self.first_sequence_number,
+        });
+        if let Some(paged) = &self.paged {
+            json["pages"] = paged.pages.into();
+            json["next"] = paged.next.clone().into();
+            json["gaps"] = paged
+                .gaps
+                .iter()
+                .map(|gap| {
+                    serde_json::json!({
+                        "expected": gap.expected,
+                        "first": gap.first,
+                        "skipped": gap.skipped,
+                    })
+                })
+                .collect();
+        }
+        json
+    }
 }
 
 /// One log record as the CLI shows it.
@@ -278,10 +448,7 @@ fn recipient(recipient: &BACnetRecipient) -> String {
 fn print_records(heading: &Heading, records: &LogRows, format: OutputFormat) {
     match format {
         OutputFormat::Table => {
-            println!(
-                "ReadRange {}  {}  count={}",
-                heading.object, heading.property, heading.item_count
-            );
+            println!("{}", heading.line());
             let flags = records.rows.iter().any(|row| row.status_flags.is_some());
             let mut table = comfy_table::Table::new();
             let mut header = vec!["#", "Timestamp", "Datum"];
@@ -300,14 +467,13 @@ fn print_records(heading: &Heading, records: &LogRows, format: OutputFormat) {
             if let Some(hex) = &records.undecoded {
                 println!("  [raw] {hex}");
             }
+            for note in heading.notes() {
+                println!("{note}");
+            }
         }
         OutputFormat::Json => {
-            let mut json = serde_json::json!({
-                "object": heading.object,
-                "property": heading.property,
-                "item_count": heading.item_count,
-                "records": records.rows,
-            });
+            let mut json = heading.json();
+            json["records"] = serde_json::to_value(&records.rows).unwrap_or_default();
             if let Some(hex) = &records.undecoded {
                 json["undecoded"] = serde_json::Value::from(hex.as_str());
             }
@@ -323,10 +489,7 @@ fn print_items(heading: &Heading, data: &[u8], format: OutputFormat) {
     let (mut items, undecoded) = format_application_values(data);
     match format {
         OutputFormat::Table => {
-            println!(
-                "ReadRange {}  {}  count={}",
-                heading.object, heading.property, heading.item_count
-            );
+            println!("{}", heading.line());
             for (number, item) in (1..).zip(&items) {
                 println!("  [{number}] {item}");
             }
@@ -338,12 +501,8 @@ fn print_items(heading: &Heading, data: &[u8], format: OutputFormat) {
             if let Some(hex) = undecoded {
                 items.push(format!("[raw: {hex}]"));
             }
-            let json = serde_json::json!({
-                "object": heading.object,
-                "property": heading.property,
-                "item_count": heading.item_count,
-                "items": items,
-            });
+            let mut json = heading.json();
+            json["items"] = items.into();
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json).unwrap_or_default()

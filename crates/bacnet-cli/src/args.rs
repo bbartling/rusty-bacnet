@@ -35,6 +35,11 @@ pub(crate) struct Cli {
     #[arg(short, long, default_value_t = 6000, global = true)]
     pub(crate) timeout: u64,
 
+    /// Least time in milliseconds between requests to one device (0: none),
+    /// so paging a log or polling leaves a slow device room for others.
+    #[arg(long, default_value_t = 0, global = true)]
+    pub(crate) min_interval_ms: u64,
+
     /// Use BACnet/IPv6 transport.
     #[arg(long, global = true)]
     pub(crate) ipv6: bool,
@@ -325,6 +330,8 @@ pub(crate) enum Command {
         /// Property (default: log-buffer).
         #[arg(default_value = "log-buffer")]
         property: String,
+        #[command(flatten)]
+        range: crate::commands::read_range::RangeOptions,
     },
 
     /// Create an object on a remote device.
