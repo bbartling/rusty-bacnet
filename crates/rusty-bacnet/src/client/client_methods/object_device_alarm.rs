@@ -286,59 +286,6 @@ impl BACnetClient {
             crate::py_async::attach(|py| Ok(PyBytes::new(py, &raw).into_any().unbind()))
         })
     }
-
-    // -----------------------------------------------------------------------
-    // ReadRange
-    // -----------------------------------------------------------------------
-
-    /// Read a range of items from a list or log object.
-    ///
-    /// `range_type` is `"position"`, `"sequence"`, or `None` (no range).
-    #[pyo3(signature = (address, object_id, property_id, array_index=None, range_type=None, reference_index=None, reference_seq=None, count=None))]
-    fn read_range<'py>(
-        &self,
-        py: Python<'py>,
-        address: String,
-        object_id: PyObjectIdentifier,
-        property_id: PyPropertyIdentifier,
-        array_index: Option<u32>,
-        range_type: Option<String>,
-        reference_index: Option<u64>,
-        reference_seq: Option<u64>,
-        count: Option<i16>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        let request = crate::read_range::request(
-            &object_id,
-            &property_id,
-            array_index,
-            range_type.as_deref(),
-            reference_index,
-            reference_seq,
-            count,
-        )?;
-
-        crate::py_async::future_into_py(py, async move {
-            let mac = parse_address(&address)?;
-            let c = {
-                let guard = inner.lock().await;
-                Arc::clone(guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("client not started — use 'async with'")
-                })?)
-            };
-            let ack = c
-                .read_range(
-                    &mac,
-                    request.object_identifier,
-                    request.property_identifier,
-                    request.property_array_index,
-                    request.range,
-                )
-                .await
-                .map_err(to_py_err)?;
-            crate::py_async::attach(|py| crate::read_range::ack_to_dict(py, ack))
-        })
-    }
 }
 
 #[cfg(test)]

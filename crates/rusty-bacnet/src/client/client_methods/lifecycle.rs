@@ -24,7 +24,8 @@ impl BACnetClient {
         mstp_max_master=127,
         mstp_max_info_frames=1,
         sc_device_uuid=None,
-        share_port_by_address=false
+        share_port_by_address=false,
+        min_request_interval_ms=0
     ))]
     fn new(
         interface: &str,
@@ -47,6 +48,7 @@ impl BACnetClient {
         mstp_max_info_frames: u8,
         sc_device_uuid: Option<Vec<u8>>,
         share_port_by_address: bool,
+        min_request_interval_ms: u64,
     ) -> PyResult<Self> {
         crate::bip_options::only_on_bip(share_port_by_address, transport)?;
         if transport == "sc" {
@@ -58,6 +60,12 @@ impl BACnetClient {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         }
         let sc_device_uuid = crate::sc_identity::device_uuid(transport, sc_device_uuid)?;
+        if min_request_interval_ms > client::MAX_MIN_REQUEST_INTERVAL_MS {
+            return Err(PyValueError::new_err(format!(
+                "min_request_interval_ms must be 0..={}, got {min_request_interval_ms}",
+                client::MAX_MIN_REQUEST_INTERVAL_MS
+            )));
+        }
         Ok(Self {
             inner: Arc::new(Mutex::new(None)),
             transport_type: transport.to_string(),
@@ -80,6 +88,7 @@ impl BACnetClient {
             mstp_mac,
             mstp_max_master,
             mstp_max_info_frames,
+            min_request_interval_ms,
         })
     }
 
@@ -107,6 +116,7 @@ impl BACnetClient {
         let mstp_mac = slf.borrow().mstp_mac;
         let mstp_max_master = slf.borrow().mstp_max_master;
         let mstp_max_info_frames = slf.borrow().mstp_max_info_frames;
+        let min_request_interval_ms = slf.borrow().min_request_interval_ms;
 
         crate::py_async::future_into_py(py, async move {
             let transport: AnyTransport<crate::mstp_py::PySerial> = match transport_type.as_str() {
@@ -179,6 +189,7 @@ impl BACnetClient {
             let c = client::BACnetClient::generic_builder()
                 .transport(transport)
                 .apdu_timeout_ms(timeout_ms)
+                .min_request_interval_ms(min_request_interval_ms)
                 .build()
                 .await
                 .map_err(to_py_err)?;

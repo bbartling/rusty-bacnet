@@ -4885,6 +4885,101 @@ the requested window. It does not iterate an entire file.
 
 ```rust
 let ack = client.read_range(&mac, oid, PropertyIdentifier::LOG_BUFFER, None, Some(RangeSpec::ByPosition { reference_index: 1, count: 10 })).await?;
+let records = ack.trend_log_records()?; // or event_log_records, trend_log_multiple_records, audit_log_records
+
+// Keep a page that breaks a rule, with the rules it broke:
+let reply = client.read_range_with(&mac, &request, ReadRangeValidation::Lenient).await?;
+for rule in &reply.violations { eprintln!("device broke a ReadRange rule: {rule}"); }
+```
+
+`read_range` checks the acknowledgement against its request
+(`ReadRangeAck::violations`): the echoed object, property and array index, a
+first sequence number present, nonzero and only where the range calls for one,
+MORE_ITEMS never set with the flag for the end a ranged read moves toward (with
+no range, never with both FIRST_ITEM and LAST_ITEM), and no more items than
+the count. A broken rule fails with
+`Error::ReadRangeViolation`, naming it; a malformed answer is still
+`Error::Decoding`. `read_range_with` and `ReadRangeValidation::Lenient` keep
+the decoded page instead, with every rule it broke in
+`ReadRangeReply::violations`, so a device that numbers the record after its
+sequence wrap 0 doesn't cost a second request. The endpoint client has the
+same `read_range_with`.
+
+`ReadRangeAck::log_records()` picks the record kind from the object type of a
+Log_Buffer read. Each decoder requires every octet to belong to a record and
+the count to equal `item_count`; a failure is a `LogRecordsError` naming the
+failing record's index and offset, keeping the records before it.
+
+### Reading a whole log
+
+```rust
+use bacnet_client::log_reader::LogCursor;
+
+let mut cursor = LogCursor::Oldest; // or Sequence(n), Position(n), Time(date, time)
+loop {
+    let page = client.read_log_page(&mac, trend_log, cursor, 100).await?;
+    if let Some(gap) = page.gap { eprintln!("lost records before {}", gap.first); }
+    store(&page.records); // LogRecords::TrendLog(..), EventLog(..), ...
+    cursor = page.next;
+    if page.done { break; }
+}
+save_checkpoint(cursor); // resume from it later for the records logged since
+```
+
+`read_log_page` reads one page with one request outstanding:
+
+- `Oldest` finds the oldest record from Total_Record_Count, Record_Count and
+  Total_Record_Count again, reading the counts again while the total moves,
+  so a record logged in between can't hide the oldest.
+- Pages go on from the first sequence number plus the records returned,
+  across the wrap from the top of the range to 1; `page.wrapped` marks a page
+  that reaches the top.
+- MORE_ITEMS only says the answer was cut to fit, so any page that isn't the
+  last continues; LAST_ITEM or an empty page ends the read, and `next` is the
+  checkpoint.
+- An empty page reads the counts again. A record logged since is asked for
+  again. A checkpoint the log no longer holds restarts from the oldest record
+  with `page.gap` set, as does a first record past the one asked for; a full
+  log may drop that one too before it is read, so a read starts over up to
+  three times.
+- A device that answers with records before the one asked for, as
+  bacnet-stack 1.6.1 does past its wrap, fails with `Error::LogNotAdvancing`
+  rather than repeating pages; so does one whose counts say it holds a record
+  it won't return. Such a device's sequence numbers are inconsistent: read it
+  from `LogCursor::Position(1)`. A log that is merely full doesn't need that,
+  and a position read of a busy full log skips the records it drops without
+  a gap.
+- Pages are read leniently: a first sequence number of 0 after a device's
+  wrap is accepted and listed in `page.violations`. A device that numbers the
+  record after the top 0 rather than 1 is one number ahead of `next` after a
+  `wrapped` page: reading on loses that record without a gap.
+- A page whose records don't decode fails with `Error::Decoding`, dropping the
+  records before the failing one; `read_range_with` and
+  `ReadRangeAck::log_records` keep them.
+
+The endpoint client has the same `read_log_page`, and
+`bacnet_client::log_reader::read_log_page` runs over any `LogRequester`. The
+endpoint client isn't paced: its pages go back to back.
+
+### Pacing
+
+`min_request_interval_ms` on every `BACnetClient` builder (and in
+`ClientConfig`), default 0 and at most 3,600,000 (an hour), paces the
+confirmed requests to each destination. A request goes once that long has
+passed since the latest request sent to that destination finished, by a reply,
+an error or its caller giving up, or since that request was sent while it is
+still outstanding. A waiting request checks again when it wakes, so a late
+reply still gets the whole pause; requests waiting together go one at a time,
+the interval apart, in no promised order, and one given up before it went
+leaves no trace. It covers paging and polling
+alike, so a slow device can serve its other clients between them; requests to
+different destinations don't wait on each other. Pacing runs before a routed
+request takes its path lease, which every device on that network behind that
+router shares, so there the pause after a reply holds for requests made one
+after another, not for concurrent ones. The endpoint client has no pacing.
+
+```rust
+let client = BACnetClient::bip_builder().min_request_interval_ms(50).build().await?;
 ```
 
 ### List Manipulation
@@ -6418,10 +6513,11 @@ The initiating role supports `read_property`, `read_range`, `read_property_multi
 and direct B/IP `write_property`, plus explicit
 endpoint destinations. ReadRange returns a correlated `ReadRangeAck` with raw
 item bytes; empty and multiple-item ACKs each produce one value-free source READ
-record. Request encoding validates before output/transaction admission: ALL,
+record. `read_range_with` takes a `ReadRangeValidation`: a lenient read keeps
+a page that breaks a rule and is audited as a success. Request encoding validates before output/transaction admission: ALL,
 REQUIRED, OPTIONAL, array index zero, zero/non-INTEGER16 counts, and nonconcrete
 ByTime components are rejected. Zero position/sequence references are valid and
-may match no items. Rust supports all-items, position, sequence and ByTime.
+may match no items. Rust and Python support all-items, position, sequence and ByTime.
 Endpoint requests/responses are unsegmented; a received segmented response is a
 failed attempted read and is reported using the caller's terminal result.
 

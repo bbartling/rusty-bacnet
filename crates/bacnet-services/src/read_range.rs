@@ -456,6 +456,14 @@ impl ReadRangeAck {
     }
 }
 
+#[path = "read_range_records.rs"]
+mod records;
+pub use records::{LogBufferRecord, LogRecords, LogRecordsError};
+#[path = "read_range_checks.rs"]
+mod checks;
+pub use bacnet_types::error::ReadRangeViolation;
+pub use checks::{ReadRangeReply, ReadRangeValidation};
+
 #[cfg(test)]
 #[path = "read_range_width_tests.rs"]
 mod width_tests;

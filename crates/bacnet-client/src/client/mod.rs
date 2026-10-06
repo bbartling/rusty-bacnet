@@ -122,6 +122,19 @@ pub struct ClientConfig {
     pub segmented_response_accepted: bool,
     /// Proposed window size for segmented transfers (1-127, default 1).
     pub proposed_window_size: u8,
+    /// Least time, in milliseconds, from the latest confirmed request sent
+    /// to a destination finishing (reply, error or cancellation) to the next
+    /// being sent; while it is still outstanding, the next waits that long
+    /// after it was sent. A waiting request checks again when it wakes;
+    /// requests waiting together go one at a time, in no promised order. A
+    /// request given up before it went leaves no trace. 0 (the default)
+    /// sends at once. A slow
+    /// device then serves its other clients between this client's requests,
+    /// paging a log or polling alike (#1535). Behind a router, whose path
+    /// lease every device on that network shares, the pause after a reply
+    /// holds for requests made one after another only. At most
+    /// [`MAX_MIN_REQUEST_INTERVAL_MS`], an hour; more fails the build.
+    pub min_request_interval_ms: u64,
 }
 
 /// Additional client startup options.
@@ -152,6 +165,7 @@ impl Default for ClientConfig {
             max_segments: None,
             segmented_response_accepted: true,
             proposed_window_size: 1,
+            min_request_interval_ms: 0,
         }
     }
 }
@@ -502,6 +516,7 @@ pub struct BACnetClient<T: TransportPort> {
     routed_path_limits: Arc<RoutedPathLimits>,
     /// See [`Self::group_source_request_drops`].
     group_source_request_drops: Arc<std::sync::atomic::AtomicU64>,
+    pacer: Box<pacing::RequestPacer>,
 }
 
 impl BACnetClient<BipTransport> {
@@ -725,6 +740,7 @@ impl ScClientBuilder {
         self.validate_identity()?;
         self.options.validate()?;
         validate_max_segments(self.config.max_segments)?;
+        pacing::validate_interval_ms(self.config.min_request_interval_ms)?;
         let transport = self.sc_transport(ws);
         BACnetClient::start_with_options(self.config, transport, self.options).await
     }
@@ -775,6 +791,7 @@ impl ScClientBuilder {
         self.validate_identity()?;
         self.options.validate()?;
         validate_max_segments(self.config.max_segments)?;
+        pacing::validate_interval_ms(self.config.min_request_interval_ms)?;
         let tls_config =
             self.tls_config.as_ref().cloned().ok_or_else(|| {
                 Error::Encoding("SC client builder: tls_config is required".into())
@@ -855,7 +872,9 @@ mod event_notifications;
 mod file_list;
 mod lifecycle;
 mod object_mgmt;
+mod pacing;
 mod property;
+mod read_range;
 mod requests;
 mod response_admission;
 mod routed_path_limits;
@@ -885,6 +904,7 @@ pub use event_notifications::{
     EventNotificationDelivery, ReceivedEventNotification, DEFAULT_EVENT_CHANNEL_CAPACITY,
     MAX_EVENT_CHANNEL_CAPACITY,
 };
+pub use pacing::MAX_MIN_REQUEST_INTERVAL_MS;
 pub use write_group::WriteGroupDestination;
 
 #[cfg(test)]
@@ -912,17 +932,23 @@ mod device_events_tests;
 #[cfg(test)]
 mod event_notification_tests;
 #[cfg(test)]
+pub(crate) mod fake_device;
+#[cfg(test)]
 mod group_source_request_tests;
 #[cfg(test)]
 mod list_error_tests;
 #[cfg(test)]
 mod list_validation_tests;
 #[cfg(test)]
+mod pacing_tests;
+#[cfg(test)]
 mod peer_max_apdu_tests;
 #[cfg(test)]
 mod peer_segmentation_tests;
 #[cfg(test)]
 mod rb07_provenance_tests;
+#[cfg(test)]
+mod read_range_tests;
 #[cfg(test)]
 mod request_timer_tests;
 #[cfg(test)]

@@ -6,6 +6,7 @@ as class attributes; vendor-proprietary values are available via ``from_raw()``.
 
 from __future__ import annotations
 
+import datetime
 from typing import Any, Awaitable, Literal, NotRequired, Optional, TypedDict, Union
 
 UNSPECIFIED: Literal[255]
@@ -1697,6 +1698,33 @@ class BacnetAbortError(BacnetError):
     """
     reason: int
 
+class BacnetLogNotAdvancingError(BacnetError):
+    """Raised when a paged log read can't advance (#1530).
+
+    The device answered a page by sequence number with records from before
+    the one asked for, as bacnet-stack 1.6.1 does past its sequence wrap, or
+    with none where its record counts say it holds that record. Read the log
+    by position instead.
+
+    Attributes:
+        requested: The sequence number asked for.
+        returned: What the device numbered the first record it sent; None
+            when it sent none.
+    """
+    requested: int
+    returned: int | None
+
+class BacnetReadRangeViolationError(BacnetError):
+    """Raised when a strict ``read_range`` refuses an answer that breaks a
+    ReadRange rule (#1531). Read again with ``validation="lenient"`` to keep
+    the answer and the rules it broke.
+
+    Attributes:
+        rule: The rule broken, in snake case, such as
+            ``"zero_first_sequence_number"``.
+    """
+    rule: str
+
 class BacnetTransportError(BacnetError, OSError):
     """Raised when a transport socket or I/O operation fails.
 
@@ -1716,6 +1744,30 @@ class BacnetTransportError(BacnetError, OSError):
 # ---------------------------------------------------------------------------
 # Serial ports
 # ---------------------------------------------------------------------------
+
+def decode_log_records(result: ReadRangeResult) -> list[dict[str, Any]]:
+    """Decode the records of a ``read_range`` result of a log's Log_Buffer
+    (#1534).
+
+    Each record is a dict with ``timestamp`` as a ``(date, time)`` pair and
+    ``datum``, a dict whose ``kind`` names the choice and whose key of the
+    same name holds its value: ``log_status`` (bits: 0 log-disabled, 1
+    buffer-purged, 2 log-interrupted), ``boolean``, ``real``,
+    ``enumerated``, ``unsigned``, ``signed``, ``bitstring`` (``(unused_bits,
+    bytes)``), ``null`` (no value), ``failure`` (``(error_class,
+    error_code)``), ``time_change`` (seconds), ``any`` (the value's encoding),
+    ``values`` (a Trend Log Multiple record's list of such dicts),
+    ``notification`` (an Event Log record's event notification, its
+    ``event_values`` as their encoding) or ``audit_notification`` (an Audit
+    Log record, as ``audit_log_query`` shows it). A Trend Log record adds
+    ``status_flags`` (bits: 0 in-alarm, 1 fault, 2 overridden, 3
+    out-of-service), or None.
+
+    Raises ValueError for a result that isn't a log's Log_Buffer, or whose
+    item data doesn't decode as ``item_count`` records, naming the first
+    record that fails by index and offset.
+    """
+    ...
 
 def list_serial_ports() -> list[str]:
     """List the serial ports the operating system reports, as names to pass as
@@ -1809,11 +1861,25 @@ class BACnetClient:
         mstp_max_info_frames: int = 1,
         sc_device_uuid: Optional[bytes | bytearray] = None,
         share_port_by_address: bool = False,
+        min_request_interval_ms: int = 0,
     ) -> None:
         """``share_port_by_address`` (B/IP only, default False): bind the
         interface address itself, so clients and devices on other addresses
         of this host can share the port. Needs an explicit interface and a
-        nonzero port; broadcasts and unicast then arrive in no fixed order."""
+        nonzero port; broadcasts and unicast then arrive in no fixed order.
+
+        ``min_request_interval_ms`` (default 0, no pacing; at most
+        3,600,000, else ValueError) paces the confirmed requests to each
+        destination: each waits until that long after the latest one sent to
+        the same destination finished (reply, error or the caller giving up),
+        or after it was sent while it is still outstanding, checking again
+        when it wakes. Requests waiting together go one at a time, in no
+        promised order. Paging a log or polling
+        then leaves a slow device room for its other clients; requests to
+        different destinations don't wait on each other. Behind a router the
+        pause after a reply holds for requests made one after another only
+        (#1535).
+        """
         ...
 
     def __aenter__(self) -> Awaitable[BACnetClient]: ...
@@ -2346,22 +2412,62 @@ class BACnetClient:
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
-        range_type: Optional[Literal["position", "sequence"]] = None,
+        range_type: Optional[Literal["position", "sequence", "time"]] = None,
         reference_index: Optional[int] = None,
         reference_seq: Optional[int] = None,
         count: Optional[int] = None,
+        *,
+        reference_time: ReferenceTime | None = None,
+        validation: Literal["strict", "lenient"] = "strict",
     ) -> Awaitable[ReadRangeResult]:
         """Read a range of items from a list or log object.
 
-        ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
-        ByTime is not exposed. Invalid selectors, array index zero and missing
-        or zero counts raise ValueError before I/O; a count outside INTEGER16
-        (-32768..=32767) raises OverflowError before address parsing or I/O
-        (#1360). Position/sequence
-        reference zero is valid; omitted references default to zero.
-        Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
-        "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,
-        "item_data": bytes, "first_sequence_number": int | None}``.
+        ``range_type`` is ``"position"``, ``"sequence"``, ``"time"`` or
+        ``None`` (all-items). ``"time"`` reads the ``count`` items newer than
+        ``reference_time`` (older, for a negative count): a naive
+        ``datetime.datetime`` in the device's local time, or a
+        ``((year, month, day, day_of_week), (hour, minute, second,
+        hundredths))`` pair; an aware datetime raises ValueError, since the
+        device's zone isn't known here (#1533). Invalid selectors, array index
+        zero, missing or zero counts and a time that isn't specific raise
+        ValueError before I/O; a count outside INTEGER16 (-32768..=32767)
+        raises OverflowError before address parsing or I/O (#1360).
+        Position/sequence reference zero is valid; omitted references default
+        to zero.
+
+        ``validation="strict"`` refuses an answer that breaks a ReadRange rule
+        with BacnetReadRangeViolationError, whose ``rule`` names it;
+        ``"lenient"`` keeps it and lists the rules in ``violations`` (#1531).
+        Decode a log's records with ``decode_log_records``.
+        """
+        ...
+
+    def read_log_page(
+        self,
+        address: str,
+        object_id: ObjectIdentifier,
+        cursor: LogCursor = None,
+        page_size: int = 100,
+    ) -> Awaitable[LogPage]:
+        """Read one page of a log's Log_Buffer from ``cursor`` (#1530).
+
+        ``cursor`` is ``None`` or ``"oldest"`` (the oldest record, found from
+        Record_Count and Total_Record_Count), ``("sequence", n)``,
+        ``("position", n)`` or ``("time", reference_time)``; lists work
+        too, so a checkpoint survives JSON. Loop on ``page["next"]`` until
+        ``page["done"]``, then keep ``next`` as the checkpoint. One request
+        is outstanding at a time. A first record past the one asked for sets
+        ``gap``; when the log drops the record asked for, the read starts
+        over from the oldest. A page answered from before the one asked for,
+        or none where the counts say records are, raises
+        BacnetLogNotAdvancingError: such a device's sequence numbers are
+        inconsistent, so read it from ``("position", 1)``. ``wrapped`` marks
+        a page that reached the top of the sequence range. A page whose
+        records don't decode raises BacnetError, dropping the records before
+        the failing one; an answer that breaks a rule the reader can't
+        tolerate, such as an echo that doesn't match, raises
+        BacnetReadRangeViolationError. A non-log object or a ``page_size``
+        outside 1..=32767 raises ValueError before I/O.
         """
         ...
 
@@ -4073,6 +4179,45 @@ class ReadRangeResult(TypedDict):
     item_count: int
     item_data: bytes
     first_sequence_number: int | None
+    violations: list[str]
+
+ReferenceTime = Union[
+    datetime.datetime,
+    tuple[tuple[int, int, int, int], tuple[int, int, int, int]],
+]
+"""A ByTime reference: a naive datetime in the device's local time, or a
+``((year, month, day, day_of_week), (hour, minute, second, hundredths))``
+pair."""
+
+LogCursor = Union[
+    None,
+    Literal["oldest"],
+    tuple[Literal["sequence"], int],
+    tuple[Literal["position"], int],
+    tuple[Literal["time"], ReferenceTime],
+]
+"""Where ``read_log_page`` starts; a list of the same two items works too."""
+
+class LogGap(TypedDict):
+    """A page whose first record isn't the one asked for."""
+    expected: int
+    first: int
+    skipped: int | None
+
+class LogPage(TypedDict):
+    """One page of ``read_log_page``.
+
+    ``records`` are dicts, oldest first, as ``decode_log_records`` returns
+    them. ``next`` is never ``None`` or ``"oldest"``.
+    """
+    records: list[dict[str, Any]]
+    first_sequence_number: int | None
+    result_flags: tuple[bool, bool, bool]
+    gap: LogGap | None
+    violations: list[str]
+    next: LogCursor
+    done: bool
+    wrapped: bool
 
 class ReadPropertyResult(TypedDict):
     property_id: PropertyIdentifier
@@ -4151,22 +4296,62 @@ class EndpointClient:
         object_id: ObjectIdentifier,
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
-        range_type: Optional[Literal["position", "sequence"]] = None,
+        range_type: Optional[Literal["position", "sequence", "time"]] = None,
         reference_index: Optional[int] = None,
         reference_seq: Optional[int] = None,
         count: Optional[int] = None,
+        *,
+        reference_time: ReferenceTime | None = None,
+        validation: Literal["strict", "lenient"] = "strict",
     ) -> Awaitable[ReadRangeResult]:
         """Read a range of items from a list or log object.
 
-        ``range_type`` is ``"position"``, ``"sequence"``, or ``None`` (all-items).
-        ByTime is not exposed. Invalid selectors, array index zero and missing
-        or zero counts raise ValueError before I/O; a count outside INTEGER16
-        (-32768..=32767) raises OverflowError before address parsing or I/O
-        (#1360). Position/sequence
-        reference zero is valid; omitted references default to zero.
-        Returns ``{"object_id": ObjectIdentifier, "property_id": PropertyIdentifier,
-        "array_index": int | None, "result_flags": tuple[bool, bool, bool], "item_count": int,
-        "item_data": bytes, "first_sequence_number": int | None}``.
+        ``range_type`` is ``"position"``, ``"sequence"``, ``"time"`` or
+        ``None`` (all-items). ``"time"`` reads the ``count`` items newer than
+        ``reference_time`` (older, for a negative count): a naive
+        ``datetime.datetime`` in the device's local time, or a
+        ``((year, month, day, day_of_week), (hour, minute, second,
+        hundredths))`` pair; an aware datetime raises ValueError, since the
+        device's zone isn't known here (#1533). Invalid selectors, array index
+        zero, missing or zero counts and a time that isn't specific raise
+        ValueError before I/O; a count outside INTEGER16 (-32768..=32767)
+        raises OverflowError before address parsing or I/O (#1360).
+        Position/sequence reference zero is valid; omitted references default
+        to zero.
+
+        ``validation="strict"`` refuses an answer that breaks a ReadRange rule
+        with BacnetReadRangeViolationError, whose ``rule`` names it;
+        ``"lenient"`` keeps it and lists the rules in ``violations`` (#1531).
+        Decode a log's records with ``decode_log_records``.
+        """
+        ...
+
+    def read_log_page(
+        self,
+        address: str,
+        object_id: ObjectIdentifier,
+        cursor: LogCursor = None,
+        page_size: int = 100,
+    ) -> Awaitable[LogPage]:
+        """Read one page of a log's Log_Buffer from ``cursor`` (#1530).
+
+        ``cursor`` is ``None`` or ``"oldest"`` (the oldest record, found from
+        Record_Count and Total_Record_Count), ``("sequence", n)``,
+        ``("position", n)`` or ``("time", reference_time)``; lists work
+        too, so a checkpoint survives JSON. Loop on ``page["next"]`` until
+        ``page["done"]``, then keep ``next`` as the checkpoint. One request
+        is outstanding at a time. A first record past the one asked for sets
+        ``gap``; when the log drops the record asked for, the read starts
+        over from the oldest. A page answered from before the one asked for,
+        or none where the counts say records are, raises
+        BacnetLogNotAdvancingError: such a device's sequence numbers are
+        inconsistent, so read it from ``("position", 1)``. ``wrapped`` marks
+        a page that reached the top of the sequence range. A page whose
+        records don't decode raises BacnetError, dropping the records before
+        the failing one; an answer that breaks a rule the reader can't
+        tolerate, such as an echo that doesn't match, raises
+        BacnetReadRangeViolationError. A non-log object or a ``page_size``
+        outside 1..=32767 raises ValueError before I/O.
         """
         ...
 

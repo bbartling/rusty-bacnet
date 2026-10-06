@@ -44,6 +44,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ) -> Result<Self, Error> {
         validate_max_apdu_length(config.max_apdu_length)?;
         validate_max_segments(config.max_segments)?;
+        pacing::validate_interval_ms(config.min_request_interval_ms)?;
         config.max_apdu_length =
             cap_max_apdu_to_transport(config.max_apdu_length, transport.egress_apdu_limit())?;
         if !(1..=127).contains(&config.proposed_window_size) {
@@ -248,6 +249,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
         });
 
+        // Boxed: the client is moved around by value, and most never pace.
+        let pacer = Box::new(pacing::RequestPacer::new(Duration::from_millis(
+            config.min_request_interval_ms,
+        )));
         Ok(Self {
             config,
             network,
@@ -268,6 +273,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             local_mac,
             routed_path_limits,
             group_source_request_drops,
+            pacer,
         })
     }
 

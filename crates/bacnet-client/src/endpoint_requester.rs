@@ -12,7 +12,7 @@ use bacnet_endpoint_core::coordinator::{
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
-use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
+use bacnet_services::read_range::{ReadRangeReply, ReadRangeRequest, ReadRangeValidation};
 use bacnet_transport::port::{DataAttribute, TransportProvenance};
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, NetworkPriority, PropertyIdentifier,
@@ -385,26 +385,20 @@ impl EndpointRequester {
         Ok(service_data)
     }
 
-    /// Perform an unsegmented ReadRange to an explicit destination.
+    /// Perform an unsegmented ReadRange to an explicit destination, checking
+    /// the acknowledgement as `validation` says.
     #[doc(hidden)]
     pub async fn read_range_with_destination(
         &self,
         destination: EndpointApduDestination,
         data_attributes: Vec<DataAttribute>,
-        object_identifier: ObjectIdentifier,
-        property_identifier: PropertyIdentifier,
-        property_array_index: Option<u32>,
-        range: Option<RangeSpec>,
-    ) -> Result<ReadRangeAck, Error> {
+        request: ReadRangeRequest,
+        validation: ReadRangeValidation,
+    ) -> Result<ReadRangeReply, Error> {
         self.prepare_read(
             destination,
             data_attributes,
-            EndpointReadRequest::Range(ReadRangeRequest {
-                object_identifier,
-                property_identifier,
-                property_array_index,
-                range,
-            }),
+            EndpointReadRequest::Range(request, validation),
         )?
         .execute()
         .await
