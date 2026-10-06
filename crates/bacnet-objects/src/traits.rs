@@ -1139,6 +1139,30 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         })
     }
 
+    /// Apply an input the application reports for an access-control object
+    /// the server holds (#1132): an Access Point's access event, a
+    /// Credential Data Input's read or an Access Door's hardware state, each
+    /// a record whose values change together. See
+    /// [`AccessControlInput`](crate::access_control::AccessControlInput).
+    ///
+    /// Only the built-in Access Point, Credential Data Input and Access Door
+    /// opt in, each for its own kind of record. While Out_Of_Service is TRUE
+    /// the point refuses an event with PROPERTY / WRITE_ACCESS_DENIED, since
+    /// it performs no authentication then, and the door and the reader store
+    /// the input with their device values put aside, leaving a client's
+    /// simulated values served. The default, and an object offered another
+    /// kind of record, fails closed with the same error as
+    /// [`set_present_value_internal`](Self::set_present_value_internal).
+    fn report_access_input_internal(
+        &mut self,
+        _input: crate::access_control::AccessControlInput,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
     /// Apply the Controlled_Variable_Value measured by the local application.
     ///
     /// Only the built-in Loop opts in. Its control algorithm runs in the

@@ -41,6 +41,7 @@ mod action_list;
 pub mod assigned_landing_calls;
 mod audit_notification;
 mod audit_record;
+pub mod authentication_policy;
 pub mod calendar;
 mod channel_value;
 mod color_command;
@@ -88,6 +89,7 @@ pub use audit_record::{
     decode_audit_log_record, decode_audit_log_record_at, decode_audit_log_record_result_at,
     encode_audit_log_record, encode_audit_log_record_result,
 };
+pub use authentication_policy::{decode_authentication_policy, encode_authentication_policy};
 pub use calendar::{
     decode_calendar_entry, decode_calendar_entry_list, decode_date_range, encode_calendar_entry,
     encode_calendar_entry_list, encode_date_range,

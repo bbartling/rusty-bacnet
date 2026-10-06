@@ -6,11 +6,11 @@ use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::rpm::ReadAccessResult;
 use bacnet_types::constructed::{
     AccessResult, BACnetAccessRule, BACnetActionCommand, BACnetActionList,
-    BACnetAuthenticationFactorFormat, BACnetCOVSubscription, BACnetCalendarEntry, BACnetDateRange,
-    BACnetDestination, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
-    BACnetPortPermission, BACnetPrescale, BACnetPropertyAccessResult, BACnetRecipient, BACnetScale,
-    BACnetSpecialEvent, BACnetStageLimitValue, BACnetTimeValue, BACnetValueSource,
-    ReadAccessSpecification, SpecialEventPeriod,
+    BACnetAuthenticationFactorFormat, BACnetAuthenticationPolicy, BACnetCOVSubscription,
+    BACnetCalendarEntry, BACnetDateRange, BACnetDestination, BACnetDeviceObjectPropertyReference,
+    BACnetDeviceObjectReference, BACnetPortPermission, BACnetPrescale, BACnetPropertyAccessResult,
+    BACnetRecipient, BACnetScale, BACnetSpecialEvent, BACnetStageLimitValue, BACnetTimeValue,
+    BACnetValueSource, ReadAccessSpecification, SpecialEventPeriod,
 };
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
@@ -38,6 +38,7 @@ pub(super) enum Decoded {
     ActionList(BACnetActionList),
     DeviceObjectReference(BACnetDeviceObjectReference),
     AuthenticationFactorFormat(BACnetAuthenticationFactorFormat),
+    AuthenticationPolicy(BACnetAuthenticationPolicy),
     StageLimitValue(BACnetStageLimitValue),
     AccessRule(BACnetAccessRule),
     DeviceObjectPropertyReference(BACnetDeviceObjectPropertyReference),
@@ -81,6 +82,16 @@ impl Decoded {
                     (None, None) => any(py, format_type)?,
                     (vendor_id, vendor_format) => any(py, (format_type, vendor_id, vendor_format))?,
                 }
+            }
+            Self::AuthenticationPolicy(policy) => {
+                let entries = PyList::empty(py);
+                for entry in &policy.policy {
+                    entries.append((
+                        object_reference_to_py(py, &entry.credential_data_input)?,
+                        entry.index,
+                    ))?;
+                }
+                any(py, (entries, policy.order_enforced, policy.timeout))?
             }
             Self::StageLimitValue(stage) => any(
                 py,

@@ -14,8 +14,9 @@
 
 use bacnet_encoding::constructed::{
     decode_access_rule, decode_action_list, decode_authentication_factor_format,
-    decode_calendar_entry, decode_cov_subscription, decode_daily_schedule, decode_date_range,
-    decode_destination, decode_device_object_property_reference, decode_device_object_reference,
+    decode_authentication_policy, decode_calendar_entry, decode_cov_subscription,
+    decode_daily_schedule, decode_date_range, decode_destination,
+    decode_device_object_property_reference, decode_device_object_reference,
     decode_port_permission, decode_prescale, decode_property_access_result,
     decode_read_access_specification, decode_recipient, decode_scale, decode_special_event,
     decode_stage_limit_value, decode_value_source,
@@ -53,6 +54,9 @@ pub(crate) enum Element {
     /// A Supported_Formats element: the format type, or a `(format_type,
     /// vendor_id, vendor_format)` triple when it carries vendor members.
     AuthenticationFactorFormat,
+    /// An Authentication_Policy_List element, as the `(entries,
+    /// order_enforced, timeout)` triple `add_access_point` takes (#1325).
+    AuthenticationPolicy,
     /// A Stages element, as a `(limit, values, deadband)` triple.
     StageLimitValue,
     /// An Access Rights rule, as an `AccessRule` mapping.
@@ -125,6 +129,9 @@ pub(crate) fn element(
         (O::ACCESS_RIGHTS, P::ACCOMPANIMENT) => (Element::DeviceObjectReference, Single),
         (O::CREDENTIAL_DATA_INPUT, P::SUPPORTED_FORMATS) => {
             (Element::AuthenticationFactorFormat, Collection)
+        }
+        (O::ACCESS_POINT, P::AUTHENTICATION_POLICY_LIST) => {
+            (Element::AuthenticationPolicy, Collection)
         }
         (O::STAGING, P::STAGES) => (Element::StageLimitValue, Collection),
         (O::ACCESS_RIGHTS, P::POSITIVE_ACCESS_RULES | P::NEGATIVE_ACCESS_RULES) => {
@@ -201,7 +208,7 @@ pub(crate) fn decode(
 impl Element {
     /// Every element production, each once; a new one goes here too, so
     /// that [`Self::from_tag`] knows it.
-    const ALL: [Self; 22] = [
+    const ALL: [Self; 23] = [
         Self::Destination,
         Self::PortPermission,
         Self::ReadAccessSpecification,
@@ -209,6 +216,7 @@ impl Element {
         Self::ActionList,
         Self::DeviceObjectReference,
         Self::AuthenticationFactorFormat,
+        Self::AuthenticationPolicy,
         Self::StageLimitValue,
         Self::AccessRule,
         Self::DeviceObjectPropertyReference,
@@ -246,6 +254,7 @@ impl Element {
             Self::ActionList => "action_list",
             Self::DeviceObjectReference => "device_object_reference",
             Self::AuthenticationFactorFormat => "authentication_factor_format",
+            Self::AuthenticationPolicy => "authentication_policy",
             Self::StageLimitValue => "stage_limit_value",
             Self::AccessRule => "access_rule",
             Self::DeviceObjectPropertyReference => "device_object_property_reference",
@@ -321,6 +330,10 @@ impl Element {
             Self::AuthenticationFactorFormat => with(
                 decode_authentication_factor_format(octets, offset),
                 Decoded::AuthenticationFactorFormat,
+            ),
+            Self::AuthenticationPolicy => with(
+                decode_authentication_policy(octets, offset),
+                Decoded::AuthenticationPolicy,
             ),
             Self::StageLimitValue => with(
                 decode_stage_limit_value(octets, offset),

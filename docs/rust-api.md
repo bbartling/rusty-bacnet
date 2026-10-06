@@ -2196,6 +2196,16 @@ framing, through the shared `bacnet-encoding` codecs.
   declaring Present_Value's format and class puts Present_Value back to
   UNDEFINED, with Update_Time stamped from the Device clock; out of service
   that covers the simulated factor and the reader's factor put aside.
+- **Access Point `Authentication_Policy_List` and
+  `Authentication_Policy_Names`** (#1325) are BACnetARRAYs of
+  `bacnet_types::constructed::BACnetAuthenticationPolicy` (codec
+  `bacnet_encoding::constructed::{encode_authentication_policy,
+  decode_authentication_policy}`) and of CharacterString, served once
+  `AccessPointObject::set_authentication_policies` sets them and read-only on
+  the network. Their size is Number_Of_Authentication_Policies, capped at
+  `MAX_AUTHENTICATION_POLICIES` (256) while they are served: a longer list, or
+  a larger count, is VALUE_OUT_OF_RANGE. The rules for valid policies are
+  under the Access Point below.
 - **Access Zone `Entry_Points` and `Exit_Points`** (Clauses 12.32.23 and
   12.32.24) are BACnetLISTs of `BACnetDeviceObjectReference`, read-only on the
   network. `AccessZoneObject::set_entry_points` and `set_exit_points` set
@@ -3808,18 +3818,39 @@ Access Door, Access Point and Credential Data Input support COV (Table 13-1).
 A door's SubscribeCOV report carries Present_Value, Status_Flags and
 Door_Alarm_State; a Door_Alarm_State change sends one. An Access Point has no
 Present_Value, so its report starts with Access_Event, then Status_Flags,
-Access_Event_Tag, Access_Event_Time and Access_Event_Credential, and only an
-Access_Event_Time or Status_Flags change sends one. A Credential Data Input
-report carries Update_Time, whose change sends one. The application sets
-these values before adding the object with
-`AccessDoorObject::set_door_alarm_state`,
-`AccessPointObject::set_access_event(event, tag, time, credential)` (its time
-a `BACnetTimeStamp`, its credential an Access Credential reference or `None`
-for the no-credential reference, instance 4194303; another object type, or
-4194303 in only one of the object and device instances, is
+Access_Event_Tag, Access_Event_Time, Access_Event_Credential and
+Access_Event_Authentication_Factor, and only an Access_Event_Time or
+Status_Flags change sends one. A Credential Data Input report carries
+Update_Time, whose change sends one. The application sets these values
+before adding the object with `AccessDoorObject::set_door_alarm_state`,
+`AccessPointObject::set_access_event` (an `AccessEventReport`: the event,
+its tag, a `BACnetTimeStamp` or `None` for the Device clock's time, an
+Access Credential reference or `None` for the no-credential reference,
+instance 4194303, and a `BACnetAuthenticationFactor` or `None` for the
+UNDEFINED one; another object type, 4194303 in only one of the object and
+device instances, or a factor format outside the closed production is
 VALUE_OUT_OF_RANGE) and `CredentialDataInputObject::set_present_value` (the
 factor read and its Update_Time), and a door's Door_Status and Lock_Status
 with `set_door_status` and `set_lock_status`.
+
+Once the server holds them, the application reports these inputs through
+`BACnetServer::report_access_event_local`,
+`report_credential_read_local` (a `CredentialReadReport`: the factor and an
+optional time, stamped from the Device clock when absent) and
+`report_door_state_local` (a `DoorStateReport`: any of Door_Status,
+Lock_Status and Door_Alarm_State) (#1132). Each record changes its values
+together as one local write, so the COV report and the event pass follow it
+as they follow `write_local`, and the call must run inside a Tokio runtime.
+Each checks its values as the setters do, all or nothing, a door's values
+against their productions and a point's event against the BACnetAccessEvent
+production (named, or proprietary from 512 to 65535) too. While its
+Out_Of_Service is TRUE each object keeps its own rule: the point refuses an
+event with WRITE_ACCESS_DENIED and changes nothing, since it performs no
+authentication then, while the door and the reader keep the reported values
+aside in place of the device's earlier ones, as their setters do, so a
+client's simulated values stay served with no COV report or event, and the
+return to service serves the latest values reported. Any other object fails
+with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 
 An Access Point's Authentication_Status is READY until the application
 reports another status with `set_authentication_status` (a value past
@@ -3828,11 +3859,30 @@ TRUE and the reported status again afterwards.
 
 The point also serves Active_Authentication_Policy,
 Number_Of_Authentication_Policies, Authorization_Mode and
-Priority_For_Writing. It serves no policy list, so what each policy holds is
-up to the application. `set_number_of_authentication_policies` sets how many
-there are (1 by default; zero, or a count below the policy in effect, is
-VALUE_OUT_OF_RANGE), and a client picks the policy in effect by writing
-Active_Authentication_Policy, an Unsigned from 1 to that count.
+Priority_For_Writing. `set_number_of_authentication_policies` sets how many
+policies there are (1 by default; zero is VALUE_OUT_OF_RANGE), and a client
+picks the policy in effect by writing Active_Authentication_Policy, an
+Unsigned from 1 to that count. Until the application describes the policies,
+what each holds is up to it. `set_authentication_policies` takes
+`(name, BACnetAuthenticationPolicy)` pairs (#1325): the point then serves
+Authentication_Policy_List and Authentication_Policy_Names, both read-only
+over the network, the count becomes the number of pairs (no pairs is
+VALUE_OUT_OF_RANGE), and a later count resizes both arrays, adding empty
+policies with empty names. While the arrays are served the count is capped
+at `MAX_AUTHENTICATION_POLICIES` (256): a longer list, or a larger count, is
+VALUE_OUT_OF_RANGE. A policy is usable when it has at least one entry, each
+entry names a Credential Data Input, and the indexes, in list order, start
+at 1 and repeat or climb by one; a client's write naming any other policy
+is VALUE_OUT_OF_RANGE. When the count drops below the policy in effect, or
+the list makes it unusable, Active_Authentication_Policy becomes 0 until a
+client writes a usable policy. Reliability is CONFIGURATION_ERROR while the
+active policy is 0 or the list holds any invalid policy, a grown count's
+empty ones included, and NO_FAULT_DETECTED otherwise. While it isn't
+NO_FAULT_DETECTED the point generates no access events, so
+`report_access_event_local` refuses them with WRITE_ACCESS_DENIED. The
+point's Reliability takes simulated writes while Out_Of_Service is TRUE and
+refuses them in service; out of service it ignores the policies, and the
+return to service serves the derived value again.
 Authorization_Mode starts at AUTHORIZE and takes a write of any mode in the
 set `set_supported_authorization_modes` gives. The point enforces no mode
 itself, so a new point supports AUTHORIZE alone: an application that acts on
@@ -3935,9 +3985,13 @@ one every time, so Access_Event_Time and Update_Time, the Table 13-1
 triggers of these two objects, would never move. Both are BACnetTimeStamp
 values (Clause 21.6), and Clauses 12.31.29 and 12.36.11 allow an update time
 in the sequence-number form, so with no usable clock the objects stamp that
-form instead. An Access Point's Out_Of_Service edge stamps its new
-Access_Event_Tag: the tag itself up to 65535, and past that the tag folded
-back into 1 to 65535. A Credential Data Input's simulated Present_Value and
+form instead. An Access Point stamps each event it records without a
+given time, an Out_Of_Service edge or a reported event, strictly after the
+time it served before, since several events of one transaction share a tag
+and each has to move the time: the next sequence number without a clock
+(from 1 when the time served is in another form, wrapping from 65535 to 1),
+and with one the clock's time, or one hundredth past the time served when
+the clock isn't later. A Credential Data Input's simulated Present_Value and
 format reset take the object's own next number, from 1 to 65535 and then 1
 again. Neither stamps 0, the value of an update time with no update yet. A
 time the application passes to `set_access_event` or `set_present_value` is

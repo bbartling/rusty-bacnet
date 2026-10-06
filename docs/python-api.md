@@ -370,6 +370,7 @@ its octets.
 | Group | Present_Value | `"read_access_result"` | a `read_property_multiple` result: `{"object_id": ..., "results": [...]}` | none: the members' results |
 | Command | Action | `"action_list"` | a list of `ActionCommand` mappings with every key | `add_command(action=...)`, which ignores `write_successful` |
 | Access Door, Access Point, Staging | Door_Members, Access_Doors, Target_References | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` when the reference names a device | `door_members=`, `access_doors=`; `target_references=` takes the `ObjectIdentifier` form only |
+| Access Point | Authentication_Policy_List | `"authentication_policy"` | `([(credential_data_input, index), ...], order_enforced, timeout)`, each reference an `ObjectIdentifier` or `(device, object)` | `add_access_point(authentication_policies=...)`, paired with the Authentication_Policy_Names element |
 | Credential Data Input | Supported_Formats | `"authentication_factor_format"` | the format type, or `(format_type, vendor_id, vendor_format)` when it has vendor members (a missing one is `None`, which the write also takes) | `add_credential_data_input(supported_formats=...)`, paired with Supported_Format_Classes |
 | Staging | Stages | `"stage_limit_value"` | `(limit, values, deadband)`, `values` a `list[bool]` | `add_staging(stages=...)` |
 | Access Rights | Positive_Access_Rules, Negative_Access_Rules | `"access_rule"` | an `AccessRule` mapping with every key; `None` stands for ALWAYS and ALL | `add_access_rights(positive_access_rules=..., negative_access_rules=...)` |
@@ -2916,6 +2917,22 @@ Active_Authentication_Policy (1 to the policy count) and the mode by writing
 Authorization_Mode (one of the supported modes). Another value is refused
 with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
 
+`authentication_policies` describes the policies as `(name, policy)` pairs
+(#1325), a policy being `([(credential_data_input, index), ...],
+order_enforced, timeout)`, each Credential Data Input in the forms
+`access_doors` takes and the timeout in seconds (0 for none). The point then
+serves Authentication_Policy_List and Authentication_Policy_Names, read-only
+over the network, and the policy count becomes the number of pairs; a
+`number_of_authentication_policies` given too is applied after and resizes
+both arrays. An empty list, more than 256 pairs, or a count above 256 with
+the pairs raises VALUE_OUT_OF_RANGE. A policy with no entries, a reference to
+anything but a Credential Data Input, or indexes that don't start at 1 and
+climb by at most one is kept but can't be in effect: peers can't select it,
+and while it is the one in effect Active_Authentication_Policy reads 0.
+While any such policy is listed, or the active policy is 0, Reliability reads
+CONFIGURATION_ERROR and the point takes no access events. The point's
+Reliability then takes simulated writes while it is out of service.
+
 `add_access_door` also takes `alarm_values`, `fault_values` and
 `masked_alarm_values`, the door's starting Alarm_Values, Fault_Values and
 Masked_Alarm_Values as BACnetDoorAlarmState numbers other than NORMAL (1 to
@@ -3060,8 +3077,8 @@ an Accompaniment the object refuses raises `BacnetProtocolError`.
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:
 Door_Alarm_State on a door; Access_Event (in place of Present_Value),
-Access_Event_Tag, Access_Event_Time and Access_Event_Credential on an Access
-Point; Update_Time on a
+Access_Event_Tag, Access_Event_Time, Access_Event_Credential and
+Access_Event_Authentication_Factor on an Access Point; Update_Time on a
 Credential Data Input; and Requested_Shed_Level, Start_Time and Shed_Duration
 on a Load Control. While a door's Out_Of_Service is TRUE, clients can write
 its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30
@@ -3080,6 +3097,24 @@ each sends the point's COV report. Supported_Formats,
 Supported_Format_Classes, Door_Members and Access_Doors read as arrays (index
 0 is the size), each reference and format in the form its keyword argument
 takes (see [typed constructed values](#typed-constructed-values)).
+
+A running server takes these objects' inputs from the application (#1132):
+`await server.report_access_event_local(point, event, tag, time=...,
+credential=..., authentication_factor=...)` records an access event,
+`await server.report_credential_read_local(reader, (format_type,
+format_class, value), update_time=...)` a reader's read, and
+`await server.report_door_state_local(door, door_status=...,
+lock_status=..., door_alarm_state=...)` the door's hardware state. A time
+left out is the Device clock's, a credential left out the no-credential
+reference and a factor left out the UNDEFINED one. Each changes its values
+together, sends the object's COV report when its trigger moves and runs the
+door's event algorithm at once. A value the object refuses raises
+VALUE_OUT_OF_RANGE with nothing changed, and another object raises
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. While an object's Out_Of_Service is
+TRUE, the point refuses an event with WRITE_ACCESS_DENIED, and the door and
+the reader keep the reported values aside in place of the device's earlier
+ones: a client's simulated values stay served, with no COV report, and the
+return to service serves the latest values reported.
 
 #### Transportation
 
