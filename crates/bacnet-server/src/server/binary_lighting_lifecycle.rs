@@ -11,9 +11,9 @@ use tokio::time::{Instant, MissedTickBehavior};
 /// expire what is due (`advance_monotonic_time_internal`) and to report its
 /// next deadline, and fans COV out for each object that changed once the
 /// database guard is dropped. Binary Lighting Output egress, Lighting Output
-/// fades, ramps and egress (#1384), Access Door pulse relock (#1073),
-/// Averaging sampling and Pulse Converter counting all run on it; the name
-/// predates the others.
+/// fades, ramps and egress (#1384), Color and Color Temperature fades and
+/// ramps (#1474), Access Door pulse relock (#1073), Averaging sampling and
+/// Pulse Converter counting all run on it; the name predates the others.
 ///
 /// It wakes once a second, at the earliest deadline it gathered, and when an
 /// object arms a deadline in a write (`MonotonicClocks::deadline_armed`), so

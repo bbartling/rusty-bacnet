@@ -73,3 +73,27 @@ bacnet_enum! {
     const STEP_DOWN_CCT = 5;
     const STOP = 6;
 }
+
+bacnet_enum! {
+    /// BACnet colour in-progress state, which both colour object types
+    /// report as In_Progress (Addendum 135-2020ca, Clause 21). A Color
+    /// object has no ramp, so it never reports RAMP_ACTIVE.
+    pub struct ColorOperationInProgress(u32);
+
+    const IDLE = 0;
+    const FADE_ACTIVE = 1;
+    const RAMP_ACTIVE = 2;
+    const NOT_CONTROLLED = 3;
+    const OTHER = 4;
+}
+
+bacnet_enum! {
+    /// BACnet colour transition: how either colour object type moves to a
+    /// Present_Value written to it (Addendum 135-2020ca, Clause 21). A Color
+    /// object takes NONE and FADE only.
+    pub struct ColorTransition(u32);
+
+    const NONE = 0;
+    const FADE = 1;
+    const RAMP = 2;
+}
