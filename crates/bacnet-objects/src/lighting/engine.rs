@@ -37,6 +37,10 @@
 //! takes effect at once. A step the table says to ignore halts nothing, and
 //! neither does a proprietary operation, which this object stores but
 //! defines no action for.
+//!
+//! The trims (#1528, see `trim`) sit on top of all this: Tracking_Value as
+//! reported is the engine's value held between them, and a trim change runs
+//! alongside whatever operation is in progress.
 
 use std::time::Duration;
 
@@ -162,17 +166,28 @@ impl LightingOutputObject {
     }
 
     /// Tracking_Value at `now`: the fade or ramp's value while one runs,
-    /// otherwise Present_Value (Clause 12.54.5).
+    /// otherwise Present_Value (Clause 12.54.5), held within the trims
+    /// (#1528).
     pub(super) fn tracking_value_at(&self, now: Duration) -> f32 {
+        self.trimmed(self.untrimmed_at(now), now)
+    }
+
+    /// Tracking_Value at `now` before the trims hold it.
+    fn untrimmed_at(&self, now: Duration) -> f32 {
         match self.operation {
             Some(Operation::Moving { run, .. }) => run.transition().value_at(now),
             _ => self.present_value,
         }
     }
 
-    /// In_Progress at `now`: FADE_ACTIVE or RAMP_ACTIVE while a fade or ramp
-    /// is still moving, otherwise IDLE.
+    /// In_Progress at `now`: TRIM_ACTIVE while the trims hold Tracking_Value
+    /// apart from Present_Value, whatever else runs (#1528); otherwise
+    /// FADE_ACTIVE or RAMP_ACTIVE while a fade or ramp is still moving, and
+    /// IDLE.
     pub(super) fn in_progress_at(&self, now: Duration) -> LightingInProgress {
+        if self.trim_active(self.untrimmed_at(now), now) {
+            return LightingInProgress::TRIM_ACTIVE;
+        }
         match self.operation {
             Some(Operation::Moving { run, .. }) if !run.transition().is_finished(now) => {
                 match run.transition().kind() {
@@ -219,11 +234,12 @@ impl LightingOutputObject {
     }
 
     /// Advance to `now`: finish a fade or ramp that has arrived, run out an
-    /// egress timer that is due, and take a COV sample that is due. `true`
-    /// when something a COV report could carry changed.
+    /// egress timer that is due, move a trim change on, and take a COV sample
+    /// that is due. `true` when something a COV report could carry changed.
     pub(super) fn advance_to(&mut self, now: Duration) -> bool {
         let step = self.sample_step();
-        match self.operation {
+        let trims = self.trims.advance(now, step);
+        let operation = match self.operation {
             Some(Operation::Egress {
                 priority,
                 then,
@@ -245,15 +261,20 @@ impl LightingOutputObject {
                 Progress::Pending => false,
             },
             _ => false,
-        }
+        };
+        trims || operation
     }
 
     /// The next instant the engine needs advancing at, if any.
     pub(super) fn next_deadline(&self) -> Option<Duration> {
-        self.operation.map(|operation| match operation {
+        let operation = self.operation.map(|operation| match operation {
             Operation::Moving { run, .. } => run.deadline(),
             Operation::Egress { deadline, .. } => deadline,
-        })
+        });
+        match (operation, self.trims.deadline()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     /// Carry out `command`'s operation at `priority`.
@@ -394,7 +415,7 @@ impl LightingOutputObject {
     }
 
     /// The highest priority with a level in its slot.
-    fn highest_priority(&self) -> Option<u8> {
+    pub(super) fn highest_priority(&self) -> Option<u8> {
         self.priority_array
             .iter()
             .position(Option::is_some)
@@ -418,7 +439,7 @@ impl LightingOutputObject {
 
     /// How far Tracking_Value moves between COV samples: COV_Increment, or
     /// one percent while that is 0.0.
-    fn sample_step(&self) -> f64 {
+    pub(super) fn sample_step(&self) -> f64 {
         if self.cov_increment > 0.0 {
             f64::from(self.cov_increment)
         } else {
@@ -427,7 +448,7 @@ impl LightingOutputObject {
     }
 
     /// Tell the server's monotonic task a deadline was armed.
-    fn wake(&self) {
+    pub(super) fn wake(&self) {
         if let Some(waker) = &self.deadline_waker {
             waker();
         }

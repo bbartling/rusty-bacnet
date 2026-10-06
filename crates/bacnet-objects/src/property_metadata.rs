@@ -57,6 +57,9 @@ pub enum PropertyPresenceCondition {
     CommandableValueSourceTracking,
     /// The paired Active_Text and Inactive_Text option is implemented.
     PairedText,
+    /// A Lighting Output has a trim, which makes its Trim_Fade_Time required
+    /// (Addendum 135-2020ca part 5, #1528).
+    LightingTrims,
 }
 
 /// The write capability implemented by an object's property-write routes.
@@ -133,6 +136,7 @@ impl PropertyMetadata {
                         | PropertyPresenceCondition::AuditReporting
                         | PropertyPresenceCondition::ValueSourceTracking
                         | PropertyPresenceCondition::CommandableValueSourceTracking
+                        | PropertyPresenceCondition::LightingTrims
                 )
             )
     }

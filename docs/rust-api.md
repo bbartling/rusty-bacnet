@@ -3395,6 +3395,31 @@ commanded Present_Value is, so a FADE_TO 0.5 puts 1.0 in the slot.
   ramp stops with its slot as it is, and an egress takes effect at once.
 - A proprietary operation is stored and does nothing else.
 
+Lighting Output takes the trims of Addendum 135-2020ca part 5 (#1528).
+`High_End_Trim` and `Low_End_Trim` are absent until `set_high_end_trim` or
+`set_low_end_trim` sets them (`None` takes one away), and either brings
+`Trim_Fade_Time` (0 to 86,400,000 ms, initially 0; `set_trim_fade_time`),
+which the table's footnote then makes required. All three take writes; a
+trim outside 1.0 to 100.0, or a fade time past a day, is refused with
+VALUE_OUT_OF_RANGE.
+
+- Tracking_Value is held between the trims: an on level below the low trim
+  tracks at it, a level above the high trim tracks at that, and off stays
+  off. Present_Value keeps the level as commanded.
+- In_Progress reads TRIM_ACTIVE (5, `LightingInProgress::TRIM_ACTIVE`) while
+  the trims keep Tracking_Value from Present_Value, ahead of FADE_ACTIVE or
+  RAMP_ACTIVE.
+- The trims stand aside while Present_Value comes from slot 1 or 2.
+- A trim change moves the trims themselves, in a straight line over
+  Trim_Fade_Time, and Tracking_Value follows them, sampled for COV as a fade
+  is. A fade or ramp under way runs on behind the moving trims.
+- Commands work from Tracking_Value as reported, so a step starts from the
+  held level, STOP leaves the held level in the slot, and a fade to a level
+  past a trim reaches the trim early and stays there. An egress holds the
+  trimmed level.
+- A high trim below the low one sets Reliability to CONFIGURATION_ERROR (with
+  Status_Flags' FAULT), and the trims hold nothing until it's put right.
+
 Fades, ramps and egress timers run on the server's monotonic task, which a
 write that starts one wakes. Tracking_Value is worked out from the clock when
 read. While it moves, the task samples it for COV each time it has moved by

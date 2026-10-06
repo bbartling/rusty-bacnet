@@ -31,7 +31,13 @@ use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 /// the level for Egress_Time before relinquishing or turning it off.
 /// Present_Value takes the blink-warn values -1.0, -2.0 and -3.0 as the
 /// three warn commands. Tracking_Value equals Present_Value whenever no fade
-/// or ramp is moving it.
+/// or ramp is moving it and no trim holds it.
+///
+/// High_End_Trim, Low_End_Trim and Trim_Fade_Time are absent until set
+/// (#1528; see [`set_high_end_trim`](Self::set_high_end_trim)). Once set,
+/// Tracking_Value is held between the trims, In_Progress reads TRIM_ACTIVE
+/// while that keeps it from Present_Value, and a trim change takes
+/// Trim_Fade_Time to show.
 ///
 /// Fades, ramps and egress timers run on the monotonic clock the database
 /// binds; the server's monotonic task advances them and fans their COV out.
@@ -66,6 +72,9 @@ pub struct LightingOutputObject {
     reliability: Reliability,
     priority_array: [Option<f32>; 16],
     relinquish_default: f32,
+    /// High_End_Trim, Low_End_Trim and Trim_Fade_Time, and a trim change
+    /// under way.
+    trims: trim::Trims,
     monotonic_clock: Option<Arc<MonotonicClock>>,
     deadline_waker: Option<Arc<DeadlineWaker>>,
     /// The time an object with no clock bound has been advanced to.
@@ -96,6 +105,7 @@ impl LightingOutputObject {
             reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: [None; 16],
             relinquish_default: 0.0,
+            trims: trim::Trims::NONE,
             monotonic_clock: None,
             deadline_waker: None,
             logical_now: Duration::ZERO,
@@ -313,7 +323,9 @@ impl BACnetObject for LightingOutputObject {
             p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            _ => Err(common::unknown_property_error()),
+            p => self
+                .read_trim(p)
+                .unwrap_or_else(|| Err(common::unknown_property_error())),
         }
     }
 
@@ -411,6 +423,10 @@ impl BACnetObject for LightingOutputObject {
             return Err(common::invalid_data_type_error());
         }
 
+        // HIGH_END_TRIM, LOW_END_TRIM and TRIM_FADE_TIME, once present.
+        if let Some(result) = self.write_trim(property, &value) {
+            return result;
+        }
         if let Some(result) = common::write_cov_increment(&mut self.cov_increment, property, &value)
         {
             return result;
@@ -487,6 +503,7 @@ mod binary;
 mod command;
 mod engine;
 mod metadata;
+mod trim;
 pub use binary::BinaryLightingOutputObject;
 
 // ---------------------------------------------------------------------------
@@ -510,3 +527,6 @@ mod engine_tests;
 
 #[cfg(test)]
 mod warn_tests;
+
+#[cfg(test)]
+mod trim_tests;

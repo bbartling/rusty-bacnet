@@ -558,6 +558,15 @@ bacnet_enum! {
     /// its Clause 21 list; its errata of 2023-01-05 (item 1) number it, and
     /// bacnet-stack, Wireshark and BACnet4J use the same value.
     const COLOR_COMMAND = 4194334;
+    /// The top of a Lighting Output's operating range (Addendum 135-2020ca
+    /// part 5, numbered by its errata of 2023-01-05).
+    const HIGH_END_TRIM = 4194335;
+    /// The bottom of a Lighting Output's operating range (Addendum
+    /// 135-2020ca part 5, numbered by its errata).
+    const LOW_END_TRIM = 4194336;
+    /// How long, in milliseconds, a Lighting Output takes to follow a change
+    /// of its trims (Addendum 135-2020ca part 5, numbered by its errata).
+    const TRIM_FADE_TIME = 4194337;
 }
 
 #[cfg(feature = "serde")]

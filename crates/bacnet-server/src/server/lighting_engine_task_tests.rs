@@ -281,3 +281,64 @@ async fn an_egress_reports_present_value_when_it_runs_out() {
     );
     server.stop().await.unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_trim_change_fades_in_on_the_task_and_reports_trim_active() {
+    let (mut server, oid, sent) = start(|object| {
+        object.set_high_end_trim(Some(100.0)).unwrap();
+        object.set_trim_fade_time(300).unwrap();
+    })
+    .await;
+    subscribe(&server, oid, None).await;
+    write(&server, oid, PV, PropertyValue::Real(90.0), Some(8)).await;
+    assert_eq!(
+        reports(&sent),
+        [(OBJECT, PV, real(90.0)), (TRACKING, TV, real(90.0))]
+    );
+    // High_End_Trim 60 (4194335): the bound moves from 100 down to 60 over
+    // 300 ms, and Tracking_Value follows it from 90 down at each 100 ms grid
+    // point. Present_Value stays 90, so whole-object subscribers hear
+    // nothing.
+    write(
+        &server,
+        oid,
+        PropertyIdentifier::HIGH_END_TRIM,
+        PropertyValue::Real(60.0),
+        None,
+    )
+    .await;
+    assert_eq!(reports(&sent), []);
+    // TRIM_ACTIVE is 5.
+    assert_eq!(
+        read(&server, oid, PropertyIdentifier::IN_PROGRESS).await,
+        PropertyValue::Enumerated(5)
+    );
+    // 100 - 40/3 is a little over 86.66, so the first grid point holds
+    // Tracking_Value at the bound; the end holds it at the trim.
+    let mut heard = Vec::new();
+    for _ in 0..3 {
+        advance(100).await;
+        heard.push(reports(&sent));
+    }
+    assert_eq!(
+        heard,
+        [
+            vec![(TRACKING, TV, real(100.0 - 40.0 / 3.0))],
+            vec![(TRACKING, TV, real(100.0 - 80.0 / 3.0))],
+            vec![(TRACKING, TV, real(60.0))],
+        ]
+    );
+    assert_eq!(
+        read(&server, oid, PropertyIdentifier::IN_PROGRESS).await,
+        PropertyValue::Enumerated(5)
+    );
+    let deadline = server
+        .database()
+        .read()
+        .await
+        .get(&oid)
+        .unwrap()
+        .next_monotonic_deadline_internal();
+    assert_eq!(deadline, None);
+    server.stop().await.unwrap();
+}

@@ -596,6 +596,9 @@ class PropertyIdentifier:
     DEFAULT_COLOR: PropertyIdentifier
     DEFAULT_COLOR_TEMPERATURE: PropertyIdentifier
     COLOR_COMMAND: PropertyIdentifier
+    HIGH_END_TRIM: PropertyIdentifier
+    LOW_END_TRIM: PropertyIdentifier
+    TRIM_FADE_TIME: PropertyIdentifier
 
     @staticmethod
     def from_raw(value: int) -> PropertyIdentifier: ...

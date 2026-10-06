@@ -6,7 +6,7 @@ use bacnet_types::enums::PropertyIdentifier as P;
 
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
-    PropertyMetadata,
+    PropertyMetadata, PropertyPresenceCondition,
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
@@ -25,6 +25,9 @@ use crate::property_metadata::{
 // profile rows; Binary Lighting Output Feedback_Value, Power, Polarity,
 // Elapsed_Active_Time family, Value_Source family, event/intrinsic/audit/
 // tag/profile rows) are all optional and stay absent until dispatch exists.
+// Lighting Output's trims (High_End_Trim, Low_End_Trim and Trim_Fade_Time,
+// Addendum 135-2020ca part 5, #1528) join the rows once set; see
+// `for_lighting_output_object`.
 // Object_Identifier, Object_Name, and Object_Type carry the table R code and
 // have no network write route, so RequiredRead/ReadOnly. Object_Name
 // explicitly documents the denial: a rename falls through to
@@ -108,9 +111,33 @@ const BINARY_LIGHTING_OUTPUT_BASE: &[PropertyMetadata] = &[
 ];
 
 pub(super) fn for_lighting_output_object(
-    _object: &LightingOutputObject,
+    object: &LightingOutputObject,
 ) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(LIGHTING_OUTPUT_BASE)
+    // The trims (#1528) are Optional rows that take writes, each present once
+    // set. Trim_Fade_Time comes with either, and the footnote to Table 12-64
+    // makes it required then. They go in before Property_List.
+    let trims = &object.trims;
+    let rows = [
+        (P::HIGH_END_TRIM, trims.high_end().is_some(), None),
+        (P::LOW_END_TRIM, trims.low_end().is_some(), None),
+        (
+            P::TRIM_FADE_TIME,
+            trims.has_fade_time(),
+            Some(PropertyPresenceCondition::LightingTrims),
+        ),
+    ];
+    if !rows.iter().any(|&(_, present, _)| present) {
+        return Cow::Borrowed(LIGHTING_OUTPUT_BASE);
+    }
+    let (property_list, base) = LIGHTING_OUTPUT_BASE
+        .split_last()
+        .expect("a Property_List row");
+    let mut metadata = base.to_vec();
+    metadata.extend(rows.into_iter().filter(|&(_, present, _)| present).map(
+        |(property, _, condition)| PropertyMetadata::new(property, Optional, condition, Always),
+    ));
+    metadata.push(*property_list);
+    Cow::Owned(metadata)
 }
 
 pub(super) fn for_binary_lighting_output_object(

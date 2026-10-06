@@ -72,6 +72,10 @@ fn property_identifiers_508_to_511_are_network_port_and_color_is_extended() {
         (4_194_330, "DEFAULT_COLOR"),
         (4_194_331, "DEFAULT_COLOR_TEMPERATURE"),
         (4_194_334, "COLOR_COMMAND"),
+        // Lighting Output's trims (#1528), numbered by the errata.
+        (4_194_335, "HIGH_END_TRIM"),
+        (4_194_336, "LOW_END_TRIM"),
+        (4_194_337, "TRIM_FADE_TIME"),
     ];
     for (raw, name) in cases {
         let property = PropertyIdentifier::from_raw(raw);
