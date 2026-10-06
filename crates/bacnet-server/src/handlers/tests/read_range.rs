@@ -13,6 +13,8 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::primitives::{Date, Time};
 
+#[path = "read_range_equivalence.rs"]
+mod equivalence;
 #[path = "read_range_log_records.rs"]
 mod log_records;
 #[path = "read_range_multiple.rs"]
@@ -430,7 +432,7 @@ pub(super) fn projected(family: LogFamily, value: u64) -> PropertyValue {
     PropertyValue::ApplicationData(framed.to_vec())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum LogFamily {
     Event,
     Trend,

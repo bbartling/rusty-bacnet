@@ -91,6 +91,12 @@ pub trait AuditLogStorage: Send + Sync {
     /// same ring `query` scans, so the two services never see different
     /// copies. The view is borrowed: the caller reads it under its object
     /// database guard, and nothing is copied or persisted.
+    ///
+    /// The numbers are nonzero and run on by one from the oldest record,
+    /// 2^64 - 1 wrapping to 1, as the built-in log keeps them. ReadRange
+    /// relies on that to compute where a sequence number sits: it checks
+    /// the record it computes and searches the ring only when that record
+    /// has another number (#1536).
     fn retained_records(&self) -> &VecDeque<BACnetAuditLogRecordResult>;
 }
 

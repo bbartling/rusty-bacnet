@@ -2789,7 +2789,24 @@ each item as one record framed as its Clause 21 production:
 | Audit Log | BACnetAuditLogRecord | `encode_audit_log_record` / `decode_audit_log_record_at` |
 
 Each decoder returns the offset after the record, so a client walks a
-ReadRange ACK's `item_data` record by record. The poller logs a value whose
+ReadRange ACK's `item_data` record by record.
+
+A ReadRange costs about the same over a full log as over a short one
+(#1536): only the returned window's records are encoded and given
+identities. `LogBufferRecords::record_identity` numbers any record from
+Total_Record_Count, and `record_position` computes where a sequence number
+sits. By Time bisects the timestamps while `timestamp_order` reports them
+`Ascending`, which the buffer keeps current as records come and go. Once the
+clock has been set back and an earlier stamp follows a later one
+(`Unordered`), each read walks the log until it finds its anchor. A
+timestamp that isn't an actual moment (`Unkeyed`) refuses By Time reads with
+`LIST_ITEM_NOT_TIMESTAMPED` until that record leaves the buffer. An Audit
+Log's numbers run on by one from its oldest record, so ReadRange computes a
+sequence number's place in its ring too, and checks the record there before
+trusting it. A custom `LogBufferRecords` must supply `record_identity`; the
+other two lookups default to walking the records.
+
+The poller logs a value whose
 datatype has no alternative of its own (a CharacterString, Double, Date,
 ObjectIdentifier, whole array and so on) as `AnyValue` holding the value's
 own encoding, the bytes a ReadProperty of it carries; NULL is logged only
