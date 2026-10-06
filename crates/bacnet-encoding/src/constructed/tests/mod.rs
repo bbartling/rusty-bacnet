@@ -14,6 +14,7 @@ mod action_list;
 mod assigned_landing_calls;
 mod audit_notification;
 mod authentication_factor_format;
+mod authentication_policy;
 mod calendar;
 mod channel_value;
 mod color_command;

@@ -1212,6 +1212,19 @@ class AccessRule(TypedDict):
     ]
 
 
+# One Access Point Authentication_Policy_List element
+# (``BACnetAuthenticationPolicy``): the ``(credential_data_input, index)``
+# entries, each Credential Data Input an ``ObjectIdentifier`` in this device
+# or a ``(device, object)`` pair, then whether the order is enforced and the
+# timeout in seconds (0 for none). A read of the list gives each element in
+# this form.
+AuthenticationPolicy = tuple[
+    list[tuple[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier], int]],
+    bool,
+    int,
+]
+
+
 class AuditReporterConfiguration(TypedDict):
     """Owned pre-start target Reporter settings; no Python callbacks."""
     instance: int
@@ -1432,8 +1445,10 @@ class PropertyValue:
       object reference lists and Accompaniment
       (``"device_object_reference"``: an ``ObjectIdentifier``, or
       ``(device, object)``), Supported_Formats
-      (``"authentication_factor_format"``), Stages (``"stage_limit_value"``:
-      ``(limit, values, deadband)``), Access Rights rules (``"access_rule"``:
+      (``"authentication_factor_format"``), Authentication_Policy_List
+      (``"authentication_policy"``: an ``AuthenticationPolicy``), Stages
+      (``"stage_limit_value"``: ``(limit, values, deadband)``), Access Rights
+      rules (``"access_rule"``:
       an ``AccessRule`` with every key), property reference lists
       (``"device_object_property_reference"``: a
       ``DeviceObjectPropertyReference`` with every key), a Global Group's
@@ -3404,6 +3419,7 @@ class BACnetServer:
             list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
         ] = None,
         number_of_authentication_policies: Optional[int] = None,
+        authentication_policies: Optional[list[tuple[str, AuthenticationPolicy]]] = None,
         supported_authorization_modes: Optional[list[int]] = None,
         priority_for_writing: Optional[int] = None,
     ) -> None:
@@ -3426,6 +3442,23 @@ class BACnetServer:
         BacnetProtocolError with VALUE_OUT_OF_RANGE. Peers write
         Active_Authentication_Policy (1 to the policy count) and
         Authorization_Mode (one of the supported modes).
+
+        ``authentication_policies`` sets Authentication_Policy_List and
+        Authentication_Policy_Names as ``(name, policy)`` pairs, both
+        read-only over the network, and the policy count to their number. A
+        policy's entries name the Credential Data Inputs and the step each
+        serves, from 1. An empty list, or more than 256 pairs, raises
+        BacnetProtocolError with VALUE_OUT_OF_RANGE; an index or timeout
+        outside 0..=4294967295 raises OverflowError. A policy with no
+        entries, a reference to anything but a Credential Data Input, or
+        indexes that don't start at 1 and climb by at most one is kept but
+        can't be in effect: while it is, Active_Authentication_Policy reads 0
+        until a peer writes a usable policy. While any such policy is listed,
+        or the active policy is 0, Reliability reads CONFIGURATION_ERROR and
+        the point takes no access events. A
+        ``number_of_authentication_policies`` given as well is applied after
+        and resizes both arrays, new policies empty and new names ``""``; it
+        can be at most 256 with the pairs (VALUE_OUT_OF_RANGE above).
         """
         ...
     def add_access_rights(
@@ -3812,6 +3845,88 @@ class BACnetServer:
         not Out_Of_Service is set, since clients never write its Present_Value;
         Tracking_Value, Silenced and Operation_Expected stay as they are. Other
         object types are not writable through this method.
+        """
+        ...
+
+    def report_access_event_local(
+        self,
+        object_id: ObjectIdentifier,
+        event: int,
+        tag: int,
+        *,
+        time: Optional[BACnetTimeStamp] = None,
+        credential: Optional[
+            ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]
+        ] = None,
+        authentication_factor: Optional[tuple[int, int, bytes]] = None,
+    ) -> Awaitable[None]:
+        """Report an access event at an Access Point the server holds.
+
+        Access_Event (``event``, a BACnetAccessEvent number),
+        Access_Event_Tag (``tag``, the access transaction), Access_Event_Time
+        (``time``, the Device clock's when omitted), Access_Event_Credential
+        (``credential``, the no-credential reference when omitted) and
+        Access_Event_Authentication_Factor (``authentication_factor`` as
+        ``(format_type, format_class, value)``, the UNDEFINED factor when
+        omitted) change together. A credential that isn't an Access
+        Credential, a factor format outside the closed production, or an
+        event that is neither a named BACnetAccessEvent nor a proprietary one
+        from 512 to 65535, raises VALUE_OUT_OF_RANGE. While the point is out
+        of service, or its Reliability isn't NO_FAULT_DETECTED, the event is
+        refused with WRITE_ACCESS_DENIED and nothing changes. An unknown
+        object raises UNKNOWN_OBJECT and any object other than an Access
+        Point OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A new time sends the
+        point's COV report, and a time the point stamps itself always moves,
+        so events of one transaction each send one.
+        """
+        ...
+
+    def report_credential_read_local(
+        self,
+        object_id: ObjectIdentifier,
+        factor: tuple[int, int, bytes],
+        *,
+        update_time: Optional[BACnetTimeStamp] = None,
+    ) -> Awaitable[None]:
+        """Report a factor a Credential Data Input's reader has read.
+
+        Present_Value takes ``factor``, ``(format_type, format_class,
+        value)``, and Update_Time ``update_time``, the Device clock's when
+        omitted, together. The factor must name one of the reader's
+        ``supported_formats`` with its class, or be the UNDEFINED (0) or
+        ERROR (1) factor with class 0, else VALUE_OUT_OF_RANGE. While the
+        reader is out of service the read is kept aside, in place of the
+        reader's earlier one: a client's simulated values stay served, no
+        COV report goes out, and the return to service serves the latest
+        read. An unknown object raises UNKNOWN_OBJECT and any object other
+        than a Credential Data Input OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A
+        new Update_Time sends the reader's COV report.
+        """
+        ...
+
+    def report_door_state_local(
+        self,
+        object_id: ObjectIdentifier,
+        *,
+        door_status: Optional[int] = None,
+        lock_status: Optional[int] = None,
+        door_alarm_state: Optional[int] = None,
+    ) -> Awaitable[None]:
+        """Report an Access Door's hardware state.
+
+        Whichever of Door_Status, Lock_Status and Door_Alarm_State is given,
+        as BACnetDoorStatus, BACnetLockStatus and BACnetDoorAlarmState
+        numbers, changes together; the others keep their values. A number
+        outside its production, or an alarm state the door's Alarm_Values,
+        Fault_Values and Masked_Alarm_Values don't admit, raises
+        VALUE_OUT_OF_RANGE and nothing changes. While the door is out of
+        service the values are kept aside, in place of the device's earlier
+        ones: a client's simulated values stay served, no COV report or event
+        follows, and the return to service serves the latest values
+        reported. An unknown object raises UNKNOWN_OBJECT and any object
+        other than an Access Door OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. In
+        service a new Door_Alarm_State sends the door's COV report, and the
+        door's event algorithm sees it at once.
         """
         ...
 
