@@ -6251,7 +6251,7 @@ record. `read_range_with` takes a `ReadRangeValidation`: a lenient read keeps
 a page that breaks a rule and is audited as a success. Request encoding validates before output/transaction admission: ALL,
 REQUIRED, OPTIONAL, array index zero, zero/non-INTEGER16 counts, and nonconcrete
 ByTime components are rejected. Zero position/sequence references are valid and
-may match no items. Rust supports all-items, position, sequence and ByTime.
+may match no items. Rust and Python support all-items, position, sequence and ByTime.
 Endpoint requests/responses are unsegmented; a received segmented response is a
 failed attempted read and is reported using the caller's terminal result.
 

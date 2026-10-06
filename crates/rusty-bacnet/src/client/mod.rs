@@ -117,6 +117,8 @@ pub struct BACnetClient {
     mstp_mac: u8,
     mstp_max_master: u8,
     mstp_max_info_frames: u8,
+    /// Least time between confirmed requests to one destination (#1535).
+    min_request_interval_ms: u64,
 }
 
 mod client_methods {
@@ -124,6 +126,7 @@ mod client_methods {
     mod enrollment_alarm_covmulti_who_writegroup;
     mod file_list_private_text_life;
     mod lifecycle;
+    mod log_read;
     mod object_device_alarm;
     mod read_write;
     mod vt_audit_time_directed;
