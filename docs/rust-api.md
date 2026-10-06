@@ -4856,13 +4856,17 @@ endpoint client isn't paced: its pages go back to back.
 ### Pacing
 
 `min_request_interval_ms` on every `BACnetClient` builder (and in
-`ClientConfig`), default 0, paces the confirmed requests to each destination.
-A request waits until that long after the previous request to the same
-destination finished, by a reply, an error or its caller giving up; while that
-previous request is still outstanding, it waits until that long after it was
-sent. It covers paging and polling alike, so a slow device can serve its other
-clients between them; requests to different destinations don't wait on each
-other. The endpoint client has no pacing.
+`ClientConfig`), default 0 and at most 3,600,000 (an hour), paces the
+confirmed requests to each destination. Requests to a destination take turns
+in call order. Each goes once that long has passed since the request before it
+finished, by a reply, an error or its caller giving up, or since that request
+was sent while it is still outstanding; the check is made again when its turn
+comes, so a late reply still gets the whole pause. It covers paging and polling
+alike, so a slow device can serve its other clients between them; requests to
+different destinations don't wait on each other. Pacing runs before a routed
+request takes its path lease, which every device on that network behind that
+router shares, so there the pause after a reply holds for requests made one
+after another, not for concurrent ones. The endpoint client has no pacing.
 
 ```rust
 let client = BACnetClient::bip_builder().min_request_interval_ms(50).build().await?;

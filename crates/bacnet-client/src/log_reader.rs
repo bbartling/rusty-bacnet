@@ -306,8 +306,10 @@ const RETRIES: usize = 3;
 /// in between would otherwise make the oldest look one newer than it is, and
 /// the read would skip it without a gap. When the total moves, the counts are
 /// read again, up to [`RETRIES`] times; after that the count goes with the
-/// total read before it, which can only make the oldest look older, a case
-/// the empty-page path in [`read_log_page`] recovers from.
+/// total read before it, which can only make the oldest look older. On a log
+/// that isn't full that may report a gap no record fell into, but no record is
+/// ever skipped without one; the empty-page path in [`read_log_page`]
+/// recovers from a number the log doesn't hold.
 async fn window<R: LogRequester + ?Sized>(
     requester: &R,
     mac: &[u8],
@@ -347,9 +349,10 @@ async fn window<R: LogRequester + ?Sized>(
 ///   full log can drop that one too before it is read, so a read starts over
 ///   up to three times.
 /// - A page that starts before the record asked for fails with
-///   [`Error::LogNotAdvancing`] instead of repeating records, as does a
-///   record the counts say the log still holds but the device won't return
-///   when asked twice, or a log that drops its oldest record faster than the
+///   [`Error::LogNotAdvancing`] instead of repeating records. So does an
+///   empty answer for a record the counts still say the log holds, once the
+///   read has asked again for a record logged since, or after any restart
+///   from the oldest; and a log that drops its oldest record faster than the
 ///   restarts catch it. A device that does either because its sequence
 ///   numbers are inconsistent can be read from [`LogCursor::Position`].
 /// - The answer is checked leniently: a first sequence number of 0 (a

@@ -337,3 +337,46 @@ fn by_time_goes_on_by_sequence_number() {
     assert_eq!(nothing_newer.next, at);
     assert!(nothing_newer.done);
 }
+
+/// A requester whose ReadRange answers are canned, with counts of 10 and
+/// 10: records 1 to 10.
+struct Canned(std::sync::Mutex<Vec<ReadRangeReply>>);
+
+impl LogRequester for Canned {
+    async fn read_unsigned(
+        &self,
+        _mac: &[u8],
+        _log: ObjectIdentifier,
+        _property: PropertyIdentifier,
+    ) -> Result<u64, Error> {
+        Ok(10)
+    }
+
+    async fn read_range_lenient(
+        &self,
+        _mac: &[u8],
+        _request: &ReadRangeRequest,
+    ) -> Result<ReadRangeReply, Error> {
+        Ok(self.0.lock().unwrap().remove(0))
+    }
+}
+
+/// An empty page that breaks a rule the reader can't tolerate fails, even
+/// though an empty page otherwise only sends the reader to the counts.
+#[tokio::test]
+async fn an_empty_page_that_breaks_an_echo_rule_fails() {
+    let mut empty = reply(0, None, (false, false, false), vec![]);
+    empty.ack.object_identifier = ObjectIdentifier::new(ObjectType::TREND_LOG, 9).unwrap();
+    empty.violations = vec![ReadRangeViolation::ObjectMismatch];
+    let requester = Canned(std::sync::Mutex::new(vec![empty]));
+    let error = read_log_page(&requester, &[1], trend_log(), LogCursor::Sequence(3), 5)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::ReadRangeViolation(ReadRangeViolation::ObjectMismatch)
+        ),
+        "{error:?}"
+    );
+}

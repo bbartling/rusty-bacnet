@@ -118,9 +118,13 @@ pub struct ClientConfig {
     /// Least time, in milliseconds, from one confirmed request to a
     /// destination finishing (reply, error or cancellation) to the next
     /// being sent; while one is still outstanding, the next waits that long
-    /// after it was sent. 0 (the default) sends at once. A slow device then
-    /// serves its other clients between this client's requests, paging a
-    /// log or polling alike (#1535).
+    /// after it was sent. Requests take their turns in call order and check
+    /// again when their turn comes. 0 (the default) sends at once. A slow
+    /// device then serves its other clients between this client's requests,
+    /// paging a log or polling alike (#1535). Behind a router, whose path
+    /// lease every device on that network shares, the pause after a reply
+    /// holds for requests made one after another only. At most
+    /// [`MAX_MIN_REQUEST_INTERVAL_MS`], an hour; more fails the build.
     pub min_request_interval_ms: u64,
 }
 
@@ -714,6 +718,7 @@ impl ScClientBuilder {
         self.validate_identity()?;
         self.options.validate()?;
         validate_max_segments(self.config.max_segments)?;
+        pacing::validate_interval_ms(self.config.min_request_interval_ms)?;
         let transport = self.sc_transport(ws);
         BACnetClient::start_with_options(self.config, transport, self.options).await
     }
@@ -764,6 +769,7 @@ impl ScClientBuilder {
         self.validate_identity()?;
         self.options.validate()?;
         validate_max_segments(self.config.max_segments)?;
+        pacing::validate_interval_ms(self.config.min_request_interval_ms)?;
         let tls_config =
             self.tls_config.as_ref().cloned().ok_or_else(|| {
                 Error::Encoding("SC client builder: tls_config is required".into())
@@ -876,6 +882,7 @@ pub use event_notifications::{
     EventNotificationDelivery, ReceivedEventNotification, DEFAULT_EVENT_CHANNEL_CAPACITY,
     MAX_EVENT_CHANNEL_CAPACITY,
 };
+pub use pacing::MAX_MIN_REQUEST_INTERVAL_MS;
 pub use write_group::WriteGroupDestination;
 
 #[cfg(test)]

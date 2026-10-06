@@ -524,12 +524,15 @@ client = BACnetClient(
 ```
 
 `min_request_interval_ms` paces the confirmed requests the client sends to
-each destination (#1535): a request waits until that long after the previous
-one to the same destination finished, by a reply, an error or the caller
-giving up, or until that long after the previous one was sent while it is
-still outstanding. Paging a log or polling then leaves a slow device room for
-its other clients. Requests to different destinations don't wait on each
-other; 0, the default, sends at once. `EndpointClient` has no pacing.
+each destination (#1535). Requests take turns in call order, and each waits
+until that long after the previous one to the same destination finished, by a
+reply, an error or the caller giving up, or until that long after the
+previous one was sent while it is still outstanding, checked again when its
+turn comes. Paging a log or polling then leaves a slow device room for its
+other clients. Requests to different destinations don't wait on each other;
+0, the default, sends at once, and more than 3,600,000 (an hour) raises
+`ValueError`. Behind a router the pause after a reply holds for requests made
+one after another only. `EndpointClient` has no pacing.
 
 ### MS/TP serial ports
 
@@ -1182,7 +1185,9 @@ as the checkpoint; lists in place of the tuples work, so it survives
 outstanding at a time, and sequence numbers wrap from the top of their range
 to 1. A page whose records don't decode raises `BacnetError` naming the
 first that fails, and the records before it are dropped; read that range with
-`read_range` and `decode_log_records` to see them.
+`read_range` and `decode_log_records` to see them. An answer that breaks a rule
+the reader can't tolerate, such as an echo that doesn't match the request,
+raises `BacnetReadRangeViolationError`.
 
 ```python
 cursor = None

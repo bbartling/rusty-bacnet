@@ -37,7 +37,7 @@ and its headers (`libpcap-dev` on Debian and Ubuntu).
 | `-p, --port <PORT>` | `47808` | BACnet UDP port |
 | `-b, --broadcast <IP>` | `255.255.255.255` | Broadcast address for WhoIs |
 | `-t, --timeout <MS>` | `6000` | APDU timeout in milliseconds |
-| `--min-interval-ms <MS>` | `0` | Least time from one confirmed request to a device finishing (or being sent, while it is still outstanding) to the next, so paging or polling leaves a slow device room for others |
+| `--min-interval-ms <MS>` | `0` | Least time from one confirmed request to a device finishing (or being sent, while it is still outstanding) to the next, at most 3600000, so paging or polling leaves a slow device room for others |
 | `--ipv6` | | Use BACnet/IPv6 transport |
 | `--ipv6-interface <IP>` | | IPv6 interface address |
 | `--device-instance <N>` | | Device instance for BIP6 VMAC derivation |

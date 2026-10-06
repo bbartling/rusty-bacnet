@@ -138,9 +138,10 @@ class ReadLogLiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(page["violations"] == [] for page in pages))
         self.assertTrue(all(page["wrapped"] is False for page in pages))
         self.assertEqual(pages[-1]["next"], ("sequence", len(records) + 1))
-        # Two counts and a ReadRange a page, each at least 20 ms apart.
-        requests = 2 + len(pages)
-        self.assertGreaterEqual(elapsed, 0.02 * (requests - 1) * 0.9)
+        # Three count reads and a ReadRange a page, each sent at least 20 ms
+        # after the one before it was answered.
+        requests = 3 + len(pages)
+        self.assertGreaterEqual(elapsed, 0.02 * (requests - 1))
 
         # A checkpoint survives JSON as a list; nothing new reads as done.
         async with BACnetClient(interface="127.0.0.1", port=0) as client:
@@ -297,12 +298,21 @@ class ReadLogContractTests(unittest.TestCase):
             (LOG, None, 0),
             (LOG, None, 32_768),
             (LOG, None, -1),
+            (LOG, None, 1 << 70),
             (LOG, ("backwards", 1), 10),
             (LOG, "newest", 10),
         ):
             with self.subTest(object_id=object_id, cursor=cursor, page_size=page_size):
                 with self.assertRaises(ValueError):
                     client.read_log_page("not-an-address", object_id, cursor, page_size)
+
+    def test_page_size_must_be_an_int_and_interval_at_most_an_hour(self) -> None:
+        client = BACnetClient(interface="127.0.0.1", port=0)
+        with self.assertRaises(TypeError):
+            client.read_log_page("not-an-address", LOG, None, "10")
+        BACnetClient(interface="127.0.0.1", port=0, min_request_interval_ms=3_600_000)
+        with self.assertRaises(ValueError):
+            BACnetClient(interface="127.0.0.1", port=0, min_request_interval_ms=3_600_001)
 
     def test_decode_log_records_refuses_other_results_and_names_the_record(self) -> None:
         result = {

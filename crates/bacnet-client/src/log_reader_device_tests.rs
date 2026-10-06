@@ -60,10 +60,10 @@ struct FakeLog {
     answer_cap: usize,
     logged: u64,
     /// bacnet-stack 1.6.1 compares a sequence reference with its oldest
-    /// and newest numbers as plain integers and reads anything outside them
-    /// from the oldest record. Once its records span the wrap the oldest
-    /// number is above the newest, so every reference, before the wrap or
-    /// after it, reads from the oldest record.
+    /// and newest numbers as plain integers. Once its records span the wrap
+    /// the oldest number is above the newest, so every reference, before the
+    /// wrap or after it, reads from the oldest record. Before the wrap it
+    /// reads like any other log.
     clamp_across_wrap: bool,
     /// Numbers the record after the top of the range 0, not 1.
     zero_after_wrap: bool,
@@ -158,9 +158,12 @@ impl FakeLog {
                 count,
             } => {
                 let found = self.records.iter().position(|(s, _)| *s == reference_seq);
+                // Before the wrap a reference past the newest matches nothing,
+                // as the standard has it; once the records span the wrap,
+                // no reference is between the oldest and newest numbers.
                 let clamped = self.clamp_across_wrap
                     && match (self.records.first(), self.records.last()) {
-                        (Some((oldest, _)), Some((newest, _))) => {
+                        (Some((oldest, _)), Some((newest, _))) if oldest > newest => {
                             reference_seq < *oldest || reference_seq > *newest
                         }
                         _ => false,
@@ -344,6 +347,36 @@ async fn a_checkpoint_the_log_no_longer_holds_restarts_from_the_oldest_with_a_ga
 
 /// bacnet-stack 1.6.1 clamps a reference past its wrap back to the oldest
 /// record, so every page after the wrap would be the first page again.
+/// The same device reads like any other log until its records reach the
+/// wrap; resuming from the checkpoint after that fails instead of looping.
+#[tokio::test]
+async fn a_clamping_device_reads_correctly_up_to_its_wrap_and_then_fails() {
+    let mut log = FakeLog::new(TOP - 30, 20, 5);
+    log.clamp_across_wrap = true;
+    log.log(20);
+    let (mut client, _device, log) = device(log).await;
+    let (read, pages) = read_all(&client, LogCursor::Oldest, 20).await.unwrap();
+    assert_eq!(read, (TOP - 29..=TOP - 10).collect::<Vec<_>>());
+    let checkpoint = pages.last().unwrap().next;
+    assert_eq!(checkpoint, LogCursor::Sequence(TOP - 9));
+    // Caught up: nothing past the newest, no clamp before the wrap.
+    let (read, _) = read_all(&client, checkpoint, 5).await.unwrap();
+    assert!(read.is_empty());
+
+    // Fifteen more records take it past the top of the range.
+    log.lock().unwrap().log(15);
+    let error = read_all(&client, checkpoint, 20).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::LogNotAdvancing { requested, returned: Some(returned) }
+                if requested == TOP - 9 && returned == TOP - 14
+        ),
+        "{error:?}"
+    );
+    client.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_device_that_clamps_past_its_wrap_fails_as_not_advancing_and_reads_by_position() {
     let mut log = FakeLog::new(TOP - 6, 20, 5);

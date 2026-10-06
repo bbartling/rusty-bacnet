@@ -37,9 +37,15 @@ pub(crate) struct Cli {
 
     /// Least time in milliseconds from one request to a device finishing to
     /// the next being sent, or from its send while it is still outstanding
-    /// (0: none), so paging a log or polling leaves a slow device room for
-    /// others.
-    #[arg(long, default_value_t = 0, global = true)]
+    /// (0: none, at most 3600000), so paging a log or polling leaves a slow
+    /// device room for others.
+    #[arg(
+        long,
+        default_value_t = 0,
+        global = true,
+        value_parser = clap::value_parser!(u64)
+            .range(..=bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS)
+    )]
     pub(crate) min_interval_ms: u64,
 
     /// Use BACnet/IPv6 transport.

@@ -212,10 +212,9 @@ impl PyEndpointClient {
         address: String,
         object_id: PyObjectIdentifier,
         cursor: Option<Bound<'py, PyAny>>,
-        page_size: i64,
+        #[pyo3(from_py_with = crate::log_records::page_size_arg)] page_size: u16,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let (log, cursor, page_size) =
-            crate::log_records::page_request(&object_id, cursor.as_ref(), page_size)?;
+        let (log, cursor) = crate::log_records::page_request(&object_id, cursor.as_ref())?;
         let handle = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;

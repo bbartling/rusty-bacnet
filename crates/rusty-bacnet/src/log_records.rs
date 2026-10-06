@@ -16,9 +16,9 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PySequence, PyString, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PySequence, PyString, PyTuple};
 
 use crate::types::{
     audit_log_record_to_py, date_value, time_value, PyBACnetTimeStamp, PyEventState, PyEventType,
@@ -381,29 +381,31 @@ pub(crate) fn page_to_py(py: Python<'_>, page: LogPage) -> PyResult<Py<PyAny>> {
     Ok(result.into_any().unbind())
 }
 
-/// A `read_log_page` call's log, cursor and page size, checked before any
-/// I/O: ValueError for an object that keeps no log, a bad cursor or a page
-/// size outside 1..=32767.
+/// A `read_log_page` call's log and cursor, checked before any I/O:
+/// ValueError for an object that keeps no log or a bad cursor.
 pub(crate) fn page_request(
     object: &PyObjectIdentifier,
     cursor: Option<&Bound<'_, PyAny>>,
-    size: i64,
-) -> PyResult<(ObjectIdentifier, LogCursor, u16)> {
+) -> PyResult<(ObjectIdentifier, LogCursor)> {
     let log = object.to_rust();
     if LogRecords::empty_for(log.object_type()).is_none() {
         return Err(PyValueError::new_err(
             "read_log_page reads a Trend Log, Event Log, Trend Log Multiple or Audit Log",
         ));
     }
-    Ok((log, cursor_from_py(cursor)?, page_size(size)?))
+    Ok((log, cursor_from_py(cursor)?))
 }
 
-/// The page size a Python caller asked for, checked before any I/O.
-fn page_size(page_size: i64) -> PyResult<u16> {
-    u16::try_from(page_size)
+/// A `page_size` argument: an int in 1..=32767, or ValueError for any other
+/// int, however large; TypeError for anything that isn't an int.
+pub(crate) fn page_size_arg(value: &Bound<'_, PyAny>) -> PyResult<u16> {
+    if !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err("page_size must be an int"));
+    }
+    value
+        .extract::<i64>()
         .ok()
+        .and_then(|size| u16::try_from(size).ok())
         .filter(|size| (1..=32_767).contains(size))
-        .ok_or_else(|| {
-            PyValueError::new_err(format!("page_size must be 1..=32767, got {page_size}"))
-        })
+        .ok_or_else(|| PyValueError::new_err(format!("page_size must be 1..=32767, got {value}")))
 }

@@ -241,7 +241,8 @@ impl core::fmt::Display for ReadRangeViolation {
                 "answer to a read by position or without a range has a first sequence number"
             }
             Self::MoreItemsPastEnd => {
-                "MORE_ITEMS is set with the flag for the end the read moves toward"
+                "MORE_ITEMS is set with the flag for the end a ranged read moves toward, \
+                 or with both FIRST_ITEM and LAST_ITEM on a read without a range"
             }
             Self::ItemCountExceedsRequest => "more items than the request's count",
         })

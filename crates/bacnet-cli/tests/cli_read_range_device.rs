@@ -231,3 +231,18 @@ async fn all_prints_what_it_read_and_where_to_resume_before_an_error() {
     assert!(stderr.contains("Abort { reason: 10 }"), "{stderr}");
     task.abort();
 }
+
+#[tokio::test]
+async fn the_minimum_interval_is_at_most_an_hour() {
+    let output = run([
+        "--min-interval-ms",
+        "3600001",
+        "read-range",
+        "127.0.0.1:47808",
+        "trend-log:1",
+    ])
+    .await;
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("3600000"), "{stderr}");
+}

@@ -268,12 +268,13 @@ async fn concurrent_waits_queue_in_call_order() {
         held(&pacer, start),
         held(&pacer, start)
     );
+    // Each holds its turn 1 ms, and the next goes 20 ms after it finished.
     assert_eq!(
         [first, second, third],
         [
             Duration::ZERO,
-            Duration::from_millis(20),
-            Duration::from_millis(40)
+            Duration::from_millis(21),
+            Duration::from_millis(42)
         ]
     );
 }
@@ -328,4 +329,121 @@ async fn the_pacer_forgets_idle_destinations_and_stays_bounded() {
     tokio::time::advance(Duration::from_millis(10)).await;
     drop(pacer.wait(routed).await);
     assert_eq!(pacer.remembered(), 1);
+}
+
+/// Giving up the last queued turn must not let the next request jump ahead
+/// of the turns before it.
+#[tokio::test(start_paused = true)]
+async fn cancelling_the_last_queued_turn_keeps_the_queue() {
+    let pacer = RequestPacer::new(Duration::from_millis(50));
+    let start = Instant::now();
+    let _a = pacer.wait(local(A)).await; // outstanding throughout
+    let (b, (), d) = tokio::join!(
+        held(&pacer, start),
+        async {
+            // Its turn is at 100; it gives up at 5.
+            let given_up = tokio::time::timeout(Duration::from_millis(5), pacer.wait(local(A)));
+            assert!(given_up.await.is_err());
+        },
+        async {
+            tokio::time::sleep(Duration::from_millis(6)).await;
+            let _d = pacer.wait(local(A)).await;
+            Instant::now() - start
+        },
+    );
+    assert_eq!(b, Duration::from_millis(50));
+    assert!(d >= b + Duration::from_millis(50), "{d:?}");
+    // B held its turn 1 ms: D goes the whole interval after B finished.
+    assert_eq!(d, Duration::from_millis(101));
+}
+
+/// A turn is checked again when it comes: the request before it finishing
+/// late still gets its whole pause.
+#[tokio::test(start_paused = true)]
+async fn a_queued_request_waits_the_full_pause_after_a_late_finish() {
+    let pacer = RequestPacer::new(Duration::from_millis(50));
+    let start = Instant::now();
+    let a = pacer.wait(local(A)).await;
+    let ((), b) = tokio::join!(
+        async {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            drop(a);
+        },
+        async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let _b = pacer.wait(local(A)).await;
+            Instant::now() - start
+        },
+    );
+    assert_eq!(b, Duration::from_millis(90));
+}
+
+/// The same on the wire: a request made while the one before it is out
+/// goes the whole interval after its reply.
+#[tokio::test(start_paused = true)]
+async fn a_concurrent_request_waits_the_full_pause_after_a_slow_reply() {
+    let (mut client, sends) = paced_client(50, Duration::from_millis(40), 0).await;
+    let start = Instant::now();
+    tokio::join!(request(&client, A), async {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        request(&client, A).await;
+    });
+    assert_eq!(sent_to(&sends, A, start), ms(&[0, 90]));
+    client.stop().await.unwrap();
+}
+
+/// An earlier request finishing only ever moves the turn right after it.
+#[tokio::test(start_paused = true)]
+async fn an_earlier_finish_moves_no_later_turn() {
+    let pacer = RequestPacer::new(Duration::from_millis(50));
+    let start = Instant::now();
+    let a = pacer.wait(local(A)).await;
+    let (b, c) = tokio::join!(held(&pacer, start), async {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        drop(a);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let _c = pacer.wait(local(A)).await;
+        Instant::now() - start
+    });
+    // B's turn was 50; A finishing at 10 moves it to 60. C follows B.
+    assert_eq!(b, Duration::from_millis(60));
+    assert!(c >= b + Duration::from_millis(50), "{c:?}");
+}
+
+/// At the cap a destination with nothing waiting or outstanding goes
+/// before a busy one, even a busy one free sooner.
+#[tokio::test(start_paused = true)]
+async fn at_the_cap_an_idle_destination_goes_before_a_busy_one() {
+    let pacer = with_capacity(Duration::from_millis(100), 2);
+    let _a = pacer.wait(local(A)).await; // busy: free at 100
+    tokio::time::advance(Duration::from_millis(10)).await;
+    drop(pacer.wait(local(B)).await); // idle: free at 110
+    let _c = pacer.wait(local(C)).await;
+    assert!(pacer.remembers(&local(A)) && pacer.remembers(&local(C)));
+    assert!(!pacer.remembers(&local(B)));
+}
+
+#[tokio::test]
+async fn an_interval_over_an_hour_is_refused() {
+    let (inbound_tx, inbound_rx) = mpsc::channel(1);
+    let transport = RecordingTransport {
+        local_mac: MacAddr::from_slice(&[0x01]),
+        inbound_tx,
+        inbound_rx: Some(inbound_rx),
+        sends: Sends::default(),
+        reply_after: Duration::ZERO,
+        unanswered: StdMutex::new(0),
+    };
+    let refused = BACnetClient::generic_builder()
+        .transport(transport)
+        .min_request_interval_ms(super::MAX_MIN_REQUEST_INTERVAL_MS + 1)
+        .build()
+        .await;
+    match refused {
+        Err(Error::Encoding(message)) => assert!(message.contains("min-request-interval")),
+        Err(other) => panic!("unexpected error {other:?}"),
+        Ok(_) => panic!("an interval over an hour must be refused"),
+    }
+    let (mut client, _) = client(super::MAX_MIN_REQUEST_INTERVAL_MS).await;
+    client.stop().await.unwrap();
 }

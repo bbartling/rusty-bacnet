@@ -1862,13 +1862,16 @@ class BACnetClient:
         sc_device_uuid: Optional[bytes | bytearray] = None,
         min_request_interval_ms: int = 0,
     ) -> None:
-        """``min_request_interval_ms`` (default 0, no pacing) paces the
-        confirmed requests to each destination: a request waits until that
+        """``min_request_interval_ms`` (default 0, no pacing; at most
+        3,600,000, else ValueError) paces the confirmed requests to each
+        destination: they take turns in call order, and each waits until that
         long after the previous one to the same destination finished (reply,
-        error or the caller giving up), or after it was sent while it is
-        still outstanding. Paging a log or polling then leaves a slow device
-        room for its other clients; requests to different destinations don't
-        wait on each other (#1535).
+        error or the caller giving up), or after it was sent while it is still
+        outstanding, checked again when its turn comes. Paging a log or polling
+        then leaves a slow device room for its other clients; requests to
+        different destinations don't wait on each other. Behind a router the
+        pause after a reply holds for requests made one after another only
+        (#1535).
         """
         ...
 
@@ -2454,8 +2457,10 @@ class BACnetClient:
         inconsistent, so read it from ``("position", 1)``. ``wrapped`` marks
         a page that reached the top of the sequence range. A page whose
         records don't decode raises BacnetError, dropping the records before
-        the failing one. A non-log object or a ``page_size`` outside
-        1..=32767 raises ValueError before I/O.
+        the failing one; an answer that breaks a rule the reader can't
+        tolerate, such as an echo that doesn't match, raises
+        BacnetReadRangeViolationError. A non-log object or a ``page_size``
+        outside 1..=32767 raises ValueError before I/O.
         """
         ...
 
@@ -4330,8 +4335,10 @@ class EndpointClient:
         inconsistent, so read it from ``("position", 1)``. ``wrapped`` marks
         a page that reached the top of the sequence range. A page whose
         records don't decode raises BacnetError, dropping the records before
-        the failing one. A non-log object or a ``page_size`` outside
-        1..=32767 raises ValueError before I/O.
+        the failing one; an answer that breaks a rule the reader can't
+        tolerate, such as an echo that doesn't match, raises
+        BacnetReadRangeViolationError. A non-log object or a ``page_size``
+        outside 1..=32767 raises ValueError before I/O.
         """
         ...
 
