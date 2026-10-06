@@ -7,6 +7,7 @@
 
 use pyo3::prelude::*;
 
+mod bip_options;
 mod client;
 mod endpoint;
 mod errors;

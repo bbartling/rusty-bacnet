@@ -50,6 +50,8 @@ pub(crate) struct UnicastAddress {
     pub(crate) multicast: bool,
     /// The adapter is the software loopback interface.
     pub(crate) loopback: bool,
+    /// The length of the address's on-link prefix, in bits.
+    pub(crate) prefix_length: u8,
 }
 
 /// Every unicast address of `family` (`AF_INET`, `AF_INET6` or `AF_UNSPEC`)
@@ -133,6 +135,7 @@ unsafe fn copy_addresses(head: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<UnicastAdd
                     up: adapter.OperStatus == IfOperStatusUp,
                     multicast: flags & IP_ADAPTER_NO_MULTICAST == 0,
                     loopback: adapter.IfType == IF_TYPE_SOFTWARE_LOOPBACK,
+                    prefix_length: unicast.OnLinkPrefixLength,
                 });
             }
             unicast_ptr = unicast.Next.cast_const();

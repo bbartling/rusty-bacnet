@@ -1,10 +1,12 @@
 //! Several B/IP transports on one host share an explicitly requested port,
-//! one per interface address, as several devices would at 47808 (#1538).
-//! Each gets only its own unicast, sends from its own address, and on Linux
-//! every one of them gets a broadcast.
+//! one per interface address, as several devices would at 47808, once each
+//! opts in with `set_share_port_by_address` (#1538). Each gets only its own
+//! unicast, sends from its own address, keeps its address to itself, and gets
+//! the broadcasts sent to its subnet.
 
 use super::*;
 use crate::port_ownership::{lost_port, ATTEMPTS};
+use socket::udp_socket;
 use tokio::time::timeout;
 
 /// Two local addresses a test can bind and reach from this host, or why
@@ -41,15 +43,15 @@ impl Node {
 }
 
 /// Start one transport per address, with the broadcast address beside it,
-/// all on one requested port. The OS picks the port for a probe that
-/// releases it, and another process can take it in between (#1032), so a
-/// lost port starts over on a fresh one. `configure` gets each transport
-/// before it starts, with its index and the port.
-async fn start_on_one_port(
-    addresses: [Ipv4Addr; 2],
-    broadcasts: [Ipv4Addr; 2],
+/// all on one requested port that they share by address. The OS picks the
+/// port for a probe that releases it, and another process can take it in
+/// between (#1032), so a lost port starts over on a fresh one. `configure`
+/// gets each transport before it starts, with its index and the port.
+async fn start_on_one_port<const N: usize>(
+    addresses: [Ipv4Addr; N],
+    broadcasts: [Ipv4Addr; N],
     configure: impl Fn(usize, u16, &mut BipTransport),
-) -> [Node; 2] {
+) -> [Node; N] {
     for attempt in 1..=ATTEMPTS {
         let port = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
             .unwrap()
@@ -59,6 +61,7 @@ async fn start_on_one_port(
         let mut nodes = Vec::new();
         for (i, (ip, broadcast)) in addresses.into_iter().zip(broadcasts).enumerate() {
             let mut transport = BipTransport::new(ip, port, broadcast);
+            transport.set_share_port_by_address(true);
             configure(i, port, &mut transport);
             match transport.start().await {
                 Ok(rx) => nodes.push(Node { transport, rx }),
@@ -66,7 +69,7 @@ async fn start_on_one_port(
                 Err(e) => panic!("start {ip}:{port}: {e}"),
             }
         }
-        if let Ok(nodes) = <[Node; 2]>::try_from(nodes) {
+        if let Ok(nodes) = <[Node; N]>::try_from(nodes) {
             return nodes;
         }
     }
@@ -203,11 +206,10 @@ async fn a_bbmd_and_a_foreign_device_share_a_port_on_two_addresses() {
     bbmd.transport.stop().await.unwrap();
 }
 
-/// Linux delivers a broadcast to every wildcard listener on the port, and
-/// its loopback carries 127.255.255.255. macOS gives loopback no broadcast
-/// address, and on Windows a broadcast arrives on the socket bound to the
-/// interface address, which loopback alone doesn't show reliably; both are
-/// left to the unicast tests above.
+/// Linux delivers a broadcast to every listener bound to its destination,
+/// and its loopback carries 127.255.255.255. macOS gives loopback no
+/// broadcast address, and Windows isn't relied on to hand one to a socket
+/// bound to a loopback address; both are left to the subnet broadcast test.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_broadcast_reaches_every_transport_on_the_port() {
@@ -216,7 +218,9 @@ async fn a_broadcast_reaches_every_transport_on_the_port() {
     let mut nodes = start_on_one_port(addresses, [subnet; 2], |_, _, _| {}).await;
     let port = nodes[0].address().port();
     // A third device's pre-start check sees the port as free to share.
-    BipTransport::check_bind(Ipv4Addr::new(127, 0, 0, 5), port).unwrap();
+    let mut third = BipTransport::new(Ipv4Addr::new(127, 0, 0, 5), port, subnet);
+    third.set_share_port_by_address(true);
+    third.check_bind().unwrap();
     let peer = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
@@ -235,8 +239,8 @@ async fn a_broadcast_reaches_every_transport_on_the_port() {
     }
 
     // Unicast to an address on the port that no transport is bound to
-    // reaches a listener, which drops it: the next NPDU each one hands up is
-    // the unicast sent to it afterwards.
+    // reaches no listener: the next NPDU each one hands up is the unicast
+    // sent to it afterwards.
     let stray = frame(BvlcFunction::ORIGINAL_UNICAST_NPDU, &npdu(3));
     let unbound = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 4), port);
     peer.send_to(&stray, unbound).await.unwrap();
@@ -260,4 +264,65 @@ async fn a_broadcast_reaches_every_transport_on_the_port() {
     for node in &mut nodes {
         node.transport.stop().await.unwrap();
     }
+}
+
+/// Another socket can't take a shared-by-address transport's own address
+/// and port, but another address can still share the port.
+#[tokio::test]
+async fn an_address_and_port_are_not_shared_twice() {
+    let addresses = match two_local_addresses() {
+        Ok(addresses) => addresses,
+        Err(why) => return eprintln!("skipped: {why}"),
+    };
+    let [node] = start_on_one_port([addresses[0]], [Ipv4Addr::BROADCAST], |_, _, _| {}).await;
+    let taken = node.address();
+    let checked = |ip| {
+        let mut transport = BipTransport::new(ip, taken.port(), Ipv4Addr::BROADCAST);
+        transport.set_share_port_by_address(true);
+        transport.check_bind()
+    };
+    checked(addresses[1]).expect("another address shares the port");
+    assert!(checked(addresses[0]).is_err(), "the same address twice");
+    // Not even with SO_REUSEADDR: Linux leaves the address socket unshared,
+    // macOS would need SO_REUSEPORT on both, Windows claims it.
+    let squatter = |ip| {
+        let socket = udp_socket(socket::SocketRole::SharedWildcard).unwrap();
+        socket.bind(&SocketAddrV4::new(ip, taken.port()).into())
+    };
+    assert!(squatter(*taken.ip()).is_err(), "SO_REUSEADDR on {taken}");
+    // Nor the wildcard address beside it on Unix, which would compete for
+    // its unicast on Linux, or for the broadcast listener's on macOS.
+    #[cfg(unix)]
+    assert!(
+        squatter(Ipv4Addr::UNSPECIFIED).is_err(),
+        "SO_REUSEADDR on 0.0.0.0"
+    );
+    let [mut node] = [node];
+    node.transport.stop().await.unwrap();
+}
+
+/// A broadcast on the default-route subnet reaches a transport bound to
+/// that subnet's address, on every OS. Skipped without a default route or a
+/// broadcast-capable interface for it, or where the host can't send one.
+#[tokio::test]
+async fn a_subnet_broadcast_reaches_a_transport_sharing_its_port_by_address() {
+    let Some(route) = crate::local_addresses::route_ipv4().filter(|ip| !ip.is_loopback()) else {
+        return eprintln!("skipped: no default-route IPv4 address");
+    };
+    let Some(subnet) = crate::local_addresses::subnet_broadcast(route) else {
+        return eprintln!("skipped: {route} has no subnet broadcast address");
+    };
+    let [mut node] = start_on_one_port([route], [subnet], |_, _, _| {}).await;
+    let peer = UdpSocket::bind(SocketAddrV4::new(route, 0)).await.unwrap();
+    peer.set_broadcast(true).unwrap();
+    let broadcast = frame(BvlcFunction::ORIGINAL_BROADCAST_NPDU, &npdu(7));
+    let to = SocketAddrV4::new(subnet, node.address().port());
+    if let Err(e) = peer.send_to(&broadcast, to).await {
+        node.transport.stop().await.unwrap();
+        return eprintln!("skipped: this host can't send to {to}: {e}");
+    }
+    let received = node.next().await;
+    assert_eq!(received.npdu.as_ref(), npdu(7));
+    assert!(received.link_layer_group);
+    node.transport.stop().await.unwrap();
 }

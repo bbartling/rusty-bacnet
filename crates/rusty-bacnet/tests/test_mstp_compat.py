@@ -62,7 +62,7 @@ MSTP_KEYWORD_ONLY = [
     "mstp_max_master",
     "mstp_max_info_frames",
 ]
-CLIENT_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + ["sc_device_uuid"]
+CLIENT_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + ["sc_device_uuid", "share_port_by_address"]
 SERVER_KEYWORD_ONLY = ["mutation_policy", "dcc_policy", "dcc_source_restriction", "dcc_disable_rate_limit"] + MSTP_KEYWORD_ONLY + [
     "max_confirmed_in_flight", "max_unconfirmed_in_flight",
     "max_confirmed_in_flight_per_peer", "max_unconfirmed_in_flight_per_peer",
@@ -78,6 +78,7 @@ SERVER_KEYWORD_ONLY = ["mutation_policy", "dcc_policy", "dcc_source_restriction"
     "event_information_max_objects", "event_information_max_returned_summaries",
     "event_information_max_service_ack_bytes",
     "sc_device_uuid", "registered_network_port", "cov_policy", "time_sync_policy",
+    "share_port_by_address",
 ]
 SUPPORTED_BAUD_RATES = (9_600, 19_200, 38_400, 57_600, 76_800, 115_200)
 SUPPORTED_BAUD_ERROR = (

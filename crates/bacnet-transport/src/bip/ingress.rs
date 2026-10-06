@@ -20,7 +20,7 @@ use super::socket::{BipSocket, BoundSockets};
 pub(super) enum Arrival {
     /// The socket every send leaves from.
     Primary,
-    /// The receive-only wildcard socket beside a socket bound to the
+    /// A receive-only broadcast listener beside a socket bound to the
     /// interface address, which keeps only broadcasts (#1538).
     BroadcastListener,
 }
@@ -50,23 +50,35 @@ impl Listener {
     }
 }
 
-/// The sockets one receive loop reads.
+/// A listener's next datagram, or never, once it is closed.
+async fn recv_on(listener: Option<&mut Listener>) -> io::Result<ReceivedDatagram> {
+    match listener {
+        Some(listener) => listener.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The sockets one receive loop reads: the primary, and in per-address mode
+/// up to two broadcast listeners (socket.rs).
 pub(super) struct Listeners {
     primary: Listener,
-    broadcast: Option<Listener>,
+    broadcast: [Option<Listener>; 2],
 }
+
+/// Which socket [`Listeners::recv`] read: `None` for the primary, or the
+/// index of a broadcast listener.
+type Source = Option<usize>;
 
 impl Listeners {
     /// Hand the sockets one start bound to tokio. Each keeps `lease` until
     /// it closes.
     pub(super) fn open(bound: BoundSockets, lease: Option<Arc<()>>) -> io::Result<Self> {
-        Ok(Self {
-            broadcast: bound
-                .broadcast
-                .map(|socket| Listener::open(socket, lease.clone()))
-                .transpose()?,
-            primary: Listener::open(bound.primary, lease)?,
-        })
+        let mut broadcast = [None, None];
+        for (slot, socket) in broadcast.iter_mut().zip(bound.listeners) {
+            *slot = Some(Listener::open(socket, lease.clone())?);
+        }
+        let primary = Listener::open(bound.primary, lease)?;
+        Ok(Self { primary, broadcast })
     }
 
     /// The socket every send leaves from.
@@ -74,48 +86,63 @@ impl Listeners {
         &self.primary.socket
     }
 
-    /// The next datagram on either socket. Each read is cancel-safe: the
-    /// datagram leaves the socket only inside the read that returns it.
-    async fn recv(&mut self) -> (Arrival, io::Result<ReceivedDatagram>) {
-        let Self { primary, broadcast } = self;
-        match broadcast {
-            None => (Arrival::Primary, primary.recv().await),
-            Some(listener) => tokio::select! {
-                received = primary.recv() => (Arrival::Primary, received),
-                received = listener.recv() => (Arrival::BroadcastListener, received),
-            },
+    /// The next datagram on any socket. Each read is cancel-safe: the
+    /// datagram leaves the socket only inside the read that returns it. With
+    /// no listener, only the primary is read, in arrival order.
+    async fn recv(&mut self) -> (Source, io::Result<ReceivedDatagram>) {
+        let Self {
+            primary,
+            broadcast: [first, second],
+        } = self;
+        if first.is_none() && second.is_none() {
+            return (None, primary.recv().await);
+        }
+        tokio::select! {
+            received = primary.recv() => (None, received),
+            received = recv_on(first.as_mut()) => (Some(0), received),
+            received = recv_on(second.as_mut()) => (Some(1), received),
         }
     }
 
-    fn data(&self, arrival: Arrival, len: usize) -> &[u8] {
-        let listener = match (arrival, &self.broadcast) {
-            (Arrival::BroadcastListener, Some(listener)) => listener,
-            _ => &self.primary,
-        };
+    fn data(&self, source: Source, len: usize) -> &[u8] {
+        let listener = source
+            .and_then(|index| self.broadcast[index].as_ref())
+            .unwrap_or(&self.primary);
         &listener.buf[..len]
     }
 }
 
-/// Read every datagram the transport's sockets receive, until one fails.
+/// Read every datagram the transport's sockets receive, until the primary
+/// fails. A failed broadcast listener is closed, and unicast goes on.
 pub(super) async fn receive_loop(
     mut listeners: Listeners,
     local: IngressAddresses,
     ctx: RecvContext,
 ) {
     loop {
-        let (arrival, received) = listeners.recv().await;
+        let (source, received) = listeners.recv().await;
+        let arrival = match source {
+            None => Arrival::Primary,
+            Some(_) => Arrival::BroadcastListener,
+        };
         match received {
             Ok(received) => {
-                let data = listeners.data(arrival, received.len);
+                let data = listeners.data(source, received.len);
                 handle_datagram(data, &received, arrival, &local, &ctx).await;
             }
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
                 debug!(error = %e, "Dropping UDP datagram with invalid destination metadata");
             }
-            Err(e) => {
-                warn!(error = %e, "UDP recv error");
-                break;
-            }
+            Err(e) => match source {
+                None => {
+                    warn!(error = %e, "UDP recv error");
+                    break;
+                }
+                Some(index) => {
+                    warn!(error = %e, "B/IP broadcast listener failed; closing it");
+                    listeners.broadcast[index] = None;
+                }
+            },
         }
     }
 }

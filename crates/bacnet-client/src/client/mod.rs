@@ -100,6 +100,13 @@ pub struct ClientConfig {
     pub port: u16,
     /// Directed broadcast address.
     pub broadcast_address: Ipv4Addr,
+    /// B/IP only: bind the interface address itself, so transports on other
+    /// addresses of this host can share the port (#1538). Off by default.
+    /// Needs an explicit interface and a nonzero port; see
+    /// `BipTransport::set_share_port_by_address` for what changes, including
+    /// that broadcasts and unicast are then received in no fixed order. Only
+    /// the B/IP builder reads it; a transport passed to `start` has its own.
+    pub share_port_by_address: bool,
     /// APDU timeout in milliseconds.
     pub apdu_timeout_ms: u64,
     /// Number of APDU retries.
@@ -138,6 +145,7 @@ impl Default for ClientConfig {
             interface: Ipv4Addr::UNSPECIFIED,
             port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
+            share_port_by_address: false,
             apdu_timeout_ms: 6000,
             apdu_retries: 3,
             max_apdu_length: 1476,
@@ -278,6 +286,17 @@ impl BipClientBuilder {
         self
     }
 
+    /// Bind the interface address itself, so transports on other addresses of
+    /// this host can share the port, each getting only its own unicast
+    /// (#1538). Off by default, which binds `0.0.0.0`. Needs an explicit
+    /// [`interface`](Self::interface) and a nonzero port, or `build` fails.
+    /// Broadcasts and unicast are then received in no fixed order; see
+    /// [`BipTransport::set_share_port_by_address`].
+    pub fn share_port_by_address(mut self, enabled: bool) -> Self {
+        self.config.share_port_by_address = enabled;
+        self
+    }
+
     /// Set APDU timeout in milliseconds.
     pub fn apdu_timeout_ms(mut self, ms: u64) -> Self {
         self.config.apdu_timeout_ms = ms;
@@ -298,11 +317,10 @@ impl BipClientBuilder {
 
     /// Build and start the client, constructing a BipTransport from the config.
     pub async fn build(self) -> Result<BACnetClient<BipTransport>, Error> {
-        let transport = BipTransport::new(
-            self.config.interface,
-            self.config.port,
-            self.config.broadcast_address,
-        );
+        let config = &self.config;
+        let mut transport =
+            BipTransport::new(config.interface, config.port, config.broadcast_address);
+        transport.set_share_port_by_address(config.share_port_by_address);
         BACnetClient::start_with_options(self.config, transport, self.options).await
     }
 }

@@ -345,3 +345,26 @@ async fn a_bbmd_registers_and_forwards_nothing_from_a_group_source() {
         assert_eq!(frame.originating_ip, Some(SENDER.0), "{label}");
     }
 }
+
+/// A broadcast address that is one of this node's own addresses, as a
+/// loopback test or a misconfigured /32 sets it up, names this node when it
+/// sends, at any port; configured anywhere else it is a group at every port.
+#[test]
+fn a_broadcast_address_that_is_this_nodes_own_is_no_group_source() {
+    let sources = |broadcast, interface| {
+        let groups = BipGroups::new(broadcast, 0xBAC0, interface);
+        GroupSources::new(groups, Arc::default(), Arc::default())
+    };
+    let own = sources(LOCAL, LOCAL);
+    let loopback = sources(Ipv4Addr::LOCALHOST, LOCAL);
+    let elsewhere = sources(LOCAL, Ipv4Addr::new(192, 0, 2, 11));
+    for port in [0xBAC0, 0xBAC1] {
+        assert!(own.admits_sender(SocketAddrV4::new(LOCAL, port)), "{port}");
+        let from_loopback = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+        assert!(loopback.admits_sender(from_loopback), "{port}");
+        assert!(
+            !elsewhere.admits_sender(SocketAddrV4::new(LOCAL, port)),
+            "{port}"
+        );
+    }
+}

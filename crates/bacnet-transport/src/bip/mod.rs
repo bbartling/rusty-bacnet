@@ -80,6 +80,8 @@ pub struct BipTransport {
     /// Fixed at construction: a restart rebinds the remembered actual port,
     /// but only an explicitly requested one may be shared.
     share_port: bool,
+    /// See [`Self::set_share_port_by_address`].
+    share_port_by_address: bool,
     broadcast_address: Ipv4Addr,
     local_mac: [u8; 6],
     socket: Option<Arc<BipSocket>>,
@@ -133,12 +135,12 @@ impl BipTransport {
     ///   With `0.0.0.0`, `start()` lists the host's IPv4 addresses and accepts
     ///   unicast only to one of them; it fails when they cannot be listed or
     ///   none is usable. The list is read at each start, so an address added
-    ///   later is accepted after the next restart. An explicit address with
-    ///   an explicit port binds that address, so transports on different
-    ///   addresses of one host can share the port (#1538); on Unix a second,
-    ///   receive-only wildcard socket then takes the broadcasts.
+    ///   later is accepted after the next restart. The socket binds the
+    ///   wildcard address either way, unless
+    ///   [`set_share_port_by_address`](Self::set_share_port_by_address) asks
+    ///   for an explicit address's own socket.
     /// - `port`: UDP port (default 47808 / 0xBAC0). Port zero asks for a
-    ///   private ephemeral port, bound on the wildcard address.
+    ///   private ephemeral port.
     /// - `broadcast_address`: Directed broadcast address (e.g., `255.255.255.255`)
     pub fn new(interface: Ipv4Addr, port: u16, broadcast_address: Ipv4Addr) -> Self {
         let fanout_policy = FanoutPolicy::default();
@@ -150,6 +152,7 @@ impl BipTransport {
             interface,
             port,
             share_port: port != 0,
+            share_port_by_address: false,
             broadcast_address,
             local_mac: [0; 6],
             socket: None,
@@ -174,6 +177,27 @@ impl BipTransport {
             #[cfg(test)]
             local_ipv4_for_test: None,
         }
+    }
+
+    /// Bind the interface address itself, so transports on other addresses
+    /// of this host can share the port, each getting only its own unicast
+    /// (#1538). Off by default: the transport binds `0.0.0.0`. Call it before
+    /// `start()`, which fails unless the interface is an explicit address and
+    /// the port is nonzero.
+    ///
+    /// In this mode every send leaves from the interface address. On Linux,
+    /// macOS and the BSDs, broadcasts arrive on separate receive-only
+    /// listeners, read in no fixed order against the address socket: a
+    /// unicast that depends on a broadcast sent just before it can be handled
+    /// first. On Linux a listener binds the configured broadcast address, which
+    /// must then be the interface's subnet broadcast or 255.255.255.255. On
+    /// Windows one socket claims the address with `SO_EXCLUSIVEADDRUSE`; a
+    /// socket already bound to the wildcard address on that port doesn't stop
+    /// it, and under Windows' strong host model a multihomed BBMD reaches a
+    /// peer only through the interface it is bound to. See
+    /// `docs/rust-api.md` (BIP section) for each OS.
+    pub fn set_share_port_by_address(&mut self, enabled: bool) {
+        self.share_port_by_address = enabled;
     }
 
     /// Enable BBMD mode with the given initial BDT.
@@ -579,10 +603,9 @@ impl TransportPort for BipTransport {
         }
 
         socket::probe_interface(self.interface)?;
-        // A wildcard socket, or one bound to the interface address plus, on
-        // Unix, a broadcast listener: see socket.rs for which and why (#1538).
-        let bound =
-            socket::bind(self.interface, self.port, self.share_port).map_err(Error::Transport)?;
+        // A wildcard socket, or in per-address mode one bound to the interface
+        // address plus, on Unix, broadcast listeners: see socket.rs (#1538).
+        let bound = socket::bind(self.bind_plan()).map_err(Error::Transport)?;
         let listeners =
             Listeners::open(bound, self.network_port_lease.clone()).map_err(Error::Transport)?;
         let socket = Arc::clone(listeners.primary());

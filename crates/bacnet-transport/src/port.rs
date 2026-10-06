@@ -468,9 +468,11 @@ pub trait TransportPort: Send + Sync {
     /// bound devices, never go to one (#1493). Its replies and COV
     /// notifications go to the source a request came from, and the server,
     /// the client and the endpoint ignore a confirmed request whose source
-    /// MAC is one (#1504), so those never go to one either. A routed NPDU
-    /// whose DADR is one on the router's delivery port carries only an
-    /// Unconfirmed-Request there.
+    /// MAC is one (#1504), so those don't go to a group on this link. A
+    /// routed request's SADR names a node on another network, which this
+    /// link can't judge: a reply to a group SADR is dropped only where the
+    /// final router is a `BACnetRouter`, which delivers only an
+    /// Unconfirmed-Request to a DADR that is a group on its delivery port.
     ///
     /// [`Self::is_broadcast_mac`] keeps its narrower meaning, this link's own
     /// broadcast, which routing and recipient checks rely on. The default is

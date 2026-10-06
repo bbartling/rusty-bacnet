@@ -23,7 +23,8 @@ impl BACnetClient {
         mstp_mac=1,
         mstp_max_master=127,
         mstp_max_info_frames=1,
-        sc_device_uuid=None
+        sc_device_uuid=None,
+        share_port_by_address=false
     ))]
     fn new(
         interface: &str,
@@ -45,7 +46,9 @@ impl BACnetClient {
         mstp_max_master: u8,
         mstp_max_info_frames: u8,
         sc_device_uuid: Option<Vec<u8>>,
+        share_port_by_address: bool,
     ) -> PyResult<Self> {
+        crate::bip_options::only_on_bip(share_port_by_address, transport)?;
         if transport == "sc" {
             crate::tls::required_sc_credentials(
                 sc_ca_cert.as_deref(),
@@ -61,6 +64,7 @@ impl BACnetClient {
             interface: interface.to_string(),
             port,
             broadcast_address: broadcast_address.to_string(),
+            share_port_by_address,
             apdu_timeout_ms,
             sc_hub,
             sc_vmac,
@@ -87,6 +91,7 @@ impl BACnetClient {
         let interface_str = slf.borrow().interface.clone();
         let port = slf.borrow().port;
         let broadcast_str = slf.borrow().broadcast_address.clone();
+        let share_port_by_address = slf.borrow().share_port_by_address;
         let timeout_ms = slf.borrow().apdu_timeout_ms;
         let sc_hub = slf.borrow().sc_hub.clone();
         let sc_vmac = slf.borrow().sc_vmac.clone();
@@ -112,7 +117,9 @@ impl BACnetClient {
                     let broadcast: Ipv4Addr = broadcast_str
                         .parse()
                         .map_err(|e| PyRuntimeError::new_err(format!("invalid broadcast: {e}")))?;
-                    AnyTransport::Bip(Box::new(BipTransport::new(interface, port, broadcast)))
+                    let mut bip = BipTransport::new(interface, port, broadcast);
+                    bip.set_share_port_by_address(share_port_by_address);
+                    AnyTransport::Bip(Box::new(bip))
                 }
                 "ipv6" => {
                     let iface_str = ipv6_interface.as_deref().unwrap_or("::");

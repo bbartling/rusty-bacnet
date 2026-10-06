@@ -2,15 +2,15 @@
 
 use super::*;
 use crate::port_ownership::{restart, ATTEMPTS};
-use socket::{udp_socket, BoundSockets, SocketRole};
+use socket::{udp_socket, BindPlan, BoundSockets, SocketRole};
 
 #[tokio::test]
 async fn socket_is_broadcast_capable_and_binds_inaddr_any() {
     // Regression for the "user-supplied interface IP" silently rejecting
-    // broadcast traffic. On an ephemeral port, even when the caller passes a
-    // specific interface, the one socket binds 0.0.0.0 so the kernel delivers
-    // subnet- and limited-broadcast packets to it. The interface IP is still
-    // used for the announced local MAC.
+    // broadcast traffic. Unless the port is shared by address (#1538), even
+    // when the caller passes a specific interface, the one socket binds
+    // 0.0.0.0 so the kernel delivers subnet- and limited-broadcast packets to
+    // it. The interface IP is still used for the announced local MAC.
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let _rx = transport.start().await.unwrap();
 
@@ -67,8 +67,15 @@ fn only_an_explicitly_requested_port_opts_into_address_reuse() {
     let reuses = |role| udp_socket(role).unwrap().reuse_address().unwrap();
     assert!(!reuses(SocketRole::PrivateWildcard));
     assert!(reuses(SocketRole::SharedWildcard));
-    // Windows claims an interface address instead of sharing it (#1538).
-    assert_eq!(reuses(SocketRole::Address), cfg!(not(windows)));
+    // In per-address mode (#1538) only macOS and the BSDs share the address,
+    // to bind beside their wildcard listener; Linux needs no listener there,
+    // and Windows claims the address.
+    let macos_or_bsd = cfg!(all(
+        unix,
+        not(any(target_os = "linux", target_os = "android"))
+    ));
+    assert_eq!(reuses(SocketRole::Address), macos_or_bsd);
+    assert!(reuses(SocketRole::BroadcastListener));
     assert!(!BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST).share_port);
     assert!(BipTransport::new(Ipv4Addr::LOCALHOST, 0xBAC0, Ipv4Addr::BROADCAST).share_port);
 }
@@ -78,17 +85,29 @@ fn address_of(socket: &socket2::Socket) -> SocketAddrV4 {
     socket.local_addr().unwrap().as_socket_ipv4().unwrap()
 }
 
+/// The plan for `interface` on an explicitly requested `port`, with the
+/// loopback subnet's broadcast address.
+fn plan(interface: Ipv4Addr, port: u16, by_address: bool) -> BindPlan {
+    BindPlan {
+        interface,
+        port,
+        share_port: port != 0,
+        by_address,
+        broadcast: Ipv4Addr::new(127, 255, 255, 255),
+    }
+}
+
 /// `socket::bind` for an explicitly requested port, which the OS picks here
 /// and the probe releases first. Another process can take it in between
 /// (#1032), so each run of `check` gets a fresh one.
-fn on_a_requested_port(interface: Ipv4Addr, check: impl Fn(u16, BoundSockets)) {
+fn on_a_requested_port(interface: Ipv4Addr, by_address: bool, check: impl Fn(u16, BoundSockets)) {
     for attempt in 1..=ATTEMPTS {
         let port = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
             .unwrap()
             .local_addr()
             .unwrap()
             .port();
-        match socket::bind(interface, port, true) {
+        match socket::bind(plan(interface, port, by_address)) {
             Ok(bound) => return check(port, bound),
             Err(e) if crate::port_ownership::lost_port(attempt, &e) => continue,
             Err(e) => panic!("bind {interface}:{port}: {e}"),
@@ -97,23 +116,45 @@ fn on_a_requested_port(interface: Ipv4Addr, check: impl Fn(u16, BoundSockets)) {
 }
 
 #[test]
-fn an_explicit_interface_on_a_requested_port_binds_its_address() {
-    on_a_requested_port(Ipv4Addr::LOCALHOST, |port, bound| {
+fn an_explicit_interface_keeps_one_wildcard_socket_by_default() {
+    // Its single socket receives unicast and broadcasts in arrival order.
+    on_a_requested_port(Ipv4Addr::LOCALHOST, false, |port, bound| {
+        assert_eq!(
+            address_of(&bound.primary),
+            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)
+        );
+        assert!(bound.primary.reuse_address().unwrap());
+        assert!(bound.listeners.is_empty());
+    });
+}
+
+#[test]
+fn sharing_the_port_by_address_binds_the_interface_address() {
+    on_a_requested_port(Ipv4Addr::LOCALHOST, true, |port, bound| {
         assert_eq!(
             address_of(&bound.primary),
             SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)
         );
         // Windows hands a socket bound to the interface address the
-        // broadcasts that arrive there; Unix needs a wildcard listener.
-        assert_eq!(bound.broadcast.is_none(), cfg!(windows));
-        if let Some(listener) = bound.broadcast {
-            assert_eq!(
-                address_of(&listener),
-                SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)
-            );
+        // broadcasts that arrive there. Linux listens on the broadcast
+        // addresses themselves; macOS and the BSDs on the wildcard address.
+        let listening: Vec<_> = bound.listeners.iter().map(address_of).collect();
+        let expected: Vec<Ipv4Addr> = if cfg!(windows) {
+            vec![]
+        } else if cfg!(any(target_os = "linux", target_os = "android")) {
+            vec![Ipv4Addr::new(127, 255, 255, 255), Ipv4Addr::BROADCAST]
+        } else {
+            vec![Ipv4Addr::UNSPECIFIED]
+        };
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|ip| SocketAddrV4::new(ip, port))
+            .collect();
+        assert_eq!(listening, expected);
+        for listener in &bound.listeners {
             assert!(listener.reuse_address().unwrap());
             assert!(listener.broadcast().unwrap());
-            // Several listeners on one port need it there.
+            // Several wildcard listeners on one port need it there.
             #[cfg(any(
                 target_vendor = "apple",
                 target_os = "freebsd",
@@ -127,21 +168,31 @@ fn an_explicit_interface_on_a_requested_port_binds_its_address() {
 }
 
 #[test]
+fn sharing_the_port_by_address_needs_an_address_and_a_port() {
+    for plan in [
+        plan(Ipv4Addr::UNSPECIFIED, 0xBAC0, true),
+        plan(Ipv4Addr::LOCALHOST, 0, true),
+    ] {
+        let refused = socket::bind(plan).err().expect("refused");
+        assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput, "{plan:?}");
+    }
+}
+
+#[test]
 fn a_wildcard_or_a_private_port_keeps_one_wildcard_socket() {
-    on_a_requested_port(Ipv4Addr::UNSPECIFIED, |port, bound| {
+    on_a_requested_port(Ipv4Addr::UNSPECIFIED, false, |port, bound| {
         assert_eq!(
             address_of(&bound.primary),
             SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)
         );
         assert!(bound.primary.reuse_address().unwrap());
-        assert!(bound.broadcast.is_none());
+        assert!(bound.listeners.is_empty());
     });
-    // An ephemeral port is never shared (#892), so an explicit interface
-    // gains nothing from its own bind there.
-    let bound = socket::bind(Ipv4Addr::LOCALHOST, 0, false).unwrap();
+    // An ephemeral port is never shared (#892).
+    let bound = socket::bind(plan(Ipv4Addr::LOCALHOST, 0, false)).unwrap();
     assert!(address_of(&bound.primary).ip().is_unspecified());
     assert!(!bound.primary.reuse_address().unwrap());
-    assert!(bound.broadcast.is_none());
+    assert!(bound.listeners.is_empty());
 }
 
 #[tokio::test]
@@ -166,12 +217,31 @@ async fn an_ephemeral_port_stays_private_across_restart() {
 
 #[tokio::test]
 async fn check_bind_refuses_what_start_would() {
-    assert!(BipTransport::check_bind(Ipv4Addr::new(192, 0, 2, 1), 0).is_err());
-    // A private port refuses a requested-port bind on every OS. macOS lets
-    // the address socket beside it bind, but not the broadcast listener.
+    let typo = BipTransport::new(Ipv4Addr::new(192, 0, 2, 1), 0, Ipv4Addr::BROADCAST);
+    assert!(typo.check_bind().is_err());
     let mut holder = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let _rx = holder.start().await.unwrap();
-    assert!(BipTransport::check_bind(Ipv4Addr::LOCALHOST, holder.port).is_err());
-    assert!(BipTransport::check_bind(Ipv4Addr::UNSPECIFIED, holder.port).is_err());
+    // A private port refuses a requested-port bind on every OS, in either
+    // mode. macOS lets the address socket beside it bind, but not the
+    // broadcast listener.
+    for (interface, by_address) in [
+        (Ipv4Addr::UNSPECIFIED, false),
+        (Ipv4Addr::LOCALHOST, false),
+        (Ipv4Addr::LOCALHOST, true),
+    ] {
+        let mut checked = BipTransport::new(interface, holder.port, Ipv4Addr::BROADCAST);
+        checked.set_share_port_by_address(by_address);
+        assert!(checked.check_bind().is_err(), "{interface} {by_address}");
+    }
     holder.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn start_refuses_sharing_by_address_without_an_address() {
+    let mut transport = BipTransport::new(Ipv4Addr::UNSPECIFIED, 0xBAC0, Ipv4Addr::BROADCAST);
+    transport.set_share_port_by_address(true);
+    let Err(Error::Transport(refused)) = transport.start().await else {
+        panic!("start must refuse");
+    };
+    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
 }

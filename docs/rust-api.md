@@ -642,49 +642,70 @@ actual port keeps it private. B/IPv6 applies the same port-zero and
 explicit-port rule, but binds a fresh ephemeral port on each start instead of
 remembering one.
 
-How the transport binds depends on the interface and the port (#1538):
+By default the transport binds one socket on `0.0.0.0:port`, whatever the
+interface: an explicitly requested port sets `SO_REUSEADDR`, and port zero is
+private. The wildcard socket receives directed and limited broadcasts and
+unicast alike, in the order they arrive, and the receive loop takes unicast
+only to the interface address (or, for `0.0.0.0`, to one of the host's
+addresses, below). Sends leave from it, so the OS picks their source address
+by route. On an explicit port, Linux lets a second application bind the same
+wildcard address, with the same single-receiver unicast caveat, so two
+devices on two addresses of one host can't both rely on the standard port;
+macOS and BSD refuse a second wildcard bind.
 
-| Interface | Port | Sockets |
-|-----------|------|---------|
-| `0.0.0.0` | explicit | one on `0.0.0.0:port`, with `SO_REUSEADDR` |
-| any | zero | one on `0.0.0.0:port`, private |
-| an address | explicit | one on `address:port`, plus a broadcast listener on Unix |
+#### Sharing a port by address
 
-The wildcard socket receives directed and limited broadcasts, and the receive
-loop takes unicast only to the interface address (or, for `0.0.0.0`, to one
-of the host's addresses, below). On an explicit port, Linux lets a second
-application bind the same wildcard address, with the same single-receiver
-unicast caveat; macOS and BSD refuse a second wildcard bind.
+`BipTransport::set_share_port_by_address(true)` (the B/IP builders'
+`.share_port_by_address(true)`, Python's `share_port_by_address=True` on
+`BACnetServer`, `BACnetClient` and `BipEndpoint`) binds the interface address
+itself instead (#1538). Several devices on one host, each on its own address,
+can then share one port such as 47808, and each receives only the unicast
+sent to its own address. `start()` fails unless the interface is an explicit
+address and the port nonzero.
 
-An explicit interface on an explicit port binds `address:port`, so several
-transports on one host, each with its own address, can share one port, such as
-47808, and each receives only the unicast sent to its own address. Every send
-leaves from that socket, so its source is the interface address. How
-broadcasts arrive differs by OS:
+What changes in this mode:
 
-- **Linux, macOS and the BSDs** don't deliver a broadcast to a socket bound to
-  a unicast address. A second, receive-only socket binds `0.0.0.0:port` with
-  `SO_REUSEADDR` (and, on macOS and the BSDs, `SO_REUSEPORT`, which several
-  such sockets need), and the transport keeps only the configured broadcast
-  address and 255.255.255.255 from it. Each OS hands a broadcast to every one
-  of these sockets on the port, and a unicast to the socket bound to its
-  destination. Unicast to a local address that no socket on the port is bound
-  to may land on any wildcard socket there, so a `0.0.0.0` transport sharing
-  the port with others can lose unicast to them. The transport reads its two
-  sockets in no fixed order, so a broadcast and a unicast that arrive
-  together may be handled in either order.
+- **Sends** leave from the interface address and the shared port.
+- **Receipt order:** on Linux, macOS and the BSDs, broadcasts arrive on
+  separate receive-only listeners, read fairly against the address socket in
+  no fixed order. A broadcast and a unicast that arrive together may be
+  handled in either order, so a unicast that depends on a broadcast sent just
+  before it, such as a query after a Network-Number-Is, can be handled first.
+  A listener that fails is closed with a warning, and unicast goes on.
+- **Linux** delivers a broadcast only to sockets bound to the wildcard address
+  or to the broadcast address itself. The listeners bind the configured
+  broadcast address and 255.255.255.255 with `SO_REUSEADDR`, which every
+  device on the subnet shares, and each gets a copy. The broadcast address
+  must therefore be the interface's subnet broadcast (or 255.255.255.255), or
+  `start()` fails. No listener sees a unicast, and the address socket shares
+  nothing: no other socket can bind the same address and port, nor
+  `0.0.0.0` on that port, so a default-mode transport can't share a port with
+  devices sharing it by address.
+- **macOS and the BSDs** refuse to bind 255.255.255.255, so one listener binds
+  `0.0.0.0:port` with `SO_REUSEADDR` and `SO_REUSEPORT`, which several such
+  listeners need, and each gets a copy of a broadcast. A unicast to a local
+  address no socket on the port is bound to can reach a listener, which drops
+  it. Another socket can't bind the same address and port without
+  `SO_REUSEPORT` on both, which the address socket doesn't set. A default-mode
+  transport's wildcard socket lacks `SO_REUSEPORT`, so it can't share a port
+  with these listeners either.
 - **Windows** delivers a broadcast arriving on an interface to a socket bound
-  to that interface's address, so the one socket is enough. Windows'
+  to that interface's address, so one socket is enough. Windows'
   `SO_REUSEADDR` would let another socket bind the same address and take its
   unicast, so the socket sets `SO_EXCLUSIVEADDRUSE` instead, and no other
   socket can bind that address and port. Other addresses can still share the
-  port.
+  port, and a socket already bound to `0.0.0.0` on it without
+  `SO_EXCLUSIVEADDRUSE` doesn't stop the bind (it does stop a default-mode
+  start). Under Windows' strong host model a socket bound to one interface
+  sends only through it, so a multihomed BBMD in this mode reaches only the
+  peers that interface can.
 
-Tests run the shared port on Linux (127.0.0.2 and 127.0.0.3, broadcasts on
-127.255.255.255 and 255.255.255.255), and on macOS and Windows with 127.0.0.1
-beside the default-route address, unicast only: macOS loopback has no
-broadcast address, and Windows broadcast reception on a shared port is not
-covered by a test.
+Tests run the shared port on every OS: on Linux on 127.0.0.2 and 127.0.0.3,
+with broadcasts to 127.255.255.255 and 255.255.255.255, and on macOS and
+Windows with 127.0.0.1 beside the default-route address. A subnet broadcast
+on the default-route interface checks broadcast receipt on every OS, and is
+skipped without a broadcast-capable default route; Windows runs it only in
+CI.
 
 With the `0.0.0.0` interface, `start()` lists the host's IPv4 addresses, with
 `getifaddrs` on Linux, macOS and the BSDs and `GetAdaptersAddresses` on
@@ -1766,7 +1787,9 @@ Unconfirmed-Request (#1504). As one unicast it would reach every node in the
 group without the broadcast network addresses #1491 filters. It is delivered
 nowhere, draws no reject, and counts in `group_dadr_drops()`. Network
 messages, and a group DADR on a network behind another router, which that
-router judges, are not affected.
+router judges, are not affected. A routed request's SADR names a node on
+another network, which the ingress rule above can't judge, so a reply to a
+group SADR is dropped only where the final router is a `BACnetRouter`.
 
 ---
 

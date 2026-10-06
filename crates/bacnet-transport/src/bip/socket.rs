@@ -3,31 +3,45 @@
 //!
 //! A transport binds one of two ways:
 //!
-//! - **Wildcard:** one socket on `0.0.0.0:port`. Used when no interface is
-//!   given, and for an explicit interface on a port the OS picks. Such a port
-//!   is never shared (#892), so the wildcard socket owns it on every address,
-//!   and the receive loop takes unicast only to the interface address.
-//! - **Per address:** an explicit interface on an explicitly requested port
-//!   binds `interface:port`, so transports on different addresses can share
-//!   one port, each getting only its own unicast (#1538). Every send leaves
-//!   from that socket, so its source is the interface address. How broadcasts
-//!   arrive differs by OS:
-//!   - Linux, macOS and the BSDs deliver a broadcast only to sockets bound to
-//!     the wildcard address or to the broadcast address itself, so a second,
-//!     receive-only socket binds `0.0.0.0:port` and the receive loop keeps only
-//!     the broadcasts it gets. Linux delivers a broadcast to every
-//!     `SO_REUSEADDR` socket on the port and a unicast to the most specific
-//!     bind. macOS and the BSDs also need `SO_REUSEPORT` before several
-//!     sockets can bind `0.0.0.0:port`, and deliver a broadcast to each.
-//!     The receive loop reads the two sockets fairly, in no fixed order, so
-//!     a broadcast and a unicast that arrive together may be handled in
-//!     either order. UDP never promised one.
+//! - **Wildcard** (the default): one socket on `0.0.0.0:port`. It receives
+//!   unicast and broadcasts alike, in the order they arrive, and the receive
+//!   loop takes unicast only to the interface address. A port the OS picks is
+//!   never shared (#892); an explicitly requested one sets `SO_REUSEADDR`.
+//! - **Per address**, opted into with
+//!   [`set_share_port_by_address`](super::BipTransport::set_share_port_by_address)
+//!   and needing an explicit interface and a nonzero port: the socket binds
+//!   `interface:port`, so transports on different addresses of one host can
+//!   share one port, each getting only its own unicast (#1538). Every send
+//!   leaves from that socket, so its source is the interface address. How
+//!   broadcasts arrive differs by OS:
+//!   - Linux delivers a broadcast only to sockets bound to the wildcard
+//!     address or to the broadcast address itself. Receive-only listeners
+//!     bind the configured broadcast address and 255.255.255.255 with
+//!     `SO_REUSEADDR`, which several transports on one subnet share, and Linux
+//!     hands a broadcast to each. No listener can see a unicast, and the
+//!     address socket needs no `SO_REUSEADDR`, so no other socket can bind the
+//!     same address and port, or the wildcard address on it.
+//!   - macOS and the BSDs refuse to bind 255.255.255.255, so one receive-only
+//!     listener binds `0.0.0.0:port` with `SO_REUSEADDR` and `SO_REUSEPORT`,
+//!     which several such listeners need, and each gets a broadcast. A unicast
+//!     to a local address that no socket on the port is bound to can reach a
+//!     listener, which drops it. The address socket sets `SO_REUSEADDR` to
+//!     bind beside the listeners; another socket binding the same address and
+//!     port would also need `SO_REUSEPORT` on both, so it is refused.
 //!   - Windows delivers a broadcast arriving on the interface to a socket bound
 //!     to the interface address, so that one socket is enough. Its
 //!     `SO_REUSEADDR` would let another socket bind the same address and take
 //!     the unicast sent there, so it claims the address with
 //!     `SO_EXCLUSIVEADDRUSE` instead, as `port_ownership` does for a private
-//!     port (#950). Sockets on other addresses can still share the port.
+//!     port (#950). Other addresses can still share the port, and so can a
+//!     socket already bound to the wildcard address without
+//!     `SO_EXCLUSIVEADDRUSE`.
+//!
+//!   The receive loop reads the address socket and the listeners fairly, in
+//!   no fixed order, so a broadcast and a unicast that arrive together may be
+//!   handled in either order; a unicast that depends on a broadcast sent just
+//!   before it can be handled first. A listener that fails is closed, and
+//!   unicast goes on.
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -47,12 +61,12 @@ pub(super) enum SocketRole {
     PrivateWildcard,
     /// `0.0.0.0` on an explicitly requested port: `SO_REUSEADDR`, as before.
     SharedWildcard,
-    /// `interface:port` on an explicitly requested port (#1538): a socket
-    /// beside the [`BroadcastListener`](Self::BroadcastListener) on Unix, a
-    /// claimed address on Windows.
+    /// `interface:port` in per-address mode (#1538): shares nothing on Linux,
+    /// sits beside a wildcard listener on macOS and the BSDs, and claims the
+    /// address on Windows.
     Address,
-    /// `0.0.0.0` beside an [`Address`](Self::Address) socket, for broadcasts
-    /// only. Not used on Windows.
+    /// A receive-only broadcast listener beside an [`Address`](Self::Address)
+    /// socket. Not used on Windows.
     BroadcastListener,
 }
 
@@ -68,7 +82,9 @@ pub(super) fn udp_socket(role: SocketRole) -> io::Result<socket2::Socket> {
         SocketRole::SharedWildcard => socket.set_reuse_address(true)?,
         #[cfg(windows)]
         SocketRole::Address => crate::port_ownership::claim_exclusive(&socket)?,
-        #[cfg(not(windows))]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        SocketRole::Address => {}
+        #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
         SocketRole::Address => socket.set_reuse_address(true)?,
         SocketRole::BroadcastListener => {
             socket.set_reuse_address(true)?;
@@ -87,23 +103,44 @@ pub(super) fn udp_socket(role: SocketRole) -> io::Result<socket2::Socket> {
     Ok(socket)
 }
 
-/// The sockets one start binds: the one every send leaves from, and on Unix,
-/// when it is bound to an interface address, the one broadcasts arrive on.
+/// What one start binds, from the transport's configuration.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct BindPlan {
+    pub(super) interface: Ipv4Addr,
+    pub(super) port: u16,
+    /// Whether the port was explicitly requested (fixed at construction).
+    pub(super) share_port: bool,
+    /// Whether per-address mode was asked for.
+    pub(super) by_address: bool,
+    /// The configured broadcast address.
+    pub(super) broadcast: Ipv4Addr,
+}
+
+/// The sockets one start binds: the one every send leaves from, and in
+/// per-address mode on Unix, the listeners broadcasts arrive on.
 pub(super) struct BoundSockets {
     pub(super) primary: socket2::Socket,
-    pub(super) broadcast: Option<socket2::Socket>,
+    pub(super) listeners: Vec<socket2::Socket>,
 }
 
 impl super::BipTransport {
-    /// Check that a transport for `interface` and `port` could start now:
-    /// bind the sockets [`start`](crate::port::TransportPort::start) would,
-    /// with the same options, and release them. Another socket can still
-    /// take the port before the real start, which stays authoritative.
-    pub fn check_bind(interface: Ipv4Addr, port: u16) -> Result<(), Error> {
-        probe_interface(interface)?;
-        bind(interface, port, port != 0)
-            .map(drop)
-            .map_err(Error::Transport)
+    /// Check that this transport could start now: bind the sockets
+    /// [`start`](crate::port::TransportPort::start) would, with the same
+    /// options, and release them. Another socket can still take the port
+    /// before the real start, which stays authoritative.
+    pub fn check_bind(&self) -> Result<(), Error> {
+        probe_interface(self.interface)?;
+        bind(self.bind_plan()).map(drop).map_err(Error::Transport)
+    }
+
+    pub(super) fn bind_plan(&self) -> BindPlan {
+        BindPlan {
+            interface: self.interface,
+            port: self.port,
+            share_port: self.share_port,
+            by_address: self.share_port_by_address,
+            broadcast: self.broadcast_address,
+        }
     }
 }
 
@@ -119,32 +156,65 @@ pub(super) fn probe_interface(interface: Ipv4Addr) -> Result<(), Error> {
     Ok(())
 }
 
-/// Bind the sockets for `interface` and `port` as the module docs describe.
-/// `share_port` says whether the port was explicitly requested.
-pub(super) fn bind(interface: Ipv4Addr, port: u16, share_port: bool) -> io::Result<BoundSockets> {
+/// Bind the sockets `plan` asks for, as the module docs describe.
+pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
     let bound = |role: SocketRole, ip: Ipv4Addr| -> io::Result<socket2::Socket> {
         let socket = udp_socket(role)?;
-        socket.bind(&SocketAddrV4::new(ip, port).into())?;
+        socket.bind(&SocketAddrV4::new(ip, plan.port).into())?;
         Ok(socket)
     };
-    if interface.is_unspecified() || !share_port {
-        let role = if share_port {
+    if !plan.by_address {
+        let role = if plan.share_port {
             SocketRole::SharedWildcard
         } else {
             SocketRole::PrivateWildcard
         };
-        return Ok(BoundSockets {
-            primary: bound(role, Ipv4Addr::UNSPECIFIED)?,
-            broadcast: None,
-        });
+        let primary = bound(role, Ipv4Addr::UNSPECIFIED)?;
+        let listeners = Vec::new();
+        return Ok(BoundSockets { primary, listeners });
     }
-    let primary = bound(SocketRole::Address, interface)?;
-    let broadcast = if cfg!(windows) {
-        None
+    if plan.interface.is_unspecified() || !plan.share_port {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a B/IP transport shares its port by address only with an explicit interface \
+             address and a nonzero port",
+        ));
+    }
+    let primary = bound(SocketRole::Address, plan.interface)?;
+    let mut listeners = Vec::new();
+    for ip in listener_addresses(plan.interface, plan.broadcast) {
+        let listener = bound(SocketRole::BroadcastListener, ip).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!(
+                    "could not bind the B/IP broadcast listener to {ip}:{} ({e}); on Linux the \
+                     broadcast address must be the interface's subnet broadcast or \
+                     255.255.255.255",
+                    plan.port
+                ),
+            )
+        })?;
+        listeners.push(listener);
+    }
+    Ok(BoundSockets { primary, listeners })
+}
+
+/// Where per-address mode's broadcast listeners bind: on Linux the
+/// configured broadcast address, unless it is the limited broadcast or the
+/// interface itself, and 255.255.255.255; on macOS and the BSDs the wildcard
+/// address; on Windows nowhere.
+fn listener_addresses(interface: Ipv4Addr, broadcast: Ipv4Addr) -> Vec<Ipv4Addr> {
+    if cfg!(windows) {
+        Vec::new()
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
+        let directed =
+            !broadcast.is_broadcast() && !broadcast.is_unspecified() && broadcast != interface;
+        let mut addresses: Vec<_> = directed.then_some(broadcast).into_iter().collect();
+        addresses.push(Ipv4Addr::BROADCAST);
+        addresses
     } else {
-        Some(bound(SocketRole::BroadcastListener, Ipv4Addr::UNSPECIFIED)?)
-    };
-    Ok(BoundSockets { primary, broadcast })
+        vec![Ipv4Addr::UNSPECIFIED]
+    }
 }
 
 /// Every socket-owning worker retains this same allocation. Rust drops fields

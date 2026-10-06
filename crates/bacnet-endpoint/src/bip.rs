@@ -61,6 +61,7 @@ pub struct BipEndpointBuilder {
     interface: Ipv4Addr,
     port: u16,
     broadcast_address: Ipv4Addr,
+    share_port_by_address: bool,
     role: SessionRole,
     session: SessionConfig,
     database: Option<ObjectDatabase>,
@@ -80,15 +81,15 @@ impl BipEndpointBuilder {
     /// Creates a B/IP endpoint builder with interface/port/broadcast.
     ///
     /// `port = 0` selects an ephemeral port (tests); production uses 47808.
-    /// `interface` is the announced MAC IP. With a nonzero port and an
-    /// explicit interface, the transport binds that address and, on Unix, a
-    /// wildcard broadcast listener, so endpoints on different addresses can
-    /// share the port (#1538); otherwise it binds `INADDR_ANY`.
+    /// `interface` is the announced MAC IP; the socket binds `INADDR_ANY`
+    /// unless [`share_port_by_address`](Self::share_port_by_address) asks for
+    /// the interface address.
     pub fn new(interface: Ipv4Addr, port: u16, broadcast_address: Ipv4Addr) -> Self {
         Self {
             interface,
             port,
             broadcast_address,
+            share_port_by_address: false,
             role: SessionRole::Both,
             session: SessionConfig::default(),
             database: None,
@@ -103,6 +104,17 @@ impl BipEndpointBuilder {
             fanout_policy: None,
             foreign_device: None,
         }
+    }
+
+    /// Binds the interface address itself, so endpoints on other addresses
+    /// of this host can share the port, each getting only its own unicast
+    /// (#1538). Off by default. Needs an explicit interface and a nonzero
+    /// port, or starting fails. Broadcasts and unicast are then received in
+    /// no fixed order; see
+    /// [`BipTransport::set_share_port_by_address`](bacnet_transport::bip::BipTransport::set_share_port_by_address).
+    pub fn share_port_by_address(mut self, enabled: bool) -> Self {
+        self.share_port_by_address = enabled;
+        self
     }
 
     /// Selects the composed roles (default [`Both`](SessionRole::Both)).
@@ -279,6 +291,7 @@ impl BipEndpointBuilder {
             interface,
             port,
             broadcast_address,
+            share_port_by_address,
             bbmd_bdt,
             foreign_policy,
             management_acl,
@@ -288,6 +301,7 @@ impl BipEndpointBuilder {
             ..
         } = self;
         let mut transport = BipTransport::new(interface, port, broadcast_address);
+        transport.set_share_port_by_address(share_port_by_address);
         if let Some(bdt) = bbmd_bdt {
             transport.enable_bbmd(bdt);
             if let Some(policy) = foreign_policy {
@@ -347,5 +361,26 @@ impl BipEndpointBuilder {
         }
         endpoint.source_audit_bindings = bindings;
         Ok(endpoint)
+    }
+}
+
+#[cfg(test)]
+mod share_port_tests {
+    use super::*;
+
+    /// The builder hands `share_port_by_address` to its transport, which
+    /// refuses it without an explicit interface (#1538).
+    #[tokio::test]
+    async fn the_builder_shares_the_port_by_address_only_with_an_address() {
+        let mut endpoint =
+            BipEndpointBuilder::new(Ipv4Addr::UNSPECIFIED, 0xBAC0, Ipv4Addr::BROADCAST)
+                .role(SessionRole::ClientOnly)
+                .share_port_by_address(true)
+                .build_session()
+                .unwrap();
+        let Err(Error::Transport(refused)) = endpoint.start().await else {
+            panic!("start must refuse");
+        };
+        assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

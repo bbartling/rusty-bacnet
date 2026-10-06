@@ -227,13 +227,9 @@ async fn gated_progress_and_stop(bbmd_mode: bool, bare_drop: bool) {
         forward(bbmd, local, &number(77, 1)).await;
         forward(bbmd, local, QUERY).await;
     } else {
-        // Both by broadcast: a BBMD on its own address and a requested port
-        // takes broadcasts on a second socket, read in no fixed order
-        // against the first (#1538), so a unicast query could pass the
-        // announcement.
         let group = SocketAddrV4::new(BROADCAST, local.port());
         send(&peer, group, &frame(0x0b, &number(77, 1))).await;
-        send(&peer, group, &frame(0x0b, QUERY)).await;
+        send(&peer, local, &frame(0x0a, QUERY)).await;
     }
     bounded(gates.entered.acquire()).await.unwrap().forget();
     let request = [1, 4, 0, 3, 42, 12, 0x0c, 0, 0, 0, 1, 0x19, 85];

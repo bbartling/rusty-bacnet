@@ -1808,7 +1808,13 @@ class BACnetClient:
         mstp_max_master: int = 127,
         mstp_max_info_frames: int = 1,
         sc_device_uuid: Optional[bytes | bytearray] = None,
-    ) -> None: ...
+        share_port_by_address: bool = False,
+    ) -> None:
+        """``share_port_by_address`` (B/IP only, default False): bind the
+        interface address itself, so clients and devices on other addresses
+        of this host can share the port. Needs an explicit interface and a
+        nonzero port; broadcasts and unicast then arrive in no fixed order."""
+        ...
 
     def __aenter__(self) -> Awaitable[BACnetClient]: ...
     def __aexit__(
@@ -2825,7 +2831,13 @@ class BACnetServer:
         registered_network_port: Optional[int] = None,
         cov_policy: CovPolicy | None = None,
         time_sync_policy: TimeSyncPolicy | None = None,
-    ) -> None: ...
+        share_port_by_address: bool = False,
+    ) -> None:
+        """``share_port_by_address`` (B/IP only, default False): bind the
+        interface address itself, so devices on other addresses of this host
+        can share the port. Needs an explicit interface and a nonzero port;
+        broadcasts and unicast then arrive in no fixed order."""
+        ...
 
     # --- Analog objects ---
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
@@ -4202,10 +4214,15 @@ class BipEndpoint:
         registered_network_port: Optional[int] = None,
         *,
         read_work_limit: int = 256,
+        share_port_by_address: bool = False,
     ) -> None:
         """``read_work_limit``: result rows one ReadProperty served by the
         server role may expand, a Group's member rows included; a read past it
-        is aborted with OUT_OF_RESOURCES. Zero raises ValueError."""
+        is aborted with OUT_OF_RESOURCES. Zero raises ValueError.
+        ``share_port_by_address`` (default False): bind the interface address
+        itself, so endpoints on other addresses of this host can share the
+        port. Needs an explicit interface and a nonzero port; broadcasts and
+        unicast then arrive in no fixed order."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...

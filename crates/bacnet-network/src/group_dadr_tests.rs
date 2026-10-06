@@ -89,3 +89,20 @@ async fn router_delivers_only_an_unconfirmed_request_to_a_group_dadr() {
     assert_eq!(fixture.router.broadcast_pdu_type_drops(), 0);
     fixture.stop().await;
 }
+
+/// The same holds for delivery back out the port the NPDU arrived on: a
+/// node on network 2000 addressing the group there through the router.
+#[tokio::test]
+async fn router_delivers_back_out_the_arrival_port_only_an_unconfirmed_request() {
+    let mut fixture = RouterFixture::start_with_group_on_b(GROUP).await;
+    fixture
+        .send_from_b(&routed(2000, GROUP, CONFIRMED_REQUEST))
+        .await;
+    fixture.send_from_b(&routed(2000, GROUP, &APDU)).await;
+
+    let (back, to) = next_from_router(&mut fixture.from_router_b).await;
+    assert_eq!(to.as_deref(), Some(&[GROUP][..]));
+    assert_eq!(back.payload, APDU[..], "the refused request went nowhere");
+    assert_eq!(fixture.router.group_dadr_drops(), 1);
+    fixture.stop().await;
+}

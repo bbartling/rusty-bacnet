@@ -30,6 +30,13 @@ pub struct ServerConfig {
     pub port: u16,
     /// Directed broadcast address.
     pub broadcast_address: Ipv4Addr,
+    /// B/IP only: bind the interface address itself, so devices on other
+    /// addresses of this host can share the port (#1538). Off by default.
+    /// Needs an explicit interface and a nonzero port; see
+    /// `BipTransport::set_share_port_by_address` for what changes, including
+    /// that broadcasts and unicast are then received in no fixed order. Only
+    /// the B/IP builder reads it; a transport passed to `start` has its own.
+    pub share_port_by_address: bool,
     /// Raw local APDU receive ceiling, clamped to the transport's stable capacity.
     /// The effective value must be at least 50 and equal the selected Device's
     /// `Max_APDU_Length_Accepted`. I-Am retains this raw value; only originated
@@ -182,6 +189,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("interface", &self.interface)
             .field("port", &self.port)
             .field("broadcast_address", &self.broadcast_address)
+            .field("share_port_by_address", &self.share_port_by_address)
             .field("max_apdu_length", &self.max_apdu_length)
             .field("segmentation_supported", &self.segmentation_supported)
             .field("vendor_id", &self.vendor_id)
@@ -254,6 +262,7 @@ impl Default for ServerConfig {
             get_event_information_budget: GetEventInformationBudget::default(),
             port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
+            share_port_by_address: false,
             max_apdu_length: 1476,
             segmentation_supported: Segmentation::NONE,
             vendor_id: 0,
@@ -302,6 +311,17 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
 }
 
 impl BipServerBuilder {
+    /// Bind the interface address itself, so devices on other addresses of
+    /// this host can share the port, each getting only its own unicast
+    /// (#1538). Off by default, which binds `0.0.0.0`. Needs an explicit
+    /// [`interface`](Self::interface) and a nonzero port, or `build` fails.
+    /// Broadcasts and unicast are then received in no fixed order; see
+    /// [`BipTransport::set_share_port_by_address`].
+    pub fn share_port_by_address(mut self, enabled: bool) -> Self {
+        self.config.share_port_by_address = enabled;
+        self
+    }
+
     /// Select local mutation authorization (default: [`MutationPolicy::Permissive`]).
     /// SC mTLS channel/peer authentication is not service authorization; identities
     /// here are claimed link/routed addresses, never certificate principals.
