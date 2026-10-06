@@ -8,7 +8,7 @@ use PropertyIdentifier as P;
 fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
     // PICS corrections vs the historical heuristic: Object_Name is required
-    // and read-only; User_Type and the rights and credential
+    // and read-only; User_Type and the rights, credential and user
     // Global_Identifier are required and writable.
     match kind {
         ObjectType::ACCESS_CREDENTIAL => vec![
@@ -45,6 +45,8 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             // Optional and read-only over the network (#1394).
             (P::MEMBERS, true, false),
             (P::MEMBER_OF, true, false),
+            // The Table 12-38 W row (#1463).
+            (P::GLOBAL_IDENTIFIER, false, true),
             (P::PROPERTY_LIST, false, false),
         ],
         ObjectType::ACCESS_RIGHTS => vec![
