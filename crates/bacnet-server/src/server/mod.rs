@@ -443,7 +443,8 @@ type TransportCleanup<T> = JoinHandle<(NetworkLayer<T>, Result<(), Error>)>;
 /// BACnet server with APDU dispatch and service handling.
 pub struct BACnetServer<T: TransportPort> {
     target_audit: Option<Arc<audit_recipient::TargetAudit<T>>>,
-    config: ServerConfig,
+    /// Shared with dispatch and every task the server starts (#1521).
+    config: Arc<ServerConfig>,
     discovery_limiter: Arc<DiscoveryLimiter>,
     #[allow(dead_code)] // Retained with the server, including direct dispatch tests.
     time_sync_limiter: Arc<TimeSyncLimiter>,
@@ -692,6 +693,10 @@ mod channel_remote_write_tests;
 mod channel_run_tests;
 #[cfg(test)]
 mod channel_wire_tests;
+#[cfg(test)]
+mod color_channel_member_tests;
+#[cfg(test)]
+mod color_engine_task_tests;
 #[cfg(test)]
 mod command_action_run_tests;
 #[cfg(test)]

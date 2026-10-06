@@ -56,9 +56,9 @@ pub struct GroupChannelValue {
     /// for this entry.
     pub override_priority: Option<u8>,
     /// The BACnetChannelValue, already encoded and carried without a wrapper tag: one
-    /// well-formed application-tagged primitive, or a context-\[0\] constructed lighting
-    /// command whose fields are in order with valid lengths. [`WriteGroupRequest::encode`]
-    /// rejects anything else.
+    /// well-formed application-tagged primitive, or a constructed context-\[0\] lighting
+    /// command, context-\[1\] xy colour or context-\[2\] colour command whose fields are
+    /// in order with valid lengths. [`WriteGroupRequest::encode`] rejects anything else.
     pub value: Vec<u8>,
 }
 

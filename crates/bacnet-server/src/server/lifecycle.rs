@@ -50,6 +50,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         super::audit_forwarder::initialize(&db, &config, &device_bindings, &transport);
         super::network_port::validate_apdu_capacity(&mut config, &transport)?;
         crate::local_device::validate_apdu_declaration(&db, config.max_apdu_length)?;
+        // Settled now: every owner from here on shares it (#1521).
+        let config = Arc::new(config);
         let request_tasks = super::request_tasks::RequestTasks::for_server(&config)?;
 
         if config.vendor_id == 0 {
@@ -117,7 +119,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
         });
         let network_dispatch = Arc::clone(&network);
-        let config_dispatch = Arc::new(config.clone());
+        let config_dispatch = Arc::clone(&config);
         let notification_transactions_dispatch = Arc::clone(&notification_transactions);
 
         let audit_owner = target_audit
