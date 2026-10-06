@@ -152,6 +152,11 @@ pub(super) async fn replace<T: TransportPort + 'static>(
                     minutes
                 );
             }
+            // A timer nothing cancelled may outlive every other handle on
+            // the database (#1560).
+            if let Some(audit) = expiry_audit {
+                audit.release();
+            }
         }));
     }
     if let Some(db) = audit_db.as_deref_mut() {
@@ -190,6 +195,12 @@ impl<T: TransportPort + 'static> DccAudit<T> {
             transactions: Arc::clone(&services.notification_transactions),
             config: Arc::clone(&services.config),
         })
+    }
+
+    /// Let go of the database through [`drop_database_off_runtime`], for a
+    /// timer that ends on its own.
+    fn release(self) {
+        drop(drop_database_off_runtime(self.db));
     }
 
     /// Report a timed disable running out: DEVICE_ENABLE_COMM, with this

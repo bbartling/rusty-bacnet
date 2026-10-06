@@ -214,6 +214,11 @@ pub(super) async fn stop_then_release(
     })
     .await
     .expect("stop() joined the request");
+    // It goes on to wait for the save storage holds.
+    assert!(
+        !stopping.is_finished(),
+        "stop() returned before the save ran"
+    );
     drop(go);
     stopping.await.unwrap()
 }

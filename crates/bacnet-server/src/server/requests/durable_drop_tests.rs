@@ -10,7 +10,12 @@
 
 use super::*;
 use crate::server::drop_database_off_runtime;
+use bacnet_objects::audit::AuditReporterObject;
 use bacnet_objects::durable::{PendingWrite, StageStep};
+use bacnet_objects::traits::BACnetObject;
+use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
+use bacnet_types::constructed::BACnetRecipient;
+use bacnet_types::enums::EnableDisable;
 use std::sync::mpsc as std_mpsc;
 use std::sync::Weak;
 use std::thread::ThreadId;
@@ -62,26 +67,68 @@ fn reporting_class(
 }
 
 /// A started server holding a Device and `class`, and the channel that
-/// feeds it requests.
+/// feeds it requests. With `dcc_audit`, it also reports through Audit
+/// Reporter 1 and takes a DeviceCommunicationControl without a password, so
+/// a timed disable's timer holds the database for the record its expiry
+/// owes.
 async fn serving(
     class: NotificationClass,
+    dcc_audit: bool,
 ) -> (BACnetServer<TestTransport>, mpsc::Sender<ReceivedNpdu>) {
     let (transport, inbound) = TestTransport::inbound(4);
     let mut db = ObjectDatabase::new();
-    let device = DeviceObject::new(DeviceConfig {
+    let mut device = DeviceObject::new(DeviceConfig {
         instance: 100,
         ..DeviceConfig::default()
-    });
-    db.add(Box::new(device.unwrap())).unwrap();
-    db.add(Box::new(class)).unwrap();
-    let server = BACnetServer::generic_builder()
+    })
+    .unwrap();
+    let mut builder = BACnetServer::generic_builder()
         .transport(transport)
-        .database(db)
-        .enable_event_enrollment(false)
-        .build()
-        .await
-        .unwrap();
+        .enable_event_enrollment(false);
+    if dcc_audit {
+        let logger = ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap();
+        device
+            .provision_audit_recipient(BACnetRecipient::Device(logger))
+            .unwrap();
+        let reporter = AuditReporterObject::new(1, "reporter").unwrap();
+        builder = builder
+            .audit_reporters(AuditReportersConfig {
+                reporters: vec![reporter.object_identifier()],
+            })
+            .dcc_policy(DccPolicy::LegacyPermissive)
+            .device_binding(DeviceBinding::local(logger, [2]).unwrap())
+            .unwrap();
+        db.add(Box::new(reporter)).unwrap();
+    }
+    db.add(Box::new(device)).unwrap();
+    db.add(Box::new(class)).unwrap();
+    let server = builder.database(db).build().await.unwrap();
     (server, inbound)
+}
+
+/// Put `server` under DISABLE_INITIATION for an hour through `inbound`, as a
+/// peer would, so a timer that re-enables it is waiting.
+async fn disable_initiation(
+    server: &BACnetServer<TestTransport>,
+    inbound: &mpsc::Sender<ReceivedNpdu>,
+) {
+    let mut request = BytesMut::new();
+    DeviceCommunicationControlRequest {
+        time_duration: Some(60),
+        enable_disable: EnableDisable::DISABLE_INITIATION,
+        password: None,
+    }
+    .encode(&mut request)
+    .unwrap();
+    let service = ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL;
+    send(inbound, service, request.freeze()).await;
+    tokio::time::timeout(WAIT, async {
+        while server.comm_state() != DccState::DisableInitiation {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the disable took effect");
 }
 
 /// Send class 1 a Recipient_List write through `inbound` that stages a save
@@ -159,7 +206,7 @@ async fn dropped_off_the_runtime(
 async fn a_server_dropped_without_stop_lets_its_database_go_off_the_runtime() {
     let storage = holding(&[destination(1)]);
     let (class, dropped_on) = reporting_class(&storage);
-    let (server, inbound) = serving(class).await;
+    let (server, inbound) = serving(class, false).await;
     // A staged save that storage holds: the class's drop waits for it, and
     // then puts storage back to the list the class serves.
     let go = stage_held_save(&storage, &inbound).await;
@@ -177,12 +224,14 @@ async fn a_server_dropped_without_stop_lets_its_database_go_off_the_runtime() {
 async fn an_application_handle_let_go_of_last_drops_the_database_off_the_runtime() {
     let storage = holding(&[destination(1)]);
     let (class, dropped_on) = reporting_class(&storage);
-    let (server, inbound) = serving(class).await;
+    let (server, inbound) = serving(class, false).await;
     let db = Arc::clone(server.database());
     let go = stage_held_save(&storage, &inbound).await;
     drop(server);
-    // The server lets go of its handle once its tasks are done, which leaves
-    // the application's the last.
+    // The dropped server's task lets go of its handle only once the server's
+    // tasks are done. Spin until it has, so the application's handle is the
+    // last and the helper, not the server's task, drops the database.
+    // Called sooner, the helper would just let go and return `None`.
     tokio::time::timeout(WAIT, async {
         while Arc::strong_count(&db) > 1 {
             tokio::task::yield_now().await;
@@ -208,7 +257,7 @@ async fn an_application_handle_let_go_of_last_drops_the_database_off_the_runtime
 async fn the_tasks_a_stop_leaves_let_the_database_go_off_the_runtime() {
     let storage = holding(&[destination(1)]);
     let (class, dropped_on) = reporting_class(&storage);
-    let (mut server, inbound) = serving(class).await;
+    let (mut server, inbound) = serving(class, false).await;
     let go = stage_held_save(&storage, &inbound).await;
     // The application reads the database through stop(), so stop() leaves
     // settling the staged write, and ending runs nothing owns, to tasks that
@@ -263,6 +312,31 @@ async fn a_settle_task_that_ends_last_drops_the_database_off_the_runtime() {
     assert!(
         thread_was_free(weak, progress, watchdog).await,
         "the settle task held the runtime's thread"
+    );
+    dropped_off_the_runtime(dropped_on, &storage).await;
+}
+
+#[tokio::test]
+async fn a_dcc_timer_the_drop_cannot_take_lets_go_of_the_database() {
+    let storage = holding(&[destination(1)]);
+    let (class, dropped_on) = reporting_class(&storage);
+    let (server, inbound) = serving(class, true).await;
+    disable_initiation(&server, &inbound).await;
+    let go = stage_held_save(&storage, &inbound).await;
+    let weak = Arc::downgrade(server.database());
+    // Something holds the timer's slot as the server drops, as a request
+    // replacing the timer would, so the drop can't take the timer (#1560).
+    let slot = Arc::clone(&server.dcc_timer);
+    let held = slot.lock().await;
+    let (progress, watchdog) = watchdog(go);
+    drop(server);
+    drop(held);
+    drop(slot);
+    // The timer's handle on the database goes with the server's, which
+    // drops the database off the runtime, and not when the timer runs out.
+    assert!(
+        thread_was_free(weak, progress, watchdog).await,
+        "the DCC timer held the database"
     );
     dropped_off_the_runtime(dropped_on, &storage).await;
 }
