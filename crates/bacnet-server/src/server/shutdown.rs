@@ -46,7 +46,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// storage that stalls holds stop up, and a warning naming the objects
     /// still saving is logged after 5 s and every 30 s after that. Stop does
     /// not wait while the application holds the database: the objects then
-    /// settle once it lets go, and put storage back when they are dropped.
+    /// settle from a task once it lets go, and put storage back when they
+    /// are dropped. That task lets go of its handle through
+    /// [`drop_database_off_runtime`], so if it holds the last one the
+    /// objects drop on Tokio's blocking pool.
     ///
     /// A request's abort lands when its task next yields, so a request
     /// already running when stop begins may find its save done and make its
@@ -194,7 +197,10 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
     /// Seal the server and abort its tasks. In async code the object
     /// database then drops on Tokio's blocking pool (#1409): the drop returns
     /// before the objects' last saves land, so storage may still change after
-    /// it. Call [`stop`](BACnetServer::stop) first to wait for them.
+    /// it. Call [`stop`](BACnetServer::stop) first to wait for them. A clone
+    /// of [`database`](BACnetServer::database) the application still holds
+    /// keeps the objects alive; let go of it with
+    /// [`drop_database_off_runtime`] (#1513).
     fn drop(&mut self) {
         if let Some(network) = &self.network {
             network.seal_responses();
@@ -244,12 +250,13 @@ impl<T: TransportPort> BACnetServer<T> {
     /// async code without `stop()` would block a Tokio worker for as long as
     /// storage takes. So when a runtime is current, the server's handle goes
     /// to a task that waits until `tasks`, aborted, and the server's request
-    /// and notification tasks have let go of theirs; then, if nothing else
-    /// holds the database, it is dropped on the blocking pool, as DeleteObject
-    /// drops a removed object. The server's drop returns first, so storage may
-    /// still change after it. An application still holding the database
-    /// drops the last handle itself. With no runtime current, the database
-    /// drops here, as it always has.
+    /// and notification tasks have let go of theirs; then it lets go of the
+    /// handle through [`drop_database_off_runtime`], so the database drops
+    /// on the blocking pool if nothing else holds it, as DeleteObject drops a
+    /// removed object. The server's drop returns first, so storage may still
+    /// change after it. An application still holding the database lets go
+    /// of the last handle itself, the same way (#1513). With no runtime
+    /// current, the database drops here, as it always has.
     fn let_database_go(&mut self, tasks: Vec<JoinHandle<()>>) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
@@ -267,9 +274,56 @@ impl<T: TransportPort> BACnetServer<T> {
             while let Some(result) = notifications.join_next().await {
                 NotificationTransactions::observe(Some(result));
             }
-            if Arc::strong_count(&db) == 1 {
-                drop(tokio::task::spawn_blocking(move || drop(db)));
-            }
+            drop(drop_database_off_runtime(db));
         });
     }
+}
+
+/// Let go of a handle on an object database without parking an async
+/// runtime's worker thread (#1513).
+///
+/// The last handle to go drops every object, and a durable object (a
+/// Notification Forwarder, Notification Class, Access Rights object or Audit
+/// Log with storage) waits as it drops for the saves it has queued, after
+/// putting storage back to the state it serves if a write is still staged
+/// (#1363). Dropped in async code, that wait would hold a Tokio worker for as
+/// long as storage takes. So if `db` is the last handle and a Tokio runtime is
+/// current, the database drops on the runtime's blocking pool, and the
+/// returned task finishes once it has: await it before building another
+/// server on the same storage. Any other handle just lets go, and so does
+/// one with no runtime current, which drops the database on this thread if
+/// it is the last; both return `None`.
+///
+/// A dropped server lets go of its own handle this way once its tasks are
+/// done, whether or not it was stopped, and so do the tasks a `stop()`
+/// leaves to settle staged writes and end runs once the application lets
+/// go of the database. A clone of [`BACnetServer::database`] the application
+/// keeps can outlive all of them, so in async code release it here rather
+/// than dropping it.
+///
+/// ```no_run
+/// # use bacnet_transport::bip::BipTransport;
+/// # async fn demo(mut server: bacnet_server::server::BACnetServer<BipTransport>) {
+/// use bacnet_server::server::drop_database_off_runtime;
+///
+/// let db = std::sync::Arc::clone(server.database());
+/// // ... use the database while the server runs ...
+/// let _ = server.stop().await;
+/// drop(server);
+/// if let Some(dropping) = drop_database_off_runtime(db) {
+///     // The objects' last saves have landed once this finishes.
+///     let _ = dropping.await;
+/// }
+/// # }
+/// ```
+pub fn drop_database_off_runtime(db: Arc<RwLock<ObjectDatabase>>) -> Option<JoinHandle<()>> {
+    // `Arc::into_inner` hands the database to exactly one of two handles let
+    // go of at once, where a count check followed by a drop could leave both
+    // thinking the other was last.
+    let db = Arc::into_inner(db)?;
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        drop(db);
+        return None;
+    };
+    Some(runtime.spawn_blocking(move || drop(db)))
 }

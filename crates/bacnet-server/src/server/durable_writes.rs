@@ -458,6 +458,8 @@ pub(super) async fn settle_forgotten(db: &Arc<RwLock<ObjectDatabase>>) {
 /// Settle `db`'s objects from a task once the application lets go of it.
 /// Nothing waits for their saves; a runtime that shuts down first drops the
 /// task, which is logged, and the objects then put storage back as they drop.
+/// The task may outlive every other handle on the database, so it lets go of
+/// its own off the runtime (#1513).
 fn settle_when_free(db: &Arc<RwLock<ObjectDatabase>>) {
     tracing::info!("The database is held at stop(); staged writes settle once it is free");
     let db = Arc::clone(db);
@@ -468,6 +470,7 @@ fn settle_when_free(db: &Arc<RwLock<ObjectDatabase>>) {
         ));
         settle_all(&mut *db.write().await);
         waiting.0 = None;
+        drop(super::drop_database_off_runtime(db));
     });
 }
 
