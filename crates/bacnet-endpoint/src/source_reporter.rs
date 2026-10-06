@@ -212,6 +212,10 @@ impl BACnetObject for SourceReporter {
         self.wrapped.next_monotonic_deadline_internal()
     }
 
+    fn set_tracking_cov_increment_internal(&mut self, finest: Option<f64>) {
+        self.wrapped.set_tracking_cov_increment_internal(finest)
+    }
+
     fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
         self.wrapped.cov_snapshot_internal()
     }

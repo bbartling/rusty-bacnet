@@ -227,3 +227,39 @@ async fn a_colour_fade_reports_each_xy_sample() {
     assert_eq!(reports(&sent), []);
     server.stop().await.unwrap();
 }
+
+/// A Tracking_Value subscriber asking for 2 K hears a slow temperature ramp
+/// every 2 K, each 100 ms, rather than at the object's own 10 K step, every
+/// half second (#1510).
+#[tokio::test(start_paused = true)]
+async fn a_finer_tracking_value_subscriber_samples_a_temperature_ramp_more_often() {
+    let object = ColorTemperatureObject::new(1, "CT-1").unwrap();
+    let (mut server, oid, sent) = start(Box::new(object)).await;
+    server
+        .cov_table
+        .write()
+        .await
+        .subscribe(CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 3]),
+            subscriber_network: None,
+            subscriber_process_identifier: 3,
+            monitored_object_identifier: oid,
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_observation: None,
+            monitored_property: Some(TV),
+            monitored_property_array_index: None,
+            cov_increment: Some(2.0),
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        })
+        .unwrap();
+    // RAMP_TO_CCT 4400 K (0x1130) at 20 K/s (0x14), from 4000 K: 20 s.
+    command(&server, oid, &[0x09, 0x03, 0x2A, 0x11, 0x30, 0x49, 0x14]).await;
+    assert_eq!(reports(&sent), [report(3, TV, kelvin(4_000))]);
+    for expected in [4_002, 4_004, 4_006, 4_008, 4_010] {
+        advance(100).await;
+        assert_eq!(reports(&sent), [report(3, TV, kelvin(expected))]);
+    }
+    server.stop().await.unwrap();
+}

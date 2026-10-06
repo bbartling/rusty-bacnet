@@ -6,6 +6,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
+use super::color_link::{self, ColorLink};
 use crate::common::{self, read_common_properties, read_priority_array};
 use crate::traits::{BACnetObject, MonotonicClock};
 
@@ -56,6 +57,9 @@ pub struct BinaryLightingOutputObject {
     reliability: Reliability,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
+    /// Color_Reference, with Color_Override and Override_Color_Reference
+    /// when overridable; absent until set.
+    color_link: Option<ColorLink>,
 }
 
 impl BinaryLightingOutputObject {
@@ -77,7 +81,22 @@ impl BinaryLightingOutputObject {
             reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: [None; 16],
             relinquish_default: OFF,
+            color_link: None,
         })
+    }
+
+    /// Link the output to the colour objects that set its colour, or take
+    /// the link away with `None`, as a Lighting Output's
+    /// [`set_color_link`](super::LightingOutputObject::set_color_link) does
+    /// (#1527).
+    pub fn set_color_link(&mut self, link: Option<ColorLink>) -> Result<(), Error> {
+        self.color_link = link.map(ColorLink::checked).transpose()?;
+        Ok(())
+    }
+
+    /// The colour link, if one is set.
+    pub fn color_link(&self) -> Option<&ColorLink> {
+        self.color_link.as_ref()
     }
 
     /// Set the description string.
@@ -290,7 +309,8 @@ impl BACnetObject for BinaryLightingOutputObject {
             PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            _ => Err(common::unknown_property_error()),
+            p => color_link::read(self.color_link.as_ref(), p)
+                .unwrap_or_else(|| Err(common::unknown_property_error())),
         }
     }
 
@@ -325,6 +345,9 @@ impl BACnetObject for BinaryLightingOutputObject {
                 return self.set_relinquish_default(value);
             }
             return Err(common::invalid_data_type_error());
+        }
+        if let Some(result) = color_link::write(&mut self.color_link, property, &value) {
+            return result;
         }
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)

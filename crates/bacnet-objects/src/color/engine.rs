@@ -26,6 +26,9 @@ pub(super) struct Engine<V> {
     run: Option<Run<V>>,
     /// How far the value moves between COV samples, in its own units.
     sample_step: f64,
+    /// The finest COV increment a Tracking_Value subscriber asks for, as the
+    /// server last passed it (#1510).
+    finest_increment: Option<f64>,
     monotonic_clock: Option<Arc<MonotonicClock>>,
     deadline_waker: Option<Arc<DeadlineWaker>>,
     /// The time an object with no clock bound has been advanced to.
@@ -38,6 +41,7 @@ impl<V: TransitionLevel> Engine<V> {
         Self {
             run: None,
             sample_step,
+            finest_increment: None,
             monotonic_clock: None,
             deadline_waker: None,
             logical_now: Duration::ZERO,
@@ -75,7 +79,7 @@ impl<V: TransitionLevel> Engine<V> {
     /// task for its first sample. `None`, nothing to move, leaves the engine
     /// idle, so the value is at its target at once.
     pub(super) fn start(&mut self, transition: Option<Transition<V>>) {
-        self.run = transition.map(|transition| Run::start(transition, self.sample_step));
+        self.run = transition.map(|transition| Run::start(transition, self.step()));
         if self.run.is_some() {
             if let Some(waker) = &self.deadline_waker {
                 waker();
@@ -93,10 +97,11 @@ impl<V: TransitionLevel> Engine<V> {
     /// sample that is due. `true` when Tracking_Value or In_Progress changed
     /// for a COV report to carry.
     pub(super) fn advance_to(&mut self, now: Duration) -> bool {
+        let step = self.step();
         let Some(run) = &mut self.run else {
             return false;
         };
-        match run.advance(now, self.sample_step) {
+        match run.advance(now, step) {
             Progress::Finished => {
                 self.run = None;
                 true
@@ -117,6 +122,18 @@ impl<V: TransitionLevel> Engine<V> {
         self.run.map(|run| run.deadline())
     }
 
+    /// The sample step: the object's own, or a Tracking_Value
+    /// subscriber's increment where that is finer.
+    fn step(&self) -> f64 {
+        self.finest_increment
+            .map_or(self.sample_step, |finest| self.sample_step.min(finest))
+    }
+
+    /// Take the finest increment a Tracking_Value subscriber asks for.
+    pub(super) fn set_finest_increment(&mut self, finest: Option<f64>) {
+        self.finest_increment = finest;
+    }
+
     pub(super) fn bind_clock(&mut self, clock: Option<Arc<MonotonicClock>>) {
         self.monotonic_clock = clock;
     }
@@ -131,6 +148,7 @@ impl<V: TransitionLevel> Engine<V> {
         Self {
             run: self.run,
             sample_step: self.sample_step,
+            finest_increment: self.finest_increment,
             monotonic_clock: None,
             deadline_waker: None,
             logical_now: self.now(),
