@@ -6,7 +6,7 @@ description: "Review the breaking changes by area before replacing a working int
 Do not treat this pre-1.0 update as a drop-in replacement merely because the package name stayed the same. v0.12.0 changes Rust and Python APIs, some on-the-wire behavior, BACnet/SC trust and identity, and how several objects answer. This page groups what changes for code and deployments built on v0.11.0.
 
 :::note[This guide and the changelog]
-The [0.12.0 section of the changelog](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/CHANGELOG.md) lists every change in the order it was made, so some of its entries concern APIs that were added and then changed again during the 0.12 cycle. This guide covers only what changes for code written against v0.11.0; the changelog's migration notes give the exact replacements.
+The [0.12.0 section of the changelog](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/CHANGELOG.md) lists every change by area and issue, and its migration notes give the exact replacements. This guide groups what changes for code written against v0.11.0.
 :::
 
 ## Before updating
@@ -43,6 +43,7 @@ The packaging changed too:
 - A custom `TransportPort` must provide `local_receive_apdu_capacity()`, `max_apdu_length()` is now `egress_apdu_limit()` with no alias, and `ReceivedNpdu` gains `provenance` and `direct_response` (#693).
 - `PropertyPresenceCondition::IntrinsicReporting` splits into `IntrinsicReportingRequired` and `IntrinsicReportingOptional`; give a custom object's rows the one its table names (#1485).
 - The PICS generator's `CharacterSet` renames or drops four variants to match the six standard character sets (#913).
+- Local writes (`write_local`, `write_local_encoded` and the `*_local` setters) must be awaited inside a Tokio runtime; outside one they return `Error::Encoding` and write nothing. Once a write commits, its COV, event, Schedule and Staging work finishes even if the caller is dropped (#1367).
 
 ## Python API
 
@@ -72,6 +73,7 @@ The packaging changed too:
 - Addresses longer than 18 octets are refused by the address codecs, the recipient encoders and You-Are (#1098, #1156, #1200).
 - While DCC disables initiation, the server skips I-Have and `broadcast_i_am()` returns an error; Who-Is still gets an I-Am (#1388).
 - Notifications to a recipient on the local network number go out as local traffic (#1299).
+- Lighting Output carries out its lighting commands: fades and ramps move Tracking_Value over time, steps and STOP act on the priority array, and the warn commands (also Present_Value -1.0 to -3.0) blink and hold for Egress_Time when Blink_Warn_Enable is TRUE. Lighting_Command_Default_Priority refuses 6 (#1384).
 
 ## CLI
 
@@ -102,6 +104,7 @@ The packaging changed too:
 - The server refuses DeviceCommunicationControl, even with the right password, until you pick a `DccPolicy` (`dcc_policy` in Python). `comm_state()` returns a `DccState` instead of a `u8`, and `handlers::handle_device_communication_control` is gone (#522, #1399, #1430).
 - `CovAckResult::Error` carries the refusing answer as a `Refusal`, a `Data` variant is added, and the type is no longer `Copy` (#1323, #1342).
 - Local writes take a `LocalCommandSource`. Writing a Command's Present_Value runs its Action list, and a Channel writes members in other devices (#824, #1150, #1264).
+- The Device's Device_Address_Binding lists the server's own configured bindings and recent I-Am observations, replacing any value the application stored there. An event notification to a Device recipient with no fresh binding sends a targeted Who-Is and waits up to a minute for the answer (#1368, #1369).
 - A Notification Class Recipient_List holds at most 32 destinations, `add_destination` returns `Result`, and the flat list form from before #152 is gone (#1098, #1124, #1125).
 - Log_Buffer reads only through ReadRange, and the pollers log any datatype. Trend Logs refuse COV logging for now (#1480), so stop a polled log by clearing Enable (#1092, #1233, #1236, #1354).
 - Calendar follows the local date, and a Schedule evaluates in the standard order. A target that refuses its write sets the Schedule's Reliability to CONFIGURATION_ERROR (#1028, #1029, #1086, #1433).
@@ -113,6 +116,7 @@ Request admission is new: the server caps the requests it works on at once, in t
 
 - Audit Log snapshots from v0.11.0 convert to the new schema on first load (#1233). Keep the backup until the converted log checks out.
 - Custom Audit Log persistence runs on a plain thread with no Tokio context, and a panic fails the save (#1270).
+- Durable saves finish on that writer thread, so a `BACnetServer` dropped without `stop()` returns before storage settles. Call `stop().await` before building another server on the same storage (#1270, #1409).
 - A wildcard BBMD with a persisted BDT finds its own address from that table alone (#952).
 
 ## Verify more than import success
