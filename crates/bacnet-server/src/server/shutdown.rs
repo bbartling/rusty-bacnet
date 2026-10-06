@@ -38,14 +38,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// building another server on the same storage.
     ///
     /// Once its requests are joined, a write a Notification Forwarder,
-    /// Notification Class or Audit Log still holds staged for one of them is
-    /// dropped, and stop waits until every save those objects have queued
-    /// has run, so storage holds the state each object serves (#1363); see
+    /// Notification Class, Access Rights object or Audit Log still holds
+    /// staged for one of them is dropped, and stop waits until every save
+    /// those objects have queued has run, so storage holds the state each
+    /// object serves (#1363); see
     /// [`DurableWrites::settle_forgotten_writes`]. That wait has no limit:
     /// storage that stalls holds stop up, and a warning naming the objects
     /// still saving is logged after 5 s and every 30 s after that. Stop does
     /// not wait while the application holds the database: the objects then
     /// settle once it lets go, and put storage back when they are dropped.
+    ///
+    /// A request's abort lands when its task next yields, so a request
+    /// already running when stop begins may find its save done and make its
+    /// write first. Its answer is sealed, but the object serves that write,
+    /// and storage holds it (#1457).
     ///
     /// [`DurableWrites::settle_forgotten_writes`]: bacnet_objects::durable::DurableWrites::settle_forgotten_writes
     ///
