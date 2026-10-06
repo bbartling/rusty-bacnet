@@ -3,6 +3,7 @@
 //! handler takes the NPDU's `link_layer_group` from how the datagram arrived.
 //! Datagrams are fed in-process with the destination the OS would report.
 
+use super::ingress::arrived_elsewhere;
 use super::*;
 use crate::udp_metadata::ReceivedDatagram;
 use bytes::Bytes;
@@ -36,7 +37,7 @@ async fn context(broadcast_addr: Ipv4Addr) -> (RecvContext, mpsc::Receiver<Recei
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     };
     (ctx, npdu_rx)
 }
@@ -57,6 +58,29 @@ async fn receive(
     destination: Ipv4Addr,
     os_group_delivery: Option<bool>,
 ) -> Option<ReceivedNpdu> {
+    let arrival = Arrival::Primary;
+    receive_on(
+        ctx,
+        rx,
+        local,
+        arrival,
+        function,
+        destination,
+        os_group_delivery,
+    )
+    .await
+}
+
+/// [`receive`] on the socket `arrival` names.
+async fn receive_on(
+    ctx: &RecvContext,
+    rx: &mut mpsc::Receiver<ReceivedNpdu>,
+    local: &IngressAddresses,
+    arrival: Arrival,
+    function: BvlcFunction,
+    destination: Ipv4Addr,
+    os_group_delivery: Option<bool>,
+) -> Option<ReceivedNpdu> {
     let data = frame(function);
     let received = ReceivedDatagram {
         len: data.len(),
@@ -65,7 +89,7 @@ async fn receive(
         arrival_index: None,
         os_group_delivery,
     };
-    handle_datagram(&data, &received, local, ctx).await;
+    handle_datagram(&data, &received, arrival, local, ctx).await;
     rx.try_recv().ok()
 }
 
@@ -74,6 +98,8 @@ fn bound_to(local_ip: Ipv4Addr) -> IngressAddresses {
         local_ip,
         unicast_ips: vec![local_ip],
         wildcard_bind: false,
+        listener_interface: None,
+        interface_mismatch_seen: Default::default(),
     }
 }
 
@@ -163,4 +189,77 @@ fn a_broadcast_address_that_is_a_host_address_is_flagged_unless_loopback() {
             "{broadcast} {own:?}"
         );
     }
+}
+
+/// A transport bound to its interface address on Unix also reads a wildcard
+/// listener on the port (#1538). Unicast reaches the listener only when no
+/// socket is bound to its destination, so the listener keeps broadcasts
+/// only, even one whose destination reads as this node's own address.
+#[tokio::test]
+async fn the_broadcast_listener_keeps_only_broadcasts() {
+    let (ctx, mut rx) = context(SUBNET_BROADCAST).await;
+    let local = bound_to(LOCAL);
+    let unicast = BvlcFunction::ORIGINAL_UNICAST_NPDU;
+    let listener = Arrival::BroadcastListener;
+    let on_listener = receive_on(&ctx, &mut rx, &local, listener, unicast, LOCAL, None);
+    assert!(on_listener.await.is_none());
+    assert!(receive(&ctx, &mut rx, &local, unicast, LOCAL, None)
+        .await
+        .is_some());
+
+    let broadcast = BvlcFunction::ORIGINAL_BROADCAST_NPDU;
+    for destination in [SUBNET_BROADCAST, Ipv4Addr::BROADCAST] {
+        let npdu = receive_on(
+            &ctx,
+            &mut rx,
+            &local,
+            listener,
+            broadcast,
+            destination,
+            None,
+        )
+        .await
+        .expect("the listener hands up a broadcast");
+        assert!(npdu.link_layer_group, "{destination}");
+    }
+}
+
+/// In per-address mode a broadcast listener keeps only what arrived on the
+/// transport's own interface (#1538); with either index unknown, it keeps
+/// it. The primary socket is not filtered.
+#[tokio::test]
+async fn a_listener_keeps_only_broadcasts_from_its_own_interface() {
+    assert!(arrived_elsewhere(Some(2), Some(3)));
+    for (own, arrival) in [
+        (Some(2), Some(2)),
+        (Some(2), None),
+        (Some(2), Some(0)),
+        (None, Some(3)),
+        (None, None),
+    ] {
+        assert!(!arrived_elsewhere(own, arrival), "{own:?} {arrival:?}");
+    }
+
+    let (ctx, mut rx) = context(SUBNET_BROADCAST).await;
+    let mut local = bound_to(LOCAL);
+    local.listener_interface = Some(2);
+    let data = frame(BvlcFunction::ORIGINAL_BROADCAST_NPDU);
+    let mut handed_up = Vec::new();
+    for (arrival, index) in [
+        (Arrival::BroadcastListener, Some(3)),
+        (Arrival::BroadcastListener, Some(2)),
+        (Arrival::BroadcastListener, None),
+        (Arrival::Primary, Some(3)),
+    ] {
+        let received = ReceivedDatagram {
+            len: data.len(),
+            peer: SocketAddr::V4(SENDER),
+            destination: IpAddr::V4(SUBNET_BROADCAST),
+            arrival_index: index,
+            os_group_delivery: None,
+        };
+        handle_datagram(&data, &received, arrival, &local, &ctx).await;
+        handed_up.push(rx.try_recv().is_ok());
+    }
+    assert_eq!(handed_up, [false, true, true, true]);
 }

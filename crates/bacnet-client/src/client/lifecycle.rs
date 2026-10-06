@@ -1,5 +1,6 @@
 use super::dispatch_context::{DispatchContext, InboundApdu};
 use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const DEVICE_PURGE_INTERVAL: Duration = Duration::from_secs(300);
 #[cfg(not(test))]
@@ -105,6 +106,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             &config,
         )));
         let routed_path_limits_dispatch = Arc::clone(&routed_path_limits);
+        let group_source_request_drops = Arc::new(AtomicU64::new(0));
+        let group_source_drops_dispatch = Arc::clone(&group_source_request_drops);
 
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
@@ -200,6 +203,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             break;
                         };
                         match apdu::decode_apdu(received.apdu.clone()) {
+                            // Its answer would go back to a group address,
+                            // to every node there (#1504).
+                            Ok(Apdu::ConfirmedRequest(_))
+                                if network_dispatch
+                                    .transport()
+                                    .is_group_destination(&received.source_mac) =>
+                            {
+                                group_source_drops_dispatch.fetch_add(1, Ordering::Relaxed);
+                                debug!("Ignoring a ConfirmedRequest from a group address");
+                            }
                             Ok(decoded) => {
                                 Self::dispatch_apdu(
                                     DispatchContext {
@@ -259,8 +272,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             segmented_cleanup,
             local_mac,
             routed_path_limits,
+            group_source_request_drops,
             pacer,
         })
+    }
+
+    /// Confirmed requests ignored since start because the link-layer address
+    /// they came from is a group destination of the transport
+    /// ([`TransportPort::is_group_destination`]), such as a B/IP broadcast or
+    /// multicast address (#1504). The answer, such as the acknowledgment of
+    /// a confirmed COV notification, would go back to that address and reach
+    /// every node in the group, so the request is neither handled nor
+    /// answered. No built-in transport hands one up; a custom one can.
+    pub fn group_source_request_drops(&self) -> u64 {
+        self.group_source_request_drops.load(Ordering::Relaxed)
     }
     /// Get the client's local MAC address.
     pub fn local_mac(&self) -> &[u8] {

@@ -129,21 +129,31 @@ pub(crate) struct RouterFixture {
 
 impl RouterFixture {
     pub(crate) async fn start() -> Self {
-        Self::launch(false).await.0
+        Self::launch(false, None).await.0
     }
 
     /// [`Self::start`], with the router's network-control receiver (#1175).
     pub(crate) async fn start_with_network_control(
     ) -> (Self, mpsc::Receiver<ReceivedNetworkControl>) {
-        let (fixture, controls) = Self::launch(true).await;
+        let (fixture, controls) = Self::launch(true, None).await;
         (fixture, controls.expect("opted in"))
+    }
+
+    /// [`Self::start`], with `mac` a group destination of the router's port
+    /// B, as its broadcast MAC (#1504).
+    pub(crate) async fn start_with_group_on_b(mac: u8) -> Self {
+        Self::launch(false, Some(mac)).await.0
     }
 
     async fn launch(
         network_control: bool,
+        group_on_b: Option<u8>,
     ) -> (Self, Option<mpsc::Receiver<ReceivedNetworkControl>>) {
         let (mut port_a, mut peer_a) = LoopbackTransport::pair(vec![0x01], vec![0x0A]);
         let (mut port_b, mut peer_b) = LoopbackTransport::pair(vec![0x02], vec![0x0B]);
+        if let Some(mac) = group_on_b {
+            port_b.set_broadcast_mac(vec![mac]);
+        }
         // Frames sent without data attributes arrive without them, so only a
         // test that sends some sees any.
         for transport in [&mut port_a, &mut peer_a, &mut port_b, &mut peer_b] {

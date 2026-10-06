@@ -122,7 +122,7 @@ async fn pending_bvlc_response_requires_sender_and_expected_function() {
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     };
 
     let result = test_bvll_message(BvlcFunction::BVLC_RESULT, &[0x00, 0x00]);

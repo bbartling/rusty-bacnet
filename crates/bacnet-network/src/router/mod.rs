@@ -317,6 +317,8 @@ pub struct BACnetRouter {
     /// Broadcast NPDUs dropped for an APDU other than an
     /// Unconfirmed-Request (#1491).
     broadcast_pdu_type_drops: Arc<AtomicU64>,
+    /// NPDUs dropped for a DADR that is a group on its delivery port (#1504).
+    group_dadr_drops: Arc<AtomicU64>,
     /// Last sequence given to a control for the router's own consumer.
     network_control_ingress_sequence: Arc<AtomicU64>,
 }
@@ -410,6 +412,24 @@ impl BACnetRouter {
         self.broadcast_pdu_type_drops.load(Ordering::Relaxed)
     }
 
+    /// NPDUs dropped on any port since start because the router would have
+    /// delivered them, on a directly connected port, to a DADR that is a
+    /// group destination there, such as a B/IP multicast address, and their
+    /// APDU isn't an Unconfirmed-Request (#1504). Saturates at `u64::MAX`.
+    ///
+    /// Sent as one unicast, such an NPDU would reach every node in the
+    /// group without the broadcast network addresses that
+    /// [`Self::broadcast_pdu_type_drops`] filters: a confirmed request would
+    /// draw an answer from each node, and an answer would reach nodes that
+    /// asked nothing. The port's rule is
+    /// [`TransportPort::group_destinations`],
+    /// so a custom transport that keeps the default recognizes none. The
+    /// router delivers it nowhere and answers it with no reject; network
+    /// messages are not affected.
+    pub fn group_dadr_drops(&self) -> u64 {
+        self.group_dadr_drops.load(Ordering::Relaxed)
+    }
+
     async fn start_dispatch<T: TransportPort + 'static>(
         mut ports: Vec<RouterPort<T>>,
         track_depth: bool,
@@ -446,13 +466,16 @@ impl BACnetRouter {
         let mut sender_tasks = Vec::new();
         let mut port_networks = Vec::new();
         let mut port_local_macs = Vec::new();
+        let mut port_groups = Vec::new();
 
         for port in &mut ports {
             let rx = port.transport.start().await?;
             port_receivers.push(rx);
             port_networks.push(port.network_number);
             port_local_macs.push(MacAddr::from_slice(port.transport.local_mac()));
+            port_groups.push(port.transport.group_destinations());
         }
+        let port_groups = Arc::new(port_groups);
 
         // Move transports into sender tasks
         for port in ports {
@@ -535,6 +558,7 @@ impl BACnetRouter {
         let address_length_drops = Arc::new(AtomicU64::new(0));
         let global_broadcast_dadr_drops = Arc::new(AtomicU64::new(0));
         let broadcast_pdu_type_drops = Arc::new(AtomicU64::new(0));
+        let group_dadr_drops = Arc::new(AtomicU64::new(0));
         let network_control_ingress_sequence = Arc::new(AtomicU64::new(0));
         let local_control = Arc::new(LocalControl::new(
             OwnAddresses::new(
@@ -560,6 +584,8 @@ impl BACnetRouter {
                 address_length_drops: Arc::clone(&address_length_drops),
                 global_broadcast_dadr_drops: Arc::clone(&global_broadcast_dadr_drops),
                 broadcast_pdu_type_drops: Arc::clone(&broadcast_pdu_type_drops),
+                group_dadr_drops: Arc::clone(&group_dadr_drops),
+                port_groups: Arc::clone(&port_groups),
                 local_tx: local_tx.clone(),
                 send_txs: Arc::clone(&send_txs),
                 port_idx,
@@ -610,6 +636,7 @@ impl BACnetRouter {
                 address_length_drops,
                 global_broadcast_dadr_drops,
                 broadcast_pdu_type_drops,
+                group_dadr_drops,
                 network_control_ingress_sequence,
             },
             local_rx,

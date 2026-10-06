@@ -508,6 +508,7 @@ client = BACnetClient(
     broadcast_address="255.255.255.255",
     apdu_timeout_ms=6000,
     transport="bip",             # "bip", "ipv6", or "sc"
+    share_port_by_address=False, # Keyword-only; B/IP, see "Sharing a port by address"
     # IPv6 options:
     ipv6_interface=None,         # IPv6 selected local address; None means ::
     # SC options:
@@ -534,6 +535,30 @@ other clients. Requests to different destinations don't wait on each other;
 0, the default, sends at once, and more than 3,600,000 (an hour) raises
 `ValueError`. Behind a router the pause after a reply holds for requests made
 one after another only. `EndpointClient` has no pacing.
+
+### Sharing a port by address
+
+By default a B/IP client, server or `BipEndpoint` binds `0.0.0.0` on its port,
+whatever `interface` says, so two devices on two addresses of one host can't
+both use 47808. With the keyword-only `share_port_by_address=True`, each binds
+its own `interface` address instead and gets only the unicast sent there, so
+several devices on one host share the port (#1538). It needs an explicit
+`interface` and a nonzero `port`; `start()` fails otherwise, and another
+transport raises `ValueError`.
+
+In this mode every send leaves from the interface address, and broadcasts
+and unicast are received in **no fixed order**: on Linux and macOS
+broadcasts arrive on separate receive-only sockets, so a unicast that depends
+on a broadcast sent just before it can be handled first. Those sockets keep
+only broadcasts that arrived on the interface's own link, as identified
+when the device starts: restart it after its interface changes. The
+`broadcast_address` must be the interface's subnet broadcast or
+`255.255.255.255` (a loopback `interface` may also name itself), or
+`start()` fails. On Windows the address is claimed
+exclusively, though the bind still succeeds beside another program's socket
+on `0.0.0.0` at that port. See
+[Sharing a port by address](rust-api.md#sharing-a-port-by-address) for each
+OS.
 
 ### MS/TP serial ports
 
@@ -1801,6 +1826,7 @@ server = BACnetServer(
     port=47808,
     broadcast_address="255.255.255.255",
     transport="bip",             # "bip", "ipv6", or "sc"
+    share_port_by_address=False, # keyword-only; B/IP, see "Sharing a port by address"
     # SC options same as BACnetClient
     mutation_policy="permissive", # keyword-only; "deny_all" denies covered network mutations
     dcc_password=None,           # password alone does not enable DCC

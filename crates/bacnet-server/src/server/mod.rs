@@ -422,11 +422,10 @@ impl BipServerBuilder {
 
     /// Build and start the server, constructing a BipTransport from the config.
     pub async fn build(self) -> Result<BACnetServer<BipTransport>, Error> {
-        let transport = BipTransport::new(
-            self.config.interface,
-            self.config.port,
-            self.config.broadcast_address,
-        );
+        let config = &self.config;
+        let mut transport =
+            BipTransport::new(config.interface, config.port, config.broadcast_address);
+        transport.set_share_port_by_address(config.share_port_by_address);
         BACnetServer::start_with_clock_mode_and_bindings(
             self.config,
             self.db,
@@ -478,7 +477,6 @@ pub struct BACnetServer<T: TransportPort> {
     /// Invoke-ID ownership and terminal admission for confirmed notifications.
     notification_transactions: Arc<NotificationTransactions>,
     /// Server-lifetime exact inbound ConfirmedRequest duplicate state.
-    #[allow(dead_code)]
     confirmed_request_tracker: Arc<ConfirmedRequestTracker>,
     /// Shared configured and passively observed Device recipient authority.
     device_bindings: Arc<RwLock<DeviceBindingTable>>,

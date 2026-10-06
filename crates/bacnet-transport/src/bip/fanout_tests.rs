@@ -486,7 +486,7 @@ async fn dbtn_delivers_local_subnet_broadcast_under_tight_fanout_budget() {
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: Some(fanout_dispatcher),
         force_dbtn_forward_failure: false,
-        forwarded_origins: super::groups::ForwardedOrigins::detached(),
+        group_sources: super::groups::GroupSources::detached(),
     };
 
     let sender = (Ipv4Addr::LOCALHOST.octets(), origin_fd_port);

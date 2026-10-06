@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::BytesMut;
+#[cfg(test)]
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -20,6 +21,7 @@ pub use crate::bbmd::{FdtCounters, ForeignDevicePolicy};
 use crate::bvll::decode_bvll;
 use crate::bvll::{decode_bip_mac, encode_bip_mac, encode_bvll, BvllMessage};
 use crate::port::{ReceivedNpdu, TransportPort};
+#[cfg(test)]
 use crate::udp_metadata::{DestinationReceiver, IpVersion};
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
 use bacnet_types::error::Error;
@@ -47,7 +49,9 @@ pub use access::AsBip;
 pub use fanout::{FanoutCounters, FanoutPolicy};
 #[cfg(test)]
 use ingress::{admitted_delivery, Delivery};
-use ingress::{broadcast_is_own_address, handle_datagram, IngressAddresses};
+use ingress::{broadcast_is_own_address, receive_loop, IngressAddresses, Listeners};
+#[cfg(test)]
+use ingress::{handle_datagram, Arrival};
 #[cfg(test)]
 use io::handle_bvll_message;
 use io::{send_register_foreign_device, RecvContext};
@@ -69,28 +73,6 @@ pub struct ForeignDeviceConfig {
     pub ttl: u16,
 }
 
-/// The unbound B/IP socket. Linux gives an ephemeral port to an SO_REUSEADDR
-/// socket even while another SO_REUSEADDR socket owns it, and unicast to that
-/// port then reaches only one of them (#892). So only an explicitly requested
-/// port sets it, keeping the long-standing behavior for configured ports. Any
-/// other port claims exclusive use where the OS has a way to (`port_ownership`,
-/// #950).
-fn udp_socket(share_port: bool) -> std::io::Result<socket2::Socket> {
-    let socket = socket2::Socket::new(
-        socket2::Domain::IPV4,
-        socket2::Type::DGRAM,
-        Some(socket2::Protocol::UDP),
-    )?;
-    if share_port {
-        socket.set_reuse_address(true)?;
-    } else {
-        crate::port_ownership::claim_exclusive(&socket)?;
-    }
-    socket.set_broadcast(true)?;
-    socket.set_nonblocking(true)?;
-    Ok(socket)
-}
-
 /// BACnet/IP transport over UDP.
 pub struct BipTransport {
     interface: Ipv4Addr,
@@ -98,6 +80,8 @@ pub struct BipTransport {
     /// Fixed at construction: a restart rebinds the remembered actual port,
     /// but only an explicitly requested one may be shared.
     share_port: bool,
+    /// See [`Self::set_share_port_by_address`].
+    share_port_by_address: bool,
     broadcast_address: Ipv4Addr,
     local_mac: [u8; 6],
     socket: Option<Arc<BipSocket>>,
@@ -130,6 +114,8 @@ pub struct BipTransport {
     fanout_counters: Arc<fanout::AtomicFanoutCounters>,
     /// See [`Self::forwarded_group_origin_drops`].
     forwarded_group_origin_drops: Arc<std::sync::atomic::AtomicU64>,
+    /// See [`Self::group_source_drops`].
+    group_source_drops: Arc<std::sync::atomic::AtomicU64>,
     /// Rate limiter for broadcast forwarding fanout.
     fanout_limiter: Arc<std::sync::Mutex<fanout::FanoutRateLimiter>>,
     /// Forwards this BBMD's own broadcasts to BDT peers and foreign devices
@@ -149,8 +135,12 @@ impl BipTransport {
     ///   With `0.0.0.0`, `start()` lists the host's IPv4 addresses and accepts
     ///   unicast only to one of them; it fails when they cannot be listed or
     ///   none is usable. The list is read at each start, so an address added
-    ///   later is accepted after the next restart.
-    /// - `port`: UDP port (default 47808 / 0xBAC0)
+    ///   later is accepted after the next restart. The socket binds the
+    ///   wildcard address either way, unless
+    ///   [`set_share_port_by_address`](Self::set_share_port_by_address) asks
+    ///   for an explicit address's own socket.
+    /// - `port`: UDP port (default 47808 / 0xBAC0). Port zero asks for a
+    ///   private ephemeral port.
     /// - `broadcast_address`: Directed broadcast address (e.g., `255.255.255.255`)
     pub fn new(interface: Ipv4Addr, port: u16, broadcast_address: Ipv4Addr) -> Self {
         let fanout_policy = FanoutPolicy::default();
@@ -162,6 +152,7 @@ impl BipTransport {
             interface,
             port,
             share_port: port != 0,
+            share_port_by_address: false,
             broadcast_address,
             local_mac: [0; 6],
             socket: None,
@@ -180,11 +171,36 @@ impl BipTransport {
             fanout_task: None,
             fanout_counters,
             forwarded_group_origin_drops: Arc::default(),
+            group_source_drops: Arc::default(),
             fanout_limiter,
             own_broadcast: None,
             #[cfg(test)]
             local_ipv4_for_test: None,
         }
+    }
+
+    /// Bind the interface address itself, so transports on other addresses
+    /// of this host can share the port, each getting only its own unicast
+    /// (#1538). Off by default: the transport binds `0.0.0.0`. Call it before
+    /// `start()`, which fails unless the interface is an explicit address and
+    /// the port is nonzero.
+    ///
+    /// In this mode every send leaves from the interface address. On Linux,
+    /// macOS and the BSDs, broadcasts arrive on separate receive-only
+    /// listeners, read in no fixed order against the address socket: a
+    /// unicast that depends on a broadcast sent just before it can be handled
+    /// first. The listeners keep only broadcasts that arrived on the
+    /// interface's own link, as looked up at start: restart the transport
+    /// after its interface changes. The configured broadcast address must be
+    /// the interface's subnet broadcast or 255.255.255.255 (a loopback
+    /// interface may also name itself), or `start()` fails. On
+    /// Windows one socket claims the address with `SO_EXCLUSIVEADDRUSE`; a
+    /// socket already bound to the wildcard address on that port doesn't stop
+    /// it, and under Windows' strong host model a multihomed BBMD reaches a
+    /// peer only through the interface it is bound to. See
+    /// `docs/rust-api.md` (BIP section) for each OS.
+    pub fn set_share_port_by_address(&mut self, enabled: bool) {
+        self.share_port_by_address = enabled;
     }
 
     /// Enable BBMD mode with the given initial BDT.
@@ -589,36 +605,15 @@ impl TransportPort for BipTransport {
             )));
         }
 
-        let socket2 = udp_socket(self.share_port).map_err(Error::Transport)?;
-
-        // Validate self.interface is a real local IP before binding the real
-        // socket to 0.0.0.0 below. Previously the kernel enforced this when
-        // we bound directly to self.interface (EADDRNOTAVAIL on typos); now
-        // we probe with a throwaway bind on an ephemeral port so a
-        // misconfigured interface fails fast at startup rather than silently
-        // advertising an unowned IP in I-Am replies via local_mac. See
-        // tests::start_fails_on_nonlocal_interface.
-        if !self.interface.is_unspecified() {
-            std::net::UdpSocket::bind(SocketAddrV4::new(self.interface, 0))
-                .map_err(Error::Transport)?;
-        }
-
-        // Always bind to INADDR_ANY so subnet- and limited-broadcast packets
-        // (destination 10.x.y.255 / 255.255.255.255) reach this socket.  A
-        // Linux UDP socket bound to a specific interface IP only receives
-        // packets whose destination IP matches the bound IP, so binding to
-        // self.interface would silently drop every inbound broadcast — see
-        // socket_tests::socket_is_broadcast_capable_and_binds_inaddr_any. `self.interface`
-        // is still used below for the announced local MAC, so I-Am responses
-        // continue to advertise the correct source IP.
-        let bind_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.port);
-        socket2.bind(&bind_addr.into()).map_err(Error::Transport)?;
-
-        let destination_receiver =
-            DestinationReceiver::configure(&socket2, IpVersion::V4).map_err(Error::Transport)?;
-
-        let std_socket: std::net::UdpSocket = socket2.into();
-        let socket = UdpSocket::from_std(std_socket).map_err(Error::Transport)?;
+        socket::probe_interface(self.interface)?;
+        // A wildcard socket, or in per-address mode one bound to the interface
+        // address plus, on Unix, broadcast listeners: see socket.rs (#1538).
+        let plan = self.bind_plan_for_start().await;
+        let listener_interface = plan.local.and_then(|local| local.index);
+        let bound = socket::bind(plan).map_err(Error::Transport)?;
+        let listeners =
+            Listeners::open(bound, self.network_port_lease.clone()).map_err(Error::Transport)?;
+        let socket = Arc::clone(listeners.primary());
 
         let wildcard_bind = self.interface.is_unspecified();
         let (local_unicast_ips, route_ip) = if wildcard_bind {
@@ -674,8 +669,6 @@ impl TransportPort for BipTransport {
 
         self.port = local_port;
         self.local_mac = encode_bip_mac(local_ip.octets(), local_port);
-
-        let socket = Arc::new(BipSocket::new(socket, self.network_port_lease.clone()));
         self.socket = Some(Arc::clone(&socket));
 
         /// NPDU receive channel capacity for high-throughput UDP transports.
@@ -712,10 +705,7 @@ impl TransportPort for BipTransport {
             pending_bvlc_response: self.pending_bvlc_response.clone(),
             management_limiter: Arc::clone(&self.management_limiter),
             fanout: Some(fanout_dispatcher),
-            forwarded_origins: groups::ForwardedOrigins::new(
-                self.groups(),
-                Arc::clone(&self.forwarded_group_origin_drops),
-            ),
+            group_sources: self.group_sources(),
             #[cfg(test)]
             force_dbtn_forward_failure: false,
         };
@@ -724,30 +714,10 @@ impl TransportPort for BipTransport {
             local_ip,
             unicast_ips: local_unicast_ips,
             wildcard_bind,
+            listener_interface,
+            interface_mismatch_seen: Default::default(),
         };
-        let recv_task = tokio::spawn(async move {
-            let mut recv_buf = vec![0u8; 2048];
-            loop {
-                match destination_receiver
-                    .recv_from(&recv_ctx.socket, &mut recv_buf)
-                    .await
-                {
-                    Ok(received) => {
-                        let data = &recv_buf[..received.len];
-                        handle_datagram(data, &received, &ingress, &recv_ctx).await;
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                        debug!(error = %e, "Dropping UDP datagram with invalid destination metadata");
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "UDP recv error");
-                        break;
-                    }
-                }
-            }
-        });
-
-        self.recv_task = Some(recv_task);
+        self.recv_task = Some(tokio::spawn(receive_loop(listeners, ingress, recv_ctx)));
 
         if let Some(bbmd) = self.bbmd.clone() {
             self.bbmd_fdt_purge_task = Some(Self::spawn_bbmd_fdt_purge_task(bbmd));
@@ -893,11 +863,11 @@ mod fanout_tests;
 #[cfg(test)]
 mod fdt_tests;
 #[cfg(test)]
-mod forwarded_origin_tests;
-#[cfg(test)]
 mod forwarded_tests;
 #[cfg(test)]
 mod group_delivery_tests;
+#[cfg(test)]
+mod group_source_tests;
 #[cfg(test)]
 mod management_ack_tests;
 #[cfg(test)]
@@ -910,6 +880,8 @@ mod own_broadcast_tests;
 mod rate_limit_tests;
 #[cfg(test)]
 mod response_amplification_tests;
+#[cfg(test)]
+mod shared_port_tests;
 #[cfg(test)]
 mod socket_tests;
 #[cfg(test)]

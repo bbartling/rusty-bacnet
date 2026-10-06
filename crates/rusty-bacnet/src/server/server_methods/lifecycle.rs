@@ -88,6 +88,7 @@ impl BACnetServer {
         let interface_str = self.interface.clone();
         let port = self.port;
         let broadcast_str = self.broadcast_address.clone();
+        let share_port_by_address = self.share_port_by_address;
         let sc_hub = self.sc_hub.clone();
         let sc_vmac = self.sc_vmac.clone();
         let sc_device_uuid = self.sc_device_uuid;
@@ -137,9 +138,9 @@ impl BACnetServer {
                         let broadcast: Ipv4Addr = broadcast_str.parse().map_err(|e| {
                             PyRuntimeError::new_err(format!("invalid broadcast: {e}"))
                         })?;
-                        Some(AnyTransport::Bip(Box::new(BipTransport::new(
-                            interface, port, broadcast,
-                        ))))
+                        let mut bip = BipTransport::new(interface, port, broadcast);
+                        bip.set_share_port_by_address(share_port_by_address);
+                        Some(AnyTransport::Bip(Box::new(bip)))
                     }
                     "ipv6" => {
                         let iface_str = ipv6_interface.as_deref().unwrap_or("::");
