@@ -9,18 +9,15 @@
 //! doesn't decode is shown as hex.
 
 use bacnet_client::client::BACnetClient;
-use bacnet_encoding::constructed::{
-    decode_audit_log_record_at, decode_event_log_record, decode_log_multiple_record,
-    decode_log_record,
-};
+use bacnet_services::read_range::{LogRecords, ReadRangeAck};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
-    BACnetAuditLogDatum, BACnetAuditNotification, BACnetRecipient, EventLogDatum,
+    BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditNotification, BACnetEventLogRecord,
+    BACnetLogMultipleRecord, BACnetLogRecord, BACnetRecipient, EventLogDatum,
     EventNotificationRequest, LogData, LogDatum,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, NotifyType, ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use serde::Serialize;
 
@@ -45,13 +42,8 @@ pub async fn read_range_cmd<T: TransportPort + 'static>(
         property: format!("{property}"),
         item_count: ack.item_count,
     };
-    let decoder = if property == PropertyIdentifier::LOG_BUFFER {
-        record_decoder(object_type)
-    } else {
-        None
-    };
-    match decoder {
-        Some(decode) => print_records(&heading, &decode_records(decode, &ack.item_data), format),
+    match log_rows(&ack) {
+        Some(rows) => print_records(&heading, &rows, format),
         None => print_items(&heading, &ack.item_data, format),
     }
     Ok(())
@@ -76,72 +68,64 @@ struct LogRecordRow {
 /// The records read from a log buffer, and the hex of whatever followed the
 /// last record that decoded.
 #[derive(Debug, Default)]
-struct LogRecords {
+struct LogRows {
     rows: Vec<LogRecordRow>,
     undecoded: Option<String>,
 }
 
-/// Decode the record at an offset into its row and the offset just past it.
-type RecordDecoder = fn(&[u8], usize) -> Result<(LogRecordRow, usize), Error>;
-
-/// The record decoder for the log buffer of an object of `object_type`, if
-/// the type keeps one.
-fn record_decoder(object_type: ObjectType) -> Option<RecordDecoder> {
-    match object_type {
-        ObjectType::TREND_LOG => Some(trend_log_row),
-        ObjectType::EVENT_LOG => Some(event_log_row),
-        ObjectType::TREND_LOG_MULTIPLE => Some(trend_log_multiple_row),
-        ObjectType::AUDIT_LOG => Some(audit_log_row),
-        _ => None,
-    }
+/// The rows of a log buffer's records, when `ack` answers a read of the
+/// Log_Buffer of a log object: every record that decodes, up to the first
+/// that doesn't, whose octets on are kept as hex.
+fn log_rows(ack: &ReadRangeAck) -> Option<LogRows> {
+    Some(match ack.log_records()? {
+        Ok(records) => LogRows {
+            rows: record_rows(&records),
+            undecoded: None,
+        },
+        Err(error) => LogRows {
+            rows: record_rows(&error.decoded),
+            undecoded: ack
+                .item_data
+                .get(error.offset..)
+                .filter(|rest| !rest.is_empty())
+                .map(hex),
+        },
+    })
 }
 
-/// Decode records until the data runs out or one fails to decode.
-fn decode_records(decode: RecordDecoder, data: &[u8]) -> LogRecords {
-    let mut records = LogRecords::default();
-    let mut offset = 0;
-    while offset < data.len() {
-        match decode(data, offset) {
-            Ok((row, next)) if next > offset => {
-                records.rows.push(row);
-                offset = next;
-            }
-            _ => {
-                records.undecoded = Some(hex(&data[offset..]));
-                break;
-            }
+fn record_rows(records: &LogRecords) -> Vec<LogRecordRow> {
+    match records {
+        LogRecords::TrendLog(records) => records.iter().map(trend_log_row).collect(),
+        LogRecords::EventLog(records) => records.iter().map(event_log_row).collect(),
+        LogRecords::TrendLogMultiple(records) => {
+            records.iter().map(trend_log_multiple_row).collect()
         }
+        LogRecords::AuditLog(records) => records.iter().map(audit_log_row).collect(),
     }
-    records
 }
 
-fn trend_log_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, usize), Error> {
-    let (record, next) = decode_log_record(data, offset)?;
-    let row = LogRecordRow {
+fn trend_log_row(record: &BACnetLogRecord) -> LogRecordRow {
+    LogRecordRow {
         timestamp: timestamp(record.date, record.time),
         datum: log_datum(&record.log_datum),
         status_flags: record.status_flags.map(status_flags),
-    };
-    Ok((row, next))
+    }
 }
 
-fn event_log_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, usize), Error> {
-    let (record, next) = decode_event_log_record(data, offset)?;
+fn event_log_row(record: &BACnetEventLogRecord) -> LogRecordRow {
     let datum = match &record.log_datum {
         EventLogDatum::LogStatus(status) => log_status(*status),
         EventLogDatum::Notification(notification) => event_notification(notification),
         EventLogDatum::TimeChange(seconds) => time_change(*seconds),
     };
-    let row = LogRecordRow {
+    LogRecordRow {
         timestamp: timestamp(record.date, record.time),
         datum,
         status_flags: None,
-    };
-    Ok((row, next))
+    }
 }
 
-fn trend_log_multiple_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, usize), Error> {
-    let (record, next) = decode_log_multiple_record(data, offset)?;
+fn trend_log_multiple_row(record: &BACnetLogMultipleRecord) -> LogRecordRow {
     let datum = match &record.log_data {
         LogData::LogStatus(status) => log_status(*status),
         LogData::Values(values) => {
@@ -153,28 +137,25 @@ fn trend_log_multiple_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, u
         }
         LogData::TimeChange(seconds) => time_change(*seconds),
     };
-    let row = LogRecordRow {
+    LogRecordRow {
         timestamp: timestamp(record.date, record.time),
         datum,
         status_flags: None,
-    };
-    Ok((row, next))
+    }
 }
 
-fn audit_log_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, usize), Error> {
-    let (record, next) = decode_audit_log_record_at(data, offset)?;
+fn audit_log_row(record: &BACnetAuditLogRecord) -> LogRecordRow {
     let datum = match &record.datum {
         BACnetAuditLogDatum::LogStatus(status) => log_status(*status),
         BACnetAuditLogDatum::AuditNotification(notification) => audit_notification(notification),
         BACnetAuditLogDatum::TimeChange(seconds) => time_change(*seconds),
     };
     let (date, time) = record.timestamp;
-    let row = LogRecordRow {
+    LogRecordRow {
         timestamp: timestamp(date, time),
         datum,
         status_flags: None,
-    };
-    Ok((row, next))
+    }
 }
 
 fn timestamp(date: Date, time: Time) -> String {
@@ -294,7 +275,7 @@ fn recipient(recipient: &BACnetRecipient) -> String {
     }
 }
 
-fn print_records(heading: &Heading, records: &LogRecords, format: OutputFormat) {
+fn print_records(heading: &Heading, records: &LogRows, format: OutputFormat) {
     match format {
         OutputFormat::Table => {
             println!(

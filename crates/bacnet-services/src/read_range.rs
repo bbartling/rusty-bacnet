@@ -456,6 +456,10 @@ impl ReadRangeAck {
     }
 }
 
+#[path = "read_range_records.rs"]
+mod records;
+pub use records::{LogBufferRecord, LogRecords, LogRecordsError};
+
 #[cfg(test)]
 #[path = "read_range_width_tests.rs"]
 mod width_tests;
